@@ -1473,8 +1473,6 @@ dependencies = [
 [[package]]
 name = "bevy_render"
 version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc86a32b2eef9859e1e7d323c6d1a9150fe77aa17c30fd05abebc12f645929dc"
 dependencies = [
  "async-channel",
  "bevy_app",
@@ -3607,6 +3605,7 @@ dependencies = [
  "iroh-tickets",
  "js-sys",
  "libc",
+ "minisign-verify",
  "miniz_oxide 0.8.9",
  "n0-future",
  "n0-mainline",
@@ -4599,6 +4598,12 @@ checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "minisign-verify"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "871285dc19d8d0ebe0eef3d0e99a205f2a71363b122632cbbfa4a6c370a960ce"
 
 [[package]]
 name = "miniz_oxide"

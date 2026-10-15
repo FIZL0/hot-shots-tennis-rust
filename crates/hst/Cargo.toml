@@ -63,6 +63,9 @@ n0-mainline = "0.7"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 iroh-mdns-address-lookup = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+# B374: the self-updater's check of a release's signed SHA256SUMS (`update.rs`; no dependencies). iOS builds it too:
+# the app bundle can't be written, so there it only offers the release page
+minisign-verify = "0.3"
 
 
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]

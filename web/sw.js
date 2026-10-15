@@ -6,7 +6,8 @@ const SHELL = ['./', 'touch.js', 'worker.js', 'opfs.js', 'manifest.webmanifest',
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
-// network first (a new build shows up on the next visit), the cache when offline. Revalidated with the server every
+// network first (a new build shows up on the next visit, or the main menu's Refresh: B317, index.html polls
+// version.txt; nothing here reloads the page), the cache when offline. Revalidated with the server every
 // time (Pages says max-age=600): a reload right after a deploy never pairs a new hst.js with an old wasm or the reverse.
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;

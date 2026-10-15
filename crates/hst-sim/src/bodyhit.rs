@@ -5,7 +5,9 @@
 //! of a point ends it (`judge::Judge::check`'s `body`) and pops up the one word of the point; it rises and swells
 //! for 20 frames, then stays at full opacity until the players react to the point (practice: 30 frames, then a
 //! 5-frame fade).
-use crate::ps2::{add, div, madd, mul, sub};
+#![deny(clippy::float_arithmetic)]
+
+use crate::ps2::F;
 
 type M4 = [[f32; 4]; 4];
 
@@ -14,20 +16,20 @@ type M4 = [[f32; 4]; 4];
 /// `player::ReachStats::collision`) of the segment from `Bip01Spine` (`spine`) to `Bip01Neck` (`neck`), measured
 /// square to it.
 pub fn hit(ball: [f32; 3], head: &M4, spine: [f32; 3], neck: [f32; 3], r: f32) -> bool {
-    let c = |k: usize| sub(sub(add(head[3][k], 0.0), mul(head[0][k], 0.15)), ball[k]);
+    let c = |k: usize| F(head[3][k]) + 0.0 - F(head[0][k]) * 0.15 - ball[k];
     let (x, y, z) = (c(0), c(1), c(2));
-    if crate::ps2::sqrt(madd(madd(mul(z, z), x, x), y, y)) < 0.25 {
+    if (z * z).madd(x, x).madd(y, y).sqrt() < 0.25 {
         return true;
     }
-    let d: [f32; 3] = std::array::from_fn(|k| sub(neck[k], spine[k]));
-    let e: [f32; 3] = std::array::from_fn(|k| sub(ball[k], spine[k]));
-    let along = madd(madd(mul(d[2], e[2]), d[0], e[0]), d[1], e[1]);
-    let len = madd(madd(mul(d[2], d[2]), d[0], d[0]), d[1], d[1]);
+    let d: [F; 3] = std::array::from_fn(|k| F(neck[k]) - spine[k]);
+    let e: [F; 3] = std::array::from_fn(|k| F(ball[k]) - spine[k]);
+    let along = (d[2] * e[2]).madd(d[0], e[0]).madd(d[1], e[1]);
+    let len = (d[2] * d[2]).madd(d[0], d[0]).madd(d[1], d[1]);
     if along < 0.0 || len < along {
         return false;
     }
-    let far = add(add(madd(madd(mul(e[2], e[2]), e[0], e[0]), e[1], e[1]), 0.0), 0.0);
-    sub(far, div(mul(along, along), len)) <= mul(r, r)
+    let far = (e[2] * e[2]).madd(e[0], e[0]).madd(e[1], e[1]) + 0.0 + 0.0;
+    far - along * along / len <= F(r) * r
 }
 
 /// The words, as their textures.
@@ -78,7 +80,7 @@ impl Popup {
             scale: 0.0,
             alpha: 128.0,
             frames: 0,
-            rise: -div(0.6, HOLD as f32),
+            rise: (-(F(0.6) / HOLD as f32)).0,
             fade: None,
             timer: HOLD,
         }
@@ -87,11 +89,11 @@ impl Popup {
     /// One frame. `practice`: fewer than two players (only then does it time out). `false`: it's gone.
     pub fn tick(&mut self, practice: bool) -> bool {
         if self.frames < 20 {
-            self.pos[1] = add(self.pos[1], self.rise);
+            self.pos[1] = (F(self.pos[1]) + self.rise).0;
         }
         self.scale = match self.frames {
-            ..10 => add(self.scale, 0.15),
-            ..20 => sub(self.scale, 0.05),
+            ..10 => (F(self.scale) + 0.15).0,
+            ..20 => (F(self.scale) - 0.05).0,
             _ => 1.0,
         };
         self.frames += 1;
@@ -126,14 +128,14 @@ impl Popup {
 fn quad(pos: [f32; 3], size: [f32; 3], scale: f32, rows: [[f32; 3]; 3], depth: impl Fn([f32; 3]) -> f32, tan: f32) -> ([f32; 3], f32, f32) {
     let f = rows[2];
     let at = [
-        sub(add(pos[0], 0.0), mul(f[0], 0.5)),
-        sub(add(sub(pos[1], div(0.5, 2.0)), 0.0), mul(f[1], 0.5)),
-        sub(add(pos[2], 0.0), mul(f[2], 0.5)),
+        (F(pos[0]) + 0.0 - F(f[0]) * 0.5).0,
+        (F(pos[1]) - F(0.5) / 2.0 + 0.0 - F(f[1]) * 0.5).0,
+        (F(pos[2]) + 0.0 - F(f[2]) * 0.5).0,
     ];
     let d = depth(at);
-    let [a, near, far] = size;
-    let size = mul(mul(a, mul(mul(near, d), tan).max(1.0)), mul(mul(far, d), tan).min(1.0));
-    (at, mul(size, mul(scale, 1.2)), mul(size, mul(scale, 0.6)))
+    let [a, near, far] = size.map(F);
+    let size = a * (near * d * tan).max(1.0) * (far * d * tan).min(1.0);
+    (at, (size * (F(scale) * 1.2)).0, (size * (F(scale) * 0.6)).0)
 }
 
 /// The word of what the ball bounced off (RATTLE off a fence, the net's, wood, water…): a material's bounce effect

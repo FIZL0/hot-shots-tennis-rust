@@ -16,15 +16,16 @@
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
-//! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods with 1P's △ card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry) opens on that screen (for `--shot`).
+//! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
+//! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
 //! columns and rows a page as the window fits (B190, [`Grid`]) in one framed group, each a face icon (`inspect::face_icon`, cut from the mod's baked
 //! costume-0 preview, blank until that's baked) with its name under it, the players' hands and tags on it as on the
 //! disc grid (←→ one, ↑↓ a row). A card on a mod shows its 3D preview, its name in `word.tm2`, its TParam.csv row's
-//! play style and (△) its power and footwork numbers; its costumes are `mod.json`'s. Picked, it plays that match slot
+//! play style and its power and footwork grades; its costumes are `mod.json`'s. Picked, it plays that match slot
 //! (`--slot-mod N DIR`, `--chars` the donor), and a costume readied on is closed to the others as on the disc.
 
 use bevy::prelude::*;
@@ -49,15 +50,20 @@ pub(crate) mod flame;
 pub(crate) mod legend;
 mod child;
 mod home;
+mod names;
 mod online;
 mod options;
+mod mods_kind;
 mod mods_screen;
 mod pointer;
+mod tabs;
 mod trace;
+mod umpire_mods;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
 mod previews;
+mod roster;
 mod slide;
 
 /// Characters on the select screen.
@@ -87,30 +93,13 @@ fn dice() -> u64 {
     std::hash::BuildHasher::hash_one(&std::hash::RandomState::new(), 0u8)
 }
 
-/// B306: the roster's tiles (square), their gap, and at most how many a view shows (so they fit the quad pool).
-const TILE_MIN: f32 = 50.0;
-const TILE_MAX: f32 = 92.0;
-const TILE_GAP: f32 = 4.0;
-const MAX_CELLS: usize = 120;
-/// B306: the scroll bar's lane right of the tiles while the roster scrolls.
-const SCROLL_W: f32 = 12.0;
-
-/// B296 / B306: the character select's layout on the window's view, in the centred 640×448 space reaching past it on
-/// the sides (and into a tall window's letterbox): the roster's tiles from under the title tab, the players' cards
-/// along the bottom (Smash Ultimate's select). `strip` and `detail` are kept for the lobby and confirm screens
-/// (`reach`, `split`), which share it.
+/// B296 / B368: the menus' layout on the window's view, in the centred 640×448 space reaching past it on the sides
+/// (and into a tall window's letterbox): the select's view (its player columns, `roster::columns`); `strip` and
+/// `detail` are the lobby's and confirm screens' (`reach`, `split`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Grid {
-    /// The roster's columns, and the rows the view shows at once.
-    cols: usize,
-    rows: usize,
-    /// The tiles' side.
-    tile: f32,
-    /// The tiles' area (the scroll bar's lane on its right while it scrolls), and the players' cards' row.
-    tiles: [f32; 4],
-    cards: [f32; 4],
-    /// Whether the roster is longer than the view (a scroll bar).
-    scrolls: bool,
+    /// The select's room: left, top, right, bottom (down to the legend strip).
+    view: [f32; 4],
     strip: [f32; 4],
     detail: [f32; 4],
     /// How far the view reaches past each side of the 4:3 screen (640 units; B297's main screen).
@@ -124,20 +113,13 @@ impl Default for Grid {
 }
 
 impl Grid {
-    /// The layout on a view `aspect` wide with the disc roster (Random and the 14).
+    /// The layout on a view `aspect` wide.
     fn fit(aspect: f32) -> Self {
-        Grid::fit_n(aspect, 1 + CHARS, 1.0)
+        Grid::fit_at(aspect, 1.0)
     }
 
     /// The layout on a view `aspect` wide at Menu Size `k` (the view `1 / k` as many units across and down).
     fn fit_at(aspect: f32, k: f32) -> Self {
-        Grid::fit_n(aspect, 1 + CHARS, k)
-    }
-
-    /// The layout on a view `aspect` wide at Menu Size `k` for a roster of `n` tiles: the biggest tiles (up to
-    /// `TILE_MAX`) that show all of it, else `TILE_MIN` ones scrolling (bigger where a tall view would show more than
-    /// `MAX_CELLS`); the columns fill the width, so a tile is never stretched, only resized.
-    fn fit_n(aspect: f32, n: usize, k: f32) -> Self {
         let (share, vshare) = super::widescreen::menu_shares(aspect, k);
         // how far the view reaches past the 4:3 screen on each side, in its units
         let ex = (640.0 / share - 640.0) / 2.0;
@@ -153,42 +135,7 @@ impl Grid {
         } else {
             [left, y + 8.0, w, bottom - y - 8.0]
         };
-        // the cards along the bottom, the tiles above them
-        let ch = ((bottom - top) * 0.3).clamp(104.0, 150.0);
-        let cards = [left, bottom - ch, w, ch];
-        let ty = top + 46.0;
-        let th = bottom - ch - 10.0 - ty;
-        let lay = |cols: usize, width: f32| {
-            let tile = (width - TILE_GAP * (cols - 1) as f32) / cols as f32;
-            (tile, (((th + TILE_GAP) / (tile + TILE_GAP)) as usize).max(1))
-        };
-        let most = |width: f32| (((width + TILE_GAP) / (TILE_MIN + TILE_GAP)) as usize).max(1);
-        let fewest = (((w + TILE_GAP) / (TILE_MAX + TILE_GAP)).ceil() as usize).clamp(1, most(w));
-        let (cols, tile, rows, scrolls) = match (fewest..=most(w)).find(|&c| c * lay(c, w).1 >= n) {
-            Some(c) => {
-                let (tile, rows) = lay(c, w);
-                (c, tile, rows.min(n.div_ceil(c)), false)
-            }
-            None => {
-                let sw = w - SCROLL_W;
-                let top = most(sw);
-                let c = (fewest.min(top)..=top).rev().find(|&c| c * lay(c, sw).1 <= MAX_CELLS).unwrap_or(fewest.min(top));
-                let (tile, rows) = lay(c, sw);
-                (c, tile, rows.min((MAX_CELLS / c).max(1)), true)
-            }
-        };
-        Grid { cols, rows, tile, tiles: [left, ty, w, th], cards, scrolls, strip, detail, extra: ex }
-    }
-
-    fn per(&self) -> usize {
-        self.cols * self.rows
-    }
-
-    /// The box of the `k`th tile on view (from the view's top-left).
-    fn cell(&self, k: usize) -> [f32; 4] {
-        let [x, y, ..] = self.tiles;
-        let pitch = self.tile + TILE_GAP;
-        [x + pitch * (k % self.cols) as f32, y + pitch * (k / self.cols) as f32, self.tile, self.tile]
+        Grid { view: [-ex, -ey, 640.0 + ex, 432.0 + ey], strip, detail, extra: ex }
     }
 }
 
@@ -199,14 +146,18 @@ fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>)
     super::key_hints::ON.store(menu.settings.0[KEY_HINTS], std::sync::atomic::Ordering::Relaxed);
     legend::LAYOUT.store(menu.settings.9, std::sync::atomic::Ordering::Relaxed);
     let Ok(w) = window.single() else { return };
-    let g = Grid::fit_n(super::widescreen::aspect(w), 1 + CHARS + menu.own_mods(), menu.settings.apply_menu_scale(w));
-    if menu.grid != g {
+    let g = Grid::fit_at(super::widescreen::aspect(w), menu.settings.apply_menu_scale(w));
+    let resized = menu.grid != g;
+    if resized {
         menu.grid = g;
     }
+    // B368: each column's grid scrolls to its player's tile when it moves (or the window changes), else stays where
+    // the wheel or a drag left it
     if menu.screen == Screen::Chars {
-        let top = menu.page().0 / menu.grid.cols;
-        if menu.scroll != top {
-            menu.scroll = top;
+        for p in 0..menu.players() {
+            if resized || menu.followed[p] != Some(menu.cell(p)) {
+                menu.follow(p);
+            }
         }
     }
     // B297: the main screen's New in the store column, on a window wide enough for it
@@ -261,14 +212,16 @@ pub(super) const FONT: [&str; 15] = [
 /// else tenths) and how many store downloads run at once (B339: 0 Auto, [`Settings::downloads_at_once`]) and the
 /// pads' button icons (B362: a `legend::LAYOUTS` index, 0 Auto), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 7], Graphics, Volumes, u8, Ask, u8, u8, u8, u8, u8);
-/// B273: the browser's renderer setting's words: Auto (WebGPU when the browser has an adapter), WebGPU, WebGL2.
-const RENDERERS: [&str; 3] = ["auto", "webgpu", "webgl2"];
+pub struct Settings([bool; 9], Graphics, Volumes, u8, Ask, u8, u8, u8, u8, u8);
+/// B273: the browser's renderer setting, each as its settings.txt / web/index.html word and its Settings row's word
+/// (B316: the row's value and choices both come from here): Auto (WebGPU when the browser has an adapter), WebGPU,
+/// WebGL2.
+const RENDERERS: [(&str, &str); 3] = [("auto", "Auto"), ("webgpu", "WebGPU"), ("webgl2", "WebGL2")];
 /// The Menu Size setting's values: Auto (0), then 50% to 150% in tenths.
 const MENU_SIZES: [u8; 12] = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
 /// Settings screen's pages (`options.rs`).
-const SETTING_NAMES: [&str; 7] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat", "vibration"];
+const SETTING_NAMES: [&str; 9] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat", "vibration", "sway_lod", "update_check"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 3;
@@ -278,10 +231,14 @@ const KEY_HINTS: usize = 4;
 const CHAT: usize = 5;
 /// B118: the on-screen pad's buzz on each press (`web/touch.js`).
 const VIBRATION: usize = 6;
+/// B344: far/unseen characters' sway drawn less often (`crate::noise::LOD`).
+const SWAY_LOD: usize = 7;
+/// B374: look for a newer release at start (`crate::update`).
+const UPDATE_CHECK: usize = 8;
 
 /// Upscaled textures and menu music on, match music off (user 2026-10-12); key hints on (B301); chat on (M20);
-/// vibration on (B118).
-const SETTING_DEFAULTS: [bool; 7] = [true, true, false, true, true, true, true];
+/// vibration on (B118); Sway LOD off (B344: no frame-rate gain measured); update check on (B374).
+const SETTING_DEFAULTS: [bool; 9] = [true, true, false, true, true, true, true, false, true];
 
 /// B339: the most store downloads the Downloads at Once setting allows: 8 on desktop, 4 in a browser, 2 on a phone.
 fn max_downloads() -> usize {
@@ -321,7 +278,7 @@ impl Settings {
             } else if k.trim() == "button_icons" {
                 s.9 = legend::LAYOUTS.iter().position(|l| l.1 == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "renderer" {
-                s.5 = RENDERERS.iter().position(|r| *r == v.trim()).unwrap_or(0) as u8;
+                s.5 = RENDERERS.iter().position(|r| r.0 == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "aspect" {
                 aspect = super::widescreen::ASPECTS.iter().position(|a| *a == v.trim()).map(|i| i as u8);
             } else if k.trim() == "widescreen" {
@@ -341,6 +298,8 @@ impl Settings {
         s.3 = aspect.or(wide).unwrap_or(s.3);
         s.2 = Volumes::parse(text);
         crate::chat::HIDDEN.store(!s.0[CHAT], std::sync::atomic::Ordering::Relaxed);
+        crate::noise::set_lod(s.0[SWAY_LOD], false);
+        crate::update::CHECK.store(s.0[UPDATE_CHECK], std::sync::atomic::Ordering::Relaxed);
         s
     }
 
@@ -379,7 +338,7 @@ impl Settings {
 
     /// B273: the renderer is the browser build's alone.
     fn renderer_line(&self) -> String {
-        if cfg!(target_arch = "wasm32") { format!("renderer = {}\n", RENDERERS[self.5 as usize]) } else { String::new() }
+        if cfg!(target_arch = "wasm32") { format!("renderer = {}\n", RENDERERS[self.5 as usize].0) } else { String::new() }
     }
 
     pub(crate) fn path(iso: &str) -> std::path::PathBuf {
@@ -414,15 +373,18 @@ struct Press {
     right: bool,
     ok: bool,
     back: bool,
-    /// △: the attribute card.
+    /// △: a computer player on the seat assignment, an umpire's call (nothing on the select, B368).
     card: bool,
     /// L1 / R1: the costume.
     prev: bool,
     next: bool,
-    /// □ / Tab: the select roster's next filter (B296).
+    /// □ / Tab: the highlighted character in or out of the favourites (B369).
     page: bool,
     /// Select / − (keyboard: the camera key, C): the hand toggle.
     hand: bool,
+    /// B373: L2 / R2 (keyboard: 1 / 3, over Q / E): the Mods pages' kind tab.
+    kind_prev: bool,
+    kind_next: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -469,8 +431,8 @@ struct Player {
     swap: bool,
     /// B217: on the Random card (the ? card until ready; readying draws the pick, `Menu::draw`).
     random: bool,
-    /// B347: △ shows the pick's attribute card in place of its render (kept across characters, as the old select's).
-    card: bool,
+    /// B369: the category tab the player browses (`tabs.rs`).
+    tab: u8,
 }
 
 impl Player {
@@ -513,8 +475,12 @@ struct Menu {
     rebinding: Option<usize>,
     /// The custom roster.
     mods: Vec<crate::mods::Mod>,
-    /// B306: the select roster's first row on view (kept on the shown player, [`Menu::page`]).
-    scroll: usize,
+    /// M8f3: the installed umpire mods, on the umpire select after the disc five (`umpire_mods`).
+    umpire_mods: Vec<crate::mods_umpire::Umpire>,
+    /// B368: each player's column's first row on view ([`Menu::page`]), and the tile it was last scrolled to
+    /// (`Menu::follow`).
+    scroll: [usize; 4],
+    followed: [Option<Option<Who>>; 4],
     /// The custom roster's indices, newest installed first (each `mod.json`'s time, read once at startup; folder
     /// order where there's no time, as in the browser): the main screen's Mods picture.
     newest: Vec<usize>,
@@ -539,13 +505,18 @@ struct Menu {
     /// B269: the roster cell the last pick readied on (`None` inside: the Random card); the next computer player's
     /// cursor starts there.
     last: Option<Option<Who>>,
-    /// B118: a 1v1 on this phone (the main menu's touch-only row): the on-screen pad doubled, the far player's at
-    /// the top turned to face them, until the menu is back.
-    duo: bool,
     /// B297: a local match was started from this menu this session; its setup is still here (the Rematch card).
     rematch: bool,
     /// The umpire picker's Preview Voice presses so far (each plays the next of [`CALLS`]).
     calls: usize,
+    /// B326: a Settings page's row is being changed (row `sel`), with the settings it opened on (○ puts them back).
+    editing: Option<Settings>,
+    /// B327: the Renderer switch's confirm popup is up: the renderer it would switch to and the chosen pill (0 Switch).
+    switch: Option<(u8, usize)>,
+    /// B369: the select's favourite characters (`favourites.txt`).
+    favs: tabs::Favourites,
+    /// B371: the players' names (`names.rs`).
+    names: names::Names,
 }
 
 impl Default for Menu {
@@ -565,7 +536,9 @@ impl Default for Menu {
             roll: 0,
             rebinding: None,
             mods: Vec::new(),
-            scroll: 0,
+            umpire_mods: Vec::new(),
+            scroll: [0; 4],
+            followed: [None; 4],
             newest: Vec::new(),
             focus: 0,
             broken: default(),
@@ -576,9 +549,12 @@ impl Default for Menu {
             add: default(),
             paused: false,
             last: None,
-            duo: false,
             rematch: false,
             calls: 0,
+            editing: None,
+            switch: None,
+            favs: default(),
+            names: default(),
         }
     }
 }
@@ -597,14 +573,11 @@ enum Effect {
     Online(online::Fx),
     /// The umpire picker's Preview Voice: umpire, voice program, key (`hst_sim::umpire`'s banks).
     Hear(u8, u8, u8),
+    /// B369: `favourites.txt` written.
+    SaveFavourites,
 }
 
 impl Menu {
-    /// B118: 1v1 on this phone, 1P picked and 2P (at the far end) picking: the select turns a half turn to face them.
-    pub(super) fn turned(&self) -> bool {
-        self.duo && self.screen == Screen::Chars && self.players[0].ready && !self.players[1].ready
-    }
-
     fn players(&self) -> usize {
         if self.doubles { 4 } else { 2 }
     }
@@ -751,16 +724,35 @@ impl Menu {
         if self.focus < n && !self.players[self.focus].ready && self.focus != lead && self.seats[self.focus].is_some() { self.focus } else { lead }
     }
 
-    /// B306: the roster and its first tile on view: `scroll`'s row, moved as little as keeps the shown player's tile
-    /// in view (so a hovering mouse never scrolls it).
-    fn page(&self) -> (usize, Vec<Option<Who>>) {
-        let roster = self.roster();
-        let at = roster.iter().position(|c| *c == self.cell(self.shown())).unwrap_or(0);
-        let (cols, rows) = (self.grid.cols, self.grid.rows);
-        let row = at / cols;
-        let last = roster.len().div_ceil(cols).saturating_sub(rows);
-        let top = self.scroll.min(row).max((row + 1).saturating_sub(rows)).min(last);
-        (top * cols, roster)
+    /// B306 / B368: the roster and the first tile on view in player `p`'s column (`scroll`'s row, kept on the roster).
+    fn page(&self, p: usize) -> (usize, Vec<Option<Who>>) {
+        let roster = self.tab_cells(p);
+        let c = self.columns();
+        let last = roster.len().div_ceil(c.cols).saturating_sub(c.rows);
+        (self.scroll[p].min(last) * c.cols, roster)
+    }
+
+    /// B368: player `p`'s column scrolled as little as shows their tile.
+    fn follow(&mut self, p: usize) {
+        let roster = self.tab_cells(p);
+        let c = self.columns();
+        let row = roster.iter().position(|w| *w == self.cell(p)).unwrap_or(0) / c.cols;
+        let last = roster.len().div_ceil(c.cols).saturating_sub(c.rows);
+        self.scroll[p] = self.scroll[p].min(row).max((row + 1).saturating_sub(c.rows)).min(last);
+        self.followed[p] = Some(self.cell(p));
+    }
+
+    /// B368: player `p`'s column's grid scrolled `d` rows (the wheel, a drag), its tile free to leave the view.
+    fn scroll_by(&mut self, p: usize, d: i32) -> bool {
+        let c = self.columns();
+        let last = self.tab_cells(p).len().div_ceil(c.cols).saturating_sub(c.rows);
+        let to = (self.scroll[p].min(last) as i32 + d).clamp(0, last as i32) as usize;
+        std::mem::replace(&mut self.scroll[p], to) != to
+    }
+
+    /// B368: the select's player columns on this window.
+    fn columns(&self) -> roster::Columns {
+        roster::columns(self.grid.view, self.players())
     }
 
     /// B201: the select of an online room not started yet.
@@ -818,7 +810,7 @@ impl Menu {
     }
 
     /// B258: once every human is ready, the open seats' COM cards (not ready) start on their automatic pick, for a
-    /// human to keep (✕), change, or leave to the computer (○).
+    /// human to keep (✕) or change; ○ goes back to the last pick readied (B355).
     fn preset_coms(&mut self) {
         let n = self.players();
         if (0..n).all(|q| self.seats[q].is_none() || self.players[q].ready) {
@@ -900,7 +892,7 @@ impl Menu {
             self.seats[..n].swap(0, q);
             return true;
         }
-        // B331: on a local roster (not the phone duo's) the seat goes back to the computer, open to the next ✕
+        // B331: on a local roster the seat goes back to the computer, open to the next ✕
         self.seats[p] = if self.screen == Screen::Chars && !self.local_roster() { Some(Dev::Open) } else { None };
         self.unready(p);
         // B361: down to two devices, a local roster goes back to singles
@@ -921,10 +913,10 @@ impl Menu {
         self.join_seat().is_some() || self.local_roster() && !self.doubles
     }
 
-    /// B331: the local roster (not online, not the phone duo's): devices join it with ✕; B361: its mode follows them
+    /// B331: the local roster (not online): devices join it with ✕; B361: its mode follows them
     /// (singles for one or two devices, doubles from the third).
     fn local_roster(&self) -> bool {
-        self.screen == Screen::Chars && !self.online() && !self.duo
+        self.screen == Screen::Chars && !self.online()
     }
 
     /// The seat a device's ✕ on the select takes: one held open for a device (B238), else on a local roster the
@@ -938,12 +930,11 @@ impl Menu {
     /// until a device joins with ✕; the Mods page's Play with puts its mod on 1P's cursor.
     fn local_start(&mut self, dev: Dev, out: &mut Vec<Effect>) {
         self.rematch = false;
-        self.duo = false;
         self.doubles = false;
         self.seats = [Some(dev), None, None, None];
         self.bots = [false; 4];
         self.players = [Player::fresh(); 4];
-        self.scroll = 0;
+        self.scroll = [0; 4];
         self.go(Screen::Chars, out);
     }
 
@@ -985,10 +976,21 @@ impl Menu {
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
             return out;
         }
+        if self.switch_step(k, &mut out) {
+            return out;
+        }
         match self.screen {
             Screen::Main => {
                 let main = self.main_rows();
                 rows(main.len(), &mut self.sel, &mut out);
+                // B374: ○ on the update notice: not again this run (the row above takes the hand)
+                if k.back && main.get(self.sel) == Some(&home::Row::Update) {
+                    crate::update::later();
+                    if crate::update::latest().is_none() {
+                        self.sel = self.sel.saturating_sub(1);
+                        out.push(Sound(1));
+                    }
+                }
                 if k.ok {
                     use home::Row;
                     match main.get(self.sel).copied().unwrap_or(Row::Local) {
@@ -1008,13 +1010,15 @@ impl Menu {
                         }
                         Row::Settings => self.go(Screen::Display, &mut out),
                         Row::Mods => self.mods_open(&mut out),
-                        Row::Duo => self.duo_start(dev, &mut out),
+                        Row::Update => crate::update::act(),
                         Row::Quit => out.push(Quit),
                     }
                 }
             }
             Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
-                rows(options::page(self.screen).len(), &mut self.sel, &mut out);
+                if self.editing.is_none() {
+                    rows(options::page(self.screen).len(), &mut self.sel, &mut out);
+                }
                 self.step_page(k, &mut out);
             }
             Screen::Controls => {
@@ -1057,7 +1061,7 @@ impl Menu {
                         for p in &mut self.players {
                             *p = Player::fresh();
                         }
-                        self.scroll = 0;
+                        self.scroll = [0; 4];
                         if self.online() {
                             // B195: into the lobby first (seats held), then its character select
                             self.online_open(&mut out);
@@ -1127,6 +1131,11 @@ impl Menu {
                 }
                 let Some(p) = self.driven(dev) else { return out };
                 self.focus = p;
+                // B371: △ the name picker for the device's own seat; while open it takes the presses
+                let np = (0..self.players()).find(|&q| self.seats[q] == Some(dev) && self.naming(q)).unwrap_or(p);
+                if self.name_step(np, dev, k, &mut out) {
+                    return out;
+                }
                 let costumes = self.costumes(self.who(p));
                 let costume_to = |back: bool| self.next_free(p, self.who(p), (self.players[p].costume + if back { costumes - 1 } else { 1 }) % costumes, back);
                 let (next_c, prev_c) = (costume_to(false), costume_to(true));
@@ -1134,45 +1143,20 @@ impl Menu {
                     self.players[p].swap = !self.players[p].swap;
                     out.push(Sound(0));
                 }
-                // B347: △ the attribute card (none for Random, whose pick stays hidden)
-                if k.card && !self.players[p].random {
-                    self.players[p].card = !self.players[p].card;
+                // B369: □ a favourite (not Random's), the moves on the player's tab
+                if k.page && !self.players[p].ready && !self.players[p].random {
+                    self.toggle_favourite(p, &mut out);
+                }
+                if !self.players[p].ready && self.tab_move(p, k) {
+                    self.follow(p);
                     out.push(Sound(0));
                 }
-                if !self.players[p].ready {
-                    let d = (k.right as i32 - k.left as i32) + (k.down as i32 - k.up as i32) * self.grid.cols as i32;
-                    if d != 0 {
-                        let roster = self.roster();
-                        let at = roster.iter().position(|c| *c == self.cell(p));
-                        // B66: past a full one the same way, staying put at the edge (the grid doesn't wrap)
-                        let to = match at {
-                            None => roster.iter().position(|&c| !self.full(p, c)),
-                            Some(at) => {
-                                let mut to = at as i32;
-                                loop {
-                                    to += d;
-                                    if !(0..roster.len() as i32).contains(&to) {
-                                        let edge = to.clamp(0, roster.len() as i32 - 1) as usize;
-                                        break Some(if self.full(p, roster[edge]) { at } else { edge });
-                                    }
-                                    if !self.full(p, roster[to as usize]) {
-                                        break Some(to as usize);
-                                    }
-                                }
-                            }
-                        };
-                        if let Some(to) = to && Some(to) != at {
-                            self.put(p, roster[to]);
-                            out.push(Sound(0));
-                        }
+                if !self.players[p].ready && (k.prev || k.next) {
+                    // M1n / B66: past a costume that failed to load or that someone else is ready on
+                    if let Some(c) = if k.next { next_c } else { prev_c } {
+                        self.players[p].costume = c;
                     }
-                    if k.prev || k.next {
-                        // M1n / B66: past a costume that failed to load or that someone else is ready on
-                        if let Some(c) = if k.next { next_c } else { prev_c } {
-                            self.players[p].costume = c;
-                        }
-                        out.push(Sound(0));
-                    }
+                    out.push(Sound(0));
                 }
                 // B66: landing on a taken costume moves on to the next free one
                 self.skip_taken();
@@ -1202,13 +1186,9 @@ impl Menu {
                         self.net.edit = None;
                         self.go(Screen::Lobby, &mut out);
                         out.push(Sound(1));
-                    } else if self.open(p) && !self.online() {
-                        // B258: a human leaves an open seat's COM card to the computer: its automatic pick
-                        self.players[p] = Player { ready: true, ..self.auto_com(p) };
-                        out.push(Sound(1));
-                        self.chars_done(&mut out);
                     } else if self.seats[p].is_none() {
-                        // player 1 driving a computer player: back to the last one readied
+                        // player 1 driving a computer player (one added or an open seat's COM card): back to the last
+                        // one readied, never a pick for the computer (B355)
                         if let Some(q) = (0..self.players()).rev().find(|&q| self.players[q].ready) {
                             self.unready(q);
                         }
@@ -1244,7 +1224,7 @@ impl Menu {
                         }
                         out.push(Sound(0));
                     }
-                    if k.card && self.sel == 4 && (self.umpire as usize) < UMPIRES {
+                    if k.card && self.sel == 4 && self.umpire as usize != UMPIRES {
                         // the lob key (△): Preview Voice
                         let (program, key) = CALLS[self.calls % CALLS.len()];
                         self.calls += 1;
@@ -1267,7 +1247,7 @@ impl Menu {
                     self.picking = None;
                     out.push(Sound(2));
                     // B191: the umpire pick is the next confirm screen's (and the next run's) starting choice
-                    if self.sel != 1 && self.settings.6 != self.umpire {
+                    if self.sel != 1 && self.settings.6 != self.umpire && self.umpire as usize <= UMPIRES {
                         self.settings.6 = self.umpire;
                         out.push(SaveSettings);
                     }
@@ -1326,33 +1306,10 @@ impl Menu {
         out.push(Effect::Sound(2));
     }
 
-    /// B118: straight to the character select of a singles match of two humans on this phone: `dev` (the screen's
-    /// pad) is 1P, 2P's seat held open for the far end's pad (its ✕ takes it, B238).
-    fn duo_start(&mut self, dev: Dev, out: &mut Vec<Effect>) {
-        self.duo = true;
-        self.doubles = false;
-        self.seats = [Some(dev), Some(Dev::Open), None, None];
-        self.bots = [false; 4];
-        self.players = [Player::fresh(); 4];
-        self.scroll = 0;
-        self.go(Screen::Chars, out);
-    }
-
-    /// B118: the duo ends when the menu leaves its select and confirmation (back past them, or a match over); while
-    /// on, 1P is the screen's own pad (a tap's `Keys` seat moved onto it).
-    fn duo_sync(&mut self, pads: &[Entity]) {
-        if self.duo && !matches!(self.screen, Screen::Chars | Screen::Confirm | Screen::Playing) {
-            self.duo = false;
-        }
-        if self.duo && self.seats[0] == Some(Dev::Keys) && let Some(&e) = pads.first() {
-            self.seats[0] = Some(Dev::Pad(e));
-        }
-    }
-
     /// The court and umpire the match gets: a random choice resolved by `roll`.
     fn venue(&self) -> (usize, u8) {
         let court = if self.court == COURTS { (self.roll % COURTS as u64) as usize } else { self.court };
-        let umpire = if self.umpire as usize == UMPIRES { (self.roll / COURTS as u64 % UMPIRES as u64) as u8 } else { self.umpire };
+        let umpire = if self.umpire as usize == UMPIRES { (self.roll / COURTS as u64 % UMPIRES as u64) as u8 } else { self.umpire_donor(self.umpire as usize) as u8 };
         (court, umpire)
     }
 
@@ -1405,6 +1362,8 @@ impl Menu {
             Seat::flag(&seats),
         ]);
         a.extend(slot_mods);
+        a.extend(self.umpire_mod_flags());
+        a.extend(self.name_flags(order));
         if swaps.contains(&"1") {
             a.extend(["--swap-hands".into(), swaps.join(",")]);
         }
@@ -1457,6 +1416,8 @@ enum Tex {
     Qr,
     /// The hovered store mod's preview (`mods_screen::Shelf`).
     Shelf,
+    /// B372: a Browse tile's picture (`mods_screen::Shelf::thumbs[slot]`).
+    Thumb(u32),
     /// A character's face icon on the select ([`Icons`]; a disc one not baked yet draws its `FACES` square).
     Icon(Who),
     /// The main screen's face icons: [`Icons`]' only, nothing drawn until it's baked (no sheet square standing in).
@@ -1591,18 +1552,6 @@ struct Art(Vec<Handle<Image>>, Option<Arc<SoundBank>>, Text);
 #[derive(Component)]
 struct Slot(usize);
 
-/// The menu's root: turned a half turn while [`Menu::turned`] (the previews are its children too).
-#[derive(Component)]
-struct Turned;
-
-fn turn(menu: Res<Menu>, mut root: Query<&mut UiTransform, With<Turned>>) {
-    let want = if menu.turned() { Rot2::PI } else { Rot2::IDENTITY };
-    for mut t in &mut root {
-        if t.rotation != want {
-            t.rotation = want;
-        }
-    }
-}
 // four human cards on the select take ~760 (B156); the confirm screen needs more than 700 (B141a)
 // B296: a full roster page (64 cells) with four players' cards takes ~2.5k
 const POOL: usize = 3200;
@@ -1773,7 +1722,19 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         s
     });
     let mut menu = kept.map(|k| k.0.clone()).unwrap_or_else(|| Menu { settings: saved.as_ref().map_or_else(|_| first(), |s| *s), mods, ..default() });
+    // M8f3: an umpire mod pick (not saved in settings.txt) stays for the menu a match comes back to
+    let was = menu.umpire;
     menu.umpire = menu.settings.6;
+    menu.umpire_mods = crate::mods_umpire::list(&mods_dir);
+    if !fresh && was as usize > UMPIRES {
+        menu.umpire = was;
+    }
+    menu.umpire_in_range();
+    if fresh {
+        menu.favs = tabs::load(&args.iso);
+    }
+    // B371: the names saved so far (another run may have added some)
+    menu.names.saved = names::load(&args.iso);
     // back from a match: its pause menu may have changed them (B126)
     if let Ok(s) = saved {
         menu.settings = s;
@@ -1782,16 +1743,16 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
-        "settings" | "display" => Screen::Display,
+        "settings" | "display" | "renderer" => Screen::Display,
         "graphics" => Screen::Graphics,
-        "sound" => Screen::Sound,
+        "sound" | "sound-edit" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
         "mobile" => Screen::Mobile,
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars2" | "chars4" | "chars4-pads" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
-        "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "sets" | "games" => Screen::Confirm,
+        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
+        "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
         "lobby" | "lobby-bot" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
@@ -1815,8 +1776,15 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     if fresh && screen == "main-mods" {
         menu.sel = menu.main_at(home::Row::Mods);
     }
+    if fresh && screen == "main-update" {
+        menu.sel = menu.main_at(home::Row::Update);
+    }
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
+    }
+    // B327: the Renderer switch's popup up, on WebGL2
+    if fresh && screen == "renderer" {
+        menu.switch = Some((2, 0));
     }
     if !fresh && menu.screen != Screen::Lobby {
         (menu.screen, menu.sel) = (Screen::Main, 0);
@@ -1828,8 +1796,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.players[0].cursor = 6;
         menu.players[0].ready = screen.starts_with("coms");
         menu.players[0].random = screen == "chars-random";
-        // B347: 1P's △ card up (`attrs`, `mods-attrs`)
-        menu.players[0].card = screen.ends_with("attrs");
+        // B371: 1P named, its name picker open on the list or typing (`names`, `names-type`)
+        if screen.starts_with("names") {
+            menu.names.demo(0, Dev::Keys, screen == "names-type");
+        }
         // B264: 2P's computer readied on Random (`coms-random`, `confirm-random`)
         menu.players[1].random = matches!(screen.as_str(), "coms-random" | "confirm-random");
         menu.players[1].ready |= menu.players[1].random;
@@ -1839,9 +1809,20 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
             menu.sel = sel;
             menu.picking = Some(if sel == 2 { menu.sets } else { menu.games as usize });
         }
+        // B326: a Settings row picked (Effects Volume)
+        if screen == "sound-edit" {
+            (menu.sel, menu.editing) = (1, Some(menu.settings));
+        }
         if let Some(sel) = [("courts", 1), ("umpires", 4)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             (menu.sel, menu.court, menu.umpire) = (sel, 8, 2);
             menu.picking = Some(if sel == 1 { 8 } else { 2 });
+        }
+        // M8f3: the umpire select / the confirm screen on the first umpire mod installed
+        if matches!(screen.as_str(), "umpires-mod" | "confirm-umpire-mod") && !menu.umpire_mods.is_empty() {
+            menu.umpire = UMPIRES as u8 + 1;
+            if screen == "umpires-mod" {
+                (menu.sel, menu.picking) = (4, Some(2));
+            }
         }
         // B192: the confirm screen on Nakagawa River Courts and Lily, as the PCSX2 shots (`context/b192`)
         if screen == "confirm-court" {
@@ -1868,7 +1849,24 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
                 menu.players[1].ready = true;
             }
         }
+        // B368: 1 to 4 humans (`rosterN`: 1P keys, the rest pads; doubles past 2), a computer in the seats left,
+        // each on their own character, 2P scrolled down its column
+        if let Some(n) = screen.strip_prefix("roster").and_then(|n| n[..1].parse::<usize>().ok()) {
+            let pad = |i: u32| Some(Dev::Pad(Entity::from_raw_u32(1_000_000 + i).unwrap()));
+            menu.doubles = n > 2;
+            menu.bots = [false; 4];
+            for p in 0..menu.players() {
+                menu.seats[p] = if p == 0 { Some(Dev::Keys) } else if p < n { pad(p as u32) } else { None };
+                menu.bots[p] = p >= n;
+                menu.players[p].cursor = [6, 9, 3, 12][p];
+            }
+            menu.players[menu.players() - 1].ready = n < menu.players();
+        }
         mods_screen::sample(&mut menu, &screen);
+        // B368: `roster2-deep`: 2P on a mod far down, its column scrolled there, 1P's at the top
+        if screen == "roster2-deep" && menu.mods.len() > 40 {
+            menu.put(1, Some(Who::Mod(40)));
+        }
         // B306: the one roster, 1P on the first mod (scrolled to it)
         if screen.starts_with("mods") && menu.screen == Screen::Chars && menu.own_mods() > 0 {
             menu.put(0, Some(Who::Mod(0)));
@@ -1879,7 +1877,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     }
     commands.insert_resource(menu);
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
-    commands.spawn((full, GlobalZIndex(10), Turned)).with_children(|p| {
+    commands.spawn((full, GlobalZIndex(10))).with_children(|p| {
         for i in 0..POOL {
             p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
         }
@@ -2256,7 +2254,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], hand_x:
             d.info(&format!("{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
             }
         }
-        Screen::Chars => chars(&mut d, m, text, pads),
+        Screen::Chars => roster::chars(&mut d, m, text, bind, pads),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
         Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, pads, hand_x),
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
@@ -2299,12 +2297,6 @@ fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], [x, y]
     }
 }
 
-/// B354: the △ card's scale on a `cw` × `ch` player card: the height between the hand tag and the Stats pill, at most
-/// 55% of the width, never above the original's size.
-fn card_scale(cw: f32, ch: f32) -> f32 {
-    ((ch - 56.0) / 158.0).min(cw * 0.55 / 144.0).min(1.0)
-}
-
 /// B347: a pick's △ grades: the disc character's from the MENU overlay, a mod's from its TParam.csv row (`mod_grades`).
 fn grades_of(text: &Text, w: Who) -> [u8; 5] {
     match w {
@@ -2344,228 +2336,6 @@ fn tile_face(c: Option<Who>) -> (Tex, [f32; 4]) {
 const TILE_RANDOM: [f32; 3] = [62.0, 60.0, 75.0];
 const TILE_DISC: [f32; 3] = [120.0, 88.0, 60.0];
 const TILE_MOD: [f32; 3] = [116.0, 98.0, 46.0];
-
-/// B296 / B306: the character select (ours, Smash Ultimate's layout, `Roster.dc.html`): one roster of tiles (Random,
-/// the disc's 14, every mod) with each player's token on the tile they're on, scrolling vertically when it outgrows the
-/// view, and a big card per player along the bottom.
-fn chars(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
-    d.frame(3, 7);
-    let g = m.grid;
-    let n = m.players();
-    let online = m.select_online();
-    let picking = |p: usize| m.seats[p].is_some() || m.bot(p) && (0..n).filter(|&q| m.bot(q)).all(|q| q >= p || m.players[q].ready) && (0..n).all(|q| m.seats[q].is_none() || m.players[q].ready);
-    // B201: online, every taken seat shows its player's place, an open one stays dark
-    let picking = |p: usize| if online { m.seats[p].is_some() || m.remote(p).is_some() || m.net.edit == Some(p) } else { picking(p) };
-    let shown = m.shown();
-    let style_of = |w: Who| match w {
-        Who::Mod(i) => text.mods[i].0,
-        Who::Disc(c) => text.style[c],
-    };
-    let name_of = |p: usize| match m.who(p) {
-        _ if m.players[p].random => "Random".to_string(),
-        Who::Mod(i) => m.mods[i].name.clone(),
-        // B234: another machine's mod this one doesn't have: its own name over the donor's looks
-        Who::Disc(c) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[c]).to_string(),
-    };
-    let [sx, sy, sw, _] = g.strip;
-    let bar = [sx + sw - 120.0, sy - 32.0, 120.0, 26.0];
-    mode_bar(d, m.doubles as usize, true, bar, if m.doubles { "Doubles" } else { "Singles" });
-
-    // the roster's tiles on view
-    let (start, roster) = m.page();
-    for (k, &c) in roster.iter().enumerate().skip(start).take(g.per()) {
-        let [x, y, w, h] = g.cell(k - start);
-        let on: Vec<usize> = (0..n).filter(|&q| (picking(q) || m.players[q].ready) && m.cell(q) == c).collect();
-        let hover = on.iter().copied().find(|&q| !m.players[q].ready && picking(q));
-        let full = m.full(shown, c);
-        // the rim: the colour of a player picking on it, thicker
-        let b = if hover.is_some() { 3.0 } else { 1.5 };
-        d.q(Tex::Solid, [0.0; 4], [x, y, w, h], hover.map_or(INK, |q| COLOURS[q]), 128.0);
-        let fill = match c {
-            None => TILE_RANDOM,
-            Some(Who::Disc(_)) => TILE_DISC,
-            Some(Who::Mod(_)) => TILE_MOD,
-        };
-        let inner = [x + b, y + b, w - 2.0 * b, h - 2.0 * b];
-        d.q(Tex::Solid, [0.0; 4], inner, if full { [50.0; 3] } else { fill }, 128.0);
-        let (tex, src) = tile_face(c);
-        d.q(tex, src, inner, if full { [50.0; 3] } else { WHITE }, 128.0);
-        // the name strip along the bottom
-        let sh = (w * 0.2).clamp(11.0, 17.0);
-        d.q(Tex::Solid, [0.0; 4], [inner[0], y + h - b - sh, inner[2], sh], [21.0, 18.0, 24.0], 96.0);
-        let name = match c {
-            None => "Random".to_string(),
-            Some(Who::Disc(ch)) => CHAR_NAMES[ch].to_string(),
-            Some(Who::Mod(i)) => m.mods[i].name.clone(),
-        };
-        d.label(&name, x + w / 2.0, y + h - b - sh + 1.0, sh - 2.0, inner[2] - 4.0, WHITE);
-        // every player on it: their token in the corner (gold-rimmed once ready)
-        let tw = (w * 0.4).clamp(18.0, 26.0);
-        for (j, &q) in on.iter().enumerate() {
-            let (tx, ty) = (x + 2.0 + (tw + 1.0) * (j % 2) as f32, y + 2.0 + (tw * 0.6 + 1.0) * (j / 2) as f32);
-            let rim = if m.players[q].ready { GOLD } else { WHITE };
-            d.pill_at([tx, ty, tw, tw * 0.6], [INK, rim, COLOURS[q]], 128.0);
-            d.centred(&format!("{}P", q + 1), tx + tw / 2.0, ty + tw * 0.06, tw * 0.48, WHITE);
-        }
-        d.hit([x, y, w, h], pointer::Act::Cell(k));
-    }
-    // the scroll bar, its halves stepping the picking player a row up or down (B221)
-    if g.scrolls {
-        let total = roster.len().div_ceil(g.cols);
-        let top = start / g.cols;
-        let h = g.rows as f32 * (g.tile + TILE_GAP) - TILE_GAP;
-        let bar = [g.tiles[0] + g.tiles[2] - SCROLL_W + 5.0, g.tiles[1], 6.0, h];
-        d.box3(bar, 3.0, [Some([90.0; 3]), None, Some([100.0; 3])], 128.0);
-        let thumb = (h * g.rows as f32 / total as f32).max(12.0);
-        let ty = bar[1] + (h - thumb) * top as f32 / (total - g.rows).max(1) as f32;
-        d.box3([bar[0], ty, 6.0, thumb], 3.0, [Some(BROWN), None, Some(BROWN)], 128.0);
-        d.hit([bar[0] - 5.0, bar[1], 16.0, h / 2.0], pointer::press(|k| k.up = true));
-        d.hit([bar[0] - 5.0, bar[1] + h / 2.0, 16.0, h / 2.0], pointer::press(|k| k.down = true));
-    }
-
-    // the players' cards along the bottom, the teams either side of "VS"
-    let [cx0, cy, cwa, ch] = g.cards;
-    let (team, vs) = (if m.doubles { 2 } else { 1 }, 34.0);
-    let gaps = vs + 8.0 * (n - 2) as f32;
-    let cw = ((cwa - gaps) / n as f32).min(300.0);
-    let x0 = cx0 + (cwa - cw * n as f32 - gaps) / 2.0;
-    d.outlined(|d| d.centred("VS", x0 + cw * team as f32 + 8.0 * (team - 1) as f32 + vs / 2.0, cy + ch / 2.0 - 14.0, 26.0, GOLD));
-    for p in 0..n {
-        let pl = m.players[p];
-        let x = x0 + (cw + 8.0) * p as f32 + if p >= team { vs - 8.0 } else { 0.0 };
-        let human = m.seats[p].is_some() || m.remote(p).is_some_and(|s| s.human());
-        // B221: a tap on a card readies its pick, on a ready one picks again
-        let tap = pointer::press(|k| if pl.ready { k.back = true } else { k.ok = true });
-        if !(picking(p) || pl.ready) {
-            // an open seat: a dashed card
-            d.q(Tex::Solid, [0.0; 4], [x, cy, cw, ch], [21.0, 18.0, 24.0], 32.0);
-            dashed(d, [x, cy, cw, ch], [40.0; 3]);
-            let (head, line) = if m.seats[p] == Some(Dev::Open) {
-                ("Open", home::JOIN)
-            } else if online {
-                ("Open", "Waiting for a player")
-            } else if m.local_roster() {
-                ("CPU", home::JOIN)
-            } else {
-                ("CPU", "Picks after the players")
-            };
-            d.label(head, x + cw / 2.0, cy + ch / 2.0 - 22.0, 24.0, cw - 16.0, INK);
-            if line == home::JOIN {
-                // B362: the buttons drawn, not named
-                home::press_hint(d, " to join", x + cw / 2.0, cy + ch / 2.0 + 6.0, 14.0, cw - 16.0, INK);
-            } else {
-                d.label(line, x + cw / 2.0, cy + ch / 2.0 + 6.0, 14.0, cw - 16.0, INK);
-            }
-            d.label(&format!("{}P", p + 1), x + 18.0, cy + 6.0, 16.0, 30.0, [40.0; 3]);
-            d.hit([x, cy, cw, ch], tap);
-            if m.droppable(p) {
-                drop_button(d, p, x + cw - 20.0, cy - 8.0);
-            }
-            continue;
-        }
-        d.box3([x, cy, cw, ch], 12.0, [Some(INK), Some(if pl.ready { GOLD } else { WHITE }), Some(COLOURS[p])], 128.0);
-        d.hit([x, cy, cw, ch], tap);
-        // the character's render (the "?" tile for Random) on the card's right
-        let rh = ch - 8.0;
-        let rw = (rh * 0.8).min(cw * 0.55);
-        if pl.random {
-            let fw = rw.min(rh * 92.0 / 68.0);
-            d.q(C02, RANDOM_TILE, [x + cw - fw - 8.0, cy + (ch - fw * 68.0 / 92.0) / 2.0, fw, fw * 68.0 / 92.0], WHITE, 128.0);
-        } else if pl.card {
-            // B347: the △ card in the render's place; B354: between the hand tag and the Stats pill, so neither covers
-            // it, and no wider than 55% of the card (the style line and name keep the left)
-            let s = card_scale(cw, ch);
-            let top = cy + 28.0 + (ch - 54.0 - 158.0 * s) / 2.0;
-            attribute_card(d, p, style_of(m.who(p)), &grades_of(text, m.who(p)), [x + cw - 144.0 * s - 6.0, top - 2.0 * s], s);
-        } else {
-            d.q(Tex::Preview(p), [0.0; 4], [x + cw - rw - 4.0, cy + 4.0, rw, rh], WHITE, 128.0);
-        }
-        if !pl.random {
-            // B347: a Stats / Picture pill on the render's foot swaps them, as △
-            let sb = [x + cw - 60.0, cy + ch - 24.0, 54.0, 18.0];
-            d.pill_at(sb, [INK, WHITE, [70.0, 64.0, 80.0]], 128.0);
-            d.label(if pl.card { "Picture" } else { "Stats" }, sb[0] + 27.0, sb[1] + 2.0, 13.0, 46.0, WHITE);
-            d.hit(sb, pointer::press(|k| k.card = true));
-        }
-        // whose seat: the device, the online player, or a computer with its rank
-        let whose = match m.remote(p).filter(|s| s.human() && online) {
-            Some(s) => m.net.room.as_ref().and_then(|r| r.names.get(&s.peer)).map_or("Online".to_string(), |n| n.clone()),
-            None if human => dev_name(m.seats[p], pads),
-            None => {
-                let (who, costume) = m.pick(p);
-                let c = match who {
-                    Who::Mod(i) => m.mods[i].donor,
-                    Who::Disc(c) => c,
-                };
-                format!("COM · {}", RANK_NAMES.get(com_rank(&text.ranks, c, costume, m.doubles)).copied().unwrap_or(""))
-            }
-        };
-        let tag = format!("{}P", p + 1);
-        d.outlined(|d| d.text(&tag, x + 10.0, cy + 5.0, 28.0, WHITE));
-        let tx = x + 14.0 + d.width(&tag, 28.0);
-        // the hand tag top-right (B40e4's: Select / − or a tap swaps it), left of the drop ✕ when there is one
-        let hx = x + cw - 72.0 - if m.droppable(p) { 22.0 } else { 0.0 };
-        left(d, &whose, tx, cy + 9.0, 13.0, (hx - 4.0 - tx).max(10.0), WHITE);
-        if !pl.random {
-            let words = if m.hand(text, p) < 0.0 { "Left hander" } else { "Right hander" };
-            let hb = [hx, cy + 6.0, 66.0, 19.0];
-            d.pill_at(hb, [INK, WHITE, if pl.swap { [128.0, 100.0, 20.0] } else { [90.0, 72.0, 48.0] }], 128.0);
-            d.label(words, hb[0] + 33.0, hb[1] + 3.0, 13.0, 56.0, WHITE);
-            if !pl.ready {
-                d.hit(hb, pointer::press(|k| k.hand = true));
-            }
-        }
-        if !pl.random {
-            // B354: left of the △ card when it is up
-            let sw = if pl.card { cw - 144.0 * card_scale(cw, ch) - 24.0 } else { cw - 20.0 };
-            left(d, STYLE_NAMES[style_of(m.who(p))], x + 10.0, cy + 36.0, 13.0, sw, WHITE);
-        }
-        if pl.ready {
-            d.outlined(|d| d.text("Ready!", x + 10.0, cy + 52.0, 18.0, GOLD));
-        }
-        let name = name_of(p);
-        let size = 26.0f32.min(ch * 0.22);
-        // B354: clear of the Stats / Picture pill on the right
-        let room = cw - 20.0 - if pl.random { 0.0 } else { 58.0 };
-        let nw = d.width(&name, size).min(room);
-        let ny = cy + ch - size - 8.0;
-        d.outlined(|d| d.label(&name, x + 10.0 + nw / 2.0, ny, size, room, WHITE));
-        // the costume and hand: L1 / R1 and Select / − (or a tap on the chip's halves, on the hand tag)
-        let py = ny - 21.0;
-        if pl.ready {
-            // "Ready!" above says it
-        } else if m.blocked(p) {
-            left(d, "Not selectable", x + 10.0, py + 2.0, 13.0, cw - 20.0, WHITE);
-        } else if pl.random {
-            left(d, "Drawn when ready", x + 10.0, py + 2.0, 13.0, cw - 20.0, WHITE);
-        } else {
-            // the costume: its number on a shirt in the player's colour (L1 / R1, or a tap on its halves)
-            // between the style line and the name: smaller on a short card (a wide window's)
-            let sh = (ny - 4.0 - (cy + 57.0)).clamp(14.0, 30.0);
-            let sb = [x + 10.0, ny - 4.0 - sh, sh * 34.0 / 30.0, sh];
-            shirt(d, sb, COLOURS[p].map(|c| c * 0.75), COLOURS[p]);
-            d.outlined(|d| d.centred(&format!("{}", pl.costume + 1), sb[0] + sb[2] / 2.0, sb[1] + sh * 0.3, sh * 0.53, WHITE));
-            d.hit([sb[0] - 4.0, sb[1], sb[2] / 2.0 + 4.0, sb[3]], pointer::press(|k| k.prev = true));
-            d.hit([sb[0] + sb[2] / 2.0, sb[1], sb[2] / 2.0 + 4.0, sb[3]], pointer::press(|k| k.next = true));
-        }
-        // B238: a joined device's ✕ on its card's corner
-        if m.droppable(p) {
-            drop_button(d, p, x + cw - 20.0, cy - 8.0);
-        }
-    }
-
-    // the description bar: the shown player's pick
-    match m.who(shown) {
-        _ if m.players[shown].random => d.info("Random: a character and costume drawn from the disc and custom characters when you're ready."),
-        Who::Mod(i) => {
-            let md = &m.mods[i];
-            let s = if md.costumes.len() == 1 { "" } else { "s" };
-            let from = if md.source.is_empty() { String::new() } else { format!(" from {}", md.source) };
-            d.info(&format!("{}: custom character{from}, {} costume{s}.", md.name, md.costumes.len()));
-        }
-        Who::Disc(c) => d.info(text.msg(308 + c)),
-    }
-}
 
 /// B306: a dashed rim round `[x, y, w, h]` (an open seat's card).
 fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], rgb: [f32; 3]) {
@@ -2640,13 +2410,9 @@ fn face_frame(d: &mut Draw, (tex, src): (Tex, [f32; 4]), x: f32, y: f32, size: f
     d.q(tex, src, [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
 }
 
-/// B295: the side card's width, a seat row's height and pitch, and the gap between the teams' groups.
+/// B295: the side card's width.
 const SIDE_W: f32 = 190.0;
-const ROW_H: f32 = 34.0;
-const ROW_PITCH: f32 = 38.0;
-const TEAM_GAP: f32 = 18.0;
-/// B295: the status chips' words on white (the mockup's): Host pink, Ready orange, a computer green.
-const CHIP_HOST: [f32; 3] = [88.0, 24.0, 53.0];
+/// B295: the status chips' words on white (the mockup's): Ready orange, a computer green.
 const CHIP_READY: [f32; 3] = [90.0, 48.0, 3.0];
 const CHIP_COM: [f32; 3] = [30.0, 61.0, 15.0];
 
@@ -2670,39 +2436,6 @@ impl Grid {
             ([l, top, r - l, 268.0], [(l + r - w) / 2.0, top + 276.0, w, (b - top - 276.0).min(340.0)])
         }
     }
-}
-
-/// B295: team `k`'s group (of `per` seats) in the seats column `col`.
-fn team_box(col: [f32; 4], per: usize, k: usize) -> [f32; 4] {
-    let h = 24.0 + ROW_PITCH * per as f32;
-    [col[0], col[1] + (h + TEAM_GAP) * k as f32, col[2], h]
-}
-
-/// B295: seat `i`'s row (1P, 2P on the first team; doubles 3P, 4P on the second).
-fn seat_rect(col: [f32; 4], doubles: bool, i: usize) -> [f32; 4] {
-    let per = 1 + doubles as usize;
-    let [x, y, w, _] = team_box(col, per, i / per);
-    [x + 6.0, y + 22.0 + ROW_PITCH * (i % per) as f32, w - 12.0, ROW_H]
-}
-
-/// B295: the context help under the seats.
-fn help_rect(col: [f32; 4], doubles: bool) -> [f32; 4] {
-    let [x, y, w, h] = team_box(col, 1 + doubles as usize, 1);
-    [x, y + h + 8.0, w, 40.0]
-}
-
-/// B295: the teams' groups ("Team 1", "Team 2") behind the seat rows.
-fn team_boxes(d: &mut Draw, col: [f32; 4], doubles: bool) {
-    for k in 0..2 {
-        let [x, y, w, h] = team_box(col, 1 + doubles as usize, k);
-        d.box3([x, y, w, h], 12.0, [Some(INK), Some(WHITE), Some(CREAM)], 120.0);
-        d.text(&format!("TEAM {}", k + 1), x + 10.0, y + 5.0, 12.0, [38.0, 51.0, 32.0]);
-    }
-}
-
-/// B295: the help line's box under the seats, `s` word-wrapped onto its two lines (shrunk to fit).
-fn help_line(d: &mut Draw, col: [f32; 4], doubles: bool, s: &str) {
-    help_box(d, help_rect(col, doubles), s);
 }
 
 /// The help box at `[x, y, w, h]`.
@@ -2729,50 +2462,6 @@ fn left(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32, rgb: [f32; 3
     d.label(s, x + w / 2.0, y, size, max, rgb);
 }
 
-/// B295: what a seat row shows.
-struct SeatRow<'a> {
-    /// the player (its colour and tag)
-    p: usize,
-    face: Option<(Tex, [f32; 4])>,
-    name: &'a str,
-    /// the name dimmed (still picking)
-    faint: bool,
-    who: &'a str,
-    /// the status chip's words and their colour (None: see-through, white words)
-    chip: (&'a str, Option<[f32; 3]>),
-    /// taken (not an open seat)
-    filled: bool,
-    /// the cursor's
-    on: bool,
-}
-
-/// B295: a seat's row (`mockups/Lobby`): the player's colour, "NP", the face, the character over the player, the
-/// status chip at the right end (`end` units in from it, for a ✕), gold-ringed when chosen.
-fn seat_row(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &SeatRow, end: f32) {
-    let fill = if s.filled { CARD_FILL[s.p] } else { CARD_FILL[s.p].map(|c| c * 0.45) };
-    let ring = if s.on { GOLD } else if s.filled { WHITE } else { [60.0; 3] };
-    d.box3([x, y, w, h], 12.0, [Some(INK), Some(ring), Some(fill)], 128.0);
-    d.text(&format!("{}P", s.p + 1), x + 8.0, y + 8.0, 18.0, WHITE);
-    let fx = x + 50.0;
-    match s.face {
-        Some(f) => face_frame(d, f, fx, y + h / 2.0, h - 6.0, WHITE),
-        None => {
-            let r = (h - 6.0) / 2.0;
-            for (src, dst) in super::menu_art::pill_quads(0, [fx - r, y + h / 2.0 - r, 2.0 * r, 2.0 * r]) {
-                d.q(Tex::Pill, src, dst, [40.0; 3], 128.0);
-            }
-        }
-    }
-    let (words, fill) = s.chip;
-    let cw = d.width(words, 12.0).min(90.0) + 18.0;
-    let cx = x + w - end - 6.0 - cw;
-    d.pill_at([cx, y + 8.0, cw, 18.0], [fill.map_or([40.0; 3], |_| [60.0; 3]), fill.map_or([40.0; 3], |_| WHITE), fill.map_or([40.0; 3], |_| WHITE)], if fill.is_some() { 128.0 } else { 70.0 });
-    d.label(words, cx + cw / 2.0, y + 10.0, 12.0, cw - 6.0, fill.unwrap_or(WHITE));
-    let (tx, tw) = (fx + h / 2.0 + 4.0, cx - fx - h / 2.0 - 10.0);
-    left(d, s.name, tx, y + 2.0, 17.0, tw, if s.faint { [100.0; 3] } else { WHITE });
-    left(d, s.who, tx, y + 20.0, 11.0, tw, [118.0; 3]);
-}
-
 /// The confirm screen (B295, ours after `mockups/Lobby`): the seats as rows by team with the original's VS between
 /// them, the side card with the court (its surface and ball meters) and umpire, the court / sets / games / umpire
 /// rows and Start under it. The original's pickers (`picker`) take the bottom as before.
@@ -2795,9 +2484,10 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     court_meters(d, m, [sx + 10.0, sy + 52.0, sw - 20.0]);
     // the umpire's round face (the "?" tile for a random one) and name
     let u = m.umpire as usize;
-    let (face, uname) = match u {
+    // M8f3: a mod shows its donor's face by its own name
+    let (face, uname) = match m.umpire_donor(u) {
         UMPIRES => ((C02, RANDOM_TILE), "Random Umpire".to_string()),
-        _ => ((C00, [63.0 + 48.0 * u as f32, 272.0, 46.0, 44.0]), text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string()),
+        f => ((C00, [63.0 + 48.0 * f as f32, 272.0, 46.0, 44.0]), m.umpire_name(text, u)),
     };
     // B350: one icon: the disc's face is round with its own rim already (no frame of ours round it), the "?" tile
     // its middle square inside its edge lines; just her name beside it
@@ -3005,9 +2695,11 @@ fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
     let [l, t, r, _] = m.grid.reach();
     let (_, top) = strip_rects(m);
     let u = m.umpire as usize;
-    let (name, sub) = match u {
-        UMPIRES => ("Random".to_string(), "Any of the 5 umpires".to_string()),
-        _ => (text.msg(669 + 2 * u).trim_start_matches("Umpire ").to_string(), format!("Umpire {} of {UMPIRES}", u + 1)),
+    let (name, sub) = match (u, m.umpire_mod_of(u)) {
+        (UMPIRES, _) => ("Random".to_string(), "Any of the 5 umpires".to_string()),
+        // M8f3: a mod by its name, its game and the disc umpire it calls (and sits) as
+        (_, Some(x)) => (x.name.clone(), format!("{}, calls as {}", x.source.as_str().split(':').next_back().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("Mod"), m.umpire_name(text, x.donor as usize))),
+        _ => (m.umpire_name(text, u), format!("Umpire {} of {UMPIRES}", u + 1)),
     };
     let [cx, cy, cw, ch] = name_card(d, m, &name, &sub, false);
     // the stage: as tall as the room between the title and the strip, the still fitted in it; on a narrow window,
@@ -3023,6 +2715,7 @@ fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
     }
     let [x, y0, w, h] = s;
     d.box3(s, 16.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
+    let u = m.umpire_donor(u);
     if u < UMPIRES {
         let (sw, sh) = (190.0, 336.0);
         let ph = (h - 16.0).min((w - 16.0) * sh / sw);
@@ -3098,6 +2791,8 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
         let on = i == at;
         let (tex, src) = match v {
             _ if m.sel != 1 && v < UMPIRES => (CONFIRM, [8.0 + 88.0 * v as f32, 392.0, 80.0, 64.0]),
+            // M8f3: a mod on a plain card, named below
+            _ if m.sel != 1 && v > UMPIRES => (Tex::Solid, [0.0; 4]),
             _ if m.sel == 1 && v < COURTS => {
                 let t = if v < 7 { 2 * v } else { 2 * (v - 7) + 1 };
                 (C02, [96.0 * (t % 2) as f32, 72.0 * (t / 2) as f32, 92.0, 68.0])
@@ -3106,7 +2801,11 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
         };
         let ring = if on { 2.5 } else { 1.5 };
         d.q(Tex::Solid, [0.0; 4], [r[0] - ring, r[1] - ring, r[2] + 2.0 * ring, r[3] + 2.0 * ring], if on { [128.0, 108.0, 38.0] } else { INK }, 128.0);
-        d.q(tex, src, r, if on { WHITE } else { [100.0; 3] }, 128.0);
+        if m.sel != 1 && v > UMPIRES {
+            d.q(tex, src, r, if on { [92.0, 80.0, 112.0] } else { [56.0, 50.0, 70.0] }, 128.0);
+        } else {
+            d.q(tex, src, r, if on { WHITE } else { [100.0; 3] }, 128.0);
+        }
         d.hit(r, pointer::Act::Pick(v));
         let rgb = if on { GOLD } else { WHITE };
         let cx = r[0] + r[2] / 2.0;
@@ -3118,6 +2817,9 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
             }
         } else if v == UMPIRES {
             d.outlined(|d| d.label("Random", cx, r[1] + r[3] - 14.0, 12.0, r[2] - 4.0, rgb));
+        } else if v > UMPIRES {
+            let name = m.umpire_name(text, v);
+            d.outlined(|d| d.label(&name, cx, r[1] + r[3] / 2.0 - 6.0, 12.0, r[2] - 4.0, rgb));
         }
     }
 }
@@ -3160,9 +2862,9 @@ fn side_button(d: &mut Draw, [x, y, w, h]: [f32; 4], label: &str, on: bool, big:
 }
 
 /// The picker strip's values (court or umpire, by `m.sel`): Random first, then the courts in the original's strip
-/// order or the umpires in theirs.
+/// order or the umpires in theirs, then the umpire mods (M8f3).
 fn strip_order(m: &Menu) -> Vec<usize> {
-    if m.sel == 1 { std::iter::once(COURTS).chain(STRIP).collect() } else { std::iter::once(UMPIRES).chain(0..UMPIRES).collect() }
+    if m.sel == 1 { std::iter::once(COURTS).chain(STRIP).collect() } else { std::iter::once(UMPIRES).chain(0..UMPIRES).chain(umpire_mods::values(m)).collect() }
 }
 
 /// Where the picked value sits on [`strip_order`].
@@ -3240,9 +2942,8 @@ fn step(
         }
         return;
     }
-    menu.duo_sync(&pads);
     #[cfg(target_arch = "wasm32")]
-    crate::web::touch_pads(menu.duo, menu.settings.0[VIBRATION]);
+    crate::web::touch_buzz(menu.settings.0[VIBRATION]);
     let dt = time.delta_secs();
     // B221: the pointer's acts (`pointer.rs`), as its device's
     let mut acts = pending.as_mut().map(|p| std::mem::take(&mut p.0)).unwrap_or_default();
@@ -3266,6 +2967,8 @@ fn step(
                 k.next = keys.any_just_pressed([KeyCode::KeyE, KeyCode::PageDown]);
                 k.page = keys.just_pressed(KeyCode::Tab);
                 k.hand = bind.key_just_pressed(&keys, Action::Camera);
+                k.kind_prev = keys.just_pressed(KeyCode::Digit1);
+                k.kind_next = keys.just_pressed(KeyCode::Digit3);
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };
@@ -3278,6 +2981,8 @@ fn step(
                 k.next = g.just_pressed(GamepadButton::RightTrigger);
                 k.page = g.just_pressed(GamepadButton::West);
                 k.hand = g.just_pressed(GamepadButton::Select);
+                k.kind_prev = g.just_pressed(GamepadButton::LeftTrigger2);
+                k.kind_next = g.just_pressed(GamepadButton::RightTrigger2);
             }
         }
         let mut dirs = [false; 4];
@@ -3285,7 +2990,7 @@ fn step(
             dirs[i] = repeat.entry((id, i)).or_default().step(h, dt);
         }
         [k.up, k.down, k.left, k.right] = dirs;
-        if k != Press::default() && touch_page() && !menu.duo {
+        if k != Press::default() && touch_page() {
             menu.pad_takes_touch_seat(dev, &pads);
         }
         let mut fx = Vec::new();
@@ -3320,7 +3025,7 @@ fn step(
                         warn!("{}: {e}", path.display());
                     }
                     #[cfg(target_arch = "wasm32")]
-                    crate::web::renderer(RENDERERS[menu.settings.5 as usize]);
+                    crate::web::renderer(RENDERERS[menu.settings.5 as usize].0);
                 }
                 Effect::Quit => {
                     exit.write(AppExit::Success);
@@ -3338,7 +3043,6 @@ fn step(
                         *launching = true;
                         continue;
                     }
-                    super::widescreen::SIDEWAYS.store(menu.duo, std::sync::atomic::Ordering::Relaxed);
                     info!("starting the match: {}", a.join(" "));
                     // the match in this app; its quit comes back to this menu as it is now
                     let (base, kept) = (args.clone(), menu.clone());
@@ -3348,9 +3052,15 @@ fn step(
                     });
                     commands.insert_resource(crate::mode::Next(Some(crate::match_mode(&args.iso, &a, back))));
                 }
+                Effect::SaveFavourites => {
+                    let path = tabs::path(&args.iso);
+                    if let Err(e) = crate::store::write(&path, tabs::text(&menu.favs)) {
+                        warn!("{}: {e}", path.display());
+                    }
+                }
                 Effect::Hear(u, program, key) => {
                     let Some(s) = &sound else { continue };
-                    let bank = voice.0.entry(u).or_insert_with(|| Iso::open(&args.iso).ok().and_then(|mut iso| crate::audio::umpire_bank(&mut iso, u, 0)).map(Arc::new)).clone();
+                    let bank = voice.0.entry(u).or_insert_with(|| umpire_mods::preview_bank(&args.iso, &menu, u).map(Arc::new)).clone();
                     if let Some(bank) = bank {
                         if let Some(id) = voice.1.take() {
                             s.stop(id);
@@ -3452,6 +3162,13 @@ fn draw(
                     continue;
                 }
             },
+            Tex::Thumb(k) => match shelf.thumbs.get(k as usize).cloned().flatten() {
+                Some(h) => h,
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Qr => match &qr {
                 Some(qr) => qr.0.clone(),
                 None => {
@@ -3468,7 +3185,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Thumb(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         // a face's source is out of 64 whatever the icon's size (a part of it: the Mods tiles' square crop)
         if matches!(quad.tex, Tex::Face(_)) && [u, v, w, h] != [0.0, 0.0, 64.0, 64.0] {
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);
@@ -3567,55 +3284,27 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
-        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text, turn).chain(), bgm, cursor::tick));
+        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick))
+        .add_systems(Last, cursor::show);
     // M14: the button legend
     legend::plugin(app);
     app.add_systems(Update, legend::fill.after(step));
     app.add_systems(Update, trace::trace.after(online::poll).run_if(trace::on));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,
-        (online::poll.after(step).before(draw), online::typing.before(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
+        (online::poll.after(step).before(draw), online::typing.before(step), names::typing.before(step), names::persist.after(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
     );
     previews::plugin(app);
     mods_screen::plugin(app);
     // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Startup, || crate::web::touch_menu(true));
-    // B118: a two-player phone match's turned HUD ends with it
-    app.add_systems(Startup, || super::widescreen::SIDEWAYS.store(false, std::sync::atomic::Ordering::Relaxed));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use Effect::*;
-
-    /// B118: 1v1 on this phone seats the tap's device as 1P (moved onto the screen's pad) and holds 2P open for the
-    /// far pad's ✕; backing out of the select ends it.
-    #[test]
-    fn phone_duo() {
-        let mut w = World::new();
-        let (near, far) = (w.spawn_empty().id(), w.spawn_empty().id());
-        let mut m = Menu::default();
-        let mut out = Vec::new();
-        m.duo_start(Dev::Keys, &mut out);
-        m.duo_sync(&[near, far]);
-        assert!(m.duo && !m.doubles && m.screen == Screen::Chars);
-        assert_eq!(m.seats, [Some(Dev::Pad(near)), Some(Dev::Open), None, None]);
-        let ok = Press { ok: true, ..default() };
-        m.step(Dev::Pad(far), ok);
-        assert_eq!(m.seats[1], Some(Dev::Pad(far)));
-        // 1P ready: the select turns to face 2P, whose pad the taps now are
-        assert!(!m.turned());
-        m.step(Dev::Pad(near), ok);
-        assert!(m.players[0].ready && m.turned());
-        assert_eq!(pointer::device(&m, &[near, far]), Dev::Pad(far));
-        m.step(Dev::Pad(far), ok);
-        assert!(!m.turned());
-        m.screen = Screen::Main;
-        m.duo_sync(&[near, far]);
-        assert!(!m.duo);
-    }
 
     /// A mod's △ grades: its base's where its row matches the base, the nearest disc characters' where it doesn't.
     #[test]
@@ -3640,24 +3329,6 @@ mod tests {
             d.out.iter().any(|q| q.rgb == [128.0, 110.0, 40.0])
         };
         assert!(gold(0) && !gold(1));
-    }
-
-    /// B282: a seat row draws a disc character's name and a mod's the same way: our font's glyphs, same size and
-    /// colour (no disc name-sheet art for one and text for the other).
-    #[test]
-    fn seat_names_one_style() {
-        let glyphs = ('A'..='z').map(|c| (c, (0.0, 0.0, 16.0))).collect();
-        let t = Text { msg: Vec::new(), glyphs, grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
-        let name = |s: &str| {
-            let mut d = Draw { out: Vec::new(), text: &t, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
-            let row = SeatRow { p: 0, face: None, name: s, faint: false, who: "", chip: ("", None), filled: true, on: false };
-            seat_row(&mut d, [0.0, 0.0, 300.0, 40.0], &row, 0.0);
-            let font: Vec<_> = d.out.iter().filter(|q| q.tex == Tex::Font && q.dst[1] == 2.0).map(|q| (q.dst[3], q.rgb, q.alpha)).collect();
-            assert!(d.out.iter().all(|q| !matches!(q.tex, Tex::Sheet(_))), "{s}: no sheet art");
-            font
-        };
-        let (disc, mods) = (name(CHAR_NAMES[0]), name("Anya"));
-        assert!(!disc.is_empty() && disc[0] == mods[0] && disc.iter().chain(&mods).all(|&q| q == disc[0]));
     }
 
     /// A 2160-pixel-high view: a box's middle and bottom slices on the 3P row meet on a half pixel (238 units); snapped,
@@ -3701,16 +3372,16 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8, 0, 4, 0);
+        let s = Settings([true, false, false, true, true, true, true, false, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8, 0, 4, 0);
         assert_eq!(Settings::parse(&s.text()), s);
         // B339: Downloads at Once: Auto (3 on desktop) unless set, at most 8
         assert_eq!((s.downloads_at_once(), Settings::default().downloads_at_once()), (4, 3));
         assert_eq!((Settings::parse("downloads_at_once = 8\n").8, Settings::parse("downloads_at_once = 9\n").8), (8, 0));
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true, false, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true, false, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true, false, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -3718,10 +3389,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true, false, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true, true, true, false, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true, true, true, false, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -3731,7 +3402,7 @@ mod tests {
         assert!(!Settings::parse("chat = off\n").0[CHAT] && Settings::parse("").0[CHAT]);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false, true, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true, true, true, false, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]
@@ -3771,8 +3442,8 @@ mod tests {
     }
 
     /// B216 / B258 / B346: a singles match with nobody on 2P: once 1P is ready, 2P's COM card starts on 1P's
-    /// character (its next free costume); ✕ keeps it, ○ leaves it to the computer (the first character nobody has),
-    /// or 1P picks another.
+    /// character (its next free costume); ✕ keeps it, or 1P picks another; ○ (B355) undoes 1P's pick instead of
+    /// picking for the computer.
     #[test]
     fn an_open_seat_is_a_com_card() {
         let (ok, back) = (press(|p| &mut p.ok), press(|p| &mut p.back));
@@ -3785,16 +3456,13 @@ mod tests {
         assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(1)));
         assert!(!m.players[1].ready);
         assert_eq!((m.players[1].char(), m.players[1].costume), (0, 1));
-        // 1P moves the COM's cursor, then backs out: the computer's own pick again
+        // 1P moves the COM's cursor, then backs out: 1P's own pick is undone, the COM's stays open (B355)
         m.step(Dev::Keys, press(|p| &mut p.right));
         assert_ne!(m.players[1].char(), 0);
         m.step(Dev::Keys, back);
-        assert_eq!(m.screen, Screen::Confirm);
-        assert!(m.players[1].ready);
-        assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
-        // back to the select: everyone picks again; this time 1P picks the COM's character
-        m.step(Dev::Keys, back);
-        assert!(m.screen == Screen::Chars && !m.players[1].ready && m.open(1));
+        assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(0)));
+        assert!(!m.players[0].ready && !m.players[1].ready && m.open(1));
+        // 1P readies again; this time 1P picks the COM's character
         m.step(Dev::Keys, ok);
         m.step(Dev::Keys, press(|p| &mut p.right));
         let c = m.players[1].char();
@@ -3810,11 +3478,28 @@ mod tests {
         assert_eq!((m.driven(Dev::Keys), m.driven(pad)), (Some(2), Some(2)));
         m.step(pad, ok);
         assert_eq!(m.driven(Dev::Keys), Some(3));
+        // ○ on 4P's card: back to 3P's, not a pick for the computer (B355)
         m.step(Dev::Keys, back);
-        assert_eq!(m.screen, Screen::Confirm);
-        let chars: Vec<usize> = m.players.iter().map(|p| p.char()).collect();
-        // 3P carried 2P's character on, 4P left to the computer: one nobody has
-        assert!(chars[2] == chars[1] && !chars[..3].contains(&chars[3]), "{chars:?}");
+        assert_eq!((m.screen, m.driven(Dev::Keys)), (Screen::Chars, Some(2)));
+        assert!(!m.players[2].ready && !m.players[3].ready);
+    }
+
+    /// B355: on a phone (touch only, the keyboard's device) the title tab's Back after 1P's pick undoes it, never
+    /// readies the computer's card; a second one leaves the select.
+    #[test]
+    fn touch_back_after_1p_picks_undoes_it() {
+        let mut m = Menu::default();
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        m.step(Dev::Keys, press(|p| &mut p.right));
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        assert!(m.players[0].ready && m.driven(Dev::Keys) == Some(1));
+        let tab = pointer::press(|k| k.back = true);
+        assert!(pointer::tests::hits(&m).0.iter().any(|h| h.act == tab), "the title tab is drawn");
+        m.point(Dev::Keys, tab, true);
+        assert_eq!(m.screen, Screen::Chars);
+        assert!(!m.players[0].ready && !m.players[1].ready);
+        m.point(Dev::Keys, tab, true);
+        assert_eq!(m.screen, Screen::Main);
     }
 
     #[test]
@@ -3883,20 +3568,22 @@ mod tests {
             m.step(Dev::Keys, press(f));
             m.cell(0)
         };
-        // B306: the one roster: the Random card, the disc's 14, then the mods (8 a row here)
+        // B369: the mods' own tab (8 a row here), ← past its first tile to Hot Shots' row 0, its last tile
         m.grid = Grid::fit(4.0 / 3.0);
-        assert_eq!(m.grid.cols, 8);
+        while m.columns().cols < 8 {
+            m.grid.view[2] += 1.0;
+        }
+        assert_eq!(m.columns().cols, 8);
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(2)));
         assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Mod(0)));
-        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[CHARS - 1].0)), "the disc's last");
+        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[6].0)), "Hot Shots' first row's last");
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(0)));
         assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)));
-        assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)), "the roster's end");
+        assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)), "the tab's end");
         assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)));
-        for _ in 0..3 {
-            go(&mut m, |p| &mut p.up);
-        }
-        assert_eq!(m.cell(0), None, "up the first column to the Random card");
+        assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)), "↑ never changes the tab");
+        go(&mut m, |p| &mut p.left);
+        assert_eq!(go(&mut m, |p| &mut p.up), None, "↑ on the first row: its first tile, the Random card");
     }
 
     /// B269: with 3 computer players added in doubles, 1P picking Random leaves each next COM's cursor on Random, so
@@ -4051,25 +3738,17 @@ mod tests {
         assert_eq!((m.court, m.umpire as usize), (COURTS, UMPIRES));
     }
 
-    /// B347: △ on the select swaps the player's render for the attribute card and back, ready or not, and stays up
-    /// across characters; on Random it does nothing (the pick stays hidden).
+    /// B368: △ on the select no longer swaps a card (the attribute card is always up); B371: it opens the device's own
+    /// seat's name picker.
     #[test]
-    fn triangle_shows_the_attribute_card() {
-        // 2P a human too, so a ready 1P's keys stay 1P's (not on to the computer's pick)
+    fn triangle_opens_the_name_picker_on_the_select() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
         let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
         m.players[0].cursor = 6;
-        let card = press(|p| &mut p.card);
-        assert_eq!(m.step(Dev::Keys, card), [Sound(0)]);
-        assert!(m.players[0].card);
-        m.step(Dev::Keys, press(|p| &mut p.right));
-        assert!(m.players[0].card, "kept on the next character");
-        m.players[0].ready = true;
-        m.step(Dev::Keys, card);
-        assert!(!m.players[0].card);
-        m.players[0] = Player { random: true, ..default() };
-        assert_eq!(m.step(Dev::Keys, card), []);
-        assert!(!m.players[0].card);
+        m.step(Dev::Keys, press(|p| &mut p.card));
+        assert!(m.naming(0) && !m.naming(1), "△ names the device's own player");
+        m.step(pad, press(|p| &mut p.card));
+        assert!(m.naming(1));
     }
 
     /// B64: ✕ on Select Court / Select Umpire opens its picker; B257: ←→↑↓ walk the court grid (three to a row, no wrap),
@@ -4257,63 +3936,93 @@ mod tests {
         assert_eq!(m.args(&[]).iter().skip_while(|x| *x != "--pads").nth(1).unwrap(), "-,k");
     }
 
-    /// B306: the select's tiles: the disc roster at any aspect on one view at up to the max size, a hundred mods
-    /// shrinking them to the min and scrolling; tiles square, filling the width, over the cards, the cards over the
-    /// description bar, all in the view.
+    /// B368: the select's player columns at any aspect, 1 to 4 of them: side by side in the view, apart, over the
+    /// legend strip; each part of a column inside its card, in order down it; tiles square on screen, filling the grid's
+    /// width, at least a row on view; at 16:9 13 / 6 / 4 / 3 a row (the mockup's).
     #[test]
     fn select_fits_the_window() {
         use super::super::widescreen::{share, vplace, vshare};
-        assert_eq!(Grid::fit(4.0 / 3.0).cols, 8);
-        assert!(Grid::fit(16.0 / 9.0).cols > 8 && Grid::fit(21.0 / 9.0).cols > Grid::fit(16.0 / 9.0).cols);
+        let inside = |r: [f32; 4], c: [f32; 4]| r[0] >= c[0] - 1e-3 && r[1] >= c[1] - 1e-3 && r[0] + r[2] <= c[0] + c[2] + 1e-3 && r[1] + r[3] <= c[1] + c[3] + 1e-3;
         for a in [0.4, 9.0 / 16.0, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
             let (ex, ey) = ((640.0 / share(a) - 640.0) / 2.0, (448.0 / vshare(a) - 448.0) / 2.0);
-            let ticker = vplace(404.0, 32.0, a, Anchor::Span).0;
-            for n in [1 + CHARS, 1 + CHARS + 30, 1 + CHARS + 100] {
-                let g = Grid::fit_n(a, n, 1.0);
-                assert!(g.tile >= TILE_MIN - 1e-3 && g.tile <= TILE_MAX + 1e-3, "{a} {n} {g:?}");
-                assert_eq!(g.scrolls, g.per() < n, "{a} {n}");
-                let last = g.cell(g.per().min(n) - 1);
-                let [tx, ty, tw, th] = g.tiles;
-                assert!(last[1] + last[3] <= ty + th + 1e-3 && ty + th < g.cards[1], "{a} {n}");
-                let right = g.cell(g.cols - 1);
-                let lane = if g.scrolls { SCROLL_W } else { 0.0 };
-                assert!((right[0] + right[2] - (tx + tw - lane)).abs() < 1e-2, "{a} {n}: the columns fill the width");
-                for r in [g.tiles, g.cards] {
-                    assert!(r[0] >= -ex && r[0] + r[2] <= 640.0 + ex + 1e-3 && r[1] >= -ey, "{a} {r:?}");
-                    let (t, h) = vplace(r[1], r[3], a, Anchor::Centre);
-                    assert!(t + h <= ticker + 1e-3, "{a} {r:?}");
+            let legend = vplace(436.0, 12.0, a, Anchor::Span).0;
+            let g = Grid::fit(a);
+            for n in 1..=4 {
+                let c = roster::columns(g.view, n);
+                assert!(c.rows >= 1 && c.cols >= 1, "{a} {n} {c:?}");
+                assert!(((c.tile[0] / roster::PX) - (c.tile[1] / roster::PY)).abs() < 1e-3, "{a} {n}: square tiles");
+                for p in 0..n {
+                    let at = c.parts(p);
+                    let card = at.card;
+                    assert!(card[0] >= -ex && card[0] + card[2] <= 640.0 + ex + 1e-3 && card[1] >= -ey, "{a} {n} {card:?}");
+                    let (t, h) = vplace(card[1], card[3], a, Anchor::Centre);
+                    assert!(t + h <= legend + 1e-3, "{a} {n} {card:?}");
+                    let rows = [at.head, at.pills, at.preview, at.tabs, at.grid, at.foot];
+                    for (i, r) in rows.iter().enumerate() {
+                        assert!(inside(*r, card) && r[3] > 0.0, "{a} {n} {p} part {i} {r:?} in {card:?}");
+                        if i > 0 {
+                            assert!(rows[i - 1][1] + rows[i - 1][3] <= r[1] + 1e-3, "{a} {n} {p} part {i} overlaps");
+                        }
+                    }
+                    assert!(inside(at.bar, card) && at.grid[0] + at.grid[2] < at.bar[0], "{a} {n} {p}");
+                    let last = c.cell(p, c.per() - 1);
+                    assert!(inside(last, at.grid), "{a} {n} {p}: {last:?} in {:?}", at.grid);
+                    let right = c.cell(p, c.cols - 1);
+                    assert!((right[0] + right[2] - (at.grid[0] + at.grid[2])).abs() < 1e-2, "{a} {n}: the tiles fill the width");
+                    if p > 0 {
+                        let prev = c.parts(p - 1).card;
+                        assert!(prev[0] + prev[2] < card[0], "{a} {n} {p}: apart");
+                    }
                 }
             }
-            let disc = Grid::fit_n(a, 1 + CHARS, 1.0);
-            assert!(!disc.scrolls, "{a}: the disc roster on one view");
-            if a >= 4.0 / 3.0 {
-                assert!(Grid::fit_n(a, 1 + CHARS + 100, 1.0).tile < disc.tile, "{a}: mods shrink the tiles");
+            if (a - 16.0 / 9.0).abs() < 1e-3 {
+                assert_eq!((1..=4).map(|n| roster::columns(g.view, n).cols).collect::<Vec<_>>(), [13, 6, 4, 3]);
             }
         }
     }
 
-    /// B306: the roster scrolls only as far as keeps the shown player's tile in view.
+    /// B306: the roster scrolls only as far as keeps the shown player's tile in view; B368: each column on its own, the
+    /// wheel / a drag moving one column's view and no cursor.
     #[test]
     fn roster_scrolls_to_the_cursor() {
-        let mut m = Menu { screen: Screen::Chars, mods: (0..100).map(fake_mod).map(|m| crate::mods::Mod { costumes: vec!["a".into()], ..m }).collect(), seats: [Some(Dev::Keys), None, None, None], ..default() };
-        m.grid = Grid::fit_n(4.0 / 3.0, m.roster().len(), 1.0);
-        assert!(m.grid.scrolls);
-        let rows = m.grid.rows;
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Chars, mods: (0..100).map(fake_mod).map(|m| crate::mods::Mod { costumes: vec!["a".into()], ..m }).collect(), seats: [Some(Dev::Keys), Some(pad), None, None], grid: Grid::fit(4.0 / 3.0), ..default() };
+        // B369: both on the mods' tab
+        let mods = m.tabs().last().unwrap().id;
+        for p in 0..2 {
+            m.put(p, Some(Who::Mod(0)));
+            m.players[p].tab = mods;
+        }
+        let c = m.columns();
+        assert!(c.per() < m.tab_cells(0).len());
         let down = |m: &mut Menu| {
             m.step(Dev::Keys, press(|p| &mut p.down));
-            m.scroll = m.page().0 / m.grid.cols;
         };
-        for _ in 0..rows - 1 {
+        for _ in 0..c.rows - 1 {
             down(&mut m);
         }
-        assert_eq!(m.scroll, 0, "still on the first view");
+        assert_eq!(m.scroll, [0; 4], "still on the first view");
         down(&mut m);
-        assert_eq!(m.scroll, 1);
-        let start = m.page().0;
+        assert_eq!(m.scroll, [1, 0, 0, 0], "1P's column only");
+        let start = m.page(0).0;
         let acts = hits_chars(&m);
-        assert!(acts.contains(&pointer::Act::Cell(start)) && !acts.contains(&pointer::Act::Cell(start - 1)));
+        assert!(acts.contains(&pointer::Act::Cell(0, start)) && !acts.contains(&pointer::Act::Cell(0, start - 1)));
+        assert!(acts.contains(&pointer::Act::Cell(1, 0)), "2P's column still at the top");
         m.step(Dev::Keys, press(|p| &mut p.up));
-        assert_eq!(m.page().0 / m.grid.cols, 1, "moving back up inside the view doesn't scroll");
+        assert_eq!(m.page(0).0 / c.cols, 1, "moving back up inside the view doesn't scroll");
+        // 2P's column scrolled by the wheel: its own view moves, its pick and 1P's don't
+        let (was, mine) = (m.cell(1), m.scroll[0]);
+        assert_eq!(m.point(pad, pointer::Act::Scroll(1, 3), false), [Sound(0)]);
+        assert_eq!((m.scroll[1], m.cell(1), m.scroll[0]), (3, was, mine));
+        assert_eq!(m.point(Dev::Keys, pointer::Act::Scroll(1, 1), false), [], "1P's device doesn't scroll 2P's column");
+        assert!(m.scroll_by(1, -10) && m.scroll[1] == 0 && !m.scroll_by(1, -1), "not past the top");
+        let last = m.tab_cells(1).len().div_ceil(c.cols) - c.rows;
+        m.scroll_by(1, 1000);
+        assert_eq!(m.scroll[1], last, "not past the bottom");
+        // a tap on a tile there picks it
+        let k = m.page(1).0 + 1;
+        m.point(pad, pointer::Act::Cell(1, k), false);
+        assert_eq!(m.cell(1), m.tab_cells(1)[k]);
     }
 
     fn hits_chars(m: &Menu) -> Vec<pointer::Act> {
@@ -4321,7 +4030,7 @@ mod tests {
     }
 
     /// B295: the lobby and confirm screens at any aspect: the seats column and side card in the view, apart, over the
-    /// legend strip; the seats and help line in their column; every button on the side card, none overlapping.
+    /// legend strip; every button on the side card, none overlapping (B370: the lobby's items in the view, apart).
     #[test]
     fn lobby_and_confirm_fit_the_window() {
         use super::super::widescreen::{share, vplace, vshare};
@@ -4338,9 +4047,6 @@ mod tests {
                 assert!(t + h <= legend + 1e-3, "{a} {r:?}");
             }
             assert!(!overlap(col, side), "{a}");
-            for doubles in [false, true] {
-                assert!(inside(help_rect(col, doubles), col), "{a} {doubles}");
-            }
             let mut m = Menu { screen: Screen::Confirm, grid: g, ..default() };
             let rows = confirm_rects(&m);
             assert!(rows.iter().all(|&r| inside(r, side)) && (0..5).all(|i| (0..i).all(|j| !overlap(rows[i], rows[j]))), "{a} {rows:?}");
@@ -4355,8 +4061,8 @@ mod tests {
                 assert!(rects.iter().all(|&x| inside(x, [l, t, r - l, b - t])), "{a} {hosting} {rects:?}");
                 for i in 0..rects.len() {
                     for j in 0..i {
-                        // a computer's ✕ sits on its own seat's row
-                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 26.0, "{a} {hosting} {i} {j} {rects:?}");
+                        // a computer's ✕ sits on its own seat's card
+                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 22.0, "{a} {hosting} {i} {j} {rects:?}");
                     }
                 }
             }

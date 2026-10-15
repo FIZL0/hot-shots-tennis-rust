@@ -1,7 +1,7 @@
-//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA and the original
+//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA, ambient occlusion (G1, beyond the original) and the original
 //! 640×448 mode (`hud_gamma.rs` draws it; it also fixes the aspect ratio to 4:3 and turns upscaled textures off, `main.rs`).
 //! The menu edits the [`Graphics`] resource (applied live) and passes it to a match as flags
-//! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--original`). The simulation stays a fixed
+//! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--ao low|high`, `--original`, `--mesh N`). The simulation stays a fixed
 //! 60 Hz tick whatever these are. Defaults draw as before these settings existed.
 
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
@@ -27,6 +27,10 @@ pub struct Graphics {
     pub shadows: Shadows,
     /// MSAA samples on the 3D cameras: 1 (off), 2 or 4 (Bevy's default, how it drew before this setting).
     pub msaa: u32,
+    /// G1: screen-space ambient occlusion (Bevy's GTAO-based SSAO, `ao`): 0 off, 1 low, 2 high quality. Not in the
+    /// original mode; the 3D cameras then draw without MSAA (SSAO needs it off), SMAA smoothing the edges instead
+    /// when Anti-aliasing is on.
+    pub ao: u8,
     /// Draw as the PS2 did: the court at 640×448 and the HUD at 448 lines, scaled up unfiltered (overrides `scale`).
     pub original: bool,
     /// A window instead of borderless fullscreen on the current monitor (the default, B96). Not part of a preset.
@@ -46,7 +50,13 @@ pub struct Graphics {
     /// Leave the characters' and effects' meshes out of a view they're outside of (B345, `cull.rs`); off draws them
     /// all as before. Not part of a preset.
     pub cull: bool,
+    /// B364: the share of the characters' triangles drawn, in percent (`lod.rs`; 100 = their own meshes). Applies to
+    /// models loaded after a change. Not part of a preset.
+    pub mesh: u32,
 }
+
+/// `Graphics::mesh` for the loaders, which have no world (`character.rs`, `mods.rs`); kept in step by `mesh_detail`.
+pub static MESH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
 
 /// `--merge-meshes` given at launch: 0 not given, 1 off, 2 on; it holds over `Graphics::merge_meshes` (B342).
 pub static MERGE_FORCED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -58,6 +68,9 @@ pub const FPS: [u32; 5] = [30, 60, 120, 144, 0];
 pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
 pub const SHADOWS: [Shadows; 3] = [Shadows::Off, Shadows::Low, Shadows::High];
 pub const MSAA: [u32; 3] = [1, 2, 4];
+pub const MESHES: [u32; 4] = [25, 50, 75, 100];
+/// `ambient_occlusion`'s values (`Graphics::ao`).
+pub const AO: [&str; 3] = ["off", "low", "high"];
 /// The speed-up switches' defaults (`Graphics::fewer_shadows`, `batch_crowd`, `merge_meshes`).
 const FEWER_SHADOWS: bool = true;
 const BATCH_CROWD: bool = false;
@@ -65,19 +78,19 @@ const MERGE_MESHES: bool = false;
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen): full resolution, but
     /// Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`).
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true };
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true };
-    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -88,10 +101,12 @@ impl Graphics {
             "scale" | "render_scale" => self.scale = v.trim_end_matches('%').parse::<u32>().map_or(self.scale, |s| s.clamp(25, 100)),
             "msaa" | "anti_aliasing" => self.msaa = MSAA.into_iter().find(|&m| msaa_name(m) == v).unwrap_or(self.msaa),
             "original" => self.original = v != "off",
+            "ao" | "ambient_occlusion" => self.ao = AO.iter().position(|&n| n == v).map_or(self.ao, |i| i as u8),
             "windowed" => self.windowed = v != "off",
             "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
             "merge_meshes" | "merge-meshes" => self.merge_meshes = v != "off",
             "cull" => self.cull = v != "off",
+            "mesh" => self.mesh = v.trim_end_matches('%').trim().parse::<u32>().map_or(self.mesh, |m| m.clamp(10, 100)),
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             "fewer_shadows" | "fewer-shadows" => self.fewer_shadows = v != "off",
             "batch_crowd" | "batch-crowd" => self.batch_crowd = v != "off",
@@ -105,24 +120,29 @@ impl Graphics {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
         let on = |b: bool| if b { "on" } else { "off" };
         format!(
-            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\ncull = {}\n",
+            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\nambient_occlusion = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\ncull = {}\nmesh = {}\n",
             on(self.vsync),
             self.scale,
             self.shadows.name(),
             msaa_name(self.msaa),
+            AO[self.ao.min(2) as usize],
             on(self.original),
             on(self.windowed),
             ["off", "on", "detailed"][self.show_fps.min(2) as usize],
             on(self.fewer_shadows),
             on(self.batch_crowd),
             on(self.merge_meshes),
-            on(self.cull)
+            on(self.cull),
+            self.mesh
         )
     }
 
     /// The match's flags.
     pub fn flags(&self) -> Vec<String> {
         let mut f = vec!["--fps".into(), self.fps.to_string(), "--scale".into(), self.scale.to_string(), "--shadows".into(), self.shadows.name().into(), "--msaa".into(), msaa_name(self.msaa).into()];
+        if self.ao > 0 {
+            f.extend(["--ao".into(), AO[self.ao.min(2) as usize].into()]);
+        }
         if self.vsync {
             f.push("--vsync".into());
         }
@@ -146,6 +166,9 @@ impl Graphics {
                 f.extend([flag.into(), if on { "on" } else { "off" }.into()]);
             }
         }
+        if self.mesh != 100 {
+            f.extend(["--mesh".into(), self.mesh.to_string()]);
+        }
         f
     }
 
@@ -155,7 +178,7 @@ impl Graphics {
 
     /// Preset `p` with this one's settings that no preset sets (the window, Show FPS, the speed-up switches).
     pub fn keep(&self, p: Graphics) -> Graphics {
-        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, batch_crowd: self.batch_crowd, merge_meshes: self.merge_meshes, cull: self.cull, ..p }
+        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, batch_crowd: self.batch_crowd, merge_meshes: self.merge_meshes, cull: self.cull, mesh: self.mesh, ..p }
     }
 
     /// Whether court meshes are drawn merged (`merge.rs`): the setting, unless `--merge-meshes` said otherwise.
@@ -164,6 +187,12 @@ impl Graphics {
             0 => self.merge_meshes,
             f => f == 2,
         }
+    }
+
+    /// Whether the scene draws with ambient occlusion: set, not in the original mode, and a GPU that runs it (WebGL2
+    /// has no compute shaders for Bevy's SSAO).
+    pub fn ao_on(&self) -> bool {
+        self.ao > 0 && !self.original && !cfg!(all(target_arch = "wasm32", not(feature = "webgpu")))
     }
 
     pub fn present_mode(&self) -> PresentMode {
@@ -195,7 +224,9 @@ pub fn plugin(app: &mut App) {
         app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
     }
     app.init_resource::<Graphics>()
-        .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), fps_counter))
+        .add_systems(PreStartup, mesh_detail)
+        .add_systems(First, mesh_detail)
+        .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), ao.after(msaa), fps_counter))
         .add_systems(Last, limit);
     // Show FPS → Detailed: where the frame's time goes (`frame_start`)
     use bevy::app::RunFixedMainLoopSystems as F;
@@ -213,14 +244,21 @@ pub fn plugin(app: &mut App) {
     }
 }
 
-/// `HST_FPS=1`: every 5 s, what the cameras and the shadow cascades draw: the meshes the scene cameras see and
+/// The Mesh setting where the loaders read it (`MESH`).
+fn mesh_detail(g: Res<Graphics>) {
+    if g.is_changed() {
+        MESH.store(g.mesh, Ordering::Relaxed);
+    }
+}
+
+/// `HST_FPS=1`: every 5 s, what the cameras and the shadow cascades draw: the meshes the active scene cameras see and
 /// how many distinct (mesh, material) pairs they are (the most draws they can batch down to), the spectators' and
 /// creatures' share (`shadow::Minor` rigs) and the meshes the sun's cascades draw.
 #[allow(clippy::type_complexity)]
 fn log_draws(
     time: Res<Time<Real>>,
     mut next: Local<f32>,
-    cams: Query<&bevy::camera::visibility::VisibleEntities, With<Camera3d>>,
+    cams: Query<(&bevy::camera::visibility::VisibleEntities, &Camera), With<Camera3d>>,
     cascades: Query<&bevy::camera::visibility::CascadesVisibleEntities>,
     parts: Query<(&Mesh3d, Option<&MeshMaterial3d<crate::gs::GsMaterial>>, Option<&MeshMaterial3d<StandardMaterial>>)>,
     parents: Query<&ChildOf>,
@@ -232,7 +270,10 @@ fn log_draws(
     }
     *next = now + 5.0;
     let (mut seen, mut pairs, mut npcs, mut npc_pairs) = (0, std::collections::HashSet::new(), 0, std::collections::HashSet::new());
-    for v in &cams {
+    for (v, c) in &cams {
+        if !c.is_active {
+            continue;
+        }
         for &e in v.get(std::any::TypeId::of::<Mesh3d>()) {
             let Ok((mesh, gs, std)) = parts.get(e) else { continue };
             let pair = (mesh.0.id(), gs.map(|m| m.0.id().untyped()).or(std.map(|m| m.0.id().untyped())));
@@ -245,7 +286,7 @@ fn log_draws(
         }
     }
     let cast: Vec<Vec<usize>> = cascades.iter().flat_map(|c| c.entities.values()).map(|v| v.iter().map(|c| c.entities.len()).collect()).collect();
-    eprintln!("draws at {now:.0} s: {} cameras, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().count(), pairs.len(), npc_pairs.len());
+    eprintln!("draws at {now:.0} s: {} of {} cameras active, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().filter(|(_, c)| c.is_active).count(), cams.iter().count(), pairs.len(), npc_pairs.len());
 }
 
 /// When this frame reached: 0 its start (`First`), 1/2 the fixed-step simulation's start/end, 3 the end of the
@@ -296,9 +337,45 @@ fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>
         return;
     }
     // Browser WebGPU only takes 1 or 4 samples (createTexture rejects 2), so 2x draws as 4x there.
-    let m = Msaa::from_samples(if cfg!(all(target_arch = "wasm32", feature = "webgpu")) && g.msaa == 2 { 4 } else { g.msaa });
+    let m = Msaa::from_samples(if g.ao_on() { 1 } else if cfg!(all(target_arch = "wasm32", feature = "webgpu")) && g.msaa == 2 { 4 } else { g.msaa });
     for mut c in &mut q {
         c.set_if_neq(m);
+    }
+}
+
+/// Ambient occlusion on the 3D cameras that clear the scene (the court's; not an overlay drawing over it, which
+/// has its own depth): Bevy's SSAO (GTAO) from a depth + normal prepass (`gs_prepass.wgsl` draws the court
+/// models', `gs.wgsl` darkens by it), and SMAA in place of the MSAA it can't run with. Inserted while on, removed
+/// with what it brought when turned off, so an off camera draws exactly as before.
+#[allow(clippy::type_complexity)]
+fn ao(
+    mut commands: Commands,
+    g: Res<Graphics>,
+    q: Query<(Entity, &Camera, Option<&bevy::pbr::ScreenSpaceAmbientOcclusion>, Has<bevy::anti_alias::smaa::Smaa>), With<crate::hud_gamma::Scene>>,
+    added: Query<(), Added<crate::hud_gamma::Scene>>,
+) {
+    use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
+    use bevy::pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel as Q};
+    if !g.is_changed() && added.is_empty() {
+        return;
+    }
+    let want = g.ao_on().then(|| ScreenSpaceAmbientOcclusion { quality_level: if g.ao == 1 { Q::Low } else { Q::High }, ..default() });
+    for (e, cam, now, smaa) in &q {
+        let mut c = commands.entity(e);
+        match &want {
+            Some(w) if !matches!(cam.clear_color, ClearColorConfig::None) => {
+                if now != Some(w) {
+                    c.insert(w.clone());
+                }
+                if g.msaa > 1 && !smaa {
+                    c.insert(bevy::anti_alias::smaa::Smaa::default());
+                } else if g.msaa == 1 && smaa {
+                    c.remove::<bevy::anti_alias::smaa::Smaa>();
+                }
+            }
+            _ if now.is_some() || smaa => _ = c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass, bevy::anti_alias::smaa::Smaa)>(),
+            _ => {}
+        }
     }
 }
 
@@ -437,7 +514,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES, cull: !p.cull };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, ao: 2, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES, cull: !p.cull, mesh: 50 };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -465,5 +542,16 @@ mod tests {
             assert!(back.set(&kv[0][2..], &kv[1]), "{kv:?}");
         }
         assert_eq!(back, g);
+        // B364: Mesh keeps through a preset, passes only below 100 and reads back
+        let g = Graphics { mesh: 50, ..default() };
+        assert_eq!((g.preset(), g.keep(Graphics::LOW).mesh), ("Default", 50));
+        assert_eq!(g.flags()[8..], ["--mesh", "50"]);
+        let mut back = Graphics::default();
+        assert!(back.set("mesh", "50 %") && back == g);
+        // G1: Ambient Occlusion is preset-set (off in every one) and passes only when on
+        let g = Graphics { ao: 2, ..default() };
+        assert_eq!((g.preset(), &g.flags()[8..]), ("Custom", &["--ao".to_string(), "high".into()][..]));
+        let mut back = Graphics::default();
+        assert!(back.set("ao", "high") && back == g);
     }
 }

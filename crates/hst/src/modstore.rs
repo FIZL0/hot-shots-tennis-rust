@@ -3,7 +3,7 @@
 //! PR's author is the mod's author); `main` wins an id, then the newest PR. Install downloads `mod.zip` over HTTPS
 //! from the store only, checks its size and sha256 against `meta.json`, then installs it through M16's checks
 //! (`modfs::install`): into `mods/<id>/` on disk, or the page's OPFS store in the browser. Upload packages an
-//! installed mod (`mod.zip`, `meta.json`, `preview.png`) and commits it to the repo as a pull request through the
+//! installed mod (`mod.zip`, `meta.json`, `preview.png` and B372's ~256 px `thumb.png`) and commits it to the repo as a pull request through the
 //! Hub API (user 2026-10-13: no upload page), with the player's own Hugging Face write token, pasted once and kept
 //! in `hf-token.txt` beside settings.txt / localStorage.
 //!
@@ -62,6 +62,30 @@ pub struct Meta {
     pub costumes: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub like: Option<u8>,
+    /// B373 (M5a/M5c share it): what the mod is, the Mods pages' kind tab it shows on. Absent: a character.
+    #[serde(default, skip_serializing_if = "Kind::is_character")]
+    pub kind: Kind,
+}
+
+/// B373: a mod's kind (`meta.json` / `mod.json` `"kind"`): absent is a character, so every older entry still reads;
+/// one this game doesn't know yet reads as `Other` and shows on no tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Character,
+    Court,
+    Umpire,
+    /// M5a: a texture replacement pack.
+    Textures,
+    #[serde(other)]
+    Other,
+}
+
+impl Kind {
+    pub fn is_character(&self) -> bool {
+        *self == Kind::Character
+    }
 }
 
 /// One mod in the store.
@@ -88,6 +112,9 @@ pub enum Event {
     Installed(String, Result<String, String>),
     /// Mod [`Entry::key`]'s `preview.png`, or None (it has none).
     Preview(String, Option<Vec<u8>>),
+    /// B372: the Browse tile picture of the store mod whose zip has this sha256 ([`thumb`]): a small PNG, or None (it
+    /// has no picture, kept in the cache, or the store couldn't be reached).
+    Thumb(String, Option<Vec<u8>>),
     /// B250: how the upload of the installed mod in this folder is going.
     Upload(std::path::PathBuf, Up),
     /// A pasted token checked: the account's name, or why it isn't kept.
@@ -256,13 +283,19 @@ async fn get_meta(rev: &str, id: &str) -> Option<Meta> {
 /// two authors' mods sharing an id are both listed (B248).
 fn merge(lists: Vec<Vec<Entry>>) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
-    for e in lists.into_iter().flatten() {
+    for e in lists.into_iter().flatten().filter(|e| !crate::mods::dropped(&e.meta.id)) {
         if !out.iter().any(|o| o.meta.id == e.meta.id && (o.meta.author == e.meta.author || o.meta.sha256 == e.meta.sha256)) {
             out.push(e);
         }
     }
     out.sort_by_key(|e| e.meta.name.to_lowercase());
     out
+}
+
+/// B380: an Open Tee 1 character ([`crate::mods::retired`]) isn't offered; its uploader still sees it under their
+/// own uploads ([`mine`]) to take it down.
+fn retired(e: &Entry) -> bool {
+    crate::mods::retired(&e.meta.id, &e.meta.source)
 }
 
 fn now() -> u64 {
@@ -280,7 +313,7 @@ pub fn list(fresh: bool) {
     if !fresh {
         let c = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok());
         if let Some(c) = c.filter(|c| now().saturating_sub(c.at) < CACHE_SECS) {
-            return send(Event::Listing(Ok(c.entries)));
+            return send(Event::Listing(Ok(c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id) && !retired(e)).collect())));
         }
     }
     spawn(async {
@@ -290,7 +323,7 @@ pub fn list(fresh: bool) {
             return send(Event::Listing(Err("Can't reach the mod store.".into())));
         }
         let pr = n0_future::join_all(prs.into_iter().map(|(n, who)| entries(format!("refs/pr/{n}"), Some(who)))).await;
-        let all = merge(std::iter::once(main).chain(pr).collect());
+        let all: Vec<Entry> = merge(std::iter::once(main).chain(pr).collect()).into_iter().filter(|e| !retired(e)).collect();
         let _ = crate::store::write(CACHE, serde_json::to_string(&Cached { at: now(), entries: all.clone() }).unwrap());
         send(Event::Listing(Ok(all)));
     });
@@ -314,7 +347,7 @@ async fn uploads_of(name: &str) -> Result<Vec<Entry>, String> {
 }
 
 /// `refs/pr/<n>`'s `n`.
-fn pr_of(rev: &str) -> Option<u32> {
+pub fn pr_of(rev: &str) -> Option<u32> {
     rev.strip_prefix("refs/pr/")?.parse().ok()
 }
 
@@ -349,6 +382,82 @@ pub fn remove(e: &Entry, token: String) {
 pub fn preview(e: &Entry) {
     let (id, url) = (e.key(), file_url(&e.rev, &format!("mods/{}/preview.png", e.meta.id)));
     spawn(async move { send(Event::Preview(id, get(&url, MAX_PREVIEW).await.ok())) });
+}
+
+/// B372: a Browse tile's picture side: `thumb.png` is the preview shrunk to this on its longest side.
+pub const THUMB: u32 = 256;
+
+/// B372: the tile picture cache's file for the zip with sha256 `sha` (in folder `dir`, beside `mods/`; the browser's
+/// OPFS card store under `<dir>~`): keyed by the zip, so an update's new picture is fetched again.
+pub fn thumb_file(dir: &Path, sha: &str) -> std::path::PathBuf {
+    dir.join(format!("{}.png", sha.chars().filter(char::is_ascii_hexdigit).collect::<String>()))
+}
+
+/// B372: the cached tile picture of the zip with sha256 `sha`: Some(None) when the store has none for it (an empty
+/// file), None when it isn't cached.
+pub fn cached_thumb(dir: &Path, sha: &str) -> Option<Option<Vec<u8>>> {
+    let f = thumb_file(dir, sha);
+    #[cfg(target_arch = "wasm32")]
+    let b = crate::web::card(&f.to_string_lossy().replace(['/', '\\'], "~")).map(|b| b.to_vec());
+    #[cfg(not(target_arch = "wasm32"))]
+    let b = std::fs::read(&f).ok();
+    b.map(|b| (!b.is_empty()).then_some(b))
+}
+
+/// B372: keeps the tile picture `png` (None: the store has none) of the zip with sha256 `sha` for the next visit.
+pub fn keep_thumb(dir: &Path, sha: &str, png: Option<&[u8]>) {
+    let f = thumb_file(dir, sha);
+    let b = png.unwrap_or_default().to_vec();
+    #[cfg(target_arch = "wasm32")]
+    let _ = crate::web::put_card(f.to_string_lossy().replace(['/', '\\'], "~"), b);
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&f, b));
+}
+
+/// B372: PNG `png` shrunk to at most `side` px on its longest side (as PNG again; one already that small is kept as
+/// it is); None if it doesn't decode.
+pub fn shrink(png: &[u8], side: u32) -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?;
+    let (w, h) = (img.width(), img.height());
+    if w.max(h) <= side {
+        return Some(png.to_vec());
+    }
+    let k = side as f32 / w.max(h) as f32;
+    let (nw, nh) = (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1));
+    let small = image::imageops::resize(&img.into_rgba8(), nw, nh, image::imageops::FilterType::Triangle);
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out).write_image(&small, nw, nh, image::ExtendedColorType::Rgba8).ok()?;
+    Some(out)
+}
+
+/// B372: fetches store mod `e`'s tile picture ([`Event::Thumb`] under its sha256): the cache in `dir` first, then its
+/// `thumb.png`, else (an upload from before thumbnails) its `preview.png` shrunk here once; what came is cached.
+pub fn thumb(e: &Entry, dir: &Path) {
+    let (sha, dir) = (e.meta.sha256.clone(), dir.to_path_buf());
+    let base = format!("mods/{}", e.meta.id);
+    let (small, big) = (file_url(&e.rev, &format!("{base}/thumb.png")), file_url(&e.rev, &format!("{base}/preview.png")));
+    spawn(async move {
+        if let Some(c) = cached_thumb(&dir, &sha) {
+            return send(Event::Thumb(sha, c));
+        }
+        let got = match get(&small, MAX_PREVIEW).await {
+            Ok(b) => Ok(Some(b)),
+            Err(_) => match get(&big, MAX_PREVIEW).await {
+                Ok(b) => Ok(shrink(&b, THUMB)),
+                // (the store answered: it has no picture for this one)
+                Err(e) if e.contains("404") => Ok(None),
+                Err(e) => Err(e),
+            },
+        };
+        match got {
+            Ok(png) => {
+                keep_thumb(&dir, &sha, png.as_deref());
+                send(Event::Thumb(sha, png));
+            }
+            Err(_) => send(Event::Thumb(sha, None)),
+        }
+    });
 }
 
 /// B335: the installed store mod in `dir` (id `id`)'s listing picture, to `done` (None: not fetched); false if it
@@ -658,6 +767,7 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, Stri
         hand: Some(if m.hand < 0.0 { -1 } else { 1 }),
         costumes: Some(m.costumes.len() as u32),
         like: Some(m.donor as u8),
+        kind: Kind::Character,
     };
     let preview = files.iter().find(|f| f.0.starts_with("previews/") && f.0.ends_with(".png")).map(|f| f.1.clone());
     Ok(Package { zip, meta, preview })
@@ -774,6 +884,10 @@ async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>,
     let dir = format!("mods/{}", m.id);
     let mut files = vec![(format!("{dir}/mod.zip"), p.zip), (format!("{dir}/meta.json"), serde_json::to_vec_pretty(&p.meta).unwrap())];
     if let Some(png) = p.preview.or(card).filter(|b| b.len() as u64 <= MAX_PREVIEW) {
+        // B372: Browse's tile picture, the preview small (Browse fetches it first)
+        if let Some(t) = shrink(&png, THUMB) {
+            files.push((format!("{dir}/thumb.png"), t));
+        }
         files.push((format!("{dir}/preview.png"), png));
     }
     let pr = commit(token, &format!("{verb} mod {} ({})", m.name, m.id), files, &[], onto).await?;
@@ -975,6 +1089,23 @@ mod tests {
         assert!(!loud.name.contains('\u{1b}') && loud.name.chars().count() == 40);
     }
 
+    /// B373: a meta.json without "kind" (every upload before it) is a character's, and a character's is written
+    /// without one; the other kinds round-trip, and one this game doesn't know yet still reads (as `Other`).
+    #[test]
+    fn reads_kind() {
+        let ok = meta("lauryn", b"zip");
+        let j = serde_json::to_string(&ok).unwrap();
+        assert!(!j.contains("kind"));
+        assert_eq!(meta_of(j.as_bytes(), "lauryn").unwrap().kind, Kind::Character);
+        for (k, word) in [(Kind::Court, "court"), (Kind::Umpire, "umpire"), (Kind::Textures, "textures")] {
+            let j = serde_json::to_string(&Meta { kind: k, ..ok.clone() }).unwrap();
+            assert!(j.contains(&format!("\"kind\":\"{word}\"")), "{j}");
+            assert_eq!(meta_of(j.as_bytes(), "lauryn").unwrap().kind, k);
+        }
+        let later = j.replacen('{', "{\"kind\":\"stadium\",", 1);
+        assert_eq!(meta_of(later.as_bytes(), "lauryn").unwrap().kind, Kind::Other);
+    }
+
     /// `main` wins an id over any PR, a newer PR over an older one.
     #[test]
     fn main_then_newest_pr() {
@@ -986,6 +1117,10 @@ mod tests {
         let by = |id: &str, rev: &str, who: &str, sha: &str| Entry { meta: Meta { author: who.into(), sha256: sha.into(), ..e(id, rev).meta }, ..e(id, rev) };
         let got = merge(vec![vec![by("a", "main", "x", "1")], vec![by("a", "refs/pr/9", "y", "2"), by("a", "refs/pr/8", "z", "1"), by("a", "refs/pr/7", "y", "3")]]);
         assert_eq!(got.iter().map(|e| e.rev.as_str()).collect::<Vec<_>>(), ["main", "refs/pr/9"]);
+        // B381: HST's four human chair umpires aren't listed, Robot Tennis is
+        let ids = ["hst_umpire_00_chika", "hst_umpire_01_suzuki", "hst_umpire_02_lily", "hst_umpire_03_robottennis", "hst_umpire_04_anna", "getagrip_pc12_suzuki"];
+        let got = merge(vec![ids.iter().map(|id| e(id, "main")).collect()]);
+        assert_eq!(got.iter().map(|e| e.meta.id.as_str()).collect::<Vec<_>>(), ["getagrip_pc12_suzuki", "hst_umpire_03_robottennis"]);
     }
 
     /// B250: a re-upload by its uploader goes onto their open PR, or a new PR once merged; the same zip, or an older

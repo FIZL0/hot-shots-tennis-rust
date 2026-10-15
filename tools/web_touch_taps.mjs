@@ -185,29 +185,4 @@ await frame();
 check('...and the stick takes a new thumb after it', (await now())[0] > 0.5);
 await touch('touchCancel');
 fingers.clear();
-// B118: 1v1 on this phone, held upright: a second pad (17) at the far end, turned round; its stick reads in the
-// screen's directions, and both players' controls work at once
-await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: false });
-await evaluate('hstTouchPads(true, false)');
-await frame(); await frame();
-const pads = () => evaluate(`navigator.getGamepads().filter(g => g).map(g => [g.index, g.axes[0], g.axes[1], g.buttons[0].pressed])`);
-check('both pads listed in 1v1', JSON.stringify((await pads()).map(g => g[0])) === '[16,17]', await pads());
-const centre = sel => evaluate(`(() => { const r = document.querySelector('${sel}').getBoundingClientRect();
-  return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
-const nearX = await centre('#touch [data-b="cross"]'), farX = await centre('.touch.far [data-b="cross"]');
-const farZone = await centre('.touch.far .zone');
-check('the far pad sits at the top', farX.y < 422 && nearX.y > 422, [nearX, farX]);
-const fs = await land(farZone); await slide(fs, { x: farZone.x + 60, y: farZone.y + 40 });
-const ns = await land(stick.x < 390 ? { x: 80, y: 700 } : stick); await slide(ns, { x: 20, y: 700 });
-await land(nearX); await land(farX);
-await frame();
-let g = await pads();
-check('far stick reads screen right/down, near stick left, both ✕ down at once',
-  g[1][1] > 0.5 && g[1][2] > 0.3 && g[0][1] < -0.5 && g[0][3] && g[1][3], g);
-await touch('touchCancel');
-fingers.clear();
-await evaluate('hstTouchPads(false, false)');
-await frame(); await frame();
-check('back to one pad after', (await pads()).length === 1, await pads());
-await touch('touchCancel');
 process.exit(failed ? 1 : 0);

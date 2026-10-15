@@ -327,6 +327,20 @@ def union(files, tid):
     return True
 
 
+def rewind(rev, tid):
+    """reset --keep to rev. It refuses when someone edited a file it would change during the tests (B315,
+    2026-10-14: a TODO.md edit kept a failed merge on main): move those edits aside, reset, put them back."""
+    if not git('reset', '-q', '--keep', rev).returncode:
+        return
+    git('stash', 'push', '-q', '-m', f'runner {tid} rewind')
+    if git('reset', '-q', '--keep', rev).returncode:
+        log(f'{tid}: could not reset main to {rev}: main still has the failed merge, fix by hand')
+        return git('stash', 'pop', '-q')
+    if git('stash', 'pop', '-q').returncode:
+        git('reset', '-q', '--hard')
+        log(f'{tid}: edits made in main during the tests clash with the rewind: kept in git stash "runner {tid} rewind"')
+
+
 def merge(tid):
     """Merge task/<tid> into main the way the master would, without a model: merge, archive ticks, tests, push.
     Returns None when done, else why it was left for the master (main is then as it was)."""
@@ -348,6 +362,15 @@ def merge(tid):
         # someone's uncommitted edits in main (PLAN.md, TODO notes): out of the way for the merge, back right after it
         stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) \
             and not git('stash', 'push', '-q', '-m', f'runner {tid}').returncode
+        # merges go into main whatever the checkout is on: slots start from main and picks read main's TODO.md, so a
+        # merge onto another branch (split-1v1, 2026-10-14) left main stale and its tasks open
+        if (cur := git('branch', '--show-current').stdout.strip()) != 'main':
+            if git('checkout', '-q', 'main').returncode:
+                return f'the main checkout is on {cur or "a detached HEAD"} and could not switch to main'
+            # commits made there meanwhile (the master's fixes, plan edits) belong on main too, when they fast-forward
+            ff = cur and not git('merge', '-q', '--ff-only', cur).returncode
+            log(f'{tid}: the main checkout was on {cur or "a detached HEAD"}; switched it to main for the merge'
+                + (f' (main fast-forwarded to {cur})' if ff else f' ({cur} does not fast-forward: its commits stay there)'))
         try:
             pre = git('rev-parse', 'HEAD').stdout.strip()
             if git('merge', '--no-edit', f'task/{tid}').returncode:
@@ -382,7 +405,7 @@ def merge(tid):
         inherited = ''
         later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
         if chk.returncode:
-            git('reset', '-q', '--keep', pre)
+            rewind(pre, tid)
             # main already failed that way without the branch (B231's flake, a disc test, main's own broken build):
             # not the branch's fault, so merge it anyway and say so instead of spending a model on it
             # ponytail: name-level match only; a branch that breaks an already-failing test differently slips through
@@ -393,13 +416,13 @@ def merge(tid):
                               cwd=ROOT, capture_output=True, text=True)
                 still = set(re.findall(r'^---- (\S+) stdout ----', base.stdout, re.M))
                 if base.returncode and ('BUILD FAILED' in base.stdout if build else still >= set(names)):
-                    git('reset', '-q', '--keep', merged)
+                    rewind(merged, tid)
                     inherited = 'main\'s build already failed' if build else 'already failing on main: ' + ', '.join(names)
                     log(f'{tid}: {inherited}; merged anyway')
         if chk.returncode and not inherited:  # HEAD is at pre already
             if later and git('cherry-pick', *later).returncode:
                 git('cherry-pick', '--abort')
-                git('reset', '-q', '--keep', later[-1])  # can't replay them alone: keep them with the merge, master sorts it
+                rewind(later[-1], tid)  # can't replay them alone: keep them with the merge, master sorts it
                 return 'tests fail after the merge, and main got commits meanwhile: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
             return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
         git('branch', '-d', f'task/{tid}')
@@ -651,13 +674,23 @@ def main():
         if n not in procs and os.path.isdir(slot(n)):
             tid = git('branch', '--show-current', cwd=slot(n)).stdout.strip().removeprefix('task/')
             git('checkout', '-q', '--detach', cwd=slot(n))  # idle slots let go of old task/<ID>s, or start() can't take them
-            # a session that ended while no runner watched (B347, 2026-10-14: it exited as the runner restarted)
-            # left its branch unmerged: merge it now like any finished slot
-            if tid and (commits := git('log', '--format=%s', f'main..task/{tid}').stdout.splitlines()):
-                log(f'slot {n}: {tid} ended while no runner was up; merging its {len(commits)} commits')
-                tried.add(tid)
-                (t := threading.Thread(target=finish, args=(tid, n, '(unknown)', commits))).start()
-                merging.append(t)
+    # branches a previous runner never merged: sessions that ended while no runner watched (B347), or finished ones
+    # still waiting in its merge queue when it was stopped (B326/B355…, 2026-10-14). Merge them like any finished slot;
+    # skip ones handed to the master, checked out somewhere (running slots, other worktrees) or not open tasks.
+    held = {l.removeprefix('branch refs/heads/') for l in git('worktree', 'list', '--porcelain').stdout.splitlines()
+            if l.startswith('branch ')}
+    handed = open(os.path.join(NOTES, 'overnight.log'), errors='replace').read() if os.path.exists(
+        os.path.join(NOTES, 'overnight.log')) else ''
+    open_ids = {m.group(1) for l in git('show', 'main:plan/TODO.md').stdout.splitlines() if (m := TASK.match(l))}
+    for b in git('branch', '--format=%(refname:short)', '--list', 'task/*').stdout.split():
+        tid = b.removeprefix('task/')
+        if b in held or tid not in open_ids or f'{tid}: left for the master' in handed:
+            continue
+        if commits := git('log', '--format=%s', f'main..{b}').stdout.splitlines():
+            log(f'{tid}: finished while no runner was up (or before a restart merged it); merging its {len(commits)} commits')
+            tried.add(tid)
+            (t := threading.Thread(target=finish, args=(tid, 0, '(unknown)', commits))).start()
+            merging.append(t)
     while True:
         for n in free_at:
             if n in procs and not alive(procs[n][0]):

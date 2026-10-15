@@ -40,11 +40,11 @@ pub(crate) enum Act {
     Ok,
     /// ○ / Esc.
     Back,
-    /// △: the attribute card.
+    /// △: the attribute card; on the select the name picker (B371).
     Card,
     /// L1 / R1: the costume; the Settings tab (B294).
     Costume,
-    /// □ / Tab: the disc or custom page.
+    /// □ / Tab: the select's favourite (B369).
     Page,
     /// Select: the hand.
     Hand,
@@ -57,6 +57,8 @@ pub(crate) enum Act {
     Key,
     /// B320: text chat in an online lobby (`chat.rs`): T, a pad's R2 (phrases) and L2 (say it).
     Chat,
+    /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab.
+    Kind,
 }
 
 /// A device's button art.
@@ -146,6 +148,7 @@ fn menu_keys(act: Act, bind: &Bindings) -> Vec<String> {
         Act::Start | Act::Cancel => vec!["Esc".into()],
         Act::Type => vec!["A-Z".into()],
         Act::Chat => vec!["T".into()],
+        Act::Kind => vec!["1".into(), "3".into()],
         Act::Key => vec![],
     }
     .into_iter()
@@ -163,16 +166,21 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let s = m.sel;
     match m.screen {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Later")]),
+        _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
+        Screen::Main if m.main_rows().get(s) == Some(&super::home::Row::Update) => v.extend([(Act::UpDown, "Move"), (Act::Ok, crate::update::button()), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if m.main_rows().get(s) == Some(&super::home::Row::Quit) { "Quit" } else { "Choose" })]),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
-            v.push((Act::UpDown, "Option"));
-            if let Some(&o) = options::page(m.screen).get(s).filter(|o| !options::locked(**o)) {
-                v.push((Act::LeftRight, "Change"));
-                if options::ok_changes(o) {
+            let open = options::page(m.screen).get(s).is_some_and(|o| !options::locked(*o));
+            if m.editing.is_some() && open {
+                // B326: the row picked: ◀ ▶ change it, ✕ keeps, ○ puts it back
+                v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Keep"), (Act::Back, "Cancel")]);
+            } else {
+                v.push((Act::UpDown, "Option"));
+                if open {
                     v.push((Act::Ok, "Change"));
                 }
+                v.extend([(Act::Costume, "Page"), (Act::Back, "Back")]);
             }
-            v.extend([(Act::Costume, "Page"), (Act::Back, "Back")]);
         }
         Screen::Controls if m.rebinding.is_some() => v.extend([(Act::Type, "Press the new key or button"), (Act::Cancel, "Cancel")]),
         Screen::Controls => {
@@ -211,12 +219,22 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             let Some(p) = m.driven(dev) else {
                 return if m.can_join() { vec![(Act::Ok, "Join".into())] } else { vec![] };
             };
+            // B371: a name picker open takes the device's presses
+            let np = (0..m.players()).find(|&q| m.seats[q] == Some(dev) && m.naming(q)).unwrap_or(p);
+            if let Some(v) = m.name_acts(np, dev) {
+                return v.into_iter().map(|(a, l)| (a, l.to_string())).collect();
+            }
             let me = m.players[p];
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
-            if !me.random {
-                v.push((Act::Card, if me.card { "Picture" } else { "Stats" }));
+            // B369: □ in or out of the favourites (not Random)
+            if !me.ready && !me.random {
+                v.push((Act::Page, "Favourite"));
+            }
+            // B371: △ names the player on the device's own seat (Stats / Picture is the card's pill)
+            if m.seats[p] == Some(dev) {
+                v.push((Act::Card, "Name"));
             }
             if !me.ready && !m.blocked(p) {
                 v.push((Act::Ok, "Ready"));
@@ -225,8 +243,6 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 v.push((Act::Back, "Cancel"));
             } else if m.online() && m.net.edit == Some(p) {
                 v.push((Act::Back, "Back"));
-            } else if m.open(p) && !m.online() {
-                v.push((Act::Back, "Leave COM"));
             } else if m.seats[p].is_none() && m.players.iter().take(m.players()).any(|q| q.ready) {
                 v.push((Act::Back, "Back"));
             } else if m.seats[p] == Some(dev) && m.droppable(p) {
@@ -282,6 +298,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             // B239: □ deletes, ○ leaves
             v.extend([(Act::Type, "Type"), (Act::Page, "Delete"), (Act::Back, "Back")].into_iter().filter(|a| grid || a.0 == Act::Back));
         }
+        // B370: the QR big: any button puts it away
+        Screen::Lobby if m.net.qr_big => v.extend([(Act::Ok, "Close"), (Act::Back, "Close")]),
         Screen::Lobby if m.net.ask.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Leave")]),
         Screen::Lobby => {
             moves(&mut v, m.pill_axes());
@@ -296,13 +314,13 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             v.push((Act::Back, "Leave"));
         }
+        // B373: a kind the store doesn't carry yet has nothing to move to or choose
+        Screen::Mods if m.add.empty_kind() => v.extend([(Act::Costume, "Tab"), (Act::Kind, "Kind"), (Act::Back, "Back")]),
+        // B372: Browse's grid says what its tiles' buttons do
+        Screen::Mods if let Some(l) = super::mods_screen::browse_legend(m) => v.extend(l),
         Screen::Mods => {
             moves(&mut v, (true, m.add.sideways(m.sel)));
-            // B335: an uploader's mods fold away under their heading on Browse
-            if let Some((_, folded)) = m.add.fold_at(m.sel) {
-                v.push((Act::LeftRight, if folded { "Show" } else { "Fold" }));
-            }
-            v.extend([(Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Back, "Back")]);
+            v.extend([(Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Kind, "Kind"), (Act::Back, "Back")]);
         }
         _ => {}
     }
@@ -377,7 +395,7 @@ pub(super) fn groups(m: &Menu, last: Dev, bind: &Bindings) -> Vec<Group> {
 /// group per player: each action once, in the select's order, its labels where players differ joined ("Cancel /
 /// Leave").
 fn shared(groups: Vec<Group>) -> Vec<Group> {
-    const ORDER: [Act; 7] = [Act::Page, Act::Move, Act::Costume, Act::Hand, Act::Ok, Act::Back, Act::Chat];
+    const ORDER: [Act; 7] = [Act::Move, Act::Costume, Act::Hand, Act::Page, Act::Ok, Act::Back, Act::Chat];
     let rank = |a: Act| ORDER.iter().position(|&o| o == a).unwrap_or(ORDER.len());
     if groups.is_empty() {
         return groups;
@@ -453,6 +471,46 @@ fn pad_style(vendor: u16, layout: u8, deck: bool) -> Style {
 
 /// B362: the connected pads' styles (each once, in pad order), as [`note_pads`] last saw them.
 static PADS: Mutex<Vec<Style>> = Mutex::new(Vec::new());
+/// B368: each connected pad's style, as [`note_pads`] last saw them.
+static PAD_STYLES: Mutex<Vec<(Entity, Style)>> = Mutex::new(Vec::new());
+
+/// B368: the button art device `dev` (None: the keyboard) shows, as its legend's.
+fn dev_style(dev: Option<Entity>) -> Style {
+    if let Some(s) = forced() {
+        return s;
+    }
+    let Some(e) = dev else { return Style::Keys };
+    let known = PAD_STYLES.lock().ok().and_then(|v| v.iter().find(|(p, _)| *p == e).map(|(_, s)| *s));
+    known.unwrap_or_else(|| pad_style(0, LAYOUT.load(Ordering::Relaxed), std::env::var("SteamDeck").as_deref() == Ok("1")))
+}
+
+/// B368: the names on `dev`'s buttons for `act` as the legend draws them (a keyboard's keys, Q / E; a pad's L1 / R1
+/// or LB / RB, its Select as "Create" on a PlayStation pad): the select's costume and hand pills label theirs.
+pub(super) fn button_names(dev: Option<Entity>, act: Act, bind: &Bindings) -> Vec<String> {
+    let it = item(act, "", &[]);
+    let it = Item { keys: menu_keys(act, bind), ..it };
+    glyphs(dev_style(dev), &it)
+        .into_iter()
+        .filter_map(|g| match g {
+            Glyph::Cap(s) => Some(s),
+            Glyph::Shoulder(s) | Glyph::Small(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// B373: the names on the kind tabs' buttons beside the Mods pages' kind row: a connected pad's L2 / R2 (ZL / ZR,
+/// LT / RT; `HST_LEGEND`'s style for `--shot`s), else the keyboard's 1 / 3.
+pub(super) fn kind_caps() -> [String; 2] {
+    let style = forced().or_else(|| PADS.lock().ok().and_then(|v| v.first().copied())).unwrap_or(Style::Keys);
+    let it = Item { keys: menu_keys(Act::Kind, &Bindings::default()), ..item(Act::Kind, "", &[]) };
+    let mut names = glyphs(style, &it).into_iter().filter_map(|g| match g {
+        Glyph::Cap(s) => Some(s),
+        Glyph::Shoulder(s) => Some(s.to_string()),
+        _ => None,
+    });
+    [names.next().unwrap_or_default(), names.next().unwrap_or_default()]
+}
 
 /// B362: the styles a "press ✕ / Enter to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if
 /// it names one, for `--shot`s without the pad), then the keyboard's Enter.
@@ -468,6 +526,12 @@ pub(crate) fn join_styles() -> Vec<Style> {
 fn note_pads(pads: Query<(Entity, &Gamepad)>, all: Query<&Gamepad>) {
     let mut ps: Vec<_> = pads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
     ps.sort();
+    let each: Vec<(Entity, Style)> = ps.iter().map(|&e| (e, style_of(Some(e), &all))).collect();
+    if let Ok(mut p) = PAD_STYLES.lock()
+        && *p != each
+    {
+        *p = each;
+    }
     let mut v: Vec<Style> = Vec::new();
     for s in ps.into_iter().map(|e| style_of(Some(e), &all)) {
         if !v.contains(&s) {
@@ -565,6 +629,9 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Chat if sw => vec![Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")],
         Act::Chat if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("R2"), Glyph::Shoulder("L2")],
         Act::Chat => vec![Glyph::Shoulder("RT"), Glyph::Shoulder("LT")],
+        Act::Kind if sw => vec![Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")],
+        Act::Kind if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("L2"), Glyph::Shoulder("R2")],
+        Act::Kind => vec![Glyph::Shoulder("LT"), Glyph::Shoulder("RT")],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
@@ -920,6 +987,8 @@ mod tests {
         let it = |act| Item { act, label: String::new(), keys: vec![] };
         assert_eq!(glyphs(Style::Switch, &it(Act::Costume)), [Glyph::Shoulder("L"), Glyph::Shoulder("R")]);
         assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")]);
+        assert_eq!(glyphs(Style::Switch, &it(Act::Kind)), [Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")]);
+        assert_eq!(glyphs(Style::Ps, &it(Act::Kind)), [Glyph::Shoulder("L2"), Glyph::Shoulder("R2")]);
         assert_eq!(glyphs(Style::Switch, &it(Act::Hand)), [Glyph::Small("-")]);
         assert_eq!(glyphs(Style::Generic, &it(Act::Start)), [Glyph::Small("Start")]);
         // the font draws Switch's - and +
@@ -951,6 +1020,18 @@ mod tests {
         let mut m = base(Screen::Main);
         m.add.ask = Some(0);
         starts.push((m, Dev::Keys));
+        // B373: a Mods kind tab the store doesn't carry yet
+        let mut m = base(Screen::Mods);
+        m.add.kind = crate::modstore::Kind::Umpire;
+        starts.push((m, Dev::Keys));
+        // B326: a Settings row picked, on every row of every page
+        for s in [Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings] {
+            for sel in 0..options::page(s).len() {
+                let mut m = base(s);
+                (m.sel, m.editing) = (sel, Some(m.settings));
+                starts.push((m, Dev::Keys));
+            }
+        }
         let mut m = base(Screen::Controls);
         m.rebinding = Some(0);
         starts.push((m, Dev::Keys));
@@ -965,6 +1046,14 @@ mod tests {
         m.players[1].ready = true;
         starts.push((m.clone(), pad));
         m.players[0].ready = true;
+        starts.push((m, pad));
+        // B371: 2P's name picker: the list (a saved name, New name, No name), then typing one
+        let mut m = base(Screen::Assign);
+        (m.screen, m.seats[1]) = (Screen::Chars, Some(pad));
+        m.names.saved = vec!["ANNA".into()];
+        m.names.open[1] = Some(super::super::names::Picker::List(0));
+        starts.push((m.clone(), pad));
+        m.names.open[1] = Some(super::super::names::Picker::Typing("AB".into(), 0));
         starts.push((m, pad));
         for sel in [1, 4] {
             let mut m = base(Screen::Confirm);
@@ -1007,7 +1096,7 @@ mod tests {
                     let has = |a: &[Act]| acts.iter().any(|(x, _)| a.contains(x));
                     let h = |f| handled(&m, dev, f);
                     // ✕ there reloads the game, opens a file picker or reaches the store: taken as handled
-                    let ok = matches!(m.screen, Screen::Mods) || m.screen == Screen::Main && m.add.ask.is_some() || h(|p| &mut p.ok);
+                    let ok = matches!(m.screen, Screen::Mods) && !m.add.empty_kind() || m.screen == Screen::Main && m.add.ask.is_some() || h(|p| &mut p.ok);
                     let got = [
                         h(|p| &mut p.up) || h(|p| &mut p.down),
                         h(|p| &mut p.left) || h(|p| &mut p.right),
@@ -1017,6 +1106,7 @@ mod tests {
                         h(|p| &mut p.prev) || h(|p| &mut p.next),
                         h(|p| &mut p.page),
                         h(|p| &mut p.hand),
+                        h(|p| &mut p.kind_prev) || h(|p| &mut p.kind_next),
                     ];
                     let want = [
                         has(&[Act::Move, Act::UpDown]),
@@ -1027,8 +1117,9 @@ mod tests {
                         has(&[Act::Costume]),
                         has(&[Act::Page]),
                         has(&[Act::Hand]),
+                        has(&[Act::Kind]),
                     ];
-                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select] handled vs legend {acts:?}", m.screen, m.sel);
+                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select L2R2] handled vs legend {acts:?}", m.screen, m.sel);
                     checked += 1;
                 }
             }

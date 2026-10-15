@@ -60,6 +60,7 @@ mod instant_replay;
 mod doubles_ai;
 mod flare;
 mod markers;
+pub mod name_tags;
 mod mod_match;
 pub mod hand_swap;
 pub mod net_hide;
@@ -83,6 +84,7 @@ mod serve_check;
 mod tick_input;
 mod timing;
 mod tornado;
+mod umpire_mod;
 mod replay_pace;
 mod weather;
 pub mod widescreen;
@@ -575,6 +577,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(foot_fx::plugin);
     app.add_plugins(instant_replay::plugin);
     app.add_plugins(markers::plugin);
+    app.add_plugins(name_tags::plugin);
     app.add_plugins(match_stats::plugin);
     app.add_plugins(menu::plugin);
     app.add_plugins(netplay::plugin);
@@ -592,6 +595,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(heard::plugin);
     app.add_plugins(intro::plugin);
     app.add_plugins(key_hints::plugin);
+    app.add_plugins(umpire_mod::plugin);
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Last, |g: Option<Res<Game>>| crate::web::in_match(g.is_some()));
     app.insert_resource(Time::<Fixed>::from_hz(60.0))

@@ -270,16 +270,30 @@ pub fn touch_menu(on: bool) {
     }
 }
 
-/// B118: the page's on-screen pads: `duo` doubles them for two players on one phone (the second at the top, turned
-/// to face its player, both listed as pads), `buzz` the press vibration (Settings → Mobile). Sent when it changes.
-pub fn touch_pads(duo: bool, buzz: bool) {
+/// B118: the page's on-screen pad's press vibration (Settings → Mobile). Sent when it changes.
+pub fn touch_buzz(buzz: bool) {
     static SENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
-    let v = duo as u8 | (buzz as u8) << 1;
+    let v = buzz as u8;
     if SENT.swap(v, std::sync::atomic::Ordering::Relaxed) != v
-        && let Some(f) = page_fn("hstTouchPads")
+        && let Some(f) = page_fn("hstTouchBuzz")
     {
-        let _ = f.call2(&JsValue::NULL, &duo.into(), &buzz.into());
+        let _ = f.call1(&JsValue::NULL, &buzz.into());
     }
+}
+
+/// B312: the page's chat button (beside Start on the on-screen pad, `web/touch.js`) shown or gone. Sent when it changes.
+pub fn touch_chat(on: bool) {
+    static SENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+    if SENT.swap(on as u8, std::sync::atomic::Ordering::Relaxed) != on as u8
+        && let Some(f) = page_fn("hstTouchChat")
+    {
+        let _ = f.call1(&JsValue::NULL, &on.into());
+    }
+}
+
+/// B312: taps on the page's chat button since the last call (none while it's hidden).
+pub fn chat_tapped() -> bool {
+    page_fn("hstChatTaps").and_then(|f| f.call0(&JsValue::NULL).ok()).and_then(|v| v.as_f64()).is_some_and(|n| n > 0.0)
 }
 
 /// B273: the renderer setting saved (`auto`, `webgpu`, `webgl2`): the page reloads into that build once it's left
@@ -328,13 +342,16 @@ pub fn put_card(name: String, png: Vec<u8>) -> io::Result<()> {
     Ok(())
 }
 
-/// Drop every card whose name doesn't start with `prefix` (an older drawing's).
+/// B372: the store's tile pictures in the card store (`modstore::keep_thumb`): not a drawing, never dropped with them.
+pub const PICTURES: &str = "mod-pictures~";
+
+/// Drop every card whose name doesn't start with `prefix` (an older drawing's), but the store's tile pictures.
 pub fn cards_keep(prefix: &str) {
     let mut cards = CARDS.lock().unwrap();
     let Some(cards) = cards.as_mut() else { return };
     let drop = page_fn("hstCardDrop");
     cards.retain(|name, _| {
-        let keep = name.starts_with(prefix);
+        let keep = name.starts_with(prefix) || name.starts_with(PICTURES);
         if !keep && let Some(f) = &drop {
             let _ = f.call1(&JsValue::NULL, &name.as_str().into());
         }

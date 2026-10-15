@@ -629,6 +629,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
             for i in 0..POOL {
                 p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
             }
+            super::name_tags::pool(p, super::name_tags::BOARDS);
         });
 }
 
@@ -642,6 +643,7 @@ fn draw(
     cam: Query<&Transform, With<crate::Orbit>>,
     mut first_near: Local<Option<bool>>,
     result: Res<ResultBanner>,
+    (names, mut plates): (Option<Res<super::name_tags::Names>>, ResMut<super::name_tags::Plates>),
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
     let (Some(art), Some(panel_art), Some(colours)) = (art, panel_art, colours) else {
@@ -685,6 +687,10 @@ fn draw(
     if let Some(b) = &result.0 {
         quads.extend(b.quads());
     }
+    // B371: named players' slot labels give way to their names
+    let slots: Vec<usize> = (0..n).map(|i| pads.slot_of(i, n).unwrap_or(4)).collect();
+    let label = |q: &Quad| matches!(q.tex, Tex::Slot).then(|| (q.src[0] / 40.0) as usize);
+    plates.0[super::name_tags::BOARDS] = super::name_tags::take(&mut quads, names.as_deref(), &slots, label, |q| (q.dst, q.rgb, q.alpha));
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             vis.set_if_neq(Visibility::Hidden);

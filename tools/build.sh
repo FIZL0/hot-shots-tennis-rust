@@ -23,7 +23,7 @@ linux() {
     fi
     mkdir -p ~/.cache/hst-steamrt
     docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" -v ~/.cache/hst-steamrt:/cache -w /src \
-        -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
+        -e HST_VERSION -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
         $sdk sh -ec '
             [ -x /cache/cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --no-modify-path
             /cache/cargo/bin/cargo build --release -p hst'

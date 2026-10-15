@@ -6,8 +6,9 @@
 //!
 //! Voices are (program, key) of her voice bank (`gag_vcNN`, sound slot 5). Program 0 holds the score words
 //! (keys 0..4 the server's points love..40, 4 + n the receiver's, 8 "all", 9 deuce, 10 advantage, 11/12 server /
-//! receiver, 13 deuce again), program 1 the calls (key = judge call − 1), program 2 the announcements (0 tiebreak,
-//! 1 game, 2 set, 3 change ends, 4 match). A two-part call plays its second word when the first voice ends, or
+//! receiver, 13 deuce again: no disc umpire has a take for it, so it's silent), program 1 the calls (key = judge
+//! call − 1), program 2 the announcements (0 tiebreak, 1 game, 2 set, 3 change ends, 4 match). Words checked by
+//! transcript of the five disc banks (M8f2). A two-part call plays its second word when the first voice ends, or
 //! at the latest after the first word's countdown.
 
 use crate::score::{Event, Score};

@@ -124,7 +124,7 @@ pub(crate) fn model<M: EffectMaterial>(
             }))
         })
         .collect();
-    let parts = crate::character::skinned_parts(&model, &mats, meshes);
+    let parts = crate::character::skinned_parts_whole(&model, &mats, meshes);
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(model.node_bind.iter().map(|b| Mat4::from_cols_array_2d(b).inverse()).collect::<Vec<_>>()));
 
     let weights = MorphWeights::new(vec![0.0; model.morph_names.len()], None).unwrap_or_default();

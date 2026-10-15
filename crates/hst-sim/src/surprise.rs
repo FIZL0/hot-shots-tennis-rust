@@ -17,6 +17,7 @@
 //!   side by side, the next every 3 frames, held until the next point is set up.
 //!
 //! All are camera-facing quads drawn like the timing balloons: same anchor over the head, the swirl a little bigger.
+#![deny(clippy::float_arithmetic)]
 
 /// Which pop-up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -21,8 +21,12 @@ use super::{Dev, Effect, Menu, Press, Screen};
 pub(super) enum Act {
     /// Row `i` of the screen's list: hovering selects it, a tap selects it and presses `k` (usually ✕).
     Row(usize, Press),
-    /// A character select tile: the roster's `i`th (B306).
-    Cell(usize),
+    /// A character select tile: player `p`'s column's, the roster's `i`th (B306, B368: `Cell(p, i)`).
+    Cell(usize, usize),
+    /// B368: player `p`'s column's grid (under its tiles): the wheel and a finger's drag scroll it.
+    Grid(usize),
+    /// B368: player `p`'s column's grid scrolled `d` rows (sent by the wheel and drags, never hit-tested).
+    Scroll(usize, i32),
     /// A court tile or umpire card in the confirm screen's picker: a tap hovers it, a tap on the hovered one keeps it.
     Pick(usize),
     /// A button: a tap is this press.
@@ -31,10 +35,19 @@ pub(super) enum Act {
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
     Tab(usize),
+    /// B369: player `p`'s column's category tab `i` (`tabs.rs`): a tap switches them to it.
+    Category(usize, usize),
+    /// B371: seat `p`'s name picker's row or key `i`: hovering selects it, a tap presses it.
+    Name(usize, usize),
+    /// B373: the Mods pages' kind tab `i` (`mods_kind::KINDS`): a tap opens it.
+    Kind(usize),
+    /// B372: a Browse tile (cursor slot `i`): the mouse over it selects it; a tap selects it, a tap on the one a tap
+    /// chose presses ✕ (a finger going down only, not hovering, so a drag scrolls without choosing).
+    Tile(usize),
 }
 
 /// ✕.
-pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false };
+pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false, kind_prev: false, kind_next: false };
 
 pub(super) fn press(f: impl FnOnce(&mut Press)) -> Act {
     let mut k = Press::default();
@@ -95,6 +108,7 @@ impl Menu {
     fn choose(&mut self, i: usize) -> bool {
         let was = match self.screen {
             Screen::Main if self.add.ask.is_some() => self.add.ask.replace(i),
+            _ if self.switch.is_some() => self.switch.as_mut().map(|s| std::mem::replace(&mut s.1, i)),
             Screen::Mode => Some(std::mem::replace(&mut self.doubles, i == 1) as usize),
             Screen::Mods => Some(std::mem::replace(self.mods_cursor(), i)),
             Screen::Lobby => {
@@ -123,13 +137,17 @@ impl Menu {
                     out.extend(self.step(dev, k));
                 }
             }
-            Act::Cell(i) => {
-                let Some(p) = self.driven(dev) else { return out };
+            Act::Cell(q, i) => {
+                // B368: only the column the pointer's device picks for; its tiles are its player's tab's (B369)
+                let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
+                let tabs = self.tabs();
+                let tab = &tabs[self.tab_at(p, &tabs)];
                 self.focus = p;
                 if self.players[p].ready {
                     return out;
                 }
-                let Some(&c) = self.roster().get(i) else { return out };
+                let Some(&c) = tab.cells.get(i) else { return out };
+                self.players[p].tab = tab.id;
                 if self.cell(p) != c {
                     // B66: a face with every costume taken can't be picked
                     if self.full(p, c) {
@@ -146,6 +164,13 @@ impl Menu {
                     out.extend(self.step(dev, OK));
                 }
             }
+            // B368: a column scrolls for its own player's device
+            Act::Scroll(p, d) => {
+                if self.driven(dev) == Some(p) && self.scroll_by(p, d) {
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Grid(_) => {}
             Act::Pick(v) if tap => {
                 let court = self.sel == 1;
                 if v == if court { self.court } else { self.umpire as usize } {
@@ -165,6 +190,35 @@ impl Menu {
             }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
+            Act::Category(q, i) if tap => {
+                let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
+                self.focus = p;
+                let tabs = self.tabs();
+                if !self.players[p].ready && i < tabs.len() && i != self.tab_at(p, &tabs) && self.set_tab(p, &tabs, i) {
+                    self.skip_taken();
+                    self.follow(p);
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Category(..) => {}
+            Act::Name(p, i) => out = self.name_point(p, i, tap),
+            Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
+            Act::Kind(_) => {}
+            Act::Tile(i) if tap => {
+                if self.add.tile_tap(i) && self.sel == i {
+                    out = self.step(dev, OK);
+                } else {
+                    self.choose(i);
+                    self.add.tile_tap(i);
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Tile(i) => {
+                if self.choose(i) {
+                    self.add.b_untap();
+                    out.push(Effect::Sound(0));
+                }
+            }
         }
         out
     }
@@ -218,7 +272,6 @@ pub(in crate::play) fn pointer(
     mut wheel: MessageReader<MouseWheel>,
     hits: Res<Hits>,
     time: Res<Time>,
-    menu: Option<Res<Menu>>,
     mut pending: ResMut<Pending>,
     mut st: Local<State>,
 ) {
@@ -235,15 +288,17 @@ pub(in crate::play) fn pointer(
     let off = widescreen::view(size).min;
     let size = widescreen::in_view(size, off).0;
     let aspect = size.x / size.y;
-    // B118: on the turned select a point's place in the view is the view's turned half a turn
-    let turned = menu.is_some_and(|m| m.turned());
-    let at = |p: Vec2, slop: f32| {
-        let v = (p - off) / size;
-        hit_at(&hits.0, if turned { Vec2::ONE - v } else { v }, aspect, widescreen::menu_scale(), slop)
-    };
+    let at = |p: Vec2, slop: f32| hit_at(&hits.0, (p - off) / size, aspect, widescreen::menu_scale(), slop);
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
-    let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(_)));
+    let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..)));
+    // the mouse also hovers Browse's tiles (a finger doesn't: it scrolls them)
+    let mouse_hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..) | Act::Tile(_)));
+    // B368: the select column under a point (its tiles or the grid round them): the wheel and drags scroll it
+    let column = |a: Option<Act>| match a {
+        Some(Act::Cell(p, _) | Act::Grid(p)) => Some(p),
+        _ => None,
+    };
     // touch
     for t in touches.iter_just_pressed() {
         if st.finger.is_none() {
@@ -253,10 +308,17 @@ pub(in crate::play) fn pointer(
     }
     if let Some((id, start, last, dragged)) = st.finger.as_mut() {
         if let Some(t) = touches.get_pressed(*id) {
-            let d = (t.position() - *last) / size * if turned { -448.0 } else { 448.0 };
+            let d = (t.position() - *last) / size * 448.0;
             let step = |v: f32| if v.abs() >= DRAG { v.signum() as i32 } else { 0 };
             let (sx, sy) = (step(d.x * size.x / size.y), step(d.y));
-            if sx != 0 || sy != 0 {
+            if let Some(p) = column(at(*start, SLOP_TOUCH)) {
+                // B368: a drag on a select column's grid scrolls that column, up and down only
+                if sy != 0 {
+                    *dragged = true;
+                    *last = t.position();
+                    out(Some(Act::Scroll(p, -sy)), true);
+                }
+            } else if sx != 0 || sy != 0 {
                 *dragged = true;
                 *last = t.position();
                 // the finger pulls the list: up moves the cursor down
@@ -280,7 +342,7 @@ pub(in crate::play) fn pointer(
         // hidden: still follow what's under it, so waking it (a compositor's stray motion as the pointer hides or shows)
         // doesn't pull the pad's or keyboard's cursor back to the row it rests on; only moving onto another row does
         if let Some(c) = win.cursor_position() {
-            (st.mouse, st.hovered) = (Some(c), hover(at(c, SLOP)));
+            (st.mouse, st.hovered) = (Some(c), mouse_hover(at(c, SLOP)));
         }
     } else if now - st.touched > 0.6 {
         let c = win.cursor_position();
@@ -288,7 +350,7 @@ pub(in crate::play) fn pointer(
         // coming back to the same row doesn't select it again
         if c.is_some() && c != st.mouse {
             st.mouse = c;
-            let a = c.and_then(|c| hover(at(c, SLOP)));
+            let a = c.and_then(|c| mouse_hover(at(c, SLOP)));
             if a != st.hovered {
                 st.hovered = a;
                 out(a, false);
@@ -309,18 +371,16 @@ pub(in crate::play) fn pointer(
     while st.wheel.abs() >= 1.0 {
         let up = st.wheel > 0.0;
         st.wheel -= st.wheel.signum();
-        out(Some(press(|k| (k.up, k.down) = (up, !up))), true);
+        // B368: over a select column, the wheel scrolls its grid
+        match st.mouse.and_then(|c| column(at(c, SLOP))) {
+            Some(p) => out(Some(Act::Scroll(p, if up { -1 } else { 1 })), true),
+            None => out(Some(press(|k| (k.up, k.down) = (up, !up))), true),
+        }
     }
 }
 
 /// The pointer's device: player 1's while it's a connected pad, else the keyboard (which a touch-only phone also is).
 pub(super) fn device(m: &Menu, pads: &[Entity]) -> Dev {
-    // B118: the turned select's taps are the far player's
-    if m.turned()
-        && let Some(d @ Dev::Pad(_)) = m.seats[1]
-    {
-        return d;
-    }
     match m.seats[0] {
         Some(Dev::Pad(e)) if pads.contains(&e) => Dev::Pad(e),
         _ => Dev::Keys,
@@ -369,13 +429,13 @@ pub(super) mod tests {
         assert_eq!(m.screen, Screen::Chars);
         // B361: the mode bar over the roster only shows the mode (singles for one device)
         assert!(!m.doubles);
-        // a face (B296: roster cell 1 + its place in the disc grid, after the Random card): 1P moves there and is
-        // ready; then the face for the computer's pick
-        let [x, y, w, h] = m.grid.cell(6);
+        // a face (B296: roster cell 1 + its place in the disc grid, after the Random card) in 1P's column (B368): 1P
+        // moves there and is ready; then the face for the computer's pick, in its column
+        let [x, y, w, h] = m.columns().cell(0, 6);
         tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[0].ready && m.players[0].cursor == 5);
-        let [x, y, ..] = m.grid.cell(10);
-        tap(&mut m, x + 4.0, y + 4.0);
+        let [x, y, w, h] = m.columns().cell(1, 10);
+        tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[1].ready && m.players[1].cursor == 9);
         assert_eq!(m.screen, Screen::Confirm);
         // the court picker (B257: a pill grid): a pill hovers it, a tap off (the side card) puts it back, the hovered
@@ -419,11 +479,23 @@ pub(super) mod tests {
         let v = m.settings.value(Opt::Msaa);
         let n = page(Screen::Graphics).len();
         let [x, y, w, h] = row(boxes(&m.grid, n).0, n, 3);
+        // B326: the first tap only picks the row; then its value's halves step it, the label keeps it
         tap(&mut m, x + w - 20.0, y + h / 2.0);
-        assert_eq!(m.sel, 3);
+        assert_eq!((m.sel, m.settings.value(Opt::Msaa), m.editing.is_some()), (3, v.clone(), true));
+        tap(&mut m, x + w - 20.0, y + h / 2.0);
         assert_ne!(m.settings.value(Opt::Msaa), v);
         tap(&mut m, x + w - 120.0, y + h / 2.0);
         assert_eq!(m.settings.value(Opt::Msaa), v);
+        tap(&mut m, x + w - 20.0, y + h / 2.0);
+        tap(&mut m, x + 40.0, y + h / 2.0);
+        assert!(m.editing.is_none() && m.settings.value(Opt::Msaa) != v, "kept");
+        // a tap off a picked row puts it back
+        let kept = m.settings.value(Opt::Msaa);
+        tap(&mut m, x + 40.0, y + h / 2.0);
+        tap(&mut m, x + w - 20.0, y + h / 2.0);
+        assert_ne!(m.settings.value(Opt::Msaa), kept);
+        tap(&mut m, 320.0, 5.0);
+        assert!(m.editing.is_none() && m.settings.value(Opt::Msaa) == kept, "put back");
         // Controls: a row starts a rebind
         let mut c = Menu { screen: Screen::Controls, ..default() };
         let [x, y, _, h] = row(super::super::options::controls_body(boxes(&c.grid, 14).0), 14, 2);
@@ -437,17 +509,19 @@ pub(super) mod tests {
     }
 
     /// Hit rects follow their quads: on 16:9 the select (B296) reaches past the middle 4:3 to the window's sides,
-    /// its Random card left of it.
+    /// 1P's column's Random card left of it, the computer's column's tiles its own (B368).
     #[test]
     fn wide_window_hits() {
         let m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
         let h = hits(&m).0;
         let at = |x: f32, y: f32| hit_at(&h, Vec2::new(0.5 + (x - 320.0) / 640.0 * 0.75, y / 448.0), 16.0 / 9.0, 1.0, SLOP);
-        for k in [0, 10] {
-            let [x, y, w, hh] = m.grid.cell(k);
-            assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(k)));
+        let c = m.columns();
+        for (p, k) in [(0, 0), (0, 10), (1, 0), (1, 10)] {
+            let [x, y, w, hh] = c.cell(p, k);
+            assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(p, k)));
         }
-        assert!(m.grid.cell(0)[0] + m.grid.cell(0)[2] < 0.0, "left of the 4:3 screen");
+        assert!(c.cell(0, 0)[0] + c.cell(0, 0)[2] < 0.0, "left of the 4:3 screen");
+        assert!(c.cell(1, 0)[0] > 320.0, "2P's column right of the middle");
         assert_eq!(at(-200.0, 300.0), None, "off the window");
     }
 
@@ -523,7 +597,7 @@ pub(super) mod tests {
             Vec2::new(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0)
         };
         let right = Press { right: true, ..default() };
-        // the host's lobby: the mouse moved onto Copy Link selects it, then the pad's ↓ to Public holds
+        // the host's lobby: the mouse moved onto Copy Link selects it, then the pad's → to Public holds
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         super::super::online::sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
@@ -532,7 +606,7 @@ pub(super) mod tests {
         let at = centre(&m, copy);
         frame(&mut app, &mut m, at, 0);
         assert_eq!(m.sel, copy, "hovering selects");
-        m.step(Dev::Keys, Press { down: true, ..default() });
+        m.step(Dev::Keys, right);
         assert_eq!(m.sel, copy + 1);
         for n in 1..30 {
             if n == 10 {
