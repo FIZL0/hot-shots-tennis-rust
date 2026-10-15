@@ -159,11 +159,24 @@ fn unsettled(
     u.0.store(slow || !images.added.is_empty() || !meshes.added.is_empty(), Ordering::Relaxed);
 }
 
+/// P47: where pipelines compile on the render thread (the browser, macOS), one frame compiles at most this long's worth
+/// (at least one) and leaves the rest for the next: the match's warm-up behind the loading screen (`warm`) queues
+/// ~150 at once, which in one frame froze the loading screen for ~1 s, longer with a cold driver cache. Elsewhere
+/// they compile on the async pool and this has no effect.
+const COMPILE_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+
+fn compile_budget(mut cache: ResMut<bevy::render::render_resource::PipelineCache>, mut set: Local<bool>) {
+    if !std::mem::replace(&mut *set, true) {
+        cache.set_compile_budget(Some(COMPILE_BUDGET));
+    }
+}
+
 pub fn plugin(app: &mut App) {
     let compiling = Compiling::default();
     let settle = Unsettled::default();
     if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
         r.insert_resource(settle.clone()).add_systems(bevy::render::Render, unsettled.in_set(bevy::render::RenderSystems::Cleanup));
+        r.add_systems(bevy::render::Render, compile_budget.in_set(bevy::render::RenderSystems::Prepare));
         r.insert_resource(compiling.clone()).add_systems(
             bevy::render::Render,
             (|cache: Res<bevy::render::render_resource::PipelineCache>, c: Res<Compiling>| {

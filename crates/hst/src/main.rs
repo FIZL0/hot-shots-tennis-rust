@@ -389,7 +389,12 @@ fn start(argv: Vec<String>) {
         render.priority = bevy::render::settings::WgpuSettingsPriority::WebGL2;
         render.limits = bevy::render::settings::WgpuLimits { max_texture_dimension_2d: 8192, max_texture_dimension_3d: 2048, ..bevy::render::settings::WgpuLimits::downlevel_webgl2_defaults() };
     }
-    let plugins = DefaultPlugins.set(bevy::render::RenderPlugin { render_creation: render.into(), ..default() }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
+    let plugins = DefaultPlugins.set(bevy::render::RenderPlugin {
+        render_creation: render.into(),
+        // P47: `HST_SYNC_PIPELINES=1` compiles pipelines on the render thread, as the browser and macOS always do
+        synchronous_pipeline_compilation: std::env::var_os("HST_SYNC_PIPELINES").is_some(),
+        ..default()
+    }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
     // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`); winit logs every redraw at info there, a line a frame,
     // and warns of each event it hands over while redrawing (P49: 14.5k of a 4-minute log's 15.8k lines)
     #[cfg(target_os = "ios")]
