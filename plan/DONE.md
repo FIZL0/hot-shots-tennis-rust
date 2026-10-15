@@ -527,6 +527,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B378** Web build panics on Linux Chromium: on Linux (Omarchy, ThinkPad T490) in Chromium, the web build stops with "The game stopped: panicked at /home/runner/.cargo/registry/src/index.crates.io-…" (the rest of the message was cut off), and the WebGL2 fallback gives the same error; find the cause from the full panic message and make the web build run there (user 2026-10-14) → crates/hst/src/web.rs · crates/hst/src/graphics.rs · web/index.html
 - [x] **B313** Mobile portrait layout (not the 1v1 split) is missing the Start, Select, L1 and R1 touch buttons; add them like the landscape layout has — files: web/touch.js, web/index.html — user 2026-10-14: still missing — portrait controller has no Start, Select, L1, R1
 - [x] **B365** Mod style and complexity check: look into the mods, especially the ones from games like Hot Shots Out of Bounds, and see if they can be made to match HST's style more closely; also consider a polygon/complexity maximum for mods, since they run much slower. Investigation only, make no commits, leave the changes for the user to review (user 2026-10-14) → crates/hst/src/mods.rs · crates/hst/src/character.rs · crates/hst/src/modstore.rs
+- [x] **B381** Remove Lily, Anna, Suzuki and Chika from the modded playable characters: drop these four characters from the modded character list because their meshes are weird (user 2026-10-14) → crates/hst/src/mods.rs · crates/hst/src/modstore.rs · crates/hst/src/play/main_menu/roster.rs
 
 
 ### Shots

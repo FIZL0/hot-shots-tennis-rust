@@ -233,7 +233,7 @@ impl std::fmt::Display for Kind {
 /// `<path>: <reason>` logged.
 /// A folder without a `mod.json` is searched one level down (a pack, e.g. `mods/hst-mods` → the mods repo's `out/mods`);
 /// what has none there either (`texture-replacements`, `textures-src`) is skipped quietly, and so are mods of
-/// another `Kind` (courts, umpires).
+/// another `Kind` (courts, umpires), and the [`dropped`] ones.
 pub fn list(root: &Path) -> Vec<Mod> {
     let sub = crate::modfs::read_dir;
     // a folder without mod.json is a pack of mods (e.g. a link to the mods repo's out/mods); a dot folder is an
@@ -241,7 +241,16 @@ pub fn list(root: &Path) -> Vec<Mod> {
     let mut dirs: Vec<PathBuf> =
         sub(root).into_iter().filter(|d| !d.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).flat_map(|d| if crate::modfs::is_file(&d.join("mod.json")) { vec![d] } else { sub(&d) }).filter(|d| crate::modfs::is_file(&d.join("mod.json"))).collect();
     dirs.sort();
-    dirs.iter().filter(|d| Kind::of_dir(d) == Kind::Character).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
+    dirs.iter().filter(|d| Kind::of_dir(d) == Kind::Character).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).filter(|m| !dropped(&m.id)).collect()
+}
+
+/// B381: mods left off the custom roster and the store even when installed or uploaded — HST's own chair umpires
+/// Chika, Suzuki, Lily and Anna, whose stood-up meshes look wrong as players (Robot Tennis stays).
+const DROPPED: [&str; 4] = ["hst_umpire_00_chika", "hst_umpire_01_suzuki", "hst_umpire_02_lily", "hst_umpire_04_anna"];
+
+/// Whether the mod `id` is one of the [`DROPPED`] ones.
+pub fn dropped(id: &str) -> bool {
+    DROPPED.contains(&id)
 }
 
 /// TParam.csv's column headers, line breaks as spaces.
@@ -1143,6 +1152,28 @@ mod tests {
 
     /// M1f: the PSP mods' heads and faces are unskinned mesh nodes under `Bip01Head`; every costume of every Get a
     /// Grip and Open Tee mod in `context/mods` carries vertices on the head joint, at rest above its neck.
+    /// B381: an installed Lily (one of the [`dropped`] chair umpires) stays off the roster, beside a mod that lists
+    /// (skipped without `context/mods/test_pc00`).
+    #[test]
+    fn dropped_umpires_stay_off_the_roster() {
+        let src = Path::new(MODS).join("test_pc00");
+        if !src.is_dir() {
+            return eprintln!("no context/mods/test_pc00, skipped");
+        }
+        let root = std::env::temp_dir().join(format!("hst-b381-{}", std::process::id()));
+        for id in ["test_pc00", "hst_umpire_02_lily"] {
+            let d = root.join(id);
+            std::fs::create_dir_all(d.join("model")).unwrap();
+            std::fs::copy(src.join("model/c00.glb"), d.join("model/c00.glb")).unwrap();
+            let mut j: serde_json::Value = serde_json::from_slice(&std::fs::read(src.join("mod.json")).unwrap()).unwrap();
+            j["id"] = id.into();
+            std::fs::write(d.join("mod.json"), serde_json::to_vec(&j).unwrap()).unwrap();
+        }
+        let ids: Vec<String> = list(&root).into_iter().map(|m| m.id).collect();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(ids, ["test_pc00"]);
+    }
+
     #[test]
     fn psp_mods_keep_their_heads() {
         let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
