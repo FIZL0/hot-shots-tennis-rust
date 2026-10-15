@@ -307,10 +307,11 @@ fn start(argv: Vec<String>) {
     let plugins = DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
     // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`)
     #[cfg(target_os = "ios")]
-    let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, ..default() });
+    // winit logs every redraw at info on iOS: a line a frame into the file
+    let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn", bevy::log::DEFAULT_FILTER), ..default() });
     app.add_plugins(plugins);
     #[cfg(target_os = "ios")]
-    app.add_systems(Last, ios::heartbeat);
+    app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin).add_systems(Last, (ios::heartbeat, ios::log_passes));
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]

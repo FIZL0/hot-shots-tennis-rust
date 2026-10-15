@@ -51,3 +51,13 @@ Controller confirmed working on the 15 Pro. The `HST_FPS` log is on by default o
 every 5 s into hst-log.txt), with CPU ms/frame from getrusage and NSProcessInfo thermal state. Settings → Show FPS →
 Detailed adds the frame split (game/sim/render). The no-disc hint was centred off-screen (the page's default 1280×720
 window is bigger than the phone): it now uses borderless fullscreen like the game; the → glyph (missing from the font) is now >.
+
+## Build 2014: first device profile (15 Pro, 100% scale, Low shadows, 2x MSAA)
+hst-log.txt from build 2012: a match holds 60 fps (game ~5 ms, render ~9.5 ms of 16.7). Every drop is one of the
+umpire's call models (Fault, Out, Change Sides; `play/popups.rs`, overlay camera on CALL_LAYER): each one, ~1.1 s
+of 30–40 ms frames, render +5–7 ms, game +1.5 ms, 12 more meshes. Ruled out: MSAA mismatch (the call camera is
+a `hud_gamma::Scene` camera, same samples), sun shadows (filtered by render layer), CPU morph (a few dozen
+vertices). Big stalls only at loads (match start 1.5 s, result → menu 0.9 s). winit logged every redraw at info
+(37k lines): now winit=warn. Added RenderDiagnosticsPlugin on iOS, logging the 8 slowest passes every 0.5 s
+(GPU time if Metal gives timestamps), and prep/enc/submit in the frame split. Next log says which pass the call
+model costs.
