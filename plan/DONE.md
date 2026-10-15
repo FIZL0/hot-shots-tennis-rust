@@ -579,6 +579,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B390** Character select defaults to a new "All" category: the character select screen should open on a new category, All, which contains every character from every category (user 2026-10-15) → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/play/main_menu.rs
 - [x] **M8f7** (in M8f) Court NPCs: the court mod's gallery, ball kids, line judges and mascots with idle/reaction motions and sounds, cued like the disc gallery, looks only → `play/npcs.rs` · ../HST-MODS `tools/psp2gltf` | j: 2026-10-14-m8f-courts-umpires
 - [x] **M8f5a2** Get a Grip c17 (Shadows) court mod: solid black vertical bars fill the match camera's view; they come from gimmick.glb (without it they're gone; likely `c17_ob13_NORMA__00` 30 m behind the near baseline or `c17_gi09_earth`). Find which piece, how GaG keeps it out of the match view (hidden near the camera, placed elsewhere, or a material state), and fix the export → ../HST-MODS `tools/psp2gltf/export_getagrip_courts.py` (`gimmicks`) | j: 2026-10-14-m8f-courts-umpires
+- [x] **M94** Re-export and look at the other Get a Grip models with one-bone, bone-local skinned groups (psp2gltf i3d `bone_local`, fixed in M93): adhoc/pc bodies 32, 111, 152, 157, 185, 186, 206 and court gimmicks c03 gi06_NIWATORI, gi09_Suzume, c16 gi09_kusudama; their parts sat at the origin before → ../HST-MODS/tools/psp2gltf/export_getagrip.py · ../HST-MODS/tools/psp2gltf/export_getagrip_courts.py
 
 
 ### Shots
