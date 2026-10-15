@@ -35,7 +35,12 @@ use super::{Game, Phase};
 use crate::character::{self, CharacterData, Motion};
 use crate::{Args, GameSpace};
 
+mod court_people;
+#[cfg(test)]
+pub(super) use court_people::seen as court_people_seen;
+
 pub fn plugin(app: &mut App) {
+    app.add_plugins(court_people::plugin);
     app.init_resource::<Ambience>()
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))

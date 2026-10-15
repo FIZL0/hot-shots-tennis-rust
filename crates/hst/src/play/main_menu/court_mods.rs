@@ -97,6 +97,7 @@ mod tests {
             bgm: None,
             ambience: Vec::new(),
             lens_flare: None,
+            people: None,
         };
         let last = *STRIP.last().unwrap();
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: last, court_mods: vec![court(1, 5), court(3, 9)], ..default() };
@@ -130,7 +131,7 @@ mod tests {
     #[test]
     fn a_hundred_court_mods_fit_the_strip() {
         let t = pointer::tests::text_with_mods(0);
-        let court = |n: usize| crate::mods_court::Court { dir: format!("mods/c{n}").into(), id: format!("c{n}"), name: "A Rather Long Court Name Here".into(), source: "Some Game: Its Subtitle".into(), layout: (n % 11) as u8, light: None, sky: false, gimmick: false, bgm: None, ambience: Vec::new(), lens_flare: None };
+        let court = |n: usize| crate::mods_court::Court { dir: format!("mods/c{n}").into(), id: format!("c{n}"), name: "A Rather Long Court Name Here".into(), source: "Some Game: Its Subtitle".into(), layout: (n % 11) as u8, light: None, sky: false, gimmick: false, bgm: None, ambience: Vec::new(), lens_flare: None, people: None };
         for a in [4.0, 21.0 / 9.0, 16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 0.4] {
             for pick in [COURTS, COURTS + 1, COURTS + 50, COURTS + 100] {
                 let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: pick, court_mods: (0..100).map(court).collect(), grid: Grid::fit(a), ..default() };
