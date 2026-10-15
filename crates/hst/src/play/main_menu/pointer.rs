@@ -445,7 +445,7 @@ pub(super) mod tests {
         // the court picker (B257: a pill grid): a pill hovers it, a tap off (the side card) puts it back, the hovered
         // pill again keeps it
         let centre = |[x, y, w, h]: [f32; 4]| (x + w / 2.0, y + h / 2.0);
-        let (cx, cy) = centre(super::super::confirm_rects(&m)[1]);
+        let (cx, cy) = centre(super::super::confirm::rects(&m)[1]);
         tap(&mut m, cx, cy); // Select Court
         assert_eq!(m.picking, Some(m.court));
         let was = m.court;
@@ -460,7 +460,7 @@ pub(super) mod tests {
         let (px, py) = centre(super::super::strip_rects(&m).0[5]);
         tap(&mut m, px, py);
         assert!(m.picking.is_none() && m.court == super::super::STRIP[4]);
-        let [x, y, w, h] = super::super::confirm_rects(&m)[0];
+        let [x, y, w, h] = super::super::confirm::rects(&m)[0];
         let fx = tap(&mut m, x + w / 2.0, y + h / 2.0); // Start the match!
         assert!(fx.contains(&Effect::Launch), "{fx:?}");
     }
