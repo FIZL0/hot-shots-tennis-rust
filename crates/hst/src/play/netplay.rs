@@ -1013,6 +1013,37 @@ mod tests {
             let _ = Lockstep::new;
         }
 
+        /// C2: one machine's mashed doubles match, every tick's state hash written to `HST_HASH_TRACE` (one hex line
+        /// a tick, `HST_HASH_TICKS` ticks, default 30000, or until the match of `HST_HASH_GAMES` games, default 1, ends). Run before and after a change
+        /// that must not change the sim and diff the files:
+        /// `HST_HASH_TRACE=context/c2/a.txt tools/check.sh -p hst hash_trace -- --ignored` (~1 min optimised).
+        #[test]
+        #[ignore]
+        fn hash_trace() {
+            let path = std::env::var("HST_HASH_TRACE").expect("HST_HASH_TRACE=file");
+            let ticks: u32 = std::env::var("HST_HASH_TICKS").map_or(30_000, |t| t.parse().unwrap());
+            REPLAYS.set(false);
+            let mut room = room(0);
+            room.games = std::env::var("HST_HASH_GAMES").map_or(1, |g| g.parse().unwrap());
+            room.seats.iter_mut().for_each(|s| s.as_mut().unwrap().peer = "host".into());
+            let mut a = app(&room, "replay");
+            let mut np = a.world_mut().remove_resource::<Netplay>().unwrap();
+            let mut out = String::new();
+            let mut last = [tick_input::IDLE; 4];
+            for t in 0..ticks {
+                out += &format!("{:016x}\n", super::super::snapshot::state_hash(a.world_mut()));
+                if a.world().resource::<Game>().match_stats.result.is_some() {
+                    break;
+                }
+                np.lock.tick = t;
+                let now = [0, 1, 2, 3].map(|s| np.mashed(s));
+                run_on(a.world_mut(), now, last);
+                a.world_mut().run_schedule(FixedUpdate);
+                last = now;
+            }
+            std::fs::write(path, out).unwrap();
+        }
+
         // ---------------------------------------------------------------- rollback (M2h)
 
         use super::super::super::rollback::{self, Rollback};

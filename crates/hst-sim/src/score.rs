@@ -1,5 +1,6 @@
 //! Match score, server rotation and ends, ported from the original's scoreboard logic.
 //! Teams: 0 = players 0 and 2, 1 = players 1 and 3. Point index 0..4 = 0, 15, 30, 40, advantage.
+#![deny(clippy::float_arithmetic)]
 
 /// Cap on the deuce counter (game data value; only shown by the scoreboard).
 const DEUCE_COUNT_CAP: i32 = 99;

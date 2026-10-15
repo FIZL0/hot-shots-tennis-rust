@@ -1,5 +1,6 @@
 //! The AI's random generator: a plain MT19937, seeded by each AI object as it is made (with a draw from the
 //! game's main generator) and drawn by every AI routine.
+#![deny(clippy::float_arithmetic)]
 
 #[derive(Clone)]
 pub struct Mt {

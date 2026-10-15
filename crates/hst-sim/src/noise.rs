@@ -2,6 +2,7 @@
 //! packets: per frame its phase advances by the wind-scaled rate, and the VU1 adds a value-noise offset to every
 //! position entry of those packets (in the bone's space, before skinning), scaled by the entry's own weight.
 //! EE side in FPU arithmetic (`ps2`), the micro program's in VU arithmetic (`vu0`).
+#![deny(clippy::float_arithmetic)]
 
 use crate::{ps2, vu0};
 
