@@ -4,13 +4,9 @@
 //! the drawn vertex gets the bind-space offset its skin maps onto that: (Σ w·R·bind⁻¹)⁻¹ · Σ R·d, in the rig's own
 //! copy of the part's mesh.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::primitives::{Frustum, Sphere};
-use bevy::camera::visibility::RenderLayers;
-use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use hst_data::{mdl, noi};
 use hst_sim::noise::{self, Noise};
@@ -171,60 +167,16 @@ fn step(weather: Option<Res<Weather>>, mut rigs: Query<(&Rig, &Motion, &mut Sway
     }
 }
 
-/// B344, Settings → Display → Sway LOD (`sway_lod`, `--sway-lod on|off`, the browser's `?sway_lod=on`): a rig no camera
-/// sees keeps its last sway, a far one (under a sixth of the view tall) moves its sway every other frame. Off (the
-/// default: no frame-rate gain measured, research/journal/2026-10-14-b344-sway-lod): every rig every frame.
-pub static LOD: AtomicBool = AtomicBool::new(false);
-/// The command line's `--sway-lod` holds for the run, over settings.txt.
-static LOD_FLAG: AtomicBool = AtomicBool::new(false);
-
-/// Sway LOD as settings.txt says (unless the command line said), or as the command line says (`flag`).
-pub fn set_lod(on: bool, flag: bool) {
-    if flag || !LOD_FLAG.load(Ordering::Relaxed) {
-        LOD.store(on, Ordering::Relaxed);
-    }
-    if flag {
-        LOD_FLAG.store(true, Ordering::Relaxed);
-    }
-}
-
-/// Whether the rig at `at` (its root, last frame) on `layers` redraws its sway in frame `frame`: in the view of some
-/// active camera on its layers (a 2.5 m ball round the root, as last frame's frustum has it), and big enough there
-/// (or the view orthographic) or on its turn (every other frame, rigs alternating by entity).
-fn due(e: Entity, at: Vec3, layers: &RenderLayers, cams: &Cams, frame: u32) -> bool {
-    let ball = Sphere { center: at.into(), radius: 2.5 };
-    let mut seen = false;
-    for (cam, eye, frustum, projection, on) in cams {
-        if !cam.is_active || !on.unwrap_or_default().intersects(layers) || !frustum.intersects_sphere(&ball, true) {
-            continue;
-        }
-        let Projection::Perspective(p) = projection else { return true };
-        // its 2 m height's share of the view's height
-        let share = 2.0 / (2.0 * (p.fov / 2.0).tan() * eye.translation().distance(at)).max(1e-3);
-        if share >= 1.0 / 6.0 {
-            return true;
-        }
-        seen = true;
-    }
-    seen && (frame + e.index_u32()) % 2 == 0
-}
-
-type Cams<'w, 's> = Query<'w, 's, (&'static Camera, &'static GlobalTransform, &'static Frustum, &'static Projection, Option<&'static RenderLayers>), With<Camera3d>>;
-
 /// Every drawn frame, after the pose: each moved vertex from the previous phase, its entries' offsets carried
 /// through their bones as posed.
-pub(crate) fn draw(mut rigs: Query<(Entity, &Rig, Ref<Motion>, &mut Sway, &GlobalTransform, Option<&RenderLayers>)>, joints: Query<&Transform>, mut queued: ResMut<Queued>, cams: Cams, frame: Res<FrameCount>) {
-    let lod = LOD.load(Ordering::Relaxed);
+pub(crate) fn draw(mut rigs: Query<(&Rig, Ref<Motion>, &mut Sway)>, joints: Query<&Transform>, mut queued: ResMut<Queued>) {
     let mut changed = Vec::new();
-    for (e, rig, motion, mut s, at, layers) in &mut rigs {
+    for (rig, motion, mut s) in &mut rigs {
         let Some(c) = &rig.data.noise else { continue };
         if motion.is_changed() {
             s.stale = true;
         }
         if !s.stale && s.offsets_at == s.noise {
-            continue;
-        }
-        if lod && !due(e, at.translation(), layers.unwrap_or_default(), &cams, frame.0) {
             continue;
         }
         // the entries' offsets from the previous phase, again only after a step
