@@ -326,6 +326,14 @@ impl Menu {
         self.send_venue(out);
     }
 
+    /// B451: the lobby as it stands under the umpire picker opened from it (its Umpire pill chosen).
+    pub(super) fn lobby_under_umpire(&self) -> Menu {
+        let mut m = self.clone();
+        (m.screen, m.picking, m.net.venue) = (Screen::Lobby, None, false);
+        m.sel = m.items().iter().position(|it| *it == Item::Set(1)).unwrap_or(0);
+        m
+    }
+
     /// M8f3: the host's umpire mod (id, name) to everyone, or none.
     fn umpire_mod_fx(&self) -> Effect {
         let u = self.umpire_mod_of(self.umpire as usize).map(|x| (x.id.clone(), x.name.clone()));

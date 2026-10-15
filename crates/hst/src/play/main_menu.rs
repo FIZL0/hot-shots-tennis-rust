@@ -62,6 +62,7 @@ mod pointer;
 mod tabs;
 mod trace;
 mod umpire_mods;
+mod umpire_picker;
 mod court_mods;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
@@ -486,6 +487,10 @@ struct Menu {
     court_mods: Vec<crate::mods_court::Court>,
     /// B400: their pictures, by the same index (`umpire_mods::load`; None: it ships none).
     umpire_pics: Vec<Option<umpire_mods::Pic>>,
+    /// B451: whether each umpire mod ships its own voice preview (Preview Voice's calls), by the same index.
+    umpire_voices: Vec<bool>,
+    /// B451: the umpire picker's rows' places.
+    umpire_pick: umpire_picker::Picker,
     /// B401: the court mods' `previews/court.png` sizes (`court_mods::Pics`), by `court_mods` index.
     court_pics: Vec<Option<[f32; 2]>>,
     /// B368: each player's column's first row on view ([`Menu::page`]), and the tile it was last scrolled to
@@ -550,6 +555,8 @@ impl Default for Menu {
             umpire_mods: Vec::new(),
             court_mods: Vec::new(),
             umpire_pics: Vec::new(),
+            umpire_voices: Vec::new(),
+            umpire_pick: default(),
             court_pics: Vec::new(),
             scroll: [0; 4],
             followed: [None; 4],
@@ -1278,6 +1285,8 @@ impl Menu {
                     }
                 }
             }
+            // B451: the umpire picker's rows
+            Screen::Confirm if host == Some(dev) && self.picking.is_some() && self.sel == 4 => umpire_picker::step(self, k, &mut out),
             Screen::Confirm if host == Some(dev) && self.picking.is_some() => {
                 // the pickers: the court and umpire strips' ←→ (Random first, stop at the ends); ✕ keeps, ○ puts back
                 let d = k.right as i32 - k.left as i32;
@@ -2363,6 +2372,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         }
         Screen::Chars => roster::chars(&mut d, m, text, bind, pads),
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
+        // B451: the umpire picker over the players
+        Screen::Confirm if m.picking.is_some() && m.sel == 4 => umpire_picker::draw_over(&mut d, m, text, pads, hand_x),
         Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, pads, hand_x),
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
         Screen::Mods => mods_screen::layout(&mut d, m, hand_x),

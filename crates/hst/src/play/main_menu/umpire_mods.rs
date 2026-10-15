@@ -32,13 +32,20 @@ pub(super) struct Pics {
 /// Reads the umpire mods' pictures whenever the installed list isn't the one they were read for.
 pub(super) fn load(mut menu: ResMut<Menu>, mut pics: ResMut<Pics>, mut images: ResMut<Assets<Image>>) {
     let dirs: Vec<PathBuf> = menu.umpire_mods.iter().map(|x| x.dir.clone()).collect();
-    if pics.dirs == dirs && menu.umpire_pics.len() == dirs.len() {
+    if pics.dirs == dirs && menu.umpire_pics.len() == dirs.len() && menu.umpire_voices.len() == dirs.len() {
         return;
     }
+    menu.umpire_voices = menu.umpire_mods.iter().map(has_voice).collect();
     let read: Vec<Option<(Pic, Image)>> = dirs.iter().map(|d| crate::modfs::read(&d.join("previews/umpire.png")).ok().and_then(|b| decode(&b))).collect();
     menu.umpire_pics = read.iter().map(|r| r.as_ref().map(|r| r.0)).collect();
     pics.handles = read.into_iter().map(|r| r.map(|r| images.add(r.1))).collect();
     pics.dirs = dirs;
+}
+
+/// B451: whether umpire mod `u` ships any of Preview Voice's calls (`voice/<program>_<key>.wav`); without one △
+/// would only play its donor's.
+fn has_voice(u: &Umpire) -> bool {
+    super::CALLS.iter().any(|(p, k)| crate::modfs::is_file(&u.dir.join(&u.voice).join(format!("{p}_{k}.wav"))))
 }
 
 /// A picture's PNG: its [`Pic`] and image.
@@ -114,6 +121,11 @@ pub(super) fn values(m: &Menu) -> impl Iterator<Item = usize> {
 }
 
 impl Menu {
+    /// B451: whether umpire value `u` has a voice to preview (△): a disc umpire, or a mod shipping its own calls.
+    pub(super) fn umpire_voiced(&self, u: usize) -> bool {
+        u < UMPIRES || u.checked_sub(UMPIRES + 1).is_some_and(|i| self.umpire_voices.get(i).copied().unwrap_or(false))
+    }
+
     /// The umpire mod that umpire value `u` picks, if it's one.
     pub(super) fn umpire_mod_of(&self, u: usize) -> Option<&Umpire> {
         self.umpire_mods.get(u.checked_sub(UMPIRES + 1)?)
@@ -166,19 +178,19 @@ mod tests {
         p
     }
 
-    /// M8f3: the umpire select's strip runs Random, the disc five, then the umpire mods; → past Anna picks the
-    /// first mod, which shows by its name, plays as its donor (`--umpire`) with `--umpire-mod DIR`, isn't saved as
+    /// M8f3: the umpire select runs Random, the disc five, then the umpire mods (B451: on the picker's second row, ↓
+    /// from Anna picks the first mod), which shows by its name, plays as its donor (`--umpire`) with `--umpire-mod DIR`, isn't saved as
     /// the next run's pick, and goes back to Random when it's no longer installed.
     #[test]
     fn umpire_mods_follow_the_disc_five() {
         let ump = |n: u8, donor| crate::mods_umpire::Umpire { dir: format!("mods/gag_ump{n:02}").into(), id: format!("gag_ump{n:02}"), name: format!("Umpire {n:02}"), source: "Hot Shots Tennis: Get a Grip".into(), donor, voice: "voice/".into() };
-        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, umpire: 4, umpire_mods: vec![ump(0, 2), ump(1, 0)], ..default() };
+        let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, umpire: 4, umpire_mods: vec![ump(0, 2), ump(1, 0)], umpire_voices: vec![true, false], ..default() };
         m.sel = 4;
         assert_eq!(strip_order(&m), [UMPIRES, 0, 1, 2, 3, 4, UMPIRES + 1, UMPIRES + 2]);
         m.step(Dev::Keys, press(|p| &mut p.ok));
-        m.step(Dev::Keys, press(|p| &mut p.right));
+        m.step(Dev::Keys, press(|p| &mut p.down));
         assert_eq!(m.umpire as usize, UMPIRES + 1);
-        // △: Preview Voice on a mod too
+        // △: Preview Voice on a mod with its own calls too
         assert!(m.step(Dev::Keys, press(|p| &mut p.card)).iter().any(|e| matches!(e, Effect::Hear(6, ..))));
         let saved = m.settings.6;
         m.step(Dev::Keys, press(|p| &mut p.ok));
