@@ -1,15 +1,15 @@
-//! B369: the character select's category tabs, each player's own (plan/B368.md § Tabs and overflow): Favourites (only
+//! B369: the character select's category tabs, each player's own (plan/B368.md § Tabs and overflow): Favorites (only
 //! while there are any), Hot Shots (the disc cast, Random first), then one per mod game (`Mod::game`, "Mods" for an
 //! untagged mod) in name order, "Mods" last. No bumpers (L1 / R1 are the costume): → past a row's last tile goes on
 //! to the next tab, ← past its first back to the previous one, wrapping, on the same row (clamped to the new tab's
 //! last) at its first or last tile; ↑↓ stay in the tab. A tap on a tab switches to it. □ marks the highlighted
-//! character a favourite (or not): saved in `favourites.txt` beside `settings.txt`, a star on its tile.
+//! character a favorite (or not): saved in `favorites.txt` beside `settings.txt`, a star on its tile.
 
 use super::{COLOURS, Draw, Effect, GOLD, INK, Menu, Press, WHITE, Who, pointer};
 
 /// A player's tab (`Player::tab`): Hot Shots is the default (0), so a fresh select (B346's Random) opens on it.
 pub(super) const HOT_SHOTS: u8 = 0;
-pub(super) const FAVOURITES: u8 = 1;
+pub(super) const FAVORITES: u8 = 1;
 /// Mod game `k` (in [`Menu::games`]' order) is tab id `GAMES + k`.
 const GAMES: u8 = 2;
 
@@ -21,29 +21,33 @@ pub(super) struct Tab {
     pub cells: Vec<Option<Who>>,
 }
 
-/// The favourite characters, by key ([`Menu::fav_key`]); sorted, so a `Menu`'s `Debug` is the same every time.
-pub(super) type Favourites = std::collections::BTreeSet<String>;
+/// The favorite characters, by key ([`Menu::fav_key`]); sorted, so a `Menu`'s `Debug` is the same every time.
+pub(super) type Favorites = std::collections::BTreeSet<String>;
 
-/// Where the favourites are saved: beside `settings.txt`.
+/// Where the favorites are saved: beside `settings.txt`.
 pub(super) fn path(iso: &str) -> std::path::PathBuf {
-    super::Settings::path(iso).with_file_name("favourites.txt")
+    super::Settings::path(iso).with_file_name("favorites.txt")
 }
 
-/// The saved favourites (none if there's no file yet).
-pub(super) fn load(iso: &str) -> Favourites {
-    crate::store::read_to_string(path(iso)).map(|t| parse(&t)).unwrap_or_default()
+/// The saved favorites (none if there's no file yet). Before B394 the file was `favourites.txt`: read that if
+/// there's no `favorites.txt` yet (the next save writes the new name).
+pub(super) fn load(iso: &str) -> Favorites {
+    crate::store::read_to_string(path(iso))
+        .or_else(|_| crate::store::read_to_string(path(iso).with_file_name("favourites.txt")))
+        .map(|t| parse(&t))
+        .unwrap_or_default()
 }
 
-fn parse(text: &str) -> Favourites {
+fn parse(text: &str) -> Favorites {
     text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect()
 }
 
-pub(super) fn text(favs: &Favourites) -> String {
+pub(super) fn text(favs: &Favorites) -> String {
     favs.iter().map(|k| format!("{k}\n")).collect()
 }
 
 impl Menu {
-    /// A favourite's key: a disc character by number, a mod by its folder (B248's unique id).
+    /// A favorite's key: a disc character by number, a mod by its folder (B248's unique id).
     fn fav_key(&self, w: Who) -> String {
         match w {
             Who::Disc(c) => format!("hst {c}"),
@@ -51,7 +55,7 @@ impl Menu {
         }
     }
 
-    pub(super) fn favourite(&self, w: Who) -> bool {
+    pub(super) fn favorite(&self, w: Who) -> bool {
         self.favs.contains(&self.fav_key(w))
     }
 
@@ -67,9 +71,9 @@ impl Menu {
     pub(super) fn tabs(&self) -> Vec<Tab> {
         let all = self.roster();
         let mut out = Vec::new();
-        let favs: Vec<Option<Who>> = all.iter().copied().filter(|c| c.is_some_and(|w| self.favourite(w))).collect();
+        let favs: Vec<Option<Who>> = all.iter().copied().filter(|c| c.is_some_and(|w| self.favorite(w))).collect();
         if !favs.is_empty() {
-            out.push(Tab { id: FAVOURITES, name: "Favourites".into(), cells: favs });
+            out.push(Tab { id: FAVORITES, name: "Favorites".into(), cells: favs });
         }
         out.push(Tab { id: HOT_SHOTS, name: "Hot Shots".into(), cells: all.iter().copied().filter(|c| !matches!(c, Some(Who::Mod(_)))).collect() });
         for (k, g) in self.games().into_iter().enumerate() {
@@ -79,7 +83,7 @@ impl Menu {
         out
     }
 
-    /// Player `p`'s tab in `tabs`: theirs, else (Favourites emptied, a game gone) Hot Shots.
+    /// Player `p`'s tab in `tabs`: theirs, else (Favorites emptied, a game gone) Hot Shots.
     pub(super) fn tab_at(&self, p: usize, tabs: &[Tab]) -> usize {
         let id = self.players[p].tab;
         tabs.iter().position(|t| t.id == id).or_else(|| tabs.iter().position(|t| t.id == HOT_SHOTS)).unwrap_or(0)
@@ -185,22 +189,22 @@ impl Menu {
         })
     }
 
-    /// B369: □: the highlighted character in or out of the favourites (saved). Taken off while on Favourites, the
+    /// B369: □: the highlighted character in or out of the favorites (saved). Taken off while on Favorites, the
     /// cursor stays at that place in the tab (or back on Hot Shots once it's empty).
-    pub(super) fn toggle_favourite(&mut self, p: usize, out: &mut Vec<Effect>) {
+    pub(super) fn toggle_favorite(&mut self, p: usize, out: &mut Vec<Effect>) {
         let Some(w) = self.cell(p) else { return };
         let key = self.fav_key(w);
         let tabs = self.tabs();
         let was = &tabs[self.tab_at(p, &tabs)];
         let at = was.cells.iter().position(|&c| c == Some(w)).unwrap_or(0);
-        let on_favs = was.id == FAVOURITES;
+        let on_favs = was.id == FAVORITES;
         if !self.favs.remove(&key) {
             self.favs.insert(key);
         }
         if on_favs {
             let tabs = self.tabs();
             let t = self.tab_at(p, &tabs);
-            if tabs[t].id == FAVOURITES {
+            if tabs[t].id == FAVORITES {
                 let cells = &tabs[t].cells;
                 if let Some(c) = (at.min(cells.len() - 1)..cells.len()).chain(0..at).map(|i| cells[i]).find(|&c| !self.full(p, c)) {
                     self.put(p, c);
@@ -212,10 +216,10 @@ impl Menu {
                 }
             }
         }
-        out.extend([Effect::Sound(0), Effect::SaveFavourites]);
+        out.extend([Effect::Sound(0), Effect::SaveFavorites]);
     }
 
-    /// The tab a character lives in (not Favourites).
+    /// The tab a character lives in (not Favorites).
     fn home_tab(&self, w: Who) -> u8 {
         match w {
             Who::Disc(_) => HOT_SHOTS,
@@ -260,7 +264,7 @@ pub(super) fn foot(m: &Menu, p: usize) -> String {
     if n > 1 { format!("« {}   {k}   {} »", tabs[(t + n - 1) % n].name, tabs[(t + 1) % n].name) } else { k }
 }
 
-/// A favourite's star in a tile's top-right corner (the font's `*`, gold over a dark ring).
+/// A favorite's star in a tile's top-right corner (the font's `*`, gold over a dark ring).
 pub(super) fn star(d: &mut Draw, [x, y, w, _]: [f32; 4]) {
     let s = (w * 0.34).clamp(12.0, 22.0);
     d.outlined(|d| d.centred("*", x + w - s * 0.45, y + 1.0, s, GOLD));
@@ -321,12 +325,12 @@ mod tests {
         let mut m = menu();
         assert_eq!(names(&m), [("Hot Shots".into(), 1 + CHARS), ("Get a Grip".into(), 2), ("Golf".into(), 7), ("Mods".into(), 3)]);
         assert_eq!(m.tab_cells(0)[..2], [None, Some(Who::Disc(GRID[0].0))]);
-        // a favourite puts Favourites first
+        // a favorite puts Favorites first
         m.put(0, Some(Who::Mod(4)));
         let mut out = Vec::new();
-        m.toggle_favourite(0, &mut out);
-        assert_eq!(out, [Effect::Sound(0), Effect::SaveFavourites]);
-        assert_eq!(names(&m)[0], ("Favourites".into(), 1));
+        m.toggle_favorite(0, &mut out);
+        assert_eq!(out, [Effect::Sound(0), Effect::SaveFavorites]);
+        assert_eq!(names(&m)[0], ("Favorites".into(), 1));
         assert_eq!(m.tabs()[0].cells, [Some(Who::Mod(4))]);
     }
 
@@ -380,28 +384,28 @@ mod tests {
     }
 
     #[test]
-    fn favourites_persist() {
+    fn favorites_persist() {
         let mut m = menu();
         m.put(0, Some(Who::Disc(3)));
         m.step(Dev::Keys, press(|p| &mut p.card));
         m.put(0, Some(Who::Mod(7)));
         let out = m.step(Dev::Keys, press(|p| &mut p.card));
-        assert!(out.contains(&Effect::SaveFavourites));
-        assert!(m.favourite(Who::Disc(3)) && m.favourite(Who::Mod(7)));
+        assert!(out.contains(&Effect::SaveFavorites));
+        assert!(m.favorite(Who::Disc(3)) && m.favorite(Who::Mod(7)));
         let saved = text(&m.favs);
         assert_eq!(saved, "hst 3\nmod m7\n");
         let mut n = menu();
         n.favs = parse(&saved);
         assert_eq!(n.tabs()[0].cells, [Some(Who::Disc(3)), Some(Who::Mod(7))]);
-        // off again, from the Favourites tab: the cursor stays on the tab, then Hot Shots once it's empty
-        n.players[0].tab = FAVOURITES;
+        // off again, from the Favorites tab: the cursor stays on the tab, then Hot Shots once it's empty
+        n.players[0].tab = FAVORITES;
         n.put(0, Some(Who::Disc(3)));
         n.step(Dev::Keys, press(|p| &mut p.card));
-        assert_eq!((n.cell(0), n.tabs()[0].name.as_str()), (Some(Who::Mod(7)), "Favourites"));
+        assert_eq!((n.cell(0), n.tabs()[0].name.as_str()), (Some(Who::Mod(7)), "Favorites"));
         n.step(Dev::Keys, press(|p| &mut p.card));
         assert!(n.favs.is_empty());
         assert_eq!((n.players[0].tab, n.cell(0)), (GAMES + 1, Some(Who::Mod(7))), "Golf, where it lives");
-        // Random has no favourite; a ready player's △ does nothing
+        // Random has no favorite; a ready player's △ does nothing
         n.put(0, None);
         assert!(n.step(Dev::Keys, press(|p| &mut p.card)).is_empty());
     }

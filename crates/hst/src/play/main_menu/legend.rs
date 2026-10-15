@@ -40,7 +40,7 @@ pub(crate) enum Act {
     Ok,
     /// ○ / Esc.
     Back,
-    /// △: the attribute card; on the select the favourite (B375).
+    /// △: the attribute card; on the select the favorite (B375).
     Card,
     /// L1 / R1: the costume; the Settings tab (B294).
     Costume,
@@ -234,9 +234,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
             }
-            // B369 / B375: △ in or out of the favourites (not Random)
+            // B369 / B375: △ in or out of the favorites (not Random)
             if !me.ready && !me.random {
-                v.push((Act::Card, "Favourite"));
+                v.push((Act::Card, "Favorite"));
             }
             // B371 / B375: Start names the player on the device's own seat (Stats / Picture is the card's pill)
             if m.seats[p] == Some(dev) {
