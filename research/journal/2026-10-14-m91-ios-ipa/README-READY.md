@@ -45,3 +45,9 @@ Build 2008/2009 open on the 15 Pro (scene fix works) but had no controller input
 in `third_party/gilrs-core/src/platform/ios/`: polls `GCController.controllers` → extended gamepad each frame, emits
 gilrs events with the default codes (A/B/X/Y = south/east/west/north, triggers as 0..1 axes). No-disc hint shrunk
 (VMin 3.5, shorter text). Waiting on the user: does a paired controller drive the menu and a match?
+
+## Build 2012: perf log, no-disc page fullscreen
+Controller confirmed working on the 15 Pro. The `HST_FPS` log is on by default on iOS (fps, slow frames, assets, draws
+every 5 s into hst-log.txt), with CPU ms/frame from getrusage and NSProcessInfo thermal state. Settings → Show FPS →
+Detailed adds the frame split (game/sim/render). The no-disc hint was centred off-screen (the page's default 1280×720
+window is bigger than the phone): it now uses borderless fullscreen like the game; the → glyph (missing from the font) is now >.

@@ -1,4 +1,4 @@
-//! iOS start-up (M91): the app's Documents folder (Files app → On My iPhone → Hot Shots) holds the ISO, settings.txt,
+//! iOS start-up (M91): the app's Documents folder (Files app → On My iPhone > Hot Shots) holds the ISO, settings.txt,
 //! mods/ and `hst-log.txt`, this launch's log (stderr, panics and the engine's log; iOS shows nothing else without a
 //! Mac). Writing the log also makes iOS list the folder in Files, which it only does once there's a file in it.
 
@@ -13,6 +13,9 @@ pub fn log_to_documents(docs: &std::path::Path) {
         // SAFETY: plain dup2 of an open file over fd 2
         unsafe { libc::dup2(f.as_raw_fd(), 2) };
     }
+    // the frame-rate log (`main.rs` log_fps, log_assets; `graphics.rs` log_draws) every 5 s: the phone's only profiler
+    // SAFETY: first thing in main, before any other thread
+    unsafe { std::env::set_var("HST_FPS", "1") };
     eprintln!("Hot Shots Tennis {} (build {})", env!("CARGO_PKG_VERSION"), option_env!("HST_BUILD").unwrap_or("?"));
     // a close with no log line and no crash report says nothing: these say which kind of end it was
     unsafe {
@@ -50,6 +53,25 @@ unsafe extern "C" {
     fn NSSetUncaughtExceptionHandler(handler: extern "C" fn(*mut std::ffi::c_void));
     fn sel_registerName(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
     fn objc_msgSend();
+    fn objc_getClass(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+}
+
+/// The process's CPU time (all threads) in ms, for log_fps's ms/frame (iOS has no /proc).
+pub fn cpu_ms() -> f32 {
+    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
+    let ms = |t: libc::timeval| t.tv_sec as f32 * 1e3 + t.tv_usec as f32 / 1e3;
+    ms(u.ru_utime) + ms(u.ru_stime)
+}
+
+/// NSProcessInfo's thermal state: the phone slows the chip from "serious" on.
+pub fn thermal() -> &'static str {
+    unsafe {
+        let obj: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let int: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> isize = std::mem::transmute(objc_msgSend as *const ());
+        let info = obj(objc_getClass(c"NSProcessInfo".as_ptr()), sel_registerName(c"processInfo".as_ptr()));
+        ["nominal", "fair", "serious", "critical"].get(int(info, sel_registerName(c"thermalState".as_ptr())) as usize).copied().unwrap_or("?")
+    }
 }
 
 extern "C" fn on_exception(e: *mut std::ffi::c_void) {
@@ -87,7 +109,11 @@ pub fn log_layer(_: &mut App) -> Option<BoxedLayer> {
 pub fn no_disc() -> ! {
     eprintln!("no disc image in Documents");
     App::new()
-        .add_plugins(DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: log_layer, ..default() }))
+        // fullscreen like the game: a default (1280×720) window lays out bigger than the phone's screen
+        .add_plugins(DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: log_layer, ..default() }).set(WindowPlugin {
+            primary_window: Some(Window { mode: bevy::window::WindowMode::BorderlessFullscreen(MonitorSelection::Primary), ..default() }),
+            ..default()
+        }))
         .insert_resource(ClearColor(Color::srgb(0.05, 0.12, 0.2)))
         .add_systems(Startup, |mut commands: Commands| {
             commands.spawn(Camera2d);
@@ -97,7 +123,7 @@ pub fn no_disc() -> ! {
                     Node { max_width: percent(85), ..default() },
                     Text::new(
                         "Hot Shots Tennis needs your disc image.\n\n\
-                         In the Files app, open On My iPhone → Hot Shots\n\
+                         In the Files app, open On My iPhone > Hot Shots\n\
                          (the folder with this app's icon), put your\n\
                          Hot Shots Tennis (USA) ISO in it, then close and reopen this app.",
                     ),

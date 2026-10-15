@@ -1283,6 +1283,10 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
             let f: Vec<u64> = s.rsplit_once(')')?.1.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
             Some(f.iter().sum::<u64>() as f32 * 10.0)
         });
+        #[cfg(target_os = "ios")]
+        let cpu = Some(ios::cpu_ms());
+        #[cfg(target_os = "ios")]
+        eprintln!("thermal {}", ios::thermal());
         if let Some(cpu) = cpu {
             eprintln!("cpu {:.2} ms/frame", (cpu - acc.3) / acc.0 as f32);
             acc.3 = cpu;
