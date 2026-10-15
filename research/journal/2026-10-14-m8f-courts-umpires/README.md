@@ -17,3 +17,6 @@ One README per task; iterations below, newest last.
 - `4-COURT-LOADER-FINAL.md` — M8f6 done: court mods draw (court/gimmick/sky glb, baked light, fog, sun) and sound
   (BGM stream at the disc BGMs' RMS, ambience loops) over a hidden layout court; Select Court lists them; replays
   unchanged. Yamate's additive light material → M8f5a1.
+- `5-GAG-ADDITIVE-FINAL.md` — M8f5a1 done: GaG's additive flag (texture record +0x24 bit 0) checked over all
+  2558 court records; flagged materials export as `@add` (HST-MODS 27c618f), yamate's black octagon is now sun
+  dapples. c17's black bars come from a gimmick → M8f5a2.
