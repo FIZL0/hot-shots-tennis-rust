@@ -43,7 +43,20 @@ pub fn add(app: &mut App, court: Option<Court>) {
         .add_systems(PostStartup, setup)
         .add_systems(PreUpdate, sounds)
         .add_systems(Update, (keep.after(crate::weather::apply), animate))
-        .add_systems(PostUpdate, clear_view.before(bevy::transform::TransformSystems::Propagate));
+        .add_systems(PostUpdate, clear_view.before(bevy::transform::TransformSystems::Propagate))
+        .add_systems(PostUpdate, bare.after(bevy::ui::UiSystems::Layout).before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate));
+}
+
+/// B401 `HST_COURT_PREVIEW=1`: no 2D on screen (the intro's plate, the HUD, the key legend), for
+/// `tools/court_previews.sh`'s `previews/court.png` shots of the intro's flyover (the scene's own nodes, on their
+/// cameras, stay).
+fn bare(mut ui: Query<&mut Visibility, (With<Node>, Without<ChildOf>, Without<bevy::ui::UiTargetCamera>)>) {
+    static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("HST_COURT_PREVIEW").is_ok_and(|v| v == "1"));
+    if *ON {
+        ui.iter_mut().for_each(|mut v| {
+            v.set_if_neq(Visibility::Hidden);
+        });
+    }
 }
 
 /// The pause menu turned the match music back on: the court mod's BGM in place of the layout court's.
