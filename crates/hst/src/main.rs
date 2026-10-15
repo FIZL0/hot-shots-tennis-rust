@@ -252,6 +252,20 @@ fn main() {
     start(argv);
 }
 
+// Android (NativeActivity, `tools/apk.sh`): the disc is the first .iso in the app's external files dir
+// (/sdcard/Android/data/<package>/files), where settings.txt etc. go too
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(app: bevy::android::android_activity::AndroidApp) {
+    let dir = app.external_data_path().expect("no external files dir");
+    let _ = bevy::android::ANDROID_APP.set(app);
+    // mods/ and the other paths the desktop build keeps beside the binary land in the same dir
+    let _ = std::env::set_current_dir(&dir);
+    let iso = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("iso")));
+    let iso = iso.unwrap_or_else(|| panic!("hst: put your Hot Shots Tennis ISO in {}", dir.display()));
+    start(vec![iso.to_string_lossy().into_owned()]);
+}
+
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
     let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
