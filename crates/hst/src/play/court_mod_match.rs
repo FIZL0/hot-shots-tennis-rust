@@ -76,4 +76,9 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
         }
     }
     assert!(points >= 2, "only {points} points played");
+    // M8f7: the mod's people stand there, reacted to those points and have their cue sounds
+    let (placed, reacted, sounds) = npcs::court_people_seen(modded.world_mut());
+    let want = court.people.as_ref().map_or(0, |p| p.people.len());
+    assert!(want > 0 && placed == want, "{placed} of the mod's {want} people placed");
+    assert_eq!((reacted, sounds), (placed, true), "the people didn't all react, or have no sounds");
 }

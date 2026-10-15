@@ -17,3 +17,7 @@ One README per task; iterations below, newest last.
 - `4-COURT-LOADER-FINAL.md` — M8f6 done: court mods draw (court/gimmick/sky glb, baked light, fog, sun) and sound
   (BGM stream at the disc BGMs' RMS, ambience loops) over a hidden layout court; Select Court lists them; replays
   unchanged. Yamate's additive light material → M8f5a1.
+- `5-COURT-NPCS-FINAL.md` — M8f7 done: Get a Grip galleries → `npcs.json` people (billboard cards with front/back/
+  down/clap frames, c09/c16 stands, crowd sounds; HST-MODS exporter + standard §2b); HST places them, cues them on
+  the disc gallery's ticks (cheer/clap/groan/win/lose, serve/rally/change_ends, line judge point), plays their
+  sounds; replays unchanged.

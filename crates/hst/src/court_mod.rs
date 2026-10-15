@@ -62,16 +62,23 @@ enum Role {
 
 /// The court mod's materials and how each is lit, re-applied over each weather change (`keep`).
 #[derive(Resource, Default)]
-struct Kept {
+pub(crate) struct Kept {
     materials: Vec<(AssetId<GsMaterial>, Role)>,
     fog: Option<(Vec4, Vec4)>,
 }
 
 /// A glTF animation looping on its own clock: per channel the node's entity, its times and its values.
 #[derive(Component)]
-struct Looped {
-    length: f32,
+pub(crate) struct Looped {
+    pub(crate) length: f32,
     channels: Vec<Channel>,
+}
+
+/// M8f7: what `scene` spawned for its caller to drive: the animations by name (not left looping) and the named nodes.
+#[derive(Default)]
+pub(crate) struct Spawned {
+    pub(crate) clips: Vec<(String, Looped)>,
+    pub(crate) nodes: Vec<(String, Entity)>,
 }
 
 struct Channel {
@@ -114,7 +121,7 @@ fn setup(
         } else {
             root
         };
-        match crate::mods::open(&path).and_then(|(doc, blob)| scene(&mut commands, &mut store, &doc, &blob, parent, args.singles, if sky { None } else { c.light.as_ref() }, sky)) {
+        match crate::mods::open(&path).and_then(|(doc, blob)| scene(&mut commands, &mut store, &doc, &blob, parent, args.singles, if sky { None } else { c.light.as_ref() }, sky, None)) {
             Ok(n) => info!("court mod {}: {file}, {n} draws", c.id),
             Err(e) => warn!("court mod {}: {}: {e}", c.id, path.display()),
         }
@@ -134,18 +141,19 @@ fn setup(
     FLARE_OFF.store(c.lens_flare.is_none(), std::sync::atomic::Ordering::Relaxed);
 }
 
-struct Store<'a> {
-    meshes: &'a mut Assets<Mesh>,
-    images: &'a mut Assets<Image>,
-    materials: &'a mut Assets<GsMaterial>,
-    binds: &'a mut Assets<SkinnedMeshInverseBindposes>,
-    kept: &'a mut Kept,
+pub(crate) struct Store<'a> {
+    pub(crate) meshes: &'a mut Assets<Mesh>,
+    pub(crate) images: &'a mut Assets<Image>,
+    pub(crate) materials: &'a mut Assets<GsMaterial>,
+    pub(crate) binds: &'a mut Assets<SkinnedMeshInverseBindposes>,
+    pub(crate) kept: &'a mut Kept,
 }
 
 /// Spawns a court mod `.glb`'s scene under `parent` in the layout court's game space (the scene's `game_space` node
-/// undone), leaving out the other match kind's `__singles`/`__doubles` nodes; its animations loop. Returns the draws.
+/// undone), leaving out the other match kind's `__singles`/`__doubles` nodes; its animations loop, or with `spawned`
+/// go there by name with the named nodes. Returns the draws.
 #[allow(clippy::too_many_arguments)]
-fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u8], parent: Entity, singles: bool, light: Option<&Light>, sky: bool) -> Result<usize, String> {
+pub(crate) fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u8], parent: Entity, singles: bool, light: Option<&Light>, sky: bool, mut spawned: Option<&mut Spawned>) -> Result<usize, String> {
     let worlds = worlds(doc);
     let space = doc.nodes().find(|n| n.name() == Some("game_space")).map_or(Mat4::IDENTITY, |n| worlds[n.index()]);
     let to_game = space.inverse();
@@ -163,6 +171,9 @@ fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u
         let (t, r, sc) = n.transform().decomposed();
         let e = commands.spawn((Transform { translation: Vec3::from(t), rotation: Quat::from_array(r), scale: Vec3::from(sc) }, Visibility::default(), ChildOf(up))).id();
         nodes.insert(n.index(), e);
+        if let (Some(sp), Some(name)) = (spawned.as_deref_mut(), n.name()) {
+            sp.nodes.push((name.to_string(), e));
+        }
         stack.extend(n.children().map(|c| (c, e)));
     }
     let mut draws = 0;
@@ -217,7 +228,10 @@ fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u
         }
         let length = channels.iter().filter_map(|c| c.times.last().copied()).fold(0.0, f32::max);
         if !channels.is_empty() && length > 0.0 {
-            commands.spawn(Looped { length, channels });
+            match spawned.as_deref_mut() {
+                Some(sp) => sp.clips.push((a.name().unwrap_or("").to_string(), Looped { length, channels })),
+                None => _ = commands.spawn(Looped { length, channels }),
+            }
         }
     }
     Ok(draws)
@@ -367,8 +381,14 @@ fn keep(look: Option<Res<crate::weather::CourtLook>>, kept: Res<Kept>, mut mater
 fn animate(time: Res<Time>, clips: Query<&Looped>, mut nodes: Query<&mut Transform>) {
     let now = time.elapsed_secs();
     for clip in &clips {
-        let t = now % clip.length;
-        for ch in &clip.channels {
+        clip.pose(now % clip.length, &mut nodes);
+    }
+}
+
+impl Looped {
+    /// Its nodes as at `t` s into it.
+    pub(crate) fn pose<F: bevy::ecs::query::QueryFilter>(&self, t: f32, nodes: &mut Query<&mut Transform, F>) {
+        for ch in &self.channels {
             let Ok(mut tf) = nodes.get_mut(ch.node) else { continue };
             let k = ch.times.partition_point(|&x| x <= t).saturating_sub(1);
             let next = (k + 1).min(ch.times.len() - 1);

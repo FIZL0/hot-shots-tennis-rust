@@ -62,6 +62,82 @@ pub struct Court {
     pub ambience: Vec<Loop>,
     /// The sun's flare sprite (`lens_flare`); `None`: no flare.
     pub lens_flare: Option<PathBuf>,
+    /// M8f7: the people of `npcs.json` (§2b); `None` without one (a broken one is left out with its reason logged).
+    pub people: Option<People>,
+}
+
+/// M8f7: `npcs.json`, checked: the models (path, turned to the camera), the people placed and the cue sounds.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct People {
+    pub models: Vec<(String, PathBuf, bool)>,
+    pub people: Vec<Person>,
+    /// Per cue its sound files, one picked at random.
+    pub sounds: Vec<(String, Vec<PathBuf>)>,
+}
+
+/// One placed person: its model's index in [`People::models`], where it stands (game space), the way it faces
+/// (game x, z; unit) and its role.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Person {
+    pub model: usize,
+    pub pos: Vec3,
+    pub facing: Vec2,
+    pub role: Role,
+}
+
+/// How a person follows the match (§2b `role`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Gallery,
+    Ballkid,
+    Linejudge,
+    Mascot,
+}
+
+/// At most this many people are placed (the rest left out).
+pub const MOST_PEOPLE: usize = 1024;
+
+/// Reads `dir/npcs.json`: a model whose file is missing or whose path leaves the mod is refused (the reason
+/// returned), a person naming an unknown model or with a bad position is left out, as is a sound file that isn't there.
+pub fn people(dir: &Path) -> Result<People, String> {
+    let at = dir.join("npcs.json");
+    let err = |m: String| format!("{}: {m}", at.display());
+    let text = crate::modfs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
+    let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| err(format!("not JSON: {e}")))?;
+    let file = |f: Option<&str>, what: &str| -> Result<PathBuf, String> {
+        let f = f.filter(|f| crate::modfs::plain(f)).ok_or_else(|| err(format!("{what}: not a file in the mod")))?;
+        Some(dir.join(f)).filter(|p| crate::modfs::is_file(p)).ok_or_else(|| err(format!("{what}: no {f}")))
+    };
+    let mut out = People::default();
+    for (name, m) in j["models"].as_object().ok_or_else(|| err("`models` must be an object".into()))? {
+        let (path, billboard) = match m {
+            serde_json::Value::Object(o) => (o.get("glb").and_then(|v| v.as_str()), o.get("billboard").and_then(|v| v.as_bool()).unwrap_or(false)),
+            v => (v.as_str(), false),
+        };
+        out.models.push((name.clone(), file(path, &format!("model `{name}`"))?, billboard));
+    }
+    let num = |v: &serde_json::Value| v.as_f64().map(|x| x as f32).filter(|x| x.is_finite());
+    for p in j["people"].as_array().ok_or_else(|| err("`people` must be a list".into()))?.iter().take(MOST_PEOPLE) {
+        let Some(model) = p["model"].as_str().and_then(|m| out.models.iter().position(|k| k.0 == m)) else { continue };
+        let Some(pos) = p["pos"].as_array().filter(|a| a.len() == 3).and_then(|a| Some(Vec3::new(num(&a[0])?, num(&a[1])?, num(&a[2])?))) else { continue };
+        let facing = p["facing"].as_array().filter(|a| a.len() == 2).and_then(|a| Some(Vec2::new(num(&a[0])?, num(&a[1])?))).map_or(Vec2::Y, |f| f.normalize_or(Vec2::Y));
+        let role = match p["role"].as_str() {
+            Some("ballkid") => Role::Ballkid,
+            Some("linejudge") => Role::Linejudge,
+            Some("mascot") => Role::Mascot,
+            _ => Role::Gallery,
+        };
+        out.people.push(Person { model, pos, facing, role });
+    }
+    if let Some(cues) = j["sounds"].as_object() {
+        for (cue, files) in cues {
+            let files: Vec<_> = files.as_array().into_iter().flatten().filter_map(|f| file(f.as_str(), &format!("sound `{cue}`")).map_err(|e| warn!("{e}")).ok()).collect();
+            if !files.is_empty() {
+                out.sounds.push((cue.clone(), files));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The court mod drawn in this match (`--court-mod DIR`).
@@ -140,6 +216,7 @@ pub fn read(dir: &Path) -> Result<Court, String> {
         bgm,
         ambience,
         lens_flare: j["lens_flare"].as_str().filter(|f| crate::modfs::plain(f)).map(|f| dir.join(f)).filter(|p| crate::modfs::is_file(p)),
+        people: crate::modfs::is_file(&dir.join("npcs.json")).then(|| people(dir).map_err(|e| warn!("{e}")).ok()).flatten(),
     })
 }
 
@@ -198,5 +275,39 @@ mod tests {
         assert!(crate::mods::list(&root).is_empty());
         assert_eq!(crate::mods_umpire::list(&root).len(), 1);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// M8f7: `npcs.json` reads (plain and billboard models, roles, facings made unit, sounds); a person naming no
+    /// model or placed badly and a missing sound file are left out; a model file that isn't there or a path out of
+    /// the mod refuses the file, and the court still reads without its people.
+    #[test]
+    fn reads_court_people() {
+        let d = std::env::temp_dir().join(format!("hst-court-people-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("npcs")).unwrap();
+        for f in ["court.glb", "npcs/fan.glb", "npcs/kid.glb", "npcs/cheer_0.wav"] {
+            std::fs::write(d.join(f), b"x").unwrap();
+        }
+        std::fs::write(d.join("mod.json"), r#"{"standard":1,"kind":"court","id":"c","name":"C","layout":0}"#).unwrap();
+        std::fs::write(
+            d.join("npcs.json"),
+            r#"{"models":{"fan":{"glb":"npcs/fan.glb","billboard":true},"kid":"npcs/kid.glb"},
+                "people":[{"model":"fan","pos":[1,0,-20],"facing":[0,2],"role":"gallery"},
+                          {"model":"kid","pos":[0,0,13],"facing":[0,-1],"role":"ballkid"},
+                          {"model":"kid","pos":[5,0,0],"role":"linejudge"},
+                          {"model":"nobody","pos":[0,0,0]},{"model":"fan","pos":[0,0]}],
+                "sounds":{"cheer":["npcs/cheer_0.wav","npcs/cheer_9.wav"],"groan":["npcs/none.wav"]}}"#,
+        )
+        .unwrap();
+        let p = read(&d).unwrap().people.unwrap();
+        assert_eq!(p.models.iter().map(|m| (m.0.as_str(), m.2)).collect::<Vec<_>>(), [("fan", true), ("kid", false)]);
+        assert_eq!(p.people.iter().map(|q| (q.model, q.role, q.facing)).collect::<Vec<_>>(), [(0, Role::Gallery, Vec2::Y), (1, Role::Ballkid, Vec2::NEG_Y), (1, Role::Linejudge, Vec2::Y)]);
+        assert_eq!(p.people[0].pos, Vec3::new(1.0, 0.0, -20.0));
+        assert_eq!(p.sounds, [("cheer".to_string(), vec![d.join("npcs/cheer_0.wav")])]);
+        std::fs::write(d.join("npcs.json"), r#"{"models":{"fan":"../fan.glb"},"people":[]}"#).unwrap();
+        assert!(people(&d).unwrap_err().contains("not a file in the mod"));
+        std::fs::write(d.join("npcs.json"), r#"{"models":{"fan":"npcs/gone.glb"},"people":[]}"#).unwrap();
+        assert!(people(&d).unwrap_err().contains("no npcs/gone.glb"));
+        assert_eq!(read(&d).unwrap().people, None);
+        std::fs::remove_dir_all(&d).ok();
     }
 }
