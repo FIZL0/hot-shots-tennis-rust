@@ -147,6 +147,7 @@ impl Menu {
                     return out;
                 }
                 let Some(&c) = tab.cells.get(i) else { return out };
+                self.players[p].on_tabs = false;
                 self.players[p].tab = tab.id;
                 if self.cell(p) != c {
                     // B66: a face with every costume taken can't be picked
@@ -190,17 +191,22 @@ impl Menu {
             }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
-            Act::Category(q, i) if tap => {
+            // B391: a tab hovered is focused, and focusing one puts the player on it (as a tap)
+            Act::Category(q, i) => {
                 let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
                 self.focus = p;
                 let tabs = self.tabs();
-                if !self.players[p].ready && i < tabs.len() && i != self.tab_at(p, &tabs) && self.set_tab(p, &tabs, i) {
+                if self.players[p].ready || i >= tabs.len() {
+                    return out;
+                }
+                let moved = i != self.tab_at(p, &tabs) && self.set_tab(p, &tabs, i);
+                if moved || !self.players[p].on_tabs && self.tab_at(p, &tabs) == i {
+                    self.players[p].on_tabs = true;
                     self.skip_taken();
                     self.follow(p);
                     out.push(Effect::Sound(0));
                 }
             }
-            Act::Category(..) => {}
             Act::Name(p, i) => out = self.name_point(p, i, tap),
             Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
             Act::Kind(_) => {}
