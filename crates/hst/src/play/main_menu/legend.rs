@@ -228,8 +228,6 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 v.push((Act::Back, "Cancel"));
             } else if m.online() && m.net.edit == Some(p) {
                 v.push((Act::Back, "Back"));
-            } else if m.open(p) && !m.online() {
-                v.push((Act::Back, "Leave COM"));
             } else if m.seats[p].is_none() && m.players.iter().take(m.players()).any(|q| q.ready) {
                 v.push((Act::Back, "Back"));
             } else if m.seats[p] == Some(dev) && m.droppable(p) {
