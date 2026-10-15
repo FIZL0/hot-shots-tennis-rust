@@ -44,3 +44,6 @@
 - Some faint banding stays inside the widest penumbrae (the blocker estimate still changes from texel to texel).
   It's render-only and within "looks right"; not chased.
 - Mod characters and the replay/cut-away cameras with Soft Shadows on weren't looked at (same `Scene` cameras, same path).
+
+Later (B404): the Stage 1 brightness gap was the weather roll (clock-picked seed; cloudy vs clear), not the
+Gaussian filter. With `HST_WEATHER_SEED` pinned, every filter gives the same open court.
