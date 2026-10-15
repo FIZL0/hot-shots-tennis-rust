@@ -72,6 +72,15 @@ impl Menu {
         }
     }
 
+    /// B401: court `c`'s label under its strip tile: a mod's name broken over two lines at the space nearest its
+    /// middle, as the disc names are (its game is on the name card), else `court_lines`.
+    pub(super) fn court_tile_lines(&self, text: &Text, c: usize) -> [String; 2] {
+        match self.court_mod_of(c) {
+            Some(x) => halves(&x.name),
+            None => self.court_lines(text, c),
+        }
+    }
+
     /// Court `c`'s full name ("Random Court" for Random).
     pub(super) fn court_title(&self, text: &Text, c: usize) -> String {
         match self.court_mod_of(c) {
@@ -127,6 +136,19 @@ impl Menu {
 /// A mod's game, short ("Get a Grip" from "Hot Shots Tennis: Get a Grip"), or "Mod".
 fn source(x: &Court) -> String {
     x.source.split(':').next_back().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("Mod").to_string()
+}
+
+/// `name` in two lines, broken at the space nearest its middle (one word: all on the first).
+fn halves(name: &str) -> [String; 2] {
+    let mid = name.chars().count() as f32 / 2.0;
+    let at = name.char_indices().filter(|&(_, ch)| ch == ' ').map(|(i, _)| i).min_by(|&a, &b| {
+        let d = |i: usize| (name[..i].chars().count() as f32 - mid).abs();
+        d(a).total_cmp(&d(b))
+    });
+    match at {
+        Some(i) => [name[..i].to_string(), name[i + 1..].to_string()],
+        None => [name.to_string(), String::new()],
+    }
 }
 
 #[cfg(test)]
@@ -223,6 +245,28 @@ mod tests {
         assert_eq!(m.room_court_name(&t, &r, true), "Court 01", "the host's own pick");
     }
 
+    /// B401: a mod's picture stands in for its value only (the disc courts and Random keep theirs), a guest's room
+    /// value is the installed mod's else the layout court, and a mod's tile label breaks its name in two.
+    #[test]
+    fn court_mod_pictures_and_labels() {
+        let court = |n: usize, name: &str| crate::mods_court::Court { dir: format!("mods/c{n}").into(), id: format!("c{n}"), name: name.into(), source: "Game".into(), layout: 4, light: None, sky: false, gimmick: false, bgm: None, ambience: Vec::new(), lens_flare: None, people: None };
+        let m = Menu { court_mods: vec![court(0, "Mt. Sakura C.C. Courts"), court(1, "Hill")], court_pics: vec![None, Some([640.0, 360.0])], ..default() };
+        assert_eq!(m.court_pic(COURTS + 2), Some((1, [640.0, 360.0])));
+        assert_eq!(m.court_pic(COURTS + 1), None, "no previews/court.png: its layout's tile");
+        assert!((0..=COURTS).all(|c| m.court_pic(c).is_none()));
+        let t = pointer::tests::text_with_mods(0);
+        assert_eq!(m.court_tile_lines(&t, COURTS + 1), ["Mt. Sakura".to_string(), "C.C. Courts".to_string()]);
+        assert_eq!(m.court_tile_lines(&t, COURTS + 2), ["Hill".to_string(), String::new()]);
+        assert_eq!(m.court_tile_lines(&t, 3), m.court_lines(&t, 3));
+        let mut r = crate::net::Room { court: 4, court_mod: Some(("c1".into(), "Hill".into())), ..default() };
+        assert_eq!(m.room_court_value(&r), COURTS + 2);
+        r.vanilla = true;
+        assert_eq!(m.room_court_value(&r), 4, "vanilla: the layout");
+        r.vanilla = false;
+        r.court_mod = Some(("c9".into(), "X".into()));
+        assert_eq!(m.room_court_value(&r), 4, "not installed: the layout");
+    }
+
     /// M8f6: the court select with a hundred court mods (long names) at every aspect: the strip scrolls (at most
     /// `STRIP_SHOWN` slots, the pick among them) and the screen draws within the menu's quad pool.
     #[test]
@@ -242,3 +286,4 @@ mod tests {
         }
     }
 }
+

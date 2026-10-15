@@ -2782,7 +2782,7 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
         let cx = r[0] + r[2] / 2.0;
         if m.sel == 1 {
             let size = if on { 10.0 } else { 8.5 };
-            let lines = m.court_lines(text, v);
+            let lines = m.court_tile_lines(text, v);
             // M8f6: with court mods on the strip only the hovered tile's names are outlined (the menu's quad pool)
             let plain = !on && strip_order(m).len() > COURTS + 1;
             for (j, s) in lines.iter().enumerate() {
