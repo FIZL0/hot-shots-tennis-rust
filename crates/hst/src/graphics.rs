@@ -35,13 +35,13 @@ pub struct Graphics {
     /// the frame's time goes, B328). Not part of a preset.
     pub show_fps: u8,
     /// B343: at Shadows Low only the players, the umpire and what shades the court cast (`shadow::Minor`, B351);
-    /// off, Low casts everything High does. A speed-up a device can turn off; not part of a preset.
+    /// off, Low casts everything High does. A speed-up a device can turn off; set by a preset (B412: High turns it off).
     pub fewer_shadows: bool,
     /// Leave the characters' and effects' meshes out of a view they're outside of (B345, `cull.rs`); off draws them
-    /// all as before. Not part of a preset.
+    /// all as before. Set by a preset (B412).
     pub cull: bool,
     /// B364: the share of the characters' triangles drawn, in percent (`lod.rs`; 100 = their own meshes). Applies to
-    /// models loaded after a change. Not part of a preset.
+    /// models loaded after a change. Set by a preset (B412).
     pub mesh: u32,
 }
 
@@ -75,7 +75,10 @@ impl Graphics {
     pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
     pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
-    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    /// B412: the best look, with every speed-up off (Fewer Shadows, Skip Off-Screen; full meshes). Default is the
+    /// balanced one: the same picture with the speed-ups on.
+    pub const HIGH: Graphics = Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: false, cull: false, mesh: 100 };
+    pub const PRESETS: [(&str, Graphics); 5] = [("High", Self::HIGH), ("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -150,9 +153,9 @@ impl Graphics {
         Self::PRESETS.iter().find(|(_, g)| self.keep(*g) == *self).map_or("Custom", |(n, _)| n)
     }
 
-    /// Preset `p` with this one's settings that no preset sets (the window, Show FPS, the speed-up switches).
+    /// Preset `p` with this one's settings that no preset sets (the window, Show FPS).
     pub fn keep(&self, p: Graphics) -> Graphics {
-        Graphics { windowed: self.windowed, show_fps: self.show_fps, fewer_shadows: self.fewer_shadows, cull: self.cull, mesh: self.mesh, ..p }
+        Graphics { windowed: self.windowed, show_fps: self.show_fps, ..p }
     }
 
     pub fn present_mode(&self) -> PresentMode {
@@ -623,25 +626,33 @@ mod tests {
         assert_eq!(Graphics { show_fps: 1, ..default() }.preset(), "Default");
         assert_eq!(Graphics { show_fps: 1, ..default() }.flags().last().unwrap(), "--show-fps");
         assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
-        assert_eq!(Graphics { cull: false, ..default() }.preset(), "Default");
+        assert_eq!(Graphics { cull: false, ..default() }.preset(), "Custom");
         assert_eq!(Graphics { cull: false, ..default() }.flags()[8..], ["--cull", "off"]);
         assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "2x"]);
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
-        // B343: Fewer Shadows passes only off its default, keeps through a preset and reads back as a flag
+        // B343: Fewer Shadows passes only off its default and reads back as a flag; B412: a preset sets it
         let g = Graphics { fewer_shadows: !FEWER_SHADOWS, ..default() };
-        assert_eq!(g.preset(), "Default");
-        assert_eq!(g.keep(Graphics::PHONE), Graphics { fewer_shadows: !FEWER_SHADOWS, ..Graphics::PHONE });
+        assert_eq!(g.preset(), "Custom");
+        assert_eq!(g.keep(Graphics::PHONE), Graphics::PHONE);
         let f = g.flags();
         let mut back = Graphics::default();
         for kv in f[8..].chunks(2) {
             assert!(back.set(&kv[0][2..], &kv[1]), "{kv:?}");
         }
         assert_eq!(back, g);
-        // B364: Mesh keeps through a preset, passes only below 100 and reads back
+        // B364: Mesh passes only below 100 and reads back; B412: a preset sets it
         let g = Graphics { mesh: 50, ..default() };
-        assert_eq!((g.preset(), g.keep(Graphics::LOW).mesh), ("Default", 50));
+        assert_eq!((g.preset(), g.keep(Graphics::LOW).mesh), ("Custom", 100));
         assert_eq!(g.flags()[8..], ["--mesh", "50"]);
         let mut back = Graphics::default();
         assert!(back.set("mesh", "50 %") && back == g);
+        // B412: High is Default with the speed-ups off; the window and Show FPS keep through it
+        assert_eq!(Graphics::HIGH, Graphics { fewer_shadows: false, cull: false, ..default() });
+        assert_eq!(Graphics::HIGH.preset(), "High");
+        assert_eq!(Graphics::HIGH.flags()[8..], ["--cull", "off", "--fewer-shadows", "off"]);
+        let w = Graphics { windowed: true, show_fps: 1, ..default() };
+        assert_eq!((w.keep(Graphics::HIGH).preset(), w.keep(Graphics::HIGH).windowed, w.keep(Graphics::HIGH).show_fps), ("High", true, 1));
+        let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["High", "Default", "Steam Deck", "Low", "Phone"]);
     }
 }
