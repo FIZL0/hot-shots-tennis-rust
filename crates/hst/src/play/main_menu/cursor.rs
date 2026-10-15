@@ -117,6 +117,10 @@ pub(in crate::play) fn tick(
         c.effect.start();
         c.acc = 0.0;
     }
+    // P39: nothing to wag (a match in play): the hand's joints and morphs stay as they are; it starts over on showing
+    if c.at.is_empty() {
+        return;
+    }
     c.acc += time.delta_secs() * 60.0;
     while c.acc >= 1.0 {
         c.acc -= 1.0;
