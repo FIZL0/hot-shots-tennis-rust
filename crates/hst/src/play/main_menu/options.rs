@@ -874,7 +874,7 @@ mod tests {
                 assert!(r[1] + r[3] <= list[1] + list[3] - 24.0 && r[3] >= 20.0, "{a} {s:?}");
                 for sel in 0..n {
                     let m = Menu { screen: s, sel, grid, ..default() };
-                    let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0.0).out.len();
+                    let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0).out.len();
                     assert!(q < super::super::pause::POOL_HERE, "{a} {s:?} {sel}: {q} quads");
                 }
             }
@@ -965,7 +965,7 @@ mod tests {
         // a tap off the popup is Cancel; a tap on Switch switches
         m.open_switch(-1, &mut out);
         let t = super::super::pointer::tests::text_with_mods(0);
-        let d = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0.0);
+        let d = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0);
         assert_eq!(d.outside, Some(pointer::Act::Row(1, pointer::OK)));
         assert!(super::super::legend::acts(&m, Dev::Keys).iter().any(|(_, w)| w == "Cancel"));
         m.point(Dev::Keys, pointer::Act::Row(1, pointer::OK), true);
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(m.switch, Some((0, 0)));
         for a in [4.0, 16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 0.4] {
             m.grid = Grid::fit(a);
-            let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0.0).out.len();
+            let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0).out.len();
             assert!(q < super::super::pause::POOL_HERE, "{a}: {q} quads");
         }
     }

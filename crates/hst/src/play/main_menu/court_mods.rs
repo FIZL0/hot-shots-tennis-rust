@@ -138,7 +138,7 @@ mod tests {
                 let rects = strip_rects(&m).0;
                 assert_eq!(rects.iter().filter(|r| r[2] > 0.0).count(), STRIP_SHOWN);
                 assert!(rects[strip_at(&m)][2] > 0.0, "{a} {pick}: the pick is off the strip");
-                let n = drawn(&m, &t, &Bindings::default(), &[], 0.0).out.len();
+                let n = drawn(&m, &t, &Bindings::default(), &[], 0, 0.0).out.len();
                 assert!(n < POOL * 9 / 10, "{a} {pick}: {n} quads");
             }
         }
