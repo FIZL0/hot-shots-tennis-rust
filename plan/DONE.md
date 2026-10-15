@@ -534,6 +534,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M8f2** (in M8f) Get a Grip umpire voices as umpire mods: decode `gag_vcNN[ab]` cue→wave, map each cue to the HST call (program, key) it fills by transcript (whisper, as B209), package `out/mods/gag_umpNN/` with the calls covered → ../HST-MODS `tools/audio.py` `tools/rerig/package.py` `notes/audio.md` · `hst-sim/src/umpire.rs` (call keys) | j: 2026-10-14-m8f-courts-umpires
 - [x] **B311** Online match started without picking the CPU (empty/bot seat) sets it to Random; it should keep the default/last pick instead — files: crates/hst/src/net.rs, crates/hst/src/play/main_menu.rs
 - [x] **B307** Menu sounds: the navigation (cursor move) sound must not cut off a still-playing select/confirm sound — it's too abrupt; let the select sound finish (separate channel/voice) — user 2026-10-14
+- [x] **M92** Get a Grip pc14 (Helghast) voices: its sgv/dgv_PC14 banks got cue names only from M8f2's SEQD decode; rerun ../HST-MODS tools/voices.py + tools/rerig/package.py getagrip so getagrip_pc14_helghast ships voice/ like the other 14 → ../HST-MODS tools/rerig/package.py notes/audio.md
 
 
 ### Shots
