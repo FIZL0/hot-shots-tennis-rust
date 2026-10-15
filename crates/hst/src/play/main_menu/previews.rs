@@ -395,7 +395,7 @@ fn start_loader(mut commands: Commands, args: Res<Args>, meshes: Res<Assets<Mesh
         let ((who, costume), md) = queue.pop().unwrap();
         let (mut m, mut t, mut i, mut b) = (Staged::new(providers.0.clone()), Staged::new(providers.1.clone()), Staged::new(providers.2.clone()), Staged::new(providers.3.clone()));
         let r = match (who, md) {
-            (Who::Mod(_), Some(md)) => crate::mods::load(iso, &md, costume, &mut m, &mut t, &mut i, &mut b).map(|d| (d, md.hand)),
+            (Who::Mod(_), Some(md)) => crate::mods::load_with(iso, &md, costume, &mut m, &mut t, &mut i, &mut b, Some(&inspect::MOTIONS)).map(|d| (d, md.hand)),
             (Who::Disc(c), _) => character::load_disc_with(iso, c, costume, &mut m, &mut t, &mut i, &mut b, Some(&inspect::MOTIONS)).map(|d| (d, inspect::disc_hand(iso, c))),
             (Who::Mod(_), None) => Err("no mod".into()),
         };
