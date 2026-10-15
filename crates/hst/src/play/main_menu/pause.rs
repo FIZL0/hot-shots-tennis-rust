@@ -328,6 +328,8 @@ fn after(
             let stage = game.stage as usize;
             let name = if (1..=11).contains(&stage) { format!("bgmg_{stage:02}") } else { "bgmg_14".into() };
             music.bgm = Iso::open(&args.iso).ok().and_then(|mut iso| SoundBank::music(&mut iso, "Court", &name)).map(|(b, m)| (Arc::new(b), m));
+            // M8f6: a court mod's own
+            crate::court_mod::bgm(&mut music.bgm);
             if let Some((bank, mid)) = &music.bgm {
                 sound.music(bank, mid, 55);
             }

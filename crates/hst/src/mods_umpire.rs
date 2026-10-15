@@ -76,7 +76,7 @@ pub fn find(root: &Path, id: &str) -> Option<Umpire> {
 /// The match's slot 5 bank for umpire mod `u`: its donor's disc bank `disc` with the mod's calls over it
 /// (`SoundBank::takes`: heard in place of the disc's, the disc's lengths still timing the match).
 pub fn bank(disc: &SoundBank, u: &Umpire) -> SoundBank {
-    let (bank, n) = SoundBank { hd: disc.hd.clone(), bd: disc.bd.clone(), wav: Default::default(), takes: Default::default() }.with_takes(&u.dir.join(&u.voice));
+    let (bank, n) = SoundBank { hd: disc.hd.clone(), bd: disc.bd.clone(), wav: Default::default(), takes: Default::default(), stream: None }.with_takes(&u.dir.join(&u.voice));
     info!("umpire mod {}: {n} calls of its own over umpire {}'s", u.id, u.donor);
     bank
 }
