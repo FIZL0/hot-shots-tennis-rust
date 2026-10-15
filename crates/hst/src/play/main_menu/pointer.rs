@@ -21,7 +21,8 @@ use super::{Dev, Effect, Menu, Press, Screen};
 pub(super) enum Act {
     /// Row `i` of the screen's list: hovering selects it, a tap selects it and presses `k` (usually ✕).
     Row(usize, Press),
-    /// A character select tile: player `p`'s column's, the roster's `i`th (B306, B368: `Cell(p, i)`).
+    /// A character select tile: player `p`'s column's, the grid's `i`th (B306, B368: `Cell(p, i)`; B382: its place
+    /// across every section, `tabs::flat`).
     Cell(usize, usize),
     /// B368: player `p`'s column's grid (under its tiles): the wheel and a finger's drag scroll it.
     Grid(usize),
@@ -35,8 +36,8 @@ pub(super) enum Act {
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
     Tab(usize),
-    /// B369: player `p`'s column's category tab `i` (`tabs.rs`): a tap switches them to it.
-    Category(usize, usize),
+    /// B382: player `p`'s column's section heading `i` (`tabs.rs`): a tap jumps to its first tile.
+    Section(usize, usize),
     /// B371: seat `p`'s name picker's row or key `i`: hovering selects it, a tap presses it.
     Name(usize, usize),
     /// B373: the Mods pages' kind tab `i` (`mods_kind::KINDS`): a tap opens it.
@@ -138,17 +139,15 @@ impl Menu {
                 }
             }
             Act::Cell(q, i) => {
-                // B368: only the column the pointer's device picks for; its tiles are its player's tab's (B369)
+                // B368: only the column the pointer's device picks for; B382: `i` is the tile's place in the grid
                 let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
-                let tabs = self.tabs();
-                let tab = &tabs[self.tab_at(p, &tabs)];
+                let secs = self.sections();
                 self.focus = p;
                 if self.players[p].ready {
                     return out;
                 }
-                let Some(&c) = tab.cells.get(i) else { return out };
-                self.players[p].on_tabs = false;
-                self.players[p].tab = tab.id;
+                let Some((s, j)) = super::tabs::unflat(&secs, i) else { return out };
+                let c = secs[s].cells[j];
                 if self.cell(p) != c {
                     // B66: a face with every costume taken can't be picked
                     if self.full(p, c) {
@@ -157,9 +156,11 @@ impl Menu {
                         }
                         return out;
                     }
-                    self.put(p, c);
+                    self.put_at(p, &secs, i);
                     self.skip_taken();
                     out.push(Effect::Sound(0));
+                } else {
+                    self.players[p].tab = secs[s].id;
                 }
                 if tap {
                     out.extend(self.step(dev, OK));
@@ -191,22 +192,18 @@ impl Menu {
             }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
-            // B391: a tab hovered is focused, and focusing one puts the player on it (as a tap)
-            Act::Category(q, i) => {
+            // B382: a tap on a section's heading: its first open tile
+            Act::Section(q, i) if tap => {
                 let Some(p) = self.driven(dev).filter(|&p| p == q) else { return out };
                 self.focus = p;
-                let tabs = self.tabs();
-                if self.players[p].ready || i >= tabs.len() {
-                    return out;
-                }
-                let moved = i != self.tab_at(p, &tabs) && self.set_tab(p, &tabs, i);
-                if moved || !self.players[p].on_tabs && self.tab_at(p, &tabs) == i {
-                    self.players[p].on_tabs = true;
+                let secs = self.sections();
+                if !self.players[p].ready && i < secs.len() && self.jump(p, &secs, i) {
                     self.skip_taken();
                     self.follow(p);
                     out.push(Effect::Sound(0));
                 }
             }
+            Act::Section(..) => {}
             Act::Name(p, i) => out = self.name_point(p, i, tap),
             Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
             Act::Kind(_) => {}
@@ -302,7 +299,7 @@ pub(in crate::play) fn pointer(
     let mouse_hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..) | Act::Tile(_)));
     // B368: the select column under a point (its tiles or the grid round them): the wheel and drags scroll it
     let column = |a: Option<Act>| match a {
-        Some(Act::Cell(p, _) | Act::Grid(p)) => Some(p),
+        Some(Act::Cell(p, _) | Act::Grid(p) | Act::Section(p, _)) => Some(p),
         _ => None,
     };
     // touch
@@ -441,10 +438,10 @@ pub(super) mod tests {
         assert!(!m.doubles);
         // a face (B296: roster cell 1 + its place in the disc grid, after the Random card) in 1P's column (B368): 1P
         // moves there and is ready; then the face for the computer's pick, in its column
-        let [x, y, w, h] = m.columns().cell(0, 6);
+        let [x, y, w, h] = m.tile_rect(0, 6).unwrap();
         tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[0].ready && m.players[0].cursor == 5);
-        let [x, y, w, h] = m.columns().cell(1, 10);
+        let [x, y, w, h] = m.tile_rect(1, 10).unwrap();
         tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[1].ready && m.players[1].cursor == 9);
         assert_eq!(m.screen, Screen::Confirm);
@@ -525,13 +522,13 @@ pub(super) mod tests {
         let m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
         let h = hits(&m).0;
         let at = |x: f32, y: f32| hit_at(&h, Vec2::new(0.5 + (x - 320.0) / 640.0 * 0.75, y / 448.0), 16.0 / 9.0, 1.0, SLOP);
-        let c = m.columns();
+        let cell = |p, k| m.tile_rect(p, k).unwrap();
         for (p, k) in [(0, 0), (0, 10), (1, 0), (1, 10)] {
-            let [x, y, w, hh] = c.cell(p, k);
+            let [x, y, w, hh] = cell(p, k);
             assert_eq!(at(x + w / 2.0, y + hh / 2.0), Some(Act::Cell(p, k)));
         }
-        assert!(c.cell(0, 0)[0] + c.cell(0, 0)[2] < 0.0, "left of the 4:3 screen");
-        assert!(c.cell(1, 0)[0] > 320.0, "2P's column right of the middle");
+        assert!(cell(0, 0)[0] + cell(0, 0)[2] < 0.0, "left of the 4:3 screen");
+        assert!(cell(1, 0)[0] > 320.0, "2P's column right of the middle");
         assert_eq!(at(-200.0, 300.0), None, "off the window");
     }
 

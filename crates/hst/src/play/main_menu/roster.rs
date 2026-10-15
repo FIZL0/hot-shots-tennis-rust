@@ -1,15 +1,16 @@
 //! B368: the character select (`Screen::Chars`: the local roster and, until B370's lobby, an online
 //! room's) as one column per player (`plan/B368.md`, the approved 1280×720 mockup). Each column is its player's own:
 //! the header (seat, character, device), the costume and hand pills, the 3D preview beside the play style and stats
-//! card, a tab row (B369's categories, `tabs.rs`), and a grid of face tiles that scrolls inside that column
-//! only. Sizes are the mockup's pixels at 720 lines ([`PY`] units down, [`PX`] across, so a tile is square on screen);
+//! card, and a grid of face tiles that scrolls inside that column only (B382: one grid, a heading per section,
+//! `tabs.rs`). Sizes are the mockup's pixels at 720 lines ([`PY`] units down, [`PX`] across, so a tile is square on screen);
 //! a narrower column fits fewer tiles a row (13 / 6 / 4 / 3 for 1–4 columns at 16:9), a taller view more rows.
 
 use bevy::prelude::*;
 
 use super::super::controls::Bindings;
 use super::super::widescreen::Anchor;
-use super::{C02, CHAR_NAMES, Dev, Draw, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, pointer, shirt, tabs, tile_face};
+use super::tabs::{self, Line, Section};
+use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, pointer, shirt, tile_face};
 
 /// One mockup pixel in the menu's units: down, and across (a unit across is 14/15 of one down on screen: 640 across
 /// a 4:3 screen 448 high).
@@ -18,7 +19,7 @@ pub(super) const PX: f32 = PY * 15.0 / 14.0;
 
 /// The mockup's sizes (px at 720 lines): the top bar over the columns, the side margins and the columns' gap, a
 /// column's padding and the gap between its rows, the rows' heights, the stats stack's width, a tile and its gap,
-/// the scroll bar.
+/// the scroll bar, a section's heading (B382).
 const TOP_BAR: f32 = 60.0;
 const MARGIN: f32 = 24.0;
 const GAP: f32 = 12.0;
@@ -27,12 +28,12 @@ const ROW_GAP: f32 = 8.0;
 const HEAD: f32 = 36.0;
 const PILL: f32 = 26.0;
 const PREVIEW: f32 = 150.0;
-const TABS: f32 = 24.0;
 const FOOT: f32 = 14.0;
 const STATS_W: f32 = 150.0;
 const TILE: f32 = 84.0;
 const TILE_GAP: f32 = 6.0;
 const BAR: f32 = 6.0;
+const HEADING: f32 = 22.0;
 /// The pills go on two rows in a column narrower than this inside (px).
 const PILLS_W: f32 = 290.0;
 
@@ -71,7 +72,7 @@ fn seat(p: usize) -> Seat {
 pub(super) struct Columns {
     /// Player columns.
     pub n: usize,
-    /// Tiles a row, and the rows on view.
+    /// Tiles a row, and the rows on view (under one heading: B382).
     pub cols: usize,
     pub rows: usize,
     /// A tile's width and height (square on screen), and the gaps between them across and down.
@@ -93,7 +94,6 @@ pub(super) struct Parts {
     /// The pills' row (both rows when stacked).
     pub pills: [f32; 4],
     pub preview: [f32; 4],
-    pub tabs: [f32; 4],
     /// The tiles on view, and the scroll bar right of them.
     pub grid: [f32; 4],
     pub bar: [f32; 4],
@@ -117,9 +117,10 @@ pub(super) fn columns(view: [f32; 4], n: usize) -> Columns {
     let th = tw * PY / PX;
     let gy = TILE_GAP * PY;
     let pills = if stack { 2.0 * PILL + ROW_GAP } else { PILL };
-    let fixed = (2.0 * PAD + HEAD + pills + TABS + FOOT + 5.0 * ROW_GAP) * PY;
-    // the preview gives way to keep a row of tiles on a short view
-    let room = h - fixed;
+    let fixed = (2.0 * PAD + HEAD + pills + FOOT + 4.0 * ROW_GAP) * PY;
+    // the preview gives way to keep a row of tiles on a short view; B382: the grid has room for a heading over its
+    // rows
+    let room = h - fixed - (HEADING * PY + gy);
     let preview = (PREVIEW * PY).min(room - th).max(60.0 * PY);
     let rows = (((room - preview + gy) / (th + gy)) as usize).max(1);
     // what's left under the last row whole goes to the preview, up to twice its size
@@ -129,11 +130,6 @@ pub(super) fn columns(view: [f32; 4], n: usize) -> Columns {
 }
 
 impl Columns {
-    /// Tiles on view in a column.
-    pub fn per(&self) -> usize {
-        self.cols * self.rows
-    }
-
     /// Player `p`'s column.
     pub fn parts(&self, p: usize) -> Parts {
         let [x0, top, w, h] = self.first;
@@ -148,32 +144,95 @@ impl Columns {
         let head = next(HEAD * PY);
         let pills = next(if self.stack { 2.0 * PILL + ROW_GAP } else { PILL } * PY);
         let preview = next(self.preview);
-        let tabs = next(TABS * PY);
-        let gh = self.rows as f32 * (self.tile[1] + self.gap[1]) - self.gap[1];
+        let gh = self.grid_h();
         let grid = next(gh);
         let foot = [ix, top + h - (PAD + FOOT) * PY, iw, FOOT * PY];
         let bar = [ix + iw - BAR * PX, grid[1], BAR * PX, gh];
-        Parts { card: [x, top, w, h], head, pills, preview, tabs, grid: [ix, grid[1], iw - (BAR + TILE_GAP) * PX, gh], bar, foot }
+        Parts { card: [x, top, w, h], head, pills, preview, grid: [ix, grid[1], iw - (BAR + TILE_GAP) * PX, gh], bar, foot }
     }
 
-    /// The `k`th tile on view in player `p`'s column.
-    pub fn cell(&self, p: usize, k: usize) -> [f32; 4] {
-        let [x, y, ..] = self.parts(p).grid;
+    /// The grid's height: `rows` rows of tiles and a heading.
+    fn grid_h(&self) -> f32 {
+        self.rows as f32 * (self.tile[1] + self.gap[1]) + HEADING * PY
+    }
+
+    /// B382: a line's height (without the gap under it).
+    fn line_h(&self, l: Line) -> f32 {
+        match l {
+            Line::Head(_) => HEADING * PY,
+            Line::Tiles(..) => self.tile[1],
+        }
+    }
+
+    /// B382: how many of `lines` from `top` the grid shows whole (at least one).
+    pub fn fit(&self, lines: &[Line], top: usize) -> usize {
+        let room = self.grid_h() + self.gap[1] + 0.01;
+        let mut used = 0.0;
+        let n = lines.iter().skip(top).take_while(|&&l| {
+            used += self.line_h(l) + self.gap[1];
+            used <= room
+        });
+        n.count().max(1)
+    }
+
+    /// B382: the furthest the grid scrolls: the first line that shows the last.
+    pub fn last_top(&self, lines: &[Line]) -> usize {
+        (0..lines.len()).find(|&t| t + self.fit(lines, t) >= lines.len()).unwrap_or(0)
+    }
+
+    /// B382: player `p`'s column's lines on view in `v`: each heading's section and box, each tile's place
+    /// (`tabs::flat`), cell and box.
+    pub fn laid(&self, p: usize, v: &View) -> (Vec<(usize, [f32; 4])>, Vec<(usize, Option<Who>, [f32; 4])>) {
+        let [x, mut y, w, _] = self.parts(p).grid;
         let [tw, th] = self.tile;
-        [x + (tw + self.gap[0]) * (k % self.cols) as f32, y + (th + self.gap[1]) * (k / self.cols) as f32, tw, th]
+        let (mut heads, mut tiles) = (Vec::new(), Vec::new());
+        for &l in &v.lines[v.top..v.end] {
+            match l {
+                Line::Head(s) => heads.push((s, [x, y, w, HEADING * PY])),
+                Line::Tiles(s, i) => {
+                    for (j, &c) in v.secs[s].cells[i..].iter().take(self.cols).enumerate() {
+                        tiles.push((tabs::flat(&v.secs, s, i + j), c, [x + (tw + self.gap[0]) * j as f32, y, tw, th]));
+                    }
+                }
+            }
+            y += self.line_h(l) + self.gap[1];
+        }
+        (heads, tiles)
     }
 }
 
+/// B382: a column's grid: the sections, their lines, and the lines on view (`top..end`).
+#[derive(Debug)]
+pub(super) struct View {
+    pub secs: Vec<Section>,
+    pub lines: Vec<Line>,
+    pub top: usize,
+    pub end: usize,
+}
+
 impl Menu {
+    /// B382: player `p`'s column's grid as scrolled (`scroll`'s line, kept on the grid).
+    pub(super) fn view(&self, p: usize) -> View {
+        let c = self.columns();
+        let secs = self.sections();
+        let lines = tabs::lines(&secs, c.cols);
+        let top = self.scroll[p].min(c.last_top(&lines));
+        let end = (top + c.fit(&lines, top)).min(lines.len());
+        View { secs, lines, top, end }
+    }
+
     /// B368: the tiles on view in every column and the players' picks (the face icons to read).
     pub(super) fn on_view(&self) -> Vec<Who> {
-        let per = self.columns().per();
-        let mut v: Vec<Who> = (0..self.players()).flat_map(|p| {
-            let (start, roster) = self.page(p);
-            roster.into_iter().skip(start).take(per).flatten()
-        }).collect();
+        let c = self.columns();
+        let mut v: Vec<Who> = (0..self.players()).flat_map(|p| c.laid(p, &self.view(p)).1).filter_map(|t| t.1).collect();
         v.extend((0..self.players()).map(|p| self.who(p)));
         v
+    }
+
+    /// The box of the tile at place `k` in player `p`'s column, if it's on view.
+    #[cfg(test)]
+    pub(super) fn tile_rect(&self, p: usize, k: usize) -> Option<[f32; 4]> {
+        self.columns().laid(p, &self.view(p)).1.into_iter().find(|t| t.0 == k).map(|t| t.2)
     }
 }
 
@@ -385,19 +444,20 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         d.centred("Ready!", px + area / 2.0, py + ph - rh - 6.0 * PY + 4.0 * PY, 16.0 * PY, hex(BG));
     }
 
-    // the tabs (B369's categories)
-    let (start, roster) = m.page(p);
-    tabs::row(d, m, p, at.tabs);
-
-    // the grid: the tiles on view, this player's darker with a rim in the seat's colour
-    let mine_cell = m.cell(p);
-    for (k, &cell) in roster.iter().enumerate().skip(start).take(c.per()) {
-        let rect = c.cell(p, k - start);
-        let on = active && cell == mine_cell && !pl.on_tabs;
+    // B382: the grid: the lines on view, a heading per section, the tiles this player's darker with a rim in the
+    // seat's colour (the same character in its other section filled, without the rim)
+    let v = m.view(p);
+    let (mine_cell, mine_at) = (m.cell(p), m.place(p, &v.secs));
+    let (heads, tiles) = c.laid(p, &v);
+    for (k, rect) in heads {
+        heading(d, &v.secs[k], rect, &s);
+        d.hit(rect, pointer::Act::Section(p, k));
+    }
+    for (k, cell, rect) in tiles {
+        let on = active && Some(k) == mine_at;
         if on {
             ringed(d, rect, 10.0, 3.0, s.ring, s.sel);
         } else if active && cell == mine_cell {
-            // B391: the cursor up on the tab row: the pick's tile filled, without its ring
             rounded(d, rect, 10.0, s.sel, 128.0);
         } else {
             rounded(d, rect, 10.0, s.tile, 128.0);
@@ -413,13 +473,12 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         }
         d.hit(rect, pointer::Act::Cell(p, k));
     }
-    // the scroll bar: its thumb the rows on view over all of them
-    let total = roster.len().div_ceil(c.cols);
+    // the scroll bar: its thumb the lines on view over all of them
+    let total = v.lines.len();
     let [bx, by, bw, bh] = at.bar;
     rounded(d, at.bar, 3.0, s.well, 128.0);
-    let thumb = (bh * c.rows as f32 / total.max(1) as f32).min(bh).max(12.0 * PY);
-    let top = start / c.cols;
-    let ty = by + (bh - thumb) * top as f32 / (total.saturating_sub(c.rows)).max(1) as f32;
+    let thumb = (bh * (v.end - v.top) as f32 / total.max(1) as f32).min(bh).max(12.0 * PY);
+    let ty = by + (bh - thumb) * v.top as f32 / c.last_top(&v.lines).max(1) as f32;
     rounded(d, [bx, ty, bw, thumb], 3.0, s.ring, 128.0);
 
     // an open seat: who fills it, over its grid
@@ -450,6 +509,31 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let fs = 12.0 * PY;
     let lw = d.width(&line, fs).min(fw);
     d.label(&line, fx + lw / 2.0, fy + (fh - fs) / 2.0, fs, lw, s.soft);
+}
+
+/// B382: a section's heading in `[x, y, w, h]`: its name (a gold star before Favorites), its count, and a divider
+/// line on to the column's edge.
+fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
+    let size = 15.0 * PY;
+    let ty = y + (h - size) / 2.0;
+    let mut tx = x + 2.0 * PX;
+    if sec.id == tabs::FAVORITES {
+        let ss = size * 1.3;
+        d.outlined(|d| d.text("*", tx, ty - 1.0 * PY, ss, GOLD));
+        tx += d.width("*", ss) + 4.0 * PX;
+    }
+    let count = sec.cells.len().to_string();
+    let cs = 12.0 * PY;
+    let cw = d.width(&count, cs) + 10.0 * PX;
+    let name = ellipsis(d, &sec.name, size, (x + w - tx - cw - 16.0 * PX).max(10.0));
+    d.text(&name, tx, ty, size, WHITE);
+    tx += d.width(&name, size) + 6.0 * PX;
+    rounded(d, [tx, y + (h - cs - 4.0 * PY) / 2.0, cw, cs + 4.0 * PY], (cs + 4.0) / 2.0, s.well, 128.0);
+    d.centred(&count, tx + cw / 2.0, y + (h - cs) / 2.0, cs, s.soft);
+    tx += cw + 8.0 * PX;
+    if tx < x + w {
+        d.q(Tex::Solid, [0.0; 4], [tx, y + h / 2.0 - 1.0 * PY, x + w - tx, 2.0 * PY], s.well, 128.0);
+    }
 }
 
 /// The costume and hand pills in `[x, y, w, h]` (two rows when `stack`); taps on them when `mine`.

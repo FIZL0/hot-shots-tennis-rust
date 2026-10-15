@@ -1,31 +1,65 @@
-//! B369: the character select's category tabs, each player's own (plan/B368.md § Tabs and overflow): All (B390: every
-//! character, Random first; where the select opens), Favorites (only while there are any), Hot Shots (the disc cast,
-//! Random first; only beside a mod game's tab, else it would be All again), then one per mod game (`Mod::game`, "Mods"
-//! for an untagged mod) in name order, "Mods" last. No bumpers (L1 / R1 are the costume): → past a row's last tile goes on
-//! to the next tab, ← past its first back to the previous one, wrapping, on the same row (clamped to the new tab's
-//! last) at its first or last tile; ↑↓ stay in the tab. A tap on a tab switches to it. □ marks the highlighted
-//! character a favorite (or not): saved in `favorites.txt` beside `settings.txt`, a star on its tile.
-//!
-//! B391: the tab row takes the cursor: ↑ from the grid's top row (or the pointer over a tab) focuses the player's
-//! tab, ←→ there go straight onto the previous / next tab (wrapping, a tab with nothing open passed over), ↓ or ✕
-//! back down onto the tile. The row keeps every tab at its own width and scrolls sideways (« » at a cut end) to show
-//! the player's, never squeezing the tabs to fit the column.
+//! B382: the character select's roster as one scrolling grid, each player's own view of it: every character under
+//! a divider heading per section with its count — ★ Favorites (only while there are any), Hot Shots Tennis (the
+//! Random card, then the disc cast), then one per mod game (`Mod::game`, "Mods" for an untagged mod) in name order,
+//! "Mods" last. Each section starts on a row of its own. ←→ walk the tiles in order across the rows and sections,
+//! stopping at the ends; ↑↓ a row, the same place across (the row's last if it's shorter), headings passed over;
+//! L2 / R2 (keyboard 1 / 3; L1 / R1 stay the costume) jump to the previous / next section's first tile, wrapping;
+//! a tap on a heading jumps there too. A favorite shows in Favorites and in its own section: `Player::tab` is the
+//! section the cursor is in. □ marks the highlighted character a favorite (or not): saved in `favorites.txt` beside
+//! `settings.txt`, a star on its tile. (B369's per-game tabs and B391's tab row are gone: squished, unclear.)
 
-use super::{COLOURS, Draw, Effect, GOLD, INK, Menu, Press, WHITE, Who, pointer};
+use super::{Draw, Effect, GOLD, Menu, Press, Who};
+#[cfg(test)]
+use super::pointer;
 
-/// A player's tab (`Player::tab`): All is the default (0), so a fresh select (B346's Random) opens on it (B390).
-pub(super) const ALL: u8 = 0;
 pub(super) const FAVORITES: u8 = 1;
 pub(super) const HOT_SHOTS: u8 = 2;
-/// Mod game `k` (in [`Menu::games`]' order) is tab id `GAMES + k`.
+/// The disc's own section's heading: a mod made from this game's own characters (its `source`) goes in it too,
+/// after the disc cast.
+const HST: &str = "Hot Shots Tennis";
+/// Mod game `k` (in [`Menu::games`]' order) is section id `GAMES + k`.
 const GAMES: u8 = 3;
 
-/// One tab: its id (`Player::tab`), its name, and its tiles (`None` the Random card).
+/// One section: its id (`Player::tab`), its heading, and its tiles (`None` the Random card).
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Tab {
+pub(super) struct Section {
     pub id: u8,
     pub name: String,
     pub cells: Vec<Option<Who>>,
+}
+
+/// A line of the grid: a section's heading, or a row of its tiles from its `i`th.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Line {
+    Head(usize),
+    Tiles(usize, usize),
+}
+
+/// The grid's lines for `secs`, `cols` tiles a row.
+pub(super) fn lines(secs: &[Section], cols: usize) -> Vec<Line> {
+    let cols = cols.max(1);
+    let mut out = Vec::new();
+    for (s, sec) in secs.iter().enumerate() {
+        out.push(Line::Head(s));
+        out.extend((0..sec.cells.len()).step_by(cols).map(|i| Line::Tiles(s, i)));
+    }
+    out
+}
+
+/// Tile `i` of section `s` as a place in the whole grid: every section's tiles one after another (`Act::Cell`).
+pub(super) fn flat(secs: &[Section], s: usize, i: usize) -> usize {
+    secs[..s].iter().map(|t| t.cells.len()).sum::<usize>() + i
+}
+
+/// The other way: the section and tile at place `k`.
+pub(super) fn unflat(secs: &[Section], mut k: usize) -> Option<(usize, usize)> {
+    for (s, sec) in secs.iter().enumerate() {
+        if k < sec.cells.len() {
+            return Some((s, k));
+        }
+        k -= sec.cells.len();
+    }
+    None
 }
 
 /// The favorite characters, by key ([`Menu::fav_key`]); sorted, so a `Menu`'s `Debug` is the same every time.
@@ -66,285 +100,186 @@ impl Menu {
         self.favs.contains(&self.fav_key(w))
     }
 
-    /// The mod games with a tab, in tab order: by name, "Mods" (untagged) last.
+    /// The mod games with a section, in order: by name, "Mods" (untagged) last.
     fn games(&self) -> Vec<&str> {
-        let mut g: Vec<&str> = (0..self.own_mods()).map(|i| self.mods[i].game()).collect();
+        let mut g: Vec<&str> = (0..self.own_mods()).map(|i| self.mods[i].game()).filter(|&g| g != HST).collect();
         g.sort_by_key(|&n| (n == "Mods", n));
         g.dedup();
         g
     }
 
-    /// Every tab, in order.
-    pub(super) fn tabs(&self) -> Vec<Tab> {
+    /// Every section, in order.
+    pub(super) fn sections(&self) -> Vec<Section> {
         let all = self.roster();
-        let mut out = vec![Tab { id: ALL, name: "All".into(), cells: all.clone() }];
+        let mut out = Vec::new();
         let favs: Vec<Option<Who>> = all.iter().copied().filter(|c| c.is_some_and(|w| self.favorite(w))).collect();
         if !favs.is_empty() {
-            out.push(Tab { id: FAVORITES, name: "Favorites".into(), cells: favs });
+            out.push(Section { id: FAVORITES, name: "Favorites".into(), cells: favs });
         }
-        let games = self.games();
-        if !games.is_empty() {
-            out.push(Tab { id: HOT_SHOTS, name: "Hot Shots".into(), cells: all.iter().copied().filter(|c| !matches!(c, Some(Who::Mod(_)))).collect() });
-        }
-        for (k, g) in games.into_iter().enumerate() {
+        out.push(Section { id: HOT_SHOTS, name: HST.into(), cells: all.iter().copied().filter(|c| !matches!(c, Some(Who::Mod(i)) if self.mods[*i].game() != HST)).collect() });
+        for (k, g) in self.games().into_iter().enumerate() {
             let cells = all.iter().copied().filter(|c| matches!(c, Some(Who::Mod(i)) if self.mods[*i].game() == g)).collect();
-            out.push(Tab { id: GAMES + k as u8, name: g.to_string(), cells });
+            out.push(Section { id: GAMES + k as u8, name: g.to_string(), cells });
         }
         out
     }
 
-    /// Player `p`'s tab in `tabs`: theirs, else (Favorites emptied, a game gone) All.
-    pub(super) fn tab_at(&self, p: usize, tabs: &[Tab]) -> usize {
+    /// The section a character lives in (never Favorites; the Random card's is Hot Shots Tennis).
+    fn home(&self, c: Option<Who>) -> u8 {
+        match c {
+            None | Some(Who::Disc(_)) => HOT_SHOTS,
+            Some(Who::Mod(i)) if self.mods[i].game() == HST => HOT_SHOTS,
+            Some(Who::Mod(i)) => GAMES + self.games().iter().position(|&g| g == self.mods[i].game()).unwrap_or(0) as u8,
+        }
+    }
+
+    /// Player `p`'s section in `secs`: theirs (`Player::tab`) while their tile is in it, else the tile's own.
+    pub(super) fn section_at(&self, p: usize, secs: &[Section]) -> usize {
+        let c = self.cell(p);
         let id = self.players[p].tab;
-        tabs.iter().position(|t| t.id == id).or_else(|| tabs.iter().position(|t| t.id == ALL)).unwrap_or(0)
+        let home = self.home(c);
+        secs.iter().position(|s| s.id == id && s.cells.contains(&c)).or_else(|| secs.iter().position(|s| s.id == home)).unwrap_or(0)
     }
 
-    /// Player `p`'s tab's tiles.
-    pub(super) fn tab_cells(&self, p: usize) -> Vec<Option<Who>> {
-        let mut tabs = self.tabs();
-        let t = self.tab_at(p, &tabs);
-        tabs.swap_remove(t).cells
+    /// Player `p`'s place in the grid ([`flat`]), if their tile is on it.
+    pub(super) fn place(&self, p: usize, secs: &[Section]) -> Option<usize> {
+        let s = self.section_at(p, secs);
+        secs[s].cells.iter().position(|&c| c == self.cell(p)).map(|i| flat(secs, s, i))
     }
 
-    /// The tiles across player `p`'s grid (B368: every column has as many).
-    fn cols(&self, _p: usize) -> usize {
-        self.columns().cols.max(1)
-    }
-
-    /// Player `p` (not ready) onto tab `t` of `tabs`: on the same tile if it's there, else its first open one.
-    pub(super) fn set_tab(&mut self, p: usize, tabs: &[Tab], t: usize) -> bool {
-        let tab = &tabs[t];
-        let to = if tab.cells.contains(&self.cell(p)) { Some(self.cell(p)) } else { tab.cells.iter().copied().find(|&c| !self.full(p, c)) };
-        let Some(c) = to else { return false };
-        self.players[p].tab = tab.id;
+    /// Player `p` onto place `k` (a new character on its first costume).
+    pub(super) fn put_at(&mut self, p: usize, secs: &[Section], k: usize) {
+        let Some((s, i)) = unflat(secs, k) else { return };
+        self.players[p].tab = secs[s].id;
+        let c = secs[s].cells[i];
         if c != self.cell(p) {
             self.put(p, c);
         }
+    }
+
+    /// Player `p` (not ready) onto section `s`'s first open tile; whether there was one.
+    pub(super) fn jump(&mut self, p: usize, secs: &[Section], s: usize) -> bool {
+        let Some(i) = secs[s].cells.iter().position(|&c| !self.full(p, c)) else { return false };
+        self.put_at(p, secs, flat(secs, s, i));
         true
     }
 
-    /// B369: a not-ready player's ↑↓←→ on their tab (B66: past a full tile the same way): ↑↓ a row, stopping at
-    /// the ends; ←→ a tile, past the row's ends onto the previous / next tab (wrapping, a tab with nothing open
-    /// passed over). Whether the cursor moved.
-    pub(super) fn tab_move(&mut self, p: usize, k: Press) -> bool {
+    /// The tiles across player `p`'s grid (B368: every column has as many).
+    fn cols(&self) -> usize {
+        self.columns().cols.max(1)
+    }
+
+    /// B382: a not-ready player's ↑↓←→ and L2 / R2 on the grid (B66: past a full tile the same way): ←→ the next
+    /// tile in order, across rows and sections, stopping at the ends; ↑↓ a row, headings passed over; L2 this
+    /// section's first tile (the previous section's from there), R2 the next section's, wrapping. Whether the cursor
+    /// moved.
+    pub(super) fn grid_move(&mut self, p: usize, k: Press) -> bool {
         let (dx, dy) = (k.right as i32 - k.left as i32, k.down as i32 - k.up as i32);
-        if dx == 0 && dy == 0 {
+        let jump = k.kind_next as i32 - k.kind_prev as i32;
+        if dx == 0 && dy == 0 && jump == 0 {
             return false;
         }
-        let tabs = self.tabs();
-        if self.players[p].on_tabs {
-            return self.row_move(p, &tabs, dx, dy);
+        let secs = self.sections();
+        let Some(at) = self.place(p, &secs) else { return false };
+        let (s, i) = unflat(&secs, at).unwrap_or((0, 0));
+        if jump != 0 && secs.len() < 2 {
+            return false;
         }
-        let cols = self.cols(p);
-        let mut t = self.tab_at(p, &tabs);
-        if !tabs[t].cells.contains(&self.cell(p)) {
-            // put off its tab (a pick carried over, a random draw): onto the tab it lives in
-            self.players[p].tab = self.cell(p).map_or(ALL, |w| self.home_tab(w));
-            t = self.tab_at(p, &tabs);
-        }
-        let cells = &tabs[t].cells;
-        let Some(at) = cells.iter().position(|&c| c == self.cell(p)) else {
-            return self.set_tab(p, &tabs, t);
-        };
-        let to = if dy != 0 {
-            // B306's rows: stay put at the edge, past full tiles
-            let mut to = at as i32;
-            loop {
-                to += dy * cols as i32;
-                if to < 0 && tabs.len() > 1 {
-                    // B391: ↑ off the top row onto the tab row (with another tab to go to)
-                    self.players[p].on_tabs = true;
-                    return true;
-                }
-                if !(0..cells.len() as i32).contains(&to) {
-                    let edge = to.clamp(0, cells.len() as i32 - 1) as usize;
-                    break if self.full(p, cells[edge]) { None } else { Some((t, edge)) };
-                }
-                if !self.full(p, cells[to as usize]) {
-                    break Some((t, to as usize));
-                }
+        if jump != 0 {
+            let first = secs[s].cells.iter().position(|&c| !self.full(p, c));
+            if jump < 0 && first.is_some_and(|f| f < i) {
+                return self.jump(p, &secs, s);
             }
+            let n = secs.len();
+            return (1..n).map(|d| if jump > 0 { (s + d) % n } else { (s + n - d) % n }).any(|u| self.jump(p, &secs, u));
+        }
+        let to = if dy != 0 {
+            self.row_step(p, &secs, s, i, dy)
         } else {
-            // the only tab: ←→ walk the whole of it, stopping at its ends (B306), as a narrow column has no tab to
-            // overflow to
-            let lone = tabs.len() == 1;
-            let span = if lone { cells.len() } else { cols };
-            let row = at / span;
-            let end = ((row + 1) * span).min(cells.len());
+            let n = secs.iter().map(|t| t.cells.len()).sum::<usize>() as i32;
+            let cell = |k: i32| unflat(&secs, k as usize).map(|(s, i)| secs[s].cells[i]);
             let mut to = at as i32 + dx;
-            while (row * span..end).contains(&(to as usize)) && to >= 0 && self.full(p, cells[to as usize]) {
+            while (0..n).contains(&to) && cell(to).is_some_and(|c| self.full(p, c)) {
                 to += dx;
             }
-            if to >= 0 && (row * span..end).contains(&(to as usize)) {
-                Some((t, to as usize))
-            } else if lone {
-                None
-            } else {
-                self.overflow(p, &tabs, t, row, dx > 0)
-            }
+            (0..n).contains(&to).then_some(to as usize)
         };
         match to {
-            Some((t, i)) if (t, i) != (self.tab_at(p, &tabs), at) => {
-                self.players[p].tab = tabs[t].id;
-                self.put(p, tabs[t].cells[i]);
+            Some(t) if t != at => {
+                self.put_at(p, &secs, t);
                 true
             }
             _ => false,
         }
     }
 
-    /// B391: a move on the tab row: ←→ onto the next tab that way with anything open (wrapping), ↓ back down onto
-    /// the tile. Whether the cursor moved.
-    fn row_move(&mut self, p: usize, tabs: &[Tab], dx: i32, dy: i32) -> bool {
-        if dy > 0 {
-            self.players[p].on_tabs = false;
-            return true;
+    /// The tile `dy` rows down from section `s`'s `i`th (up for -1): the same place across, the row's last if it's
+    /// shorter, past rows whose tile there has nothing open; past the grid's ends its last (first) tile, if open (B306).
+    fn row_step(&self, p: usize, secs: &[Section], s: usize, i: usize, dy: i32) -> Option<usize> {
+        let cols = self.cols();
+        let rows: Vec<(usize, usize)> = lines(secs, cols).into_iter().filter_map(|l| if let Line::Tiles(s, i) = l { Some((s, i)) } else { None }).collect();
+        let col = i % cols;
+        let mut r = rows.iter().position(|&row| row == (s, i - col))? as i32;
+        loop {
+            r += dy;
+            let Some(&(rs, ri)) = usize::try_from(r).ok().and_then(|r| rows.get(r)) else {
+                let (s, i) = if dy > 0 { (secs.len() - 1, secs[secs.len() - 1].cells.len().checked_sub(1)?) } else { (0, 0) };
+                return (!self.full(p, secs[s].cells[i])).then(|| flat(secs, s, i));
+            };
+            let i = ri + col.min((secs[rs].cells.len() - ri).min(cols) - 1);
+            if !self.full(p, secs[rs].cells[i]) {
+                return Some(flat(secs, rs, i));
+            }
         }
-        let n = tabs.len();
-        if dx == 0 || n < 2 {
-            return false;
-        }
-        let t = self.tab_at(p, tabs);
-        (1..n).map(|s| if dx > 0 { (t + s) % n } else { (t + n - s) % n }).any(|u| self.set_tab(p, tabs, u))
     }
 
-    /// B391: ✕ on the tab row: down onto the tab's tile (not a pick); `k` without its ✕ then.
-    pub(super) fn tabs_ok(&mut self, p: usize, k: Press, out: &mut Vec<Effect>) -> Press {
-        if !(k.ok && self.players[p].on_tabs && !self.players[p].ready) {
-            return k;
-        }
-        self.players[p].on_tabs = false;
-        self.follow(p);
-        out.push(Effect::Sound(0));
-        Press { ok: false, ..k }
-    }
-
-    /// Past row `row`'s end of tab `t` (`right`: its last tile): the next tab's same row (its last if it's shorter),
-    /// first open tile from that end; tabs with none there passed over, wrapping.
-    fn overflow(&self, p: usize, tabs: &[Tab], t: usize, row: usize, right: bool) -> Option<(usize, usize)> {
-        let n = tabs.len();
-        let cols = self.cols(p);
-        (1..=n).map(|s| if right { (t + s) % n } else { (t + n - s) % n }).find_map(|u| {
-            let cells = &tabs[u].cells;
-            let r = row.min(cells.len().checked_sub(1)? / cols);
-            let span = r * cols..((r + 1) * cols).min(cells.len());
-            let i = if right { span.clone().find(|&i| !self.full(p, cells[i])) } else { span.clone().rev().find(|&i| !self.full(p, cells[i])) };
-            i.map(|i| (u, i))
-        })
-    }
-
-    /// B369: □: the highlighted character in or out of the favorites (saved). Taken off while on Favorites, the
-    /// cursor stays at that place in the tab (or back on All once it's empty).
+    /// B369: □: the highlighted character in or out of the favorites (saved). Taken off while in Favorites, the
+    /// cursor stays at that place in it (or goes to the character's own section once it's empty). B382: Favorites
+    /// grows or shrinks over every column's grid: each one's view keeps its place.
     pub(super) fn toggle_favorite(&mut self, p: usize, out: &mut Vec<Effect>) {
         let Some(w) = self.cell(p) else { return };
         let key = self.fav_key(w);
-        let tabs = self.tabs();
-        let was = &tabs[self.tab_at(p, &tabs)];
-        let at = was.cells.iter().position(|&c| c == Some(w)).unwrap_or(0);
-        let on_favs = was.id == FAVORITES;
+        let secs = self.sections();
+        let cols = self.cols();
+        let fav_lines = |secs: &[Section]| secs.iter().find(|s| s.id == FAVORITES).map_or(0, |s| 1 + s.cells.len().div_ceil(cols));
+        let was = fav_lines(&secs);
+        let s = self.section_at(p, &secs);
+        let at = secs[s].cells.iter().position(|&c| c == Some(w)).unwrap_or(0);
+        let on_favs = secs[s].id == FAVORITES;
         if !self.favs.remove(&key) {
             self.favs.insert(key);
         }
-        if on_favs {
-            let tabs = self.tabs();
-            let t = self.tab_at(p, &tabs);
-            if tabs[t].id == FAVORITES {
-                let cells = &tabs[t].cells;
-                if let Some(c) = (at.min(cells.len() - 1)..cells.len()).chain(0..at).map(|i| cells[i]).find(|&c| !self.full(p, c)) {
-                    self.put(p, c);
-                }
-            } else {
-                self.players[p].tab = ALL;
+        let secs = self.sections();
+        let now = fav_lines(&secs);
+        for q in 0..self.players() {
+            if self.scroll[q] >= was {
+                self.scroll[q] = (self.scroll[q] + now).saturating_sub(was);
             }
+        }
+        if on_favs {
+            match secs.iter().position(|s| s.id == FAVORITES) {
+                Some(t) => {
+                    let cells = &secs[t].cells;
+                    if let Some(i) = (at.min(cells.len() - 1)..cells.len()).chain(0..at).find(|&i| !self.full(p, cells[i])) {
+                        self.put_at(p, &secs, flat(&secs, t, i));
+                    }
+                }
+                None => self.players[p].tab = self.home(Some(w)),
+            }
+        }
+        for q in 0..self.players() {
+            self.follow(q);
         }
         out.extend([Effect::Sound(0), Effect::SaveFavorites]);
     }
-
-    /// The tab a character lives in (not All or Favorites).
-    fn home_tab(&self, w: Who) -> u8 {
-        match w {
-            Who::Disc(_) => HOT_SHOTS,
-            Who::Mod(i) => GAMES + self.games().iter().position(|&g| g == self.mods[i].game()).unwrap_or(0) as u8,
-        }
-    }
 }
 
-/// The tab row of player `p`'s column (its colour), in `[x, y, w, h]`: a pill per tab with its count, theirs filled
-/// (the column's footer names the tab and its neighbours), ringed gold while the cursor is on the row (B391). B391:
-/// every pill at its own width; too many for the column, the row shows a run of whole tabs round theirs, a « / » at
-/// a cut end (a tap there goes on to the tab past it).
-pub(super) fn row(d: &mut Draw, m: &Menu, p: usize, [x, y, w, h]: [f32; 4]) {
-    let tabs = m.tabs();
-    let t = m.tab_at(p, &tabs);
-    let size = h * 0.62;
-    let gap = 4.0;
-    let labels: Vec<String> = tabs.iter().map(|tab| format!("{} {}", tab.name, tab.cells.len())).collect();
-    let want: Vec<f32> = labels.iter().map(|l| d.width(l, size) + h * 0.6).collect();
-    let arrow = h * 0.8;
-    let (lo, hi, room) = shown(&want, t, w, gap, arrow);
-    let focused = m.players[p].on_tabs && !m.players[p].ready;
-    let mut px = x;
-    if lo > 0 {
-        d.label("«", x + arrow / 2.0, y + (h - size) / 2.0, size, arrow, WHITE);
-        d.hit([x, y, arrow, h], pointer::Act::Category(p, lo - 1));
-    }
-    if (lo, hi) != (0, tabs.len()) {
-        px += arrow + gap;
-    }
-    for i in lo..hi {
-        let pw = want[i].min(room);
-        let on = i == t;
-        let fill = if on { COLOURS[p] } else { [24.0, 22.0, 30.0] };
-        let ring = if on && focused { GOLD } else if on { WHITE } else { [70.0; 3] };
-        if on && focused {
-            d.pill_at([px - 2.0, y - 2.0, pw + 4.0, h + 4.0], [GOLD; 3], 128.0);
-        }
-        d.pill_at([px, y, pw, h], [INK, ring, fill], 128.0);
-        d.label(&labels[i], px + pw / 2.0, y + (h - size) / 2.0, size, pw - h * 0.5, if on { WHITE } else { [100.0; 3] });
-        d.hit([px, y, pw, h], pointer::Act::Category(p, i));
-        px += pw + gap;
-    }
-    if hi < tabs.len() {
-        d.label("»", x + w - arrow / 2.0, y + (h - size) / 2.0, size, arrow, WHITE);
-        d.hit([x + w - arrow, y, arrow, h], pointer::Act::Category(p, hi));
-    }
-}
-
-/// B391: the run of tabs `lo..hi` the row shows (pill widths `want`, `gap` apart, in `w`), round tab `t` (grown a tab
-/// each way in turn while they fit), and the most one pill may take; a cut row keeps `arrow` (+ `gap`) at each end.
-fn shown(want: &[f32], t: usize, w: f32, gap: f32, arrow: f32) -> (usize, usize, f32) {
-    let n = want.len();
-    if want.iter().sum::<f32>() + gap * n.saturating_sub(1) as f32 <= w {
-        return (0, n, w);
-    }
-    let room = w - 2.0 * (arrow + gap);
-    let (mut lo, mut hi, mut used) = (t, t + 1, want[t]);
-    loop {
-        let mut grew = false;
-        if hi < n && used + gap + want[hi] <= room {
-            used += gap + want[hi];
-            hi += 1;
-            grew = true;
-        }
-        if lo > 0 && used + gap + want[lo - 1] <= room {
-            used += gap + want[lo - 1];
-            lo -= 1;
-            grew = true;
-        }
-        if !grew {
-            break (lo, hi, room);
-        }
-    }
-}
-
-/// Player `p`'s footer: `« previous   n of N   next »` (the font has no ◂ ▸ or ·), `n` the tile's place in the tab.
+/// Player `p`'s footer: the section and where the tile is in it (`Golf   3 of 7`).
 pub(super) fn foot(m: &Menu, p: usize) -> String {
-    let tabs = m.tabs();
-    let t = m.tab_at(p, &tabs);
-    let n = tabs.len();
-    let at = tabs[t].cells.iter().position(|&c| c == m.cell(p)).unwrap_or(0) + 1;
-    let k = format!("{}   {at} of {}", tabs[t].name, tabs[t].cells.len());
-    if n > 1 { format!("« {}   {k}   {} »", tabs[(t + n - 1) % n].name, tabs[(t + 1) % n].name) } else { k }
+    let secs = m.sections();
+    let s = m.section_at(p, &secs);
+    let at = secs[s].cells.iter().position(|&c| c == m.cell(p)).unwrap_or(0) + 1;
+    format!("{}   {at} of {}", secs[s].name, secs[s].cells.len())
 }
 
 /// A favorite's star in a tile's top-right corner (the font's `*`, gold over a dark ring).
@@ -385,6 +320,17 @@ mod tests {
         }
     }
 
+    /// A mod from the disc's own game: in Hot Shots Tennis, after the cast, no section of its own.
+    #[test]
+    fn the_games_own_mods_join_its_section() {
+        let mut m = menu();
+        m.mods.push(a_mod(12, "Hot Shots Tennis"));
+        assert_eq!(names(&m)[..2], [("Hot Shots Tennis".into(), 2 + CHARS), ("Get a Grip".into(), 2)]);
+        assert_eq!(m.sections()[0].cells.last(), Some(&Some(Who::Mod(12))));
+        m.put(0, Some(Who::Mod(12)));
+        assert_eq!(at(&m), ("Hot Shots Tennis".into(), 1 + CHARS));
+    }
+
     /// 1P on the keyboard, singles, 5 tiles a row; mods: 3 untagged, 7 from Golf, 2 from Get a Grip.
     fn menu() -> Menu {
         let mods = (0..12).map(|i| a_mod(i, if i < 3 { "" } else if i < 10 { "Golf" } else { "Get a Grip" })).collect();
@@ -400,84 +346,120 @@ mod tests {
     }
 
     fn names(m: &Menu) -> Vec<(String, usize)> {
-        m.tabs().into_iter().map(|t| (t.name, t.cells.len())).collect()
+        m.sections().into_iter().map(|t| (t.name, t.cells.len())).collect()
+    }
+
+    /// Where 1P is: their section's name and the tile's place in it.
+    fn at(m: &Menu) -> (String, usize) {
+        let secs = m.sections();
+        let s = m.section_at(0, &secs);
+        (secs[s].name.clone(), secs[s].cells.iter().position(|&c| c == m.cell(0)).unwrap())
     }
 
     #[test]
-    fn tabs_in_order_with_counts() {
+    fn sections_in_order_with_counts() {
         let mut m = menu();
-        assert_eq!(names(&m), [("All".into(), 1 + CHARS + 12), ("Hot Shots".into(), 1 + CHARS), ("Get a Grip".into(), 2), ("Golf".into(), 7), ("Mods".into(), 3)]);
-        // B390: the select opens on All, Random first
-        assert_eq!(m.players[0].tab, ALL);
-        assert_eq!(m.tab_cells(0)[..2], [None, Some(Who::Disc(GRID[0].0))]);
-        assert_eq!(m.tab_cells(0).last(), Some(&Some(Who::Mod(11))));
-        // a favorite puts Favorites after All
+        assert_eq!(names(&m), [("Hot Shots Tennis".into(), 1 + CHARS), ("Get a Grip".into(), 2), ("Golf".into(), 7), ("Mods".into(), 3)]);
+        // B390: the select opens on the Random card, Hot Shots Tennis' first
+        assert_eq!(at(&m), ("Hot Shots Tennis".into(), 0));
+        assert_eq!(m.sections()[0].cells[..2], [None, Some(Who::Disc(GRID[0].0))]);
+        // each section on rows of its own under its heading
+        let l = lines(&m.sections(), 5);
+        assert_eq!(l[..5], [Line::Head(0), Line::Tiles(0, 0), Line::Tiles(0, 5), Line::Tiles(0, 10), Line::Head(1)]);
+        assert_eq!(l.len(), 4 + (1 + CHARS).div_ceil(5) + 1 + 2 + 1);
+        // a favorite puts Favorites first; the cursor stays in the character's own section
         m.put(0, Some(Who::Mod(4)));
         let mut out = Vec::new();
         m.toggle_favorite(0, &mut out);
         assert_eq!(out, [Effect::Sound(0), Effect::SaveFavorites]);
-        assert_eq!(names(&m)[1], ("Favorites".into(), 1));
-        assert_eq!(m.tabs()[1].cells, [Some(Who::Mod(4))]);
+        assert_eq!(names(&m)[0], ("Favorites".into(), 1));
+        assert_eq!(at(&m), ("Golf".into(), 1));
     }
 
-    /// → past the row's end: the next tab's same row at its first tile; ← back: the previous tab's row at its last;
-    /// a shorter tab clamps the row; the ends wrap.
+    /// ←→ walk every tile in order across rows and sections, stopping at the grid's ends; ↑↓ keep the place across
+    /// (the row's last on a shorter row), passing the headings.
     #[test]
-    fn overflow_wraps_and_clamps_the_row() {
+    fn moves_cross_rows_and_sections() {
+        let mut m = menu();
+        m.players[0].random = false;
+        let k = |m: &mut Menu, f: fn(&mut Press) -> &mut bool| {
+            m.step(Dev::Keys, press(f));
+            at(m)
+        };
+        let hst = "Hot Shots Tennis".to_string();
+        let last = CHARS; // the Random card first
+        m.put(0, m.sections()[0].cells[last]);
+        assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.left), (hst.clone(), last));
+        // ↓ from Hot Shots' last tile (its last row's 5th) to Get a Grip's last (two tiles), then Golf's 2nd, its 7th
+        assert_eq!(last % 5, 4);
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Get a Grip".into(), 1), "the shorter row's last");
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Golf".into(), 1));
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Golf".into(), 6));
+        assert_eq!(k(&mut m, |p| &mut p.up), ("Golf".into(), 1));
+        assert_eq!(k(&mut m, |p| &mut p.up), ("Get a Grip".into(), 1));
+        assert_eq!(k(&mut m, |p| &mut p.up), (hst.clone(), last - 3), "over the heading, the same place across");
+        // the far ends: ↓ / ↑ to the grid's last / first tile, then stay put
+        m.put(0, Some(Who::Mod(0)));
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Mods".into(), 2));
+        assert_eq!(k(&mut m, |p| &mut p.right), ("Mods".into(), 2));
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Mods".into(), 2));
+        m.put(0, m.sections()[0].cells[3]);
+        assert_eq!(k(&mut m, |p| &mut p.up), (hst.clone(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.left), (hst.clone(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.up), (hst, 0));
+    }
+
+    /// L2 / R2: the next section's first tile, wrapping; L2 inside a section its own first first.
+    #[test]
+    fn l2_r2_jump_sections() {
         let mut m = menu();
         let k = |m: &mut Menu, f: fn(&mut Press) -> &mut bool| {
             m.step(Dev::Keys, press(f));
-            let tabs = m.tabs();
-            let t = m.tab_at(0, &tabs);
-            (tabs[t].name.clone(), tabs[t].cells.iter().position(|&c| c == m.cell(0)).unwrap())
+            at(m)
         };
-        // Hot Shots row 1 (tiles 5..10): to its last tile, then on to Get a Grip, whose only row is 0
-        m.players[0].tab = HOT_SHOTS;
-        m.put(0, m.tab_cells(0)[9]);
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), 0));
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), 1));
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Golf".into(), 0));
-        // Golf row 1 (5, 6), right past 6 → Mods (one row): its row 0
-        assert_eq!(k(&mut m, |p| &mut p.down), ("Golf".into(), 5));
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Golf".into(), 6));
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Mods".into(), 0));
-        // wraps: Mods → All, row 0 at its first tile (Random)
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Mods".into(), 1));
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Mods".into(), 2));
-        assert_eq!(k(&mut m, |p| &mut p.right), ("All".into(), 0));
-        assert_eq!(m.cell(0), None);
-        // ← past the first: the previous tab (wrapping), its row's last tile
-        assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), 2));
-        // ↓ stays in the tab (Mods has one row), ↑ too
-        assert_eq!(k(&mut m, |p| &mut p.down), ("Mods".into(), 2));
-        assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), 1));
-        // All's row 2 (tiles 10..15) → ← from its first goes to the previous tab's (Mods') row 0, at its last
-        m.players[0].tab = ALL;
-        m.put(0, m.tab_cells(0)[10]);
-        assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), 2));
-        // Hot Shots' row 2 → ← to All's row 2, at its last
-        m.players[0].tab = HOT_SHOTS;
-        m.put(0, m.tab_cells(0)[10]);
-        assert_eq!(k(&mut m, |p| &mut p.left), ("All".into(), 14));
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Get a Grip".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Golf".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.right), ("Golf".into(), 1));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Golf".into(), 0), "back to its own heading first");
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Get a Grip".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Hot Shots Tennis".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Mods".into(), 0), "wraps");
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Hot Shots Tennis".into(), 0));
+        // L1 / R1 stay the costume: no move
+        m.players[0].random = false;
+        m.put(0, Some(Who::Mod(5)));
+        assert_eq!(k(&mut m, |p| &mut p.next), ("Golf".into(), 2));
+        // a favorite: Favorites first, its tile there and in its own section; jumps reach both
+        let mut out = Vec::new();
+        m.toggle_favorite(0, &mut out);
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Mods".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Favorites".into(), 0));
+        assert_eq!(m.cell(0), Some(Who::Mod(5)));
+        assert_eq!(k(&mut m, |p| &mut p.right), ("Hot Shots Tennis".into(), 0), "on past Favorites' end");
     }
 
-    /// B66: a tile with nothing open is passed over, a tab with nothing open on that row too.
+    /// B66: a tile with nothing open is passed over, the jumps' first tile too.
     #[test]
-    fn overflow_passes_full_tiles() {
+    fn moves_pass_full_tiles() {
         let mut m = menu();
         m.seats[1] = Some(Dev::Open);
         // 2P ready on Get a Grip's first mod: its only costume is closed to 1P
         m.put(1, Some(Who::Mod(10)));
         m.players[1].ready = true;
-        m.players[0].tab = HOT_SHOTS;
-        m.put(0, m.tab_cells(0)[4]);
+        m.players[0].random = false;
+        m.put(0, m.sections()[0].cells[CHARS]);
         m.step(Dev::Keys, press(|p| &mut p.right));
+        assert_eq!(m.cell(0), Some(Who::Mod(11)));
+        m.put(0, None);
+        m.step(Dev::Keys, press(|p| &mut p.kind_next));
         assert_eq!(m.cell(0), Some(Who::Mod(11)));
     }
 
     #[test]
     fn favorites_persist() {
         let mut m = menu();
+        m.players[0].random = false;
         m.put(0, Some(Who::Disc(3)));
         m.step(Dev::Keys, press(|p| &mut p.card));
         m.put(0, Some(Who::Mod(7)));
@@ -487,73 +469,60 @@ mod tests {
         let saved = text(&m.favs);
         assert_eq!(saved, "hst 3\nmod m7\n");
         let mut n = menu();
+        n.players[0].random = false;
         n.favs = parse(&saved);
-        assert_eq!(n.tabs()[1].cells, [Some(Who::Disc(3)), Some(Who::Mod(7))]);
-        // off again, from the Favorites tab: the cursor stays on the tab, then All once it's empty
+        assert_eq!(n.sections()[0].cells, [Some(Who::Disc(3)), Some(Who::Mod(7))]);
+        // off again, from Favorites: the cursor stays in it, then goes to the character's own section once it's empty
         n.players[0].tab = FAVORITES;
         n.put(0, Some(Who::Disc(3)));
+        assert_eq!(at(&n), ("Favorites".into(), 0));
         n.step(Dev::Keys, press(|p| &mut p.card));
-        assert_eq!((n.cell(0), n.tabs()[n.tab_at(0, &n.tabs())].name.as_str()), (Some(Who::Mod(7)), "Favorites"));
+        assert_eq!((n.cell(0), at(&n)), (Some(Who::Mod(7)), ("Favorites".into(), 0)));
         n.step(Dev::Keys, press(|p| &mut p.card));
         assert!(n.favs.is_empty());
-        assert_eq!((n.players[0].tab, n.cell(0)), (ALL, Some(Who::Mod(7))), "All, on the same tile");
+        assert_eq!((n.cell(0), at(&n)), (Some(Who::Mod(7)), ("Golf".into(), 4)), "its own section, the same tile");
         // Random has no favorite; a ready player's △ does nothing
         n.put(0, None);
         assert!(n.step(Dev::Keys, press(|p| &mut p.card)).is_empty());
     }
 
-    /// B391: ↑ off the top row focuses the tab row; ←→ there switch tabs (wrapping), ✕ or ↓ go back to the tile.
+    /// The grid scrolls to keep the cursor on view, its section's heading too on its first row; a favorite added
+    /// above keeps another column's view where it was.
     #[test]
-    fn the_tab_row_takes_the_cursor() {
+    fn the_grid_follows_the_cursor() {
         let mut m = menu();
+        m.seats[1] = Some(Dev::Pad(bevy::prelude::Entity::from_raw_u32(9).unwrap()));
         m.players[0].random = false;
-        m.players[0].tab = HOT_SHOTS;
-        m.put(0, m.tab_cells(0)[2]);
-        let k = |m: &mut Menu, f: fn(&mut Press) -> &mut bool| {
-            m.step(Dev::Keys, press(f));
-            let tabs = m.tabs();
-            (tabs[m.tab_at(0, &tabs)].name.clone(), m.players[0].on_tabs)
-        };
-        assert_eq!(k(&mut m, |p| &mut p.up), ("Hot Shots".into(), true));
-        // on the row: → straight onto Get a Grip's first tile, ← back (the same tile kept), ← All, ← wraps to Mods
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), true));
-        assert_eq!(m.cell(0), Some(Who::Mod(10)));
-        assert_eq!(k(&mut m, |p| &mut p.left), ("Hot Shots".into(), true));
-        assert_eq!(k(&mut m, |p| &mut p.left), ("All".into(), true));
-        assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), true));
-        assert_eq!(k(&mut m, |p| &mut p.up), ("Mods".into(), true));
-        // ✕ goes down, not ready; ↓ too
-        assert_eq!(k(&mut m, |p| &mut p.ok), ("Mods".into(), false));
-        assert!(!m.players[0].ready);
-        assert_eq!(k(&mut m, |p| &mut p.up), ("Mods".into(), true));
-        assert_eq!(k(&mut m, |p| &mut p.down), ("Mods".into(), false));
-        assert_eq!(m.cell(0), Some(Who::Mod(0)));
-        // the pointer over a tab focuses it and puts the player on it; over a tile, back on the grid
-        m.point(Dev::Keys, pointer::Act::Category(0, 3), false);
-        assert_eq!((m.players[0].tab, m.players[0].on_tabs), (GAMES + 1, true));
-        m.point(Dev::Keys, pointer::Act::Cell(0, 1), false);
-        assert_eq!((m.players[0].on_tabs, m.cell(0)), (false, Some(Who::Mod(4))));
-    }
-
-    /// B391: tabs too wide for the row keep their widths: a run round the player's tab, « » room at the ends.
-    #[test]
-    fn the_row_scrolls_instead_of_squeezing() {
-        let want = [50.0; 6];
-        assert_eq!(shown(&want, 3, 400.0, 4.0, 10.0), (0, 6, 400.0));
-        let (lo, hi, room) = shown(&want, 5, 200.0, 4.0, 10.0);
-        assert_eq!((lo, hi, room), (3, 6, 172.0));
-        assert_eq!(shown(&want, 0, 200.0, 4.0, 10.0).0..shown(&want, 0, 200.0, 4.0, 10.0).1, 0..3);
-        assert_eq!(&shown(&want, 2, 200.0, 4.0, 10.0).0, &1);
-        // one pill wider than the row: just it, squeezed to the room
-        assert_eq!(shown(&[500.0, 50.0], 0, 200.0, 4.0, 10.0), (0, 1, 172.0));
+        let v = m.view(0);
+        assert_eq!(v.top, 0);
+        assert!(v.end < v.lines.len(), "more lines than the view");
+        // R2 to the last section: its heading is the top line on view or above it, its first row on view
+        for _ in 0..3 {
+            m.step(Dev::Keys, press(|p| &mut p.kind_next));
+        }
+        assert_eq!(at(&m), ("Mods".into(), 0));
+        let v = m.view(0);
+        let row = v.lines.iter().position(|&l| l == Line::Tiles(3, 0)).unwrap();
+        assert!((v.top..v.end).contains(&row) && (v.top..v.end).contains(&(row - 1)), "{v:?}");
+        assert_eq!(m.view(1).top, 0, "2P's column didn't move");
+        // a favorite: one heading and one row more over every view past the top
+        let top = v.top;
+        m.step(Dev::Keys, press(|p| &mut p.card));
+        assert_eq!(m.view(0).top, top + 2);
+        assert_eq!(m.view(1).top, 2, "2P's view keeps Hot Shots Tennis' heading on top");
+        assert_eq!(m.view(1).lines[2], Line::Head(1));
     }
 
     #[test]
-    fn tap_a_tab() {
-        // All, Hot Shots, Get a Grip, Golf: Golf's first
+    fn tap_a_heading() {
         let mut m = menu();
-        let tabs = m.tabs();
-        assert!(m.set_tab(0, &tabs, 3));
-        assert_eq!((m.players[0].tab, m.cell(0)), (GAMES + 1, Some(Who::Mod(3))));
+        let secs = m.sections();
+        m.point(Dev::Keys, pointer::Act::Section(0, 2), false);
+        assert_eq!(at(&m), ("Hot Shots Tennis".into(), 0), "hovering a heading moves nothing");
+        m.point(Dev::Keys, pointer::Act::Section(0, 2), true);
+        assert_eq!((m.players[0].tab, m.cell(0)), (secs[2].id, Some(Who::Mod(3))));
+        // a tile's place across the sections
+        m.point(Dev::Keys, pointer::Act::Cell(0, flat(&secs, 1, 1)), false);
+        assert_eq!(m.cell(0), Some(Who::Mod(11)));
     }
 }
