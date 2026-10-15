@@ -3,9 +3,41 @@
 //! `--court`: collision, judging, the chair) and draws and sounds the mod (`--court-mod DIR`). Online (M8f8) the room
 //! carries the layout as its court and the mod's id and name (`Room::court_mod`): a peer with it installed draws it
 //! (`--court-mod-id`), one without plays the layout's disc court. A vanilla lobby's strip leaves them out.
+//!
+//! B401: a mod's own picture (`previews/court.png`, `tools/court_previews.sh`) stands in for its layout court's on
+//! the strip's tile, the select's backdrop and the confirm/lobby court card. Without one it shows its layout's.
+
+use std::path::PathBuf;
+
+use bevy::prelude::*;
 
 use super::{COURTS, Menu, Text};
 use crate::mods_court::Court;
+
+/// B401: the court mods' pictures (`Tex::CourtMod`), by `Menu::court_mods` index, and the folders they were read for.
+#[derive(Resource, Default)]
+pub(super) struct Pics {
+    dirs: Vec<PathBuf>,
+    pub handles: Vec<Option<Handle<Image>>>,
+}
+
+/// Reads the court mods' pictures whenever the installed list isn't the one they were read for.
+pub(super) fn load(mut menu: ResMut<Menu>, mut pics: ResMut<Pics>, mut images: ResMut<Assets<Image>>) {
+    let dirs: Vec<PathBuf> = menu.court_mods.iter().map(|x| x.dir.clone()).collect();
+    if pics.dirs == dirs && menu.court_pics.len() == dirs.len() {
+        return;
+    }
+    let read: Vec<Option<Image>> = dirs.iter().map(|d| crate::modfs::read(&d.join("previews/court.png")).ok().and_then(|b| decode(&b))).collect();
+    menu.court_pics = read.iter().map(|r| r.as_ref().map(|i| i.size_f32().to_array())).collect();
+    pics.handles = read.into_iter().map(|r| r.map(|r| images.add(r))).collect();
+    pics.dirs = dirs;
+}
+
+fn decode(png: &[u8]) -> Option<Image> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+    Image::from_buffer(png, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok()
+}
 
 /// The court mods' values on the select's strip, after the disc eleven (none in a vanilla lobby).
 pub(super) fn values(m: &Menu) -> impl Iterator<Item = usize> {
@@ -18,6 +50,12 @@ impl Menu {
     /// The court mod that court value `c` picks, if it's one.
     pub(super) fn court_mod_of(&self, c: usize) -> Option<&Court> {
         self.court_mods.get(c.checked_sub(COURTS + 1)?)
+    }
+
+    /// B401: court value `c`'s own picture (its `court_mods` index and size), if it's a mod that has one.
+    pub(super) fn court_pic(&self, c: usize) -> Option<(usize, [f32; 2])> {
+        let i = c.checked_sub(COURTS + 1)?;
+        Some((i, (*self.court_pics.get(i)?)?))
     }
 
     /// The disc court `c` plays on (a mod's layout; Random stays Random).
@@ -70,6 +108,12 @@ impl Menu {
             None if r.court < COURTS => text.msg(276 + 2 * r.court).to_string(),
             None => "Random".into(),
         }
+    }
+
+    /// A guest's court value for online room `r`: the room's mod when it's installed here, else its disc court.
+    pub(super) fn room_court_value(&self, r: &crate::net::Room) -> usize {
+        let installed = r.court_mod.as_ref().filter(|_| !r.vanilla).and_then(|(id, _)| self.court_mods.iter().position(|x| x.id == *id));
+        installed.map_or(r.court, |i| COURTS + 1 + i)
     }
 
     /// A pick past the installed mods (one taken away since): Random.

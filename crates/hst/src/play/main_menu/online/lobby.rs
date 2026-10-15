@@ -295,7 +295,7 @@ fn side_panel(d: &mut Draw, m: &Menu, r: &Room, g: &Geo, items: &[Item], on: &dy
     let (court, sets, games, umpire) = if m.net.hosting { (m.court, m.sets, m.games, m.umpire as usize) } else { (r.court, r.sets, r.games, r.umpire as usize) };
     // the court card: its picture, COURT over its name, the host's "change"
     let name = m.room_court_name(text, r, m.net.hosting);
-    frame::court_card(d, m.court_layout(court), &name, g.court, on(Item::Set(0)), at(Item::Set(0)).is_some());
+    frame::court_card(d, m, if m.net.hosting { court } else { m.room_court_value(r) }, &name, g.court, on(Item::Set(0)), at(Item::Set(0)).is_some());
     if let Some(k) = at(Item::Set(0)) {
         d.hit(g.court, Act::Row(k, OK));
     }

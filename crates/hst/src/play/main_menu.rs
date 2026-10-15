@@ -487,6 +487,8 @@ struct Menu {
     court_mods: Vec<crate::mods_court::Court>,
     /// B400: their pictures, by the same index (`umpire_mods::load`; None: it ships none).
     umpire_pics: Vec<Option<umpire_mods::Pic>>,
+    /// B401: the court mods' `previews/court.png` sizes (`court_mods::Pics`), by `court_mods` index.
+    court_pics: Vec<Option<[f32; 2]>>,
     /// B368: each player's column's first row on view ([`Menu::page`]), and the tile it was last scrolled to
     /// (`Menu::follow`).
     scroll: [usize; 4],
@@ -549,6 +551,7 @@ impl Default for Menu {
             umpire_mods: Vec::new(),
             court_mods: Vec::new(),
             umpire_pics: Vec::new(),
+            court_pics: Vec::new(),
             scroll: [0; 4],
             followed: [None; 4],
             newest: Vec::new(),
@@ -1491,6 +1494,8 @@ enum Tex {
     Glyph(legend::Style, u8),
     /// B400: umpire mod `k`'s picture (`umpire_mods::Pics`), in its pixels.
     Umpire(usize),
+    /// B401: court mod `k`'s picture (`court_mods::Pics`), in its pixels.
+    CourtMod(usize),
 }
 
 /// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
@@ -2578,17 +2583,25 @@ fn court_meters(d: &mut Draw, m: &Menu, [x0, y, w]: [f32; 3]) {
     }
 }
 
-/// B192: court `k`'s picture over `dst`, cropped (never stretched) to its shape: Random's "?" tile on a dark field.
-fn court_picture(d: &mut Draw, k: usize, [x, y, w, h]: [f32; 4]) {
+/// The part of a `[pw, ph]` picture that covers a `w`×`h` box, cut about its middle (never stretched).
+fn cover([pw, ph]: [f32; 2], [w, h]: [f32; 2]) -> [f32; 4] {
+    if w / h > pw / ph { let sh = pw * h / w; [0.0, (ph - sh) / 2.0, pw, sh] } else { let sw = ph * w / h; [(pw - sw) / 2.0, 0.0, sw, ph] }
+}
+
+/// B192: court value `c`'s picture over `dst`, cropped (never stretched) to its shape: a court mod's own (B401) else
+/// its layout court's, Random's "?" tile on a dark field.
+fn court_picture(d: &mut Draw, m: &Menu, c: usize, [x, y, w, h]: [f32; 4]) {
+    if let Some((i, size)) = m.court_pic(c) {
+        return d.q(Tex::CourtMod(i), cover(size, [w, h]), [x, y, w, h], WHITE, 128.0);
+    }
+    let k = m.court_layout(c);
     if k >= COURTS {
         d.q(Tex::Solid, [0.0; 4], [x, y, w, h], [30.0, 45.0, 28.0], 128.0);
         let t = (h * 0.3).min(w * 0.3);
         d.q(C02, RANDOM_TILE, [x + w / 2.0 - t * 0.68, y + h * 0.35 - t / 2.0, t * 1.35, t], [70.0; 3], 128.0);
         return;
     }
-    let (pw, ph) = (568.0, 256.0);
-    let src = if w / h > pw / ph { let sh = pw * h / w; [0.0, (ph - sh) / 2.0, pw, sh] } else { let sw = ph * w / h; [(pw - sw) / 2.0, 0.0, sw, ph] };
-    d.q(court_pic(k), src, [x, y, w, h], WHITE, 128.0);
+    d.q(court_pic(k), cover([568.0, 256.0], [w, h]), [x, y, w, h], WHITE, 128.0);
 }
 
 /// B192: Select Court as its own screen (ours): the hovered court's picture across the window under the title (cut
@@ -2606,7 +2619,7 @@ fn court_screen(d: &mut Draw, m: &Menu, text: &Text) {
         y += (h - w * 256.0 / 568.0) / 2.0;
         h = w * 256.0 / 568.0;
     }
-    court_picture(d, m.court_layout(m.court), [l - 24.0, y, w, h]);
+    court_picture(d, m, m.court, [l - 24.0, y, w, h]);
     let pic: Vec<Quad> = d.out.drain(at..).collect();
     d.out.splice(1..1, pic);
     let (name, sub) = match m.court {
@@ -2740,6 +2753,11 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
             _ if m.sel != 1 && v < UMPIRES => (CONFIRM, [8.0 + 88.0 * v as f32, 392.0, 80.0, 64.0]),
             // M8f3: a mod on a plain card, named below
             _ if m.sel != 1 && v > UMPIRES => (Tex::Solid, [0.0; 4]),
+            // B401: a mod with its own picture on it
+            _ if m.sel == 1 && m.court_pic(v).is_some() => {
+                let (i, size) = m.court_pic(v).unwrap();
+                (Tex::CourtMod(i), cover(size, [92.0, 68.0]))
+            }
             // M8f6: a mod on its layout court's tile, named below
             _ if m.sel == 1 && m.court_layout(v) < COURTS => {
                 let v = m.court_layout(v);
@@ -3036,7 +3054,7 @@ fn draw(
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
     images: Res<Assets<Image>>,
-    (buttons, umpire_pics): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>),
+    (buttons, umpire_pics, court_pics): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>),
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| controls::readable(g)).map(|(e, _, _)| e).collect();
@@ -3134,6 +3152,13 @@ fn draw(
                 }
             },
             Tex::Umpire(k) => match umpire_pics.as_ref().and_then(|p| p.handles.get(k).cloned().flatten()) {
+                Some(h) => h,
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
+            Tex::CourtMod(k) => match court_pics.as_ref().and_then(|p| p.handles.get(k).cloned().flatten()) {
                 Some(h) => h,
                 None => {
                     *vis = Visibility::Hidden;
@@ -3247,6 +3272,7 @@ pub fn plugin(app: &mut App) {
     legend::plugin(app);
     app.add_systems(Update, legend::fill.after(step));
     app.init_resource::<umpire_mods::Pics>().add_systems(Update, umpire_mods::load.before(draw));
+    app.init_resource::<court_mods::Pics>().add_systems(Update, court_mods::load.before(draw));
     app.add_systems(Update, trace::trace.after(online::poll).run_if(trace::on));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,
