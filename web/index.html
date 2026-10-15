@@ -28,8 +28,12 @@
      ("chin") until the phone is turned. 100dvh before the script runs. The canvas is pinned to the top left so a
      page scrolled by the browser can't shift it. */
   html, body { width: var(--app-w, 100%); height: 100%; height: var(--app-h, 100dvh); }
-  canvas { touch-action: none; display: block; position: fixed; left: 0; top: 0;
-    width: var(--app-w, 100vw) !important; height: var(--app-h, 100dvh) !important; }
+  /* B314: the canvas starts below the top safe area (the iPhone's Dynamic Island / status bar, which the home-screen
+     app blurs over): the game's view is that much shorter, so neither the far side's score nor a menu's top is drawn
+     under it. 0 everywhere else (landscape, desktop, Safari with its own bar). */
+  :root { --safe-top: env(safe-area-inset-top, 0px); }
+  canvas { touch-action: none; display: block; position: fixed; left: 0; top: var(--safe-top);
+    width: var(--app-w, 100vw) !important; height: calc(var(--app-h, 100dvh) - var(--safe-top)) !important; }
   button { font: inherit; }
   /* Join by Code on a touch screen: a tap anywhere but the controls opens the keyboard (typed_code) */
   #codekeys { position: fixed; inset: 0; z-index: 5; opacity: 0; font-size: 16px; border: 0; padding: 0; caret-color: transparent; }
@@ -413,7 +417,7 @@ async function start() {
   console.info(`hst: mods read from OPFS (${(modBytes / 1048576).toFixed(1)} MB) in ${Math.round(performance.now() - modsFrom)} ms`);
   // the Mods screen's picker (web.rs): over the Add mod row while it's up, or opened by a key or pad
   const pick = document.getElementById('modzip');
-  window.hstModPicker = r => { pick.hidden = !r; if (r) Object.assign(pick.style, { left: `${r[0]}%`, top: `${r[1]}%`, width: `${r[2]}%`, height: `${r[3]}%` }); };
+  window.hstModPicker = r => { pick.hidden = !r; if (r) Object.assign(pick.style, { left: `${r[0]}%`, top: `calc(var(--safe-top) + ${r[1] / 100} * (var(--app-h, 100dvh) - var(--safe-top)))`, width: `${r[2]}%`, height: `calc(${r[3] / 100} * (var(--app-h, 100dvh) - var(--safe-top)))` }); };
   window.hstModPick = () => pick.click();
   // B338: the OPFS writes and removals under way; Reload (web.rs reload) waits for them, a save cut short by the
   // reload is a folder without its mod.json, dropped at the next start (the mod "didn't come in")
