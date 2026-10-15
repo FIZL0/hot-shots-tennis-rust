@@ -117,6 +117,11 @@ pub(super) struct View {
     /// choosing one puts up the "use the desktop app" popup (its row while up).
     phone: bool,
     nophone: Option<usize>,
+    /// B445: My uploads' Remove all uploads warning popup while up (its cursor: 0 Remove all, 1 Cancel), and the
+    /// uploads still to take down after its Remove all, one at a time, with how many went and how many didn't of all.
+    wipe: Option<usize>,
+    wiping: VecDeque<Entry>,
+    wiped: (usize, usize, usize),
     /// B372: Browse's grid: its search, filters, sort, wish list and tile pictures.
     b: grid::Browse,
     /// B335: the installs since the queue was last empty: done, all (the status's "3/50").
@@ -137,6 +142,29 @@ struct By {
 }
 
 impl View {
+    /// B445: Remove all uploads' next take-down (`busy` while it's out), or, the last one back, what came of them all.
+    fn wipe_next(&mut self) {
+        let (done, failed, all) = self.wiped;
+        let token = modstore::account().map(|a| a.1);
+        match (self.wiping.pop_front(), token) {
+            (Some(e), Some(token)) => {
+                self.busy = true;
+                self.status = format!("Removing your uploads: {} ({}/{all})...", e.meta.name, done + failed + 1);
+                modstore::remove(&e, token);
+            }
+            (left, _) => {
+                let missed = failed + left.as_ref().map_or(0, |_| 1 + self.wiping.len());
+                self.wiping.clear();
+                self.wiped = (0, 0, 0);
+                self.status = match missed {
+                    0 => format!("Removed all {done} of your uploads from the store."),
+                    _ if left.is_some() => format!("Signed out: removed {done} of {all} uploads. Sign in again and Remove all uploads for the rest."),
+                    _ => format!("Removed {done} of {all} uploads; {missed} couldn't be: Refresh, then Remove all uploads again."),
+                };
+            }
+        }
+    }
+
     /// How many mods the store lists (the Browse tab's count).
     fn entries_len(&self) -> usize {
         self.store.as_ref().map_or(0, Vec::len)
@@ -290,7 +318,7 @@ impl View {
 
     /// Whether ←→ move from row `sel` (between pills side by side), for the legend.
     pub(super) fn sideways(&self, sel: usize) -> bool {
-        self.child.is_none() && self.nophone.is_none() && sel < self.acts() && self.acts() > 1
+        self.child.is_none() && self.nophone.is_none() && self.wipe.is_none() && sel < self.acts() && self.acts() > 1
     }
 
     /// The page's pills above its list (the first rows): Installed, Add mod and Reload; Browse, Refresh (an author's
@@ -543,6 +571,9 @@ impl Menu {
 
     /// B221/B202: what the pointer's row moves: the open child's button, else the list's row.
     pub(super) fn mods_cursor(&mut self) -> &mut usize {
+        if let Some(w) = &mut self.add.wipe {
+            return w;
+        }
         match (&mut self.add.child, &mut self.add.b.osk) {
             (Some(c), _) => &mut c.at,
             // B372: Browse's on-screen keyboard's key
@@ -560,6 +591,9 @@ impl Menu {
                 out.push(Sound(1));
             }
             return;
+        }
+        if self.add.wipe.is_some() {
+            return self.wipe_step(k, out);
         }
         let n = self.add.rows();
         // B373: a kind the store doesn't carry yet has no rows: only the tabs and ○ do anything there
@@ -873,6 +907,57 @@ impl Menu {
         }
     }
 
+    /// B445: Remove all uploads (a word in My uploads' heading): the warning popup, on Cancel, if there's any to remove.
+    fn wipe_ask(&mut self, out: &mut Vec<Effect>) {
+        use Effect::Sound;
+        let n = self.add.mine.as_ref().map_or(0, Vec::len);
+        if self.add.busy {
+            self.add.status = "Wait for the store to finish first.".into();
+            out.push(Sound(1));
+        } else if self.add.account.is_none() {
+            self.add.status = "Sign in with Upload (top right) to see your uploads.".into();
+            out.push(Sound(1));
+        } else if n == 0 {
+            self.add.status = "None of your mods are on the store.".into();
+            out.push(Sound(1));
+        } else {
+            self.add.wipe = Some(1);
+            out.push(Sound(0));
+        }
+    }
+
+    /// B445: one press while the warning is up (it takes them all): ↑↓←→ move between Remove all and Cancel, ✕
+    /// chooses, ○ is Cancel.
+    fn wipe_step(&mut self, k: Press, out: &mut Vec<Effect>) {
+        use Effect::Sound;
+        let Some(a) = self.add.wipe else { return };
+        if k.up || k.down || k.left || k.right {
+            self.add.wipe = Some(1 - a.min(1));
+            out.push(Sound(0));
+        } else if k.back || (k.ok && a != 0) {
+            self.add.wipe = None;
+            out.push(Sound(1));
+        } else if k.ok {
+            self.add.wipe = None;
+            self.wipe_all(out);
+        }
+    }
+
+    /// B445: takes every one of the player's uploads off the store (`modstore::remove` each, one after another as
+    /// each comes back): an open pull request is closed, a merged mod gets its delete asked for.
+    fn wipe_all(&mut self, out: &mut Vec<Effect>) {
+        let all: VecDeque<Entry> = self.add.mine.clone().unwrap_or_default().into();
+        if modstore::account().is_none() {
+            self.add.account = None;
+            self.add.status = "Signed out: sign in again on the Upload tab.".into();
+            return out.push(Effect::Sound(1));
+        }
+        self.add.wiped = (0, 0, all.len());
+        self.add.wiping = all;
+        self.add.wipe_next();
+        out.push(Effect::Sound(2));
+    }
+
     fn installed_step(&mut self, s: usize, out: &mut Vec<Effect>) {
         use Effect::Sound;
         if s == 0 && self.add.phone {
@@ -1004,7 +1089,7 @@ impl Menu {
 /// B205: mods changed since the start (the main menu's note on its Mods row) and the popup isn't up.
 /// B372: the legend on Browse (None: another page, or a child or popup up).
 pub(super) fn browse_legend(m: &Menu) -> Option<Vec<(super::legend::Act, &'static str)>> {
-    (m.add.grid() && !m.add.empty_kind() && m.add.child.is_none() && m.add.nophone.is_none()).then(|| grid::legend(m))
+    (m.add.grid() && !m.add.empty_kind() && m.add.child.is_none() && m.add.nophone.is_none() && m.add.wipe.is_none()).then(|| grid::legend(m))
 }
 
 pub(super) fn reload_due(m: &Menu) -> bool {
@@ -1285,6 +1370,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         if let Some(r) = v.nophone {
             nophone(d, if r == 0 { "Add mod" } else { "Upload my mod" });
         }
+        if let Some(a) = v.wipe {
+            wipe_popup(d, v, a, hand_x);
+        }
         return;
     }
     // B383: the header (the kinds, Upload, the downloads), then Upload's list or a kind still to come
@@ -1538,6 +1626,49 @@ fn facts(source: &str, hand: Option<f32>, costumes: Option<usize>, like: Option<
     l
 }
 
+/// B445: Remove all uploads' warning over a dimmed page, in B205's popup style: what goes, that it can't be undone,
+/// and Remove all / Cancel pills (Cancel chosen first), the hand beside the chosen one; a tap off it is ○ (Cancel).
+fn wipe_popup(d: &mut Draw, v: &View, a: usize, hand_x: f32) {
+    use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
+    use super::pointer::{Act, OK, press};
+    if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
+        d.out.remove(i);
+    }
+    d.popup(Some(press(|k| k.back = true)));
+    d.anchor = super::Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
+    d.anchor = super::Anchor::Centre;
+    let mine = v.mine.as_deref().unwrap_or_default();
+    let n = mine.len();
+    let b = [130.0, ASK_TOP - 104.0, 380.0, 104.0 + 72.0 + 16.0];
+    d.box3(b, 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
+    d.hit(b, Act::Press(Press::default()));
+    let plural = if n == 1 { "" } else { "s" };
+    d.outlined(|d| d.label("Warning", 320.0, ASK_TOP - 92.0, 22.0, 348.0, GOLD));
+    d.outlined(|d| d.label(&format!("Remove all {n} of your upload{plural}?"), 320.0, ASK_TOP - 66.0, 20.0, 348.0, WHITE));
+    // a merged one isn't the uploader's to close: its delete is asked for (`modstore::remove`)
+    let merged = mine.iter().filter(|e| e.verified).count();
+    let gone = match merged {
+        0 => "They leave the store for everyone.".to_string(),
+        m => format!("They leave the store ({m} merged: once a maintainer agrees)."),
+    };
+    d.outlined(|d| d.label(&gone, 320.0, ASK_TOP - 42.0, 16.0, 348.0, WHITE));
+    d.outlined(|d| d.label("This can't be undone.", 320.0, ASK_TOP - 22.0, 16.0, 348.0, WHITE));
+    for (k, word) in ["Remove all", "Cancel"].into_iter().enumerate() {
+        let y = ASK_TOP + 40.0 * k as f32;
+        let on = k == a;
+        let fill = match (on, k) {
+            (true, 0) => [150.0, 40.0, 36.0],
+            (true, _) => CHOSEN,
+            _ => UNCHOSEN,
+        };
+        d.pill_at([176.0, y, 288.0, 32.0], [INK, WHITE, fill], 128.0);
+        d.hit([176.0, y, 288.0, 32.0], Act::Row(k, OK));
+        d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
+    }
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0 + hand_x, ASK_TOP + 40.0 * a as f32, 64.0, 32.0], WHITE, 128.0);
+}
+
 /// B208: the phone popup over a dimmed page, in B205's popup style: the row's name, why, and an OK pill; a tap
 /// anywhere closes it.
 fn nophone(d: &mut Draw, row: &str) {
@@ -1563,7 +1694,7 @@ fn nophone(d: &mut Draw, row: &str) {
 }
 
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
-/// shown, someone's folded; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open) / `uploadmods` (Upload, Upload
+/// shown, someone's folded; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open; `HST_CHILD=wipe`: B445's Remove all uploads warning) / `uploadmods` (Upload, Upload
 /// all open, the first mods tagged with each upload state; `HST_CHILD=0`: none open, the first mod hovered) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
 /// mod's Remove open; B383: the Installed grid) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
@@ -1634,6 +1765,12 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
             m.sel = v.browse_acts() + 1;
             v.child = Some(Child::new(m.sel, &["Take down"]));
             v.status = format!("Take {} off the store (closes its pull request)?", v.hovered(m.sel).map_or("", |e| &e.meta.name));
+            // B445: `HST_CHILD=wipe`: Remove all uploads' warning up instead (Cancel chosen)
+            if std::env::var("HST_CHILD").is_ok_and(|c| c == "wipe") {
+                v.child = None;
+                v.wipe = Some(1);
+                m.sel = 2 + v.words().iter().position(|w| *w == "Remove all uploads").unwrap_or(0);
+            }
         }
     } else if screen == "reloadmods" {
         (v.changed, v.ask) = (true, Some(0));
@@ -1831,7 +1968,13 @@ fn page(
                     v.mine.get_or_insert_default().retain(|e| e.meta.id != id);
                     v.store = None;
                 }
+                let ok = r.is_ok();
                 v.status = r.unwrap_or_else(|e| format!("Not removed: {e}"));
+                // B445: Remove all uploads goes on to the next
+                if v.wiped.2 > 0 {
+                    if ok { v.wiped.0 += 1 } else { v.wiped.1 += 1 }
+                    v.wipe_next();
+                }
             }
             Event::Upload(dir, u) => {
                 match &u {
@@ -2528,7 +2671,7 @@ mod tests {
         m.add.account = Some("me".into());
         let t0 = m.add.browse_acts();
         assert_eq!((m.add.page, m.add.b.show, m.sel, m.add.rows(), m.add.busy), (Page::Mine, grid::Show::Mine, 0, t0 + 2, false));
-        assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Refresh"]);
+        assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Refresh", "Remove all uploads"]);
         m.sel = t0;
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.as_ref().is_some_and(|c| c.row == t0 && c.opts[0] == "Take down") && m.add.status.contains("closes its pull request"));
@@ -2540,6 +2683,58 @@ mod tests {
         assert_eq!(m.add.hovered(m.sel).map(|x| x.meta.id.as_str()), Some("b"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
+    }
+
+    /// B445: Remove all uploads (a word in My uploads' heading) puts up the warning on Cancel: it takes every press, ○
+    /// and Cancel close it with nothing removed, ↓ then ✕ on Remove all starts the take-downs (here signed out:
+    /// nothing goes, it says so); none to remove or signed out, it says why instead of asking.
+    #[test]
+    fn remove_all_uploads_asks_first() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        let mut out = Vec::new();
+        let e = |id: &str, rev: &str| Entry { meta: Meta { id: id.into(), name: id.into(), ..Default::default() }, rev: rev.into(), verified: rev == "main" };
+        m.add.mine = Some(vec![e("a", "refs/pr/4"), e("b", "main")]);
+        m.add.store = Some(Vec::new());
+        m.mods_show(grid::Show::Mine, &mut out);
+        // signed out: no popup
+        m.sel = word(&m, "Remove all uploads");
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.wipe.is_none() && m.add.status.starts_with("Sign in"), "{}", m.add.status);
+        m.add.account = Some("me".into());
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.wipe, m.add.child.is_none(), browse_legend(&m).is_none()), (Some(1), true, true));
+        // the popup takes the moves and the kind tabs; ✕ on Cancel closes it
+        let at = m.sel;
+        m.mods_step(Press { kind_next: true, ..default() }, &mut out);
+        m.mods_step(Press { right: true, ..default() }, &mut out);
+        assert_eq!((m.add.wipe, m.sel, m.add.kind), (Some(0), at, Kind::Character));
+        m.mods_step(Press { up: true, ..default() }, &mut out);
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.wipe, m.add.busy, m.add.mine.as_ref().map(Vec::len)), (None, false, Some(2)));
+        // ○ closes it too
+        m.mods_step(ok(), &mut out);
+        *m.mods_cursor() = 0;
+        assert_eq!(m.add.wipe, Some(0));
+        m.mods_step(Press { back: true, ..default() }, &mut out);
+        assert_eq!((m.add.wipe, m.screen), (None, Screen::Mods));
+        // Remove all with no token kept: nothing taken down, signed out (never pressed with a real token kept here:
+        // that would take this machine's account's uploads down)
+        if modstore::account().is_none() {
+            m.mods_step(ok(), &mut out);
+            m.mods_step(Press { down: true, ..default() }, &mut out);
+            m.mods_step(ok(), &mut out);
+            assert_eq!((m.add.wipe, m.add.busy, m.add.account.as_deref()), (None, false, None));
+            assert!(m.add.status.starts_with("Signed out"), "{}", m.add.status);
+        }
+        // the last one back says what came of them all
+        (m.add.wiping, m.add.wiped) = (VecDeque::new(), (1, 1, 2));
+        m.add.wipe_next();
+        assert_eq!((m.add.wiped, m.add.status.as_str()), ((0, 0, 0), "Removed 1 of 2 uploads; 1 couldn't be: Refresh, then Remove all uploads again."));
+        // none on the store: no popup
+        m.add.account = Some("me".into());
+        m.add.mine = Some(Vec::new());
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.wipe.is_none() && m.add.status.starts_with("None of your mods"), "{}", m.add.status);
     }
 
     /// B255/B372: △ on a tile lists only that uploader's mods with Download all, which queues each one not installed at
