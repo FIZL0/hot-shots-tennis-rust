@@ -178,10 +178,10 @@ pub fn plugin(app: &mut App) {
         // P46: the render app's schedules: those there now, the rest (added by later plugins) at the first extract
         r.add_systems(bevy::render::ExtractSchedule, |w: &mut World, mut done: Local<bool>| {
             if !std::mem::replace(&mut *done, true) {
-                one_thread(&mut w.resource_mut::<Schedules>());
+                render_one_thread(&mut w.resource_mut::<Schedules>());
             }
         });
-        one_thread(&mut r.world_mut().resource_mut::<Schedules>());
+        render_one_thread(&mut r.world_mut().resource_mut::<Schedules>());
         r.insert_resource(settle.clone()).add_systems(bevy::render::Render, unsettled.in_set(bevy::render::RenderSystems::Cleanup));
         r.add_systems(bevy::render::Render, compile_budget.in_set(bevy::render::RenderSystems::Prepare));
         r.insert_resource(compiling.clone()).add_systems(
@@ -237,6 +237,17 @@ pub(crate) fn one_thread(schedules: &mut Schedules) {
     }
     for (_, s) in schedules.iter_mut() {
         s.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+    }
+}
+
+/// `one_thread` for the render app. On Apple targets `Render` stays multi-threaded: only that executor hands its
+/// main-thread systems (`create_surfaces`: a UIView/NSView may only be touched there) to the main thread; the single-
+/// threaded one ran it on the render thread and iOS panicked on the first surface (black screen, build 2384).
+fn render_one_thread(schedules: &mut Schedules) {
+    one_thread(schedules);
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if let Some(s) = schedules.get_mut(bevy::render::Render) {
+        s.set_executor(bevy::ecs::schedule::MultiThreadedExecutor::new());
     }
 }
 
@@ -636,7 +647,10 @@ fn teardown(world: &mut World) {
     let doomed: Vec<Entity> = world
         .iter_entities()
         .filter(|e| !base.entities.contains(&e.id()) && e.get::<ChildOf>().is_none_or(|p| base.entities.contains(&p.parent())))
-        .filter(|e| !(e.contains::<Loading>() || e.contains::<IsResource>() || e.contains::<Window>() || e.contains::<Monitor>() || e.contains::<Gamepad>() || e.contains::<Observer>()))
+        .filter(|e| !(e.contains::<Loading>() || e.contains::<IsResource>() || e.contains::<Window>() || e.contains::<Monitor>() || e.contains::<Gamepad>() || e.contains::<Observer>()
+            // a capture still in flight (iOS can take longer than `leave` waits): Bevy inserts `Captured` on it when it
+            // lands and despawns it after; despawned here first, that insert panicked
+            || e.contains::<bevy::render::view::screenshot::Screenshot>()))
         .map(|e| e.id())
         .collect();
     for e in doomed {

@@ -78,12 +78,14 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 #[derive(Component)]
 pub struct Scene;
 
-/// Every 3D camera drawing to the window draws into the scene image instead, HDR so nothing re-encodes its values.
+/// Every 3D camera drawing to the window draws into the scene image instead. No `Hdr` (P34): the main texture is then
+/// the scene image's `Rgba8Unorm`, half `Rgba16Float`'s colour bandwidth, and the upscale copies the encoded values
+/// across unconverted; an LDR view would dither in Bevy's PBR shader, so that's off.
 fn retarget(mut commands: Commands, t: Res<Targets>, mut q: Query<(Entity, &mut RenderTarget), Added<Camera3d>>) {
     for (e, mut target) in &mut q {
         if matches!(*target, RenderTarget::Window(_)) {
             *target = RenderTarget::Image(ImageRenderTarget { handle: t.scene.clone(), scale_factor: 1.0 });
-            commands.entity(e).try_insert((Scene, bevy::camera::Hdr));
+            commands.entity(e).try_insert((Scene, bevy::core_pipeline::tonemapping::DebandDither::Disabled));
         }
     }
 }

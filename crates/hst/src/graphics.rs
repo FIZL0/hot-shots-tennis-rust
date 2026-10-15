@@ -245,22 +245,6 @@ pub fn plugin(app: &mut App) {
     if std::env::var("HST_INDIRECT").map_or(true, |v| v == "0") {
         app.add_systems(PostUpdate, direct_draws);
     }
-    // `HST_MAIN8=1` (P34): an 8-bit main texture for the 3D cameras; on by default on iOS (tile GPU), `HST_MAIN8=0` off
-    if std::env::var("HST_MAIN8").map_or(cfg!(target_os = "ios"), |v| v != "0") {
-        app.add_systems(PostUpdate, main8);
-    }
-}
-
-/// `HST_MAIN8=1` (P34): the scene cameras draw into an `Rgba8Unorm` main texture instead of `Hdr`'s `Rgba16Float`,
-/// half the colour bandwidth (most of it on a tile GPU with MSAA). Without `Hdr` Bevy gives the main texture the
-/// scene image's format, `Rgba8Unorm`, and the upscale copies it unconverted, so the
-/// encoded values land in the scene image as before; `CompositingSpace::Srgb` would decode them on that copy. An LDR
-/// view dithers Bevy's PBR in its shader, which `Hdr`'s tonemapping pass skips with `Tonemapping::None`: dither off.
-/// Blends then round to 8 bits after each draw, as the GS's do.
-fn main8(mut commands: Commands, q: Query<Entity, (With<crate::hud_gamma::Scene>, With<bevy::camera::Hdr>)>) {
-    for e in &q {
-        commands.entity(e).remove::<bevy::camera::Hdr>().insert(bevy::core_pipeline::tonemapping::DebandDither::Disabled);
-    }
 }
 
 /// P48: the 3D cameras draw directly instead of through Bevy's GPU-built indirect draws. Indirect drawing groups a
