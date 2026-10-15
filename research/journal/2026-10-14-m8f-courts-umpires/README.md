@@ -32,3 +32,6 @@ One README per task; iterations below, newest last.
 - `6-STORE-FINAL.md` — M8f9 done: court and umpire mods upload, list (Courts / Umpires tabs) and install with
   `kind` in `meta.json` (`mods::read_any`); umpire heads on the Mods pages (B400). The parent still waits on M8f7
   (NPCs), M8f8 and M8f10.
+- `7-GOLF-VENUES-SURVEY-FINAL.md` — M8f10 done (survey): Fore!/Open Tee 2/Out of Bounds height maps and placements
+  decoded, court spots per hole (HST-MODS `tools/venues/`, `notes/venues.md`); no umpires in any; Open Tee 2
+  Nakagawa h07 has real tennis courts. Exports → M8f10a1 (Nakagawa), M8f10a2 (Fore!), M8f10a3 (Out of Bounds).

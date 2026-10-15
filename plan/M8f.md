@@ -35,3 +35,5 @@ Sub-tasks, in order:
 - [ ] **M8f9** Store: court and umpire mods upload, browse (B373's Courts/Umpires tabs) and install with their
   kind in the store metadata; installed ones show in the court/umpire select; the parent's done-when shot.
 - [ ] **M8f10** Fore! / Open Tee 2 / Out of Bounds venues that can host a tennis court, and any umpires, as mods.
+  Survey done (../HST-MODS `tools/venues/`, `notes/venues.md`): no umpires in any of the three; Open Tee 2
+  Nakagawa h07 has real courts. Exports: M8f10a1 (Nakagawa), M8f10a2 (Fore!), M8f10a3 (Out of Bounds).
