@@ -62,6 +62,7 @@ raw-window-handle = "0.6"
 
 # M99: the Android start page's file picker and restart (`android.rs` → `android/…/HstActivity.java`)
 # M101: the input device list for gamepad hot-plug (`android_pad.rs`; the version android-activity already builds)
+# M102: the window's safe area and the on-screen pad's haptic tick through JNI (`android.rs`; android-activity's own jni)
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 
