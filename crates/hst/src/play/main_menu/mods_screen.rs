@@ -277,7 +277,7 @@ impl View {
         let e = self.doing.remove(i);
         self.batch.0 += 1;
         let job = match r {
-            Ok(_) => ("Installed", format!("Installed {}. Restart the game to play it.", e.meta.name)),
+            Ok(_) => ("Installed", format!("Installed {}. Reload to play it.", e.meta.name)),
             Err(err) => ("Error", format!("{} not installed: {err}", e.meta.name)),
         };
         self.jobs.insert(e.key(), job);
@@ -460,7 +460,7 @@ impl Menu {
             self.add.account = modstore::account().map(|a| a.0);
         }
         if p == Page::Mine && self.add.account.is_none() {
-            self.add.status = "Sign in with Upload (top right) to see your uploads.".into();
+            self.add.status = "Sign in to see your uploads: Upload (top right), then Sign in.".into();
         }
         if p == Page::Mine && self.add.mine.is_none() && !self.add.busy {
             self.read_mine();
@@ -656,16 +656,16 @@ impl Menu {
                         modstore::sign_out();
                         v.account = None;
                         v.mine = None;
-                        "Signed out: the token is forgotten.".into()
+                        "Signed out. The game no longer keeps your token.".into()
                     }
                     (None, 0) => {
                         modstore::open(modstore::TOKENS);
                         // the child stays, on Paste token
                         v.child = Some(Child { at: 1, ..c });
                         if cfg!(target_arch = "wasm32") {
-                            "On the page that opened, make a token (Write), copy it, paste it here (Ctrl+V), then Paste token.".into()
+                            "On the Hugging Face page that opened, create a token with Write access and copy it. Press Ctrl+V here, then choose Paste token.".into()
                         } else {
-                            "On the page that opened, make a token (Write) and copy it, then Paste token.".into()
+                            "On the Hugging Face page that opened, create a token with Write access and copy it. Then choose Paste token.".into()
                         }
                     }
                     (None, _) => {
@@ -684,7 +684,7 @@ impl Menu {
                     }
                     None => {
                         self.add.account = None;
-                        self.add.status = "Signed out: sign in again (Sign in, top left).".into();
+                        self.add.status = "You've been signed out: choose Sign in, then upload again.".into();
                         out.push(Sound(1));
                     }
                 }
@@ -700,7 +700,7 @@ impl Menu {
                     }
                     None => {
                         self.add.account = None;
-                        self.add.status = "Signed out: sign in again on the Upload tab.".into();
+                        self.add.status = "You've been signed out: sign in again under Upload (top right).".into();
                         out.push(Sound(1));
                     }
                 }
@@ -792,11 +792,11 @@ impl Menu {
             Page::Browse => {}
             Page::Upload => {
                 if self.add.busy {
-                    self.add.status = "Wait for the last one to finish.".into();
+                    self.add.status = "Wait for the current upload to finish.".into();
                 } else if s == 0 {
                     self.account_step(out);
                 } else if self.add.account.is_none() {
-                    self.add.status = "Sign in first: Sign in, top left.".into();
+                    self.add.status = "Uploading needs a Hugging Face account: choose Sign in first.".into();
                     out.push(Sound(1));
                 } else if s == 1 && self.add.locals().is_empty() {
                     self.add.status = "No mods installed to upload.".into();
@@ -824,8 +824,8 @@ impl Menu {
         let mods: Vec<Mod> = mods.into_iter().filter(|m| !matches!(v.ups.get(&m.dir), Some(Up::Queued | Up::Uploading))).collect();
         v.status = match mods.len() {
             0 => "Those are uploading already.".into(),
-            1 => format!("Checking, packing and uploading {} (in the background)...", mods[0].name),
-            n => format!("Uploading {n} mods one after another in the background: the menu stays yours."),
+            1 => format!("Uploading {} in the background...", mods[0].name),
+            n => format!("Uploading {n} mods one at a time in the background. You can keep using the menu."),
         };
         let ups = mods
             .into_iter()
@@ -844,10 +844,10 @@ impl Menu {
     /// The account row: signed out, Open token page / Paste token; signed in, Sign out.
     fn account_step(&mut self, out: &mut Vec<Effect>) {
         match self.add.account.clone() {
-            Some(name) => self.open_child(&["Sign out"], format!("Signed in as {name}. Sign out (the game forgets the token)?"), out),
+            Some(name) => self.open_child(&["Sign out"], format!("Signed in to Hugging Face as {name}. Sign out? The game will forget your token."), out),
             None => self.open_child(
                 &["Open token page", "Paste token"],
-                "Open token page, make a token (Write) there and copy it, then Paste token.".into(),
+                "Uploading needs a free Hugging Face token. Open token page, create one with Write access and copy it, then choose Paste token.".into(),
                 out,
             ),
         }
@@ -859,16 +859,16 @@ impl Menu {
         if self.add.busy {
             self.add.status = "Wait for the store to finish first.".into();
         } else if s == 0 && self.add.account.is_none() {
-            self.add.status = "Sign in with Upload (top right) to see your uploads.".into();
+            self.add.status = "Sign in to see your uploads: Upload (top right), then Sign in.".into();
             out.push(Sound(1));
         } else if s == 0 {
             self.read_mine();
             out.push(Sound(2));
         } else if let Some(e) = self.add.hovered(s).cloned() {
             if e.verified {
-                self.open_child(&["Ask to delete"], format!("Ask for {} to be deleted from the store (a maintainer merges it)?", e.meta.name), out);
+                self.open_child(&["Ask to delete"], format!("{} is part of the store now. Ask a maintainer to delete it?", e.meta.name), out);
             } else {
-                self.open_child(&["Take down"], format!("Take {} off the store (closes its pull request)?", e.meta.name), out);
+                self.open_child(&["Take down"], format!("Take {} off the store? This closes its pull request.", e.meta.name), out);
             }
         }
     }
@@ -887,7 +887,7 @@ impl Menu {
             if !std::mem::replace(&mut self.add.busy, true) {
                 modstore::pick(root());
             }
-            self.add.status = "Pick a mod .zip (a character, court or umpire from the mods repo).".into();
+            self.add.status = "Choose a mod .zip file: a character, court or umpire.".into();
             out.push(Sound(2));
         } else if s == 1 {
             if let Err(e) = reload(out) {
@@ -899,14 +899,14 @@ impl Menu {
                 self.add.status = "No mods the game installed to remove.".into();
                 out.push(Sound(1));
             } else {
-                self.open_child(&["Remove all"], format!("Remove all {n} mods the game installed (Reload then takes them out of the select)?"), out);
+                self.open_child(&["Remove all"], format!("Remove all {n} mods the game installed? Mods you added by hand stay. Reload afterwards to update the select screens."), out);
             }
         } else {
             // B383: an installed mod's tile
             let Some(m) = self.add.local(s) else { return };
             let (name, dir) = (m.name.clone(), m.dir.clone());
             if ours(m) {
-                self.open_child(&["Remove"], format!("Remove {name} (Reload then takes it out of the select)?"), out);
+                self.open_child(&["Remove"], format!("Remove {name}? Reload afterwards to take it off the select screens."), out);
             } else {
                 self.add.status = format!("{name} was added by hand: delete {} to remove it.", dir.display());
                 out.push(Sound(1));
@@ -919,7 +919,7 @@ impl Menu {
         self.add.locals().iter().filter(|m| ours(m)).for_each(delete);
         self.add.refresh();
         self.add.changed();
-        self.add.status = "Removed every mod the game installed. Reload to take them out of the select.".into();
+        self.add.status = "Removed every mod the game installed. Reload to take them off the select screens.".into();
         out.push(Effect::Sound(1));
     }
 
@@ -929,7 +929,7 @@ impl Menu {
         delete(&self.add.locals()[i]);
         self.add.refresh();
         self.add.changed();
-        self.add.status = format!("Removed {name}. Reload to take it out of the select.");
+        self.add.status = format!("Removed {name}. Reload to take it off the select screens.");
         out.push(Effect::Sound(1));
     }
 }
@@ -1100,7 +1100,7 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
     }
     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0 + hand_x, ASK_TOP + 40.0 * a as f32, 64.0, 32.0], WHITE, 128.0);
-    d.said = "Mods aren't loaded while the game runs: Reload restarts it with them; Later keeps playing as it is.".into();
+    d.said = "Mod changes take effect after a restart. Reload restarts the game now; Later carries on without them.".into();
 }
 
 /// The list box and the side panel on the view `g` fits, from under the title band down to the legend strip: the
@@ -1217,7 +1217,7 @@ fn card_of(m: &Menu, r: usize) -> Option<Card> {
         }
         let chips = match v.ups.get(&md.dir).filter(|_| v.page == Page::Upload) {
             Some(u) => vec![up_tag(u)],
-            None => modstore::stamp(&md.dir).map(|_| vec![("Store", GREY)]).unwrap_or_default(),
+            None => modstore::stamp(&md.dir).map(|_| vec![("From store", GREY)]).unwrap_or_default(),
         };
         return Some(Card { face: face_of(m, &md.dir), name: md.name.clone(), sub, chips, style });
     }
@@ -1328,7 +1328,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             Page::Installed | Page::Upload => "No mods installed yet: install one from the store first.",
             Page::Browse if v.busy => "Reading the mod store...",
             Page::Browse => "Nobody has shared a mod yet.",
-            Page::Mine if v.account.is_none() => "Sign in with Upload (top right) to see your uploads.",
+            Page::Mine if v.account.is_none() => "Sign in to see your uploads: Upload (top right), then Sign in.",
             Page::Mine if v.busy => "Reading your uploads...",
             Page::Mine => "None of your mods are on the store.",
         };
@@ -1364,9 +1364,9 @@ fn info(m: &Menu) -> String {
         (Page::Browse | Page::Installed | Page::Mine, _) => grid::info(m),
         (Page::Upload, 0) => match &v.account {
             Some(name) => format!("Signed in to Hugging Face as {name}."),
-            None => "Sign in to Hugging Face with a token, once: the game then uploads by itself.".into(),
+            None => "Sign in to Hugging Face once with a token. After that, the game uploads for you.".into(),
         },
-        (Page::Upload, 1) => "Upload every installed mod, in the background (ones already on the store as they are are skipped).".into(),
+        (Page::Upload, 1) => "Upload every installed mod in the background. Mods already on the store, unchanged, are skipped.".into(),
         (Page::Upload, _) => RULE.into(),
     }
 }
@@ -1516,7 +1516,7 @@ fn up_tag(u: &Up) -> (&'static str, [f32; 3]) {
         Up::Uploading => ("Uploading", GREY),
         Up::Done(_) => ("Uploaded", GREEN),
         Up::Skipped(_) => ("Skipped", GREY),
-        Up::Failed(_) => ("Error", RED),
+        Up::Failed(_) => ("Failed", RED),
     }
 }
 
@@ -1633,7 +1633,7 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
             (v.page, v.mine, v.account, v.b.show, v.b.offline) = (Page::Mine, v.store.take(), Some("FIZL0".into()), grid::Show::Mine, true);
             m.sel = v.browse_acts() + 1;
             v.child = Some(Child::new(m.sel, &["Take down"]));
-            v.status = format!("Take {} off the store (closes its pull request)?", v.hovered(m.sel).map_or("", |e| &e.meta.name));
+            v.status = format!("Take {} off the store? This closes its pull request.", v.hovered(m.sel).map_or("", |e| &e.meta.name));
         }
     } else if screen == "reloadmods" {
         (v.changed, v.ask) = (true, Some(0));
@@ -1659,7 +1659,7 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
     } else if screen == "signinmods" {
         v.page = Page::Upload;
         v.child = Some(Child::new(0, &["Open token page", "Paste token"]));
-        v.status = "Open token page, make a token (Write) there and copy it, then Paste token.".into();
+        v.status = "Uploading needs a free Hugging Face token. Open token page, create one with Write access and copy it, then choose Paste token.".into();
         m.sel = 0;
     } else if screen == "addmods" {
         // B383: the Installed grid (Show → Installed), the first mod chosen; `HST_CHILD=1`: its Remove open
@@ -1668,7 +1668,7 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         m.sel = v.browse_acts();
         if std::env::var("HST_CHILD").is_ok() && v.hovered(m.sel).is_some() {
             v.child = Some(Child::new(m.sel, &["Remove"]));
-            v.status = format!("Remove {} (Reload then takes it out of the select)?", v.hovered(m.sel).map_or("", |e| &e.meta.name));
+            v.status = format!("Remove {}? Reload afterwards to take it off the select screens.", v.hovered(m.sel).map_or("", |e| &e.meta.name));
         }
     } else if screen.starts_with("phonemods") {
         v.phone = true;
@@ -1753,7 +1753,7 @@ fn page(
                 let mut c = Child::new(0, &["Open token page", "Paste token"]);
                 c.at = 1;
                 menu.add.child = Some(c);
-                menu.add.status = "No token (hf_...) was copied: copy it, then Paste token.".into();
+                menu.add.status = "No token on the clipboard (tokens start with hf_). Copy yours, then choose Paste token again.".into();
             }
         }
     }
@@ -1799,7 +1799,7 @@ fn page(
                 v.status = match r {
                     // the browser's page says when it's saved
                     Ok(_) if cfg!(target_arch = "wasm32") => v.status.clone(),
-                    Ok(name) => format!("{}Installed {name}. Restart the game to play it.", v.count()),
+                    Ok(name) => format!("{}Installed {name}. Reload to play it.", v.count()),
                     Err(e) => format!("{}Not installed: {e}", v.count()),
                 };
                 v.busy = !v.doing.is_empty();
@@ -2365,7 +2365,7 @@ mod tests {
         m.add.account = None;
         m.sel = UP_TOP;
         m.mods_step(ok(), &mut out);
-        assert!(m.add.status.starts_with("Sign in first") && m.add.child.is_none());
+        assert!(m.add.status.starts_with("Uploading needs a Hugging Face account") && m.add.child.is_none());
         m.add.account = Some("me".into());
         m.mods_step(ok(), &mut out);
         assert!(m.add.status.starts_with(RULE) && m.add.status.ends_with("Upload A?") && !m.add.busy);

@@ -612,7 +612,7 @@ impl Menu {
                     if self.add.busy && self.add.doing.is_empty() {
                         self.add.status = "Wait for the store to finish first.".into();
                     } else if self.add.state(&e) == Some("Installed") && !self.add.jobs.contains_key(&e.key()) {
-                        self.open_child(&["Remove"], format!("{} is installed: remove it (Reload then takes it out of the select)?", e.meta.name), out);
+                        self.open_child(&["Remove"], format!("Remove {}? Reload afterwards to take it off the select screens.", e.meta.name), out);
                     } else if self.add.state(&e) == Some("Installed") {
                         self.add.status = format!("{} is installed already.", e.meta.name);
                     } else {
@@ -1053,12 +1053,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     if tiles.is_empty() {
         let none = if v.page == Page::Mine && v.account.is_none() {
-            "Sign in with Upload (top right) to see your uploads."
+            "Sign in to see your uploads: Upload (top right), then Sign in."
         } else if v.busy && (v.store.is_none() || v.page == Page::Mine) {
             if v.page == Page::Mine { "Reading your uploads..." } else { "Reading the mod store..." }
         } else if v.entries().is_empty() {
             match v.page {
-                Page::Installed => "No mods installed yet: Add mod, or install one from Everything.",
+                Page::Installed => "No mods installed yet. Install one from Everything, or use Add mod.",
                 Page::Mine => "None of your mods are on the store.",
                 _ => "Nobody has shared a mod yet.",
             }
@@ -1077,7 +1077,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     // the footer's line (the legend's on the right)
     let fw = (m.grid.strip[2] * 0.42).min(380.0);
-    d.outlined(|d| super::super::left(d, &format!("{} - pictures load by themselves, cached for next time", super::mods_kind::online(v.kind)), m.grid.strip[0], l.foot, 9.0, fw, WHITE));
+    d.outlined(|d| super::super::left(d, super::mods_kind::online(v.kind), m.grid.strip[0], l.foot, 9.0, fw, WHITE));
     detail(d, m, l.detail, hand_x);
     if let Some(r) = cursor.filter(|_| v.child.is_none() && v.b.osk.is_none()) {
         hand(d, r);
@@ -1236,35 +1236,35 @@ fn blurb(e: &Entry) -> String {
 pub(super) fn info(m: &Menu) -> String {
     let v = &m.add;
     match v.slot(m.sel) {
-        Slot::Search => "Search the mods' names, uploaders and games: X, then type (a pad: the keyboard on screen).".into(),
+        Slot::Search => "Search by name, uploader or game: press X, then type (on a pad, a keyboard opens on screen).".into(),
         Slot::Upload if v.phone => "Not available in the browser on phones: use the desktop app.".into(),
         Slot::Upload => "Share your installed mods on the store: sign in to Hugging Face once, then upload.".into(),
         Slot::Word(i) => match v.words()[i] {
             "Newest" => "The newest uploads first.".into(),
             "A-Z" => "By name.".into(),
-            "Uploader" => "By who shared them, each tile saying who.".into(),
+            "Uploader" => "Grouped by who shared them.".into(),
             "Refresh" if v.page == Page::Mine => "Read your uploads from the store again.".into(),
             "Refresh" => "Read the store's list again.".into(),
             "Add mod" if v.phone => "Not available in the browser on phones: use the desktop app.".into(),
-            "Add mod" => "Install a mod .zip from this computer (a character, court or umpire from the mods repo).".into(),
+            "Add mod" => "Install a mod from a .zip file on this computer: a character, court or umpire.".into(),
             "Remove all" => "Remove every mod the game installed (ones added by hand stay).".into(),
-            "Reload" => "Restart the game with the mods as they are now: new ones join the select, removed ones leave it.".into(),
+            "Reload" => "Restart the game so your mod changes take effect: new mods join the select screens, removed ones leave.".into(),
             "Download all" => format!("Install every mod by {} you don't have yet.", v.by.as_ref().map_or("", |b| super::who(&b.author))),
             _ => "Back to every mod in the store.".into(),
         },
         Slot::Rail(i) => match v.rail().get(i) {
-            Some(Opt::Show(Show::Installed)) => format!("The mods on this machine ({}): remove them, add one from a .zip.", v.count_of(&Opt::Show(Show::Installed))),
-            Some(Opt::Show(Show::Mine)) if v.account.is_none() => "The mods you shared on the store (sign in with Upload first).".into(),
-            Some(Opt::Show(Show::Mine)) => "The mods you shared on the store: take one down.".into(),
+            Some(Opt::Show(Show::Installed)) => format!("The mods on this device ({}): remove them, or add one from a .zip.", v.count_of(&Opt::Show(Show::Installed))),
+            Some(Opt::Show(Show::Mine)) if v.account.is_none() => "The mods you've shared on the store. Sign in under Upload (top right) to see them.".into(),
+            Some(Opt::Show(Show::Mine)) => "The mods you've shared on the store: press one to take it down.".into(),
             Some(o) => format!("Show {} ({} mods).", o.label().to_lowercase(), v.count_of(o)),
             None => String::new(),
         },
         Slot::Tile(_) => match v.hovered(m.sel) {
             Some(e) if v.jobs.contains_key(&e.key()) => v.jobs[&e.key()].1.clone(),
-            Some(e) if v.page == Page::Mine && e.verified => format!("{} is on the store (merged): press to ask for it to be deleted.", e.meta.name),
-            Some(e) if v.page == Page::Mine => format!("{} is live from your pull request: press to take it down.", e.meta.name),
+            Some(e) if v.page == Page::Mine && e.verified => format!("{} is part of the store: press to ask for it to be deleted.", e.meta.name),
+            Some(e) if v.page == Page::Mine => format!("{} is live but not reviewed yet: press to take it down.", e.meta.name),
             Some(e) if v.page == Page::Installed && v.state(e) != Some("Update") => match v.local(m.sel) {
-                Some(md) if !super::ours(md) => format!("{} was added by hand: delete {} to remove it.", md.name, md.dir.display()),
+                Some(md) if !super::ours(md) => format!("{} was added by hand, not by the game: delete its folder {} to remove it.", md.name, md.dir.display()),
                 _ => format!("{} is installed: press to remove it.", e.meta.name),
             },
             Some(e) => match v.state(e) {

@@ -251,14 +251,14 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         d.outlined(|d| d.text(name(r), x + 18.0, y + 14.0, 34.0, WHITE));
     }
     let words = match r {
-        Row::Rematch => "The last match again: the same players, characters and costumes, court, sets, games and umpire. A random court or umpire is drawn again.".to_string(),
+        Row::Rematch => "Play the last match again: same players, characters, costumes, court, umpire and length. A random court or umpire is drawn again.".to_string(),
         Row::Local => text.msg(188).to_string(),
         Row::Online => "Play over the internet or on this network: host a lobby, find one, or join by code.".into(),
-        Row::Mods => "Browse the mod store, add characters from other games and manage the ones you have.".into(),
+        Row::Mods => "Get characters, courts and umpires from the mod store, and manage the ones you have.".into(),
         Row::Settings => text.msg(190).to_string(),
         Row::Update if cfg!(target_arch = "wasm32") => "A new version is out. Refresh loads this page again with it; your settings and mods stay.".into(),
         Row::Update if crate::update::installs() => "A new version is out. Update downloads it, checks its signature and restarts the game into it; your settings and mods stay.".into(),
-        Row::Update => "A new version is out. Download opens its release page: swap this game for the new build, keeping your settings and mods beside it.".into(),
+        Row::Update => "A new version is out. Download opens its release page: replace this game with the new build and keep your settings and mods folders next to it.".into(),
         Row::Quit => "Close the game.".into(),
     };
     let top = if r == Row::Quit { y + 60.0 } else { y + PIC_H + 16.0 };
@@ -333,7 +333,7 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, pads: usize, [x, y, w, h]: [f32; 4]) 
             seats.extend((1..=pads).map(|k| ("pad", format!("Pad {k}"))));
             seats.truncate(4);
             device_tiles(d, &seats, [x, y, w, h]);
-            caption(d, "The devices plugged in now: each takes a seat", x + w - 13.0, y + h - 21.0, [23.0, 45.0, 22.0]);
+            caption(d, "Connected controllers: each one takes a seat", x + w - 13.0, y + h - 21.0, [23.0, 45.0, 22.0]);
         }
         Row::Online => {
             // the courts' tiles (`Confirmation_02`: courts 0–6 down its left column, 7–10 its right)

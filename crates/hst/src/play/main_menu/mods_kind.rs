@@ -23,10 +23,10 @@ pub(super) fn name(k: Kind) -> &'static str {
 /// How a kind behaves online (the note at the row's right).
 pub(super) fn online(k: Kind) -> &'static str {
     match k {
-        Kind::Character | Kind::Other => "Online: a player without the mod sees a stand-in",
-        Kind::Court => "Online: a player without it plays its disc layout",
+        Kind::Character | Kind::Other => "Online: players without this mod see a stand-in character",
+        Kind::Court => "Online: players without it play the disc court it's built on",
         Kind::Umpire => "Online: a missing call falls back to the disc umpire",
-        Kind::Textures => "Online: looks only, per player, never synced to a lobby",
+        Kind::Textures => "Online: only you see a texture pack; the lobby doesn't share it",
     }
 }
 
