@@ -7,7 +7,7 @@
 use super::super::widescreen::ASPECTS;
 use super::{BROWN, CHAT, SWAY_LOD, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
-use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
+use crate::graphics::{AO, FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
 
 /// One option row.
@@ -26,6 +26,8 @@ pub(super) enum Opt {
     Scale,
     Shadows,
     Msaa,
+    /// G1: screen-space ambient occlusion (`Graphics::ao`).
+    Ao,
     Fps,
     Vsync,
     Original,
@@ -82,7 +84,7 @@ pub(super) fn tab(page: Screen) -> usize {
 /// Renderer instead (B273).
 const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled, Cull];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Fps, Vsync, Original, Mesh, Upscaled, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
@@ -103,9 +105,9 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
 }
 
 /// The options the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
-/// Downloads, `modstore::install`).
+/// Downloads, `modstore::install`; G1: WebGL2's Ambient Occlusion, no compute shaders for Bevy's SSAO).
 pub(super) fn locked(o: Opt) -> bool {
-    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads)
+    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads) || cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))) && o == Ao
 }
 
 fn label(o: Opt) -> &'static str {
@@ -120,6 +122,7 @@ fn label(o: Opt) -> &'static str {
         Scale => "Resolution",
         Shadows => "Shadows",
         Msaa => "Anti-aliasing",
+        Ao => "Ambient Occlusion",
         Fps => "Frame Limit",
         Vsync => "VSync",
         Original => "Original Mode",
@@ -155,6 +158,8 @@ fn about(o: Opt) -> &'static str {
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
+        Ao if locked(o) => "Ambient occlusion needs the WebGPU renderer.",
+        Ao => "Not in the original: soft shade in corners and where things meet the ground (SSAO). Uses SMAA instead of MSAA for Anti-aliasing. Off in Original Mode.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
         MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
@@ -222,6 +227,7 @@ fn choices(o: Opt) -> Vec<String> {
         Mesh => MESHES.iter().map(|s| format!("{s} %")).collect(),
         Shadows => words(&SHADOW_NAMES),
         Msaa => words(&MSAA_NAMES),
+        Ao => words(&SHADOW_NAMES),
         ShowFps => words(&SHOW_FPS_NAMES),
         Renderer => RENDERERS.iter().map(|(_, n)| n.to_string()).collect(),
         ButtonIcons => super::legend::LAYOUTS.iter().map(|l| l.0.to_string()).collect(),
@@ -267,6 +273,7 @@ impl Settings {
             Scale => g.scale = cycle(&SCALES, g.scale, d),
             Shadows => g.shadows = cycle(&SHADOWS, g.shadows, d),
             Msaa => g.msaa = cycle(&MSAA, g.msaa, d),
+            Ao => g.ao = (g.ao as isize + d).rem_euclid(AO.len() as isize) as u8,
             Fps => g.fps = cycle(&FPS, g.fps, d),
             Vsync => g.vsync = !g.vsync,
             Original => g.original = !g.original,
@@ -321,6 +328,7 @@ impl Settings {
             Scale => format!("{} %", g.scale),
             Shadows => SHADOW_NAMES[g.shadows as usize].into(),
             Msaa => MSAA_NAMES[g.msaa.ilog2().min(2) as usize].into(),
+            Ao => SHADOW_NAMES[g.ao.min(2) as usize].into(),
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
             Original => on_off(g.original),
@@ -606,7 +614,7 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
-        let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original);
+        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Fps | Vsync | Original);
         let note = if preset {
             "Set by Preset. Changing it switches Preset to Custom."
         } else if o == MenuSize {
