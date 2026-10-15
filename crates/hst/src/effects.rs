@@ -410,7 +410,7 @@ static EMPTIED: std::sync::Mutex<Vec<(AssetId<Mesh>, bool)>> = std::sync::Mutex:
 
 /// Shown on no camera while its mesh is [`fill`]'s empty placeholder.
 #[derive(Component)]
-struct Emptied;
+pub(crate) struct Emptied;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostUpdate, hide_empty.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));

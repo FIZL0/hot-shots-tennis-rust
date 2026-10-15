@@ -341,9 +341,10 @@ fn loaded(world: &mut World) {
     }
 }
 
-/// A mesh drawn under the loading screen this frame: its own visibility and whether it was frustum culled.
+/// A mesh drawn under the loading screen this frame: its own visibility, whether it was frustum culled and whether it
+/// was on no render layer (an emptied effect, `effects::hide_empty`).
 #[derive(Component)]
-struct Warming(Visibility, bool);
+struct Warming(Visibility, bool, bool);
 
 /// While the loading screen is up over the new mode, every mesh is drawn under it, hidden or out of view too, so the
 /// pipelines a hidden effect needs (a hit's sparks, a lob's landing marks) compile behind the cover, not on its first
@@ -351,7 +352,7 @@ struct Warming(Visibility, bool);
 fn warm(
     mut commands: Commands,
     loading: Query<&Loading>,
-    mut q: Query<(Entity, &mut Visibility, Has<bevy::camera::visibility::NoFrustumCulling>), (With<Mesh3d>, Without<Warming>)>,
+    mut q: Query<(Entity, &mut Visibility, Has<bevy::camera::visibility::NoFrustumCulling>, Option<&bevy::camera::visibility::RenderLayers>), (With<Mesh3d>, Without<Warming>)>,
     mut cams: Query<(Entity, &mut Camera), Without<WarmingCamera>>,
 ) {
     if !loading.iter().any(|l| l.built) {
@@ -364,8 +365,14 @@ fn warm(
             commands.entity(e).insert(WarmingCamera);
         }
     }
-    for (e, mut v, unculled) in &mut q {
-        commands.entity(e).insert((Warming(*v, !unculled), bevy::camera::visibility::NoFrustumCulling));
+    // P30: an emptied effect (a hit's sparks and ribbon, B328) sits on no layer: on the scene's for the warm-up
+    for (e, mut v, unculled, layers) in &mut q {
+        let none = layers.is_some_and(|l| l.iter().next().is_none());
+        let mut e = commands.entity(e);
+        e.insert((Warming(*v, !unculled, none), bevy::camera::visibility::NoFrustumCulling));
+        if none {
+            e.remove::<bevy::camera::visibility::RenderLayers>();
+        }
         *v = Visibility::Visible;
     }
 }
@@ -375,17 +382,21 @@ fn warm(
 struct WarmingCamera;
 
 /// Each warmed mesh and camera back as its systems left it, before they run again.
-fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warming)>, mut cams: Query<(Entity, &mut Camera), With<WarmingCamera>>) {
+fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warming, Has<crate::effects::Emptied>)>, mut cams: Query<(Entity, &mut Camera), With<WarmingCamera>>) {
     for (e, mut c) in &mut cams {
         c.is_active = false;
         commands.entity(e).remove::<WarmingCamera>();
     }
-    for (e, mut v, w) in &mut q {
+    for (e, mut v, w, emptied) in &mut q {
         *v = w.0;
         let mut e = commands.entity(e);
         e.remove::<Warming>();
         if w.1 {
             e.remove::<bevy::camera::visibility::NoFrustumCulling>();
+        }
+        // still empty (one filled meanwhile has dropped its marker and stays on the scene's layer)
+        if w.2 && emptied {
+            e.insert(bevy::camera::visibility::RenderLayers::none());
         }
     }
 }
@@ -577,5 +588,31 @@ mod tests {
         app.world_mut().write_message(AppExit::Success);
         app.update();
         assert!(app.should_exit().is_some());
+    }
+
+    /// P30: an emptied effect mesh (on no render layer, `effects::hide_empty`) is drawn under the loading screen like
+    /// any hidden mesh, so its pipeline doesn't compile on the match's first hit; it's hidden again after, unless
+    /// filled meanwhile.
+    #[test]
+    fn the_warm_up_draws_emptied_effects() {
+        use bevy::camera::visibility::RenderLayers;
+        let mut app = App::new();
+        app.add_systems(Update, (unwarm, warm).chain());
+        let mesh = Mesh3d(Handle::default());
+        let empty = app.world_mut().spawn((mesh.clone(), Visibility::Hidden, crate::effects::Emptied, RenderLayers::none())).id();
+        let filled = app.world_mut().spawn((mesh, Visibility::Hidden, crate::effects::Emptied, RenderLayers::none())).id();
+        let screen = app.world_mut().spawn(Loading { built: true, ..default() }).id();
+        app.update();
+        for e in [empty, filled] {
+            let e = app.world().entity(e);
+            assert!(e.get::<RenderLayers>().is_none(), "an emptied mesh stayed on no layer under the loading screen");
+            assert_eq!(e.get::<Visibility>(), Some(&Visibility::Visible));
+        }
+        app.world_mut().entity_mut(filled).remove::<crate::effects::Emptied>();
+        app.world_mut().despawn(screen);
+        app.update();
+        assert_eq!(app.world().entity(empty).get::<RenderLayers>(), Some(&RenderLayers::none()));
+        assert!(app.world().entity(filled).get::<RenderLayers>().is_none(), "a filled mesh went back to no layer");
+        assert_eq!(app.world().entity(empty).get::<Visibility>(), Some(&Visibility::Hidden));
     }
 }

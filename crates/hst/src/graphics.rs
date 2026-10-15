@@ -294,8 +294,36 @@ pub fn plugin(app: &mut App) {
         r.add_systems(RenderGraph, (gpu_time::<false>.in_set(G::Begin), gpu_time::<true>.after(G::Render).before(G::Submit)));
     }
     if std::env::var_os("HST_FPS").is_some() {
-        app.init_resource::<SplitLog>().add_systems(Last, (log_draws, log_split));
+        app.init_resource::<SplitLog>().add_systems(Last, (log_draws, log_split, |t: Res<Time<Real>>| NOW.store(t.elapsed_secs().to_bits(), Ordering::Relaxed)));
+        if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            r.add_systems(bevy::render::Render, log_pipelines.in_set(bevy::render::RenderSystems::Cleanup));
+        }
     }
+}
+
+/// The app's real time (s, f32 bits) for the render world's logs.
+static NOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `HST_FPS=1` (P30): each render pipeline as it's first queued, with when: one queued mid-match is a first-draw
+/// compile the loading screen's warm-up (`mode.rs`) missed.
+fn log_pipelines(cache: Res<bevy::render::render_resource::PipelineCache>, mut seen: Local<usize>) {
+    use bevy::render::render_resource::PipelineDescriptor;
+    let all: Vec<_> = cache.pipelines().collect();
+    for p in &all[(*seen).min(all.len())..] {
+        let PipelineDescriptor::RenderPipelineDescriptor(d) = &p.descriptor else { continue };
+        let defs = |v: &[bevy::shader::ShaderDefVal]| v.iter().map(|d| format!("{d:?}").replace("Bool(\"", "").replace("\", true)", "")).collect::<Vec<_>>().join(" ");
+        eprintln!(
+            "pipeline at {:.2} s: {} | {} vertex buffers ({} attrs) | samples {} | vs [{}] | fs [{}]",
+            f32::from_bits(NOW.load(Ordering::Relaxed)),
+            d.label.as_deref().unwrap_or("?"),
+            d.vertex.buffers.len(),
+            d.vertex.buffers.iter().map(|b| b.attributes.len()).sum::<usize>(),
+            d.multisample.count,
+            defs(&d.vertex.shader_defs),
+            d.fragment.as_ref().map_or(String::new(), |f| defs(&f.shader_defs)),
+        );
+    }
+    *seen = all.len();
 }
 
 /// The Mesh and Smooth Normals settings where the loaders read them (`MESH`, `SMOOTH`).
