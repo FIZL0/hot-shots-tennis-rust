@@ -693,9 +693,9 @@ impl Menu {
                     (self.net.finding, self.net.fail) = (crate::net::FINDS, None);
                     out.push(Effect::Online(Fx::Net(Cmd::Find)));
                 } else if k.ok && self.sel < 3 {
-                    self.net.go = Some([Go::Quick, Go::Host, Go::Find][self.sel]);
-                    self.net.fit = 0;
-                    self.go(Screen::Mode, out);
+                    // B392: no singles/doubles or controllers screens: singles, 1P alone (the host swaps it on the roster)
+                    (self.net.go, self.net.fit, self.doubles) = (Some([Go::Quick, Go::Host, Go::Find][self.sel]), 0, false);
+                    self.online_enter(out);
                 } else if (k.ok && self.sel == 6) || k.back {
                     self.net.go = None;
                     self.sel = self.main_at(super::home::Row::Online);
@@ -709,9 +709,8 @@ impl Menu {
                 if k.ok && self.sel < n {
                     // the lobby's kind and room: this machine's controllers next, then join it
                     let l = &self.net.list[self.sel];
-                    (self.net.paste, self.doubles, self.net.fit) = (l.dial().into(), l.doubles, l.open());
-                    self.seats[1..].fill(None);
-                    self.go(Screen::Assign, out);
+                    (self.net.go, self.net.paste, self.doubles, self.net.fit) = (Some(Go::Find), l.dial().into(), l.doubles, l.open());
+                    self.online_enter(out);
                 } else if k.ok && self.sel == n {
                     self.net.list.clear();
                     (self.net.finding, self.net.fail) = (self.net.finding.saturating_add(crate::net::FINDS), None);
@@ -963,12 +962,41 @@ impl Menu {
         out.push(Effect::Sound(1));
     }
 
-    /// Join by Code's code chosen: no singles/doubles (the lobby has it, taken from its room once in, B225), straight to
-    /// this machine's controllers, up to three until the lobby says (it refuses more than its open seats).
+    /// Join by Code's code chosen: no singles/doubles (the lobby has it, taken from its room once in, B225), straight
+    /// into the lobby (B392).
     fn join_code(&mut self, out: &mut Vec<Effect>) {
         (self.net.go, self.doubles, self.net.fit) = (Some(Go::Code), true, 0);
+        self.online_enter(out);
+    }
+
+    /// B392: Quickplay, Host, a found lobby or a code chosen: no singles/doubles or controllers screens, 1P alone
+    /// straight into the lobby, which opens its roster (`heard`), as a local match goes straight to its own (B331).
+    pub(super) fn online_enter(&mut self, out: &mut Vec<Effect>) {
         self.seats[1..].fill(None);
-        self.go(Screen::Assign, out);
+        self.bots = [false; 4];
+        self.players = [super::Player::fresh(); 4];
+        self.scroll = [0; 4];
+        self.online_open(out);
+    }
+
+    /// B392: whether `dev` may swap the lobby's Singles ↔ Doubles from the online roster: the host's 1P, while not
+    /// picking for a computer player and singles fits everyone seated (as the lobby's Mode item, `can_switch`).
+    pub(super) fn online_can_swap(&self, dev: super::Dev) -> bool {
+        self.screen == Screen::Chars && self.net.hosting && !self.net.started && self.net.edit.is_none() && self.seats[0] == Some(dev) && self.can_switch()
+    }
+
+    /// B392: the host's □ / Tab (or a tap on the mode pill) on the online roster: the lobby to the other mode for
+    /// everyone (its room comes back and `align` re-seats the select). False: not the host's roster.
+    pub(super) fn online_swap(&mut self, dev: super::Dev, out: &mut Vec<Effect>) -> bool {
+        if !(self.screen == Screen::Chars && self.online() && self.net.hosting && self.seats[0] == Some(dev)) {
+            return false;
+        }
+        match self.net.room.as_ref().filter(|_| self.online_can_swap(dev)) {
+            Some(r) => out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Doubles(!r.doubles)))]),
+            // the help line says why (four seated: doubles only)
+            None => out.push(Effect::Sound(1)),
+        }
+        true
     }
 
     /// The pasted text as Join by Code's code: on to the picks if it parses.
@@ -2011,19 +2039,32 @@ mod tests {
         let mut m = Menu { sel: 1, net: View { cfg: Some(Online::default()), ..default() }, ..default() };
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };
-        // B195: Online → Host → singles/doubles → controllers → the lobby (no character yet) → its select → lobby
+        // B195 / B392: Online → Host → the lobby (no character yet, singles, 1P alone) → its select → lobby
         m.step(dev, ok);
         assert_eq!((m.screen, m.sel), (Screen::Online, 0), "Quickplay first");
         m.step(dev, Press { down: true, ..default() });
-        m.step(dev, ok);
-        assert_eq!((m.screen, m.net.go), (Screen::Mode, Some(Go::Host)));
-        m.step(dev, Press { down: true, ..default() });
-        m.step(dev, ok);
-        assert_eq!(m.screen, Screen::Assign);
+        m.doubles = true;
         let fx = m.step(dev, ok);
-        assert_eq!(m.screen, Screen::Lobby);
+        assert_eq!((m.screen, m.net.go), (Screen::Lobby, Some(Go::Host)), "no singles/doubles or controllers screens");
         let Some(Effect::Online(Fx::Net(Cmd::Host(r)))) = fx.into_iter().find(|e| matches!(e, Effect::Online(_))) else { panic!() };
-        assert_eq!((r.doubles, r.open(), r.picking.contains("host")), (true, 3, true));
+        assert_eq!((r.doubles, r.open(), r.picking.contains("host")), (false, 1, true));
+        // B392: on the lobby's select the host's □ swaps it (the lobby's room comes back doubles); a guest's doesn't
+        m.heard(Event::Room(r.clone()));
+        assert_eq!(m.screen, Screen::Chars);
+        let page = Press { page: true, ..default() };
+        let pad = super::super::Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        assert!(m.step(pad, page).is_empty(), "not 1P's device");
+        assert!(m.step(dev, page).contains(&Effect::Online(Fx::Net(Cmd::Doubles(true)))));
+        let r = Room { doubles: true, seats: r.seats.iter().cloned().chain([None, None]).collect(), ..r };
+        assert_eq!(r.open(), 3);
+        m.heard(Event::Room(r.clone()));
+        assert_eq!((m.screen, m.doubles, m.players(), m.seats[0]), (Screen::Chars, true, 4, Some(dev)));
+        let mut guest = m.clone();
+        guest.net.hosting = false;
+        assert!(!guest.step(dev, page).iter().any(|e| matches!(e, Effect::Online(_))), "only the host swaps");
+        let mut full = m.clone();
+        full.net.room.as_mut().unwrap().seats = r.seats.iter().map(|_| r.seats[0].clone()).collect();
+        assert_eq!(full.step(dev, page), vec![Effect::Sound(1)], "four seated: doubles only");
         // B305: the court and umpire start on Random as offline; the host throws the dice once and every peer gets the
         // same resolved pair, in the lobby and again at Start
         assert_eq!((m.court, m.umpire as usize), (super::super::COURTS, super::super::UMPIRES));
@@ -2067,7 +2108,7 @@ mod tests {
         m.pasted(Some("hello".into()), &mut out);
         assert_eq!(m.screen, Screen::Online);
         m.pasted(Some(iroh::SecretKey::generate().public().to_string()), &mut out);
-        assert_eq!((m.screen, m.net.go), (Screen::Assign, Some(Go::Code)));
+        assert_eq!((m.screen, m.net.go), (Screen::Lobby, Some(Go::Code)));
     }
 
     #[test]
@@ -2092,14 +2133,9 @@ mod tests {
             m.step(dev, ok);
         }
         assert_eq!((m.net.entry.as_str(), m.sel), ("K7QX", KEYS + 2), "full: on Join");
-        m.step(dev, ok);
-        // B225: no singles/doubles, straight to the controllers; Back returns to the code
-        assert_eq!((m.screen, m.net.go), (Screen::Assign, Some(Go::Code)));
-        m.step(dev, Press { back: true, ..default() });
-        assert_eq!((m.screen, m.net.entry.as_str()), (Screen::Code, "K7QX"));
-        m.sel = KEYS + 2;
-        m.step(dev, ok);
+        // B225 / B392: no singles/doubles or controllers, straight into the lobby
         let fx = m.step(dev, ok);
+        assert_eq!((m.screen, m.net.go), (Screen::Lobby, Some(Go::Code)));
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
         // the lobby's mode, whatever this machine had: a singles lobby's select is singles
         assert_eq!(m.screen, Screen::Lobby);
@@ -2118,7 +2154,12 @@ mod tests {
         // a pasted link joins its code
         let mut out = Vec::new();
         m.pasted(Some(crate::net::link("K7QX")), &mut out);
-        assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Assign, "K7QX"));
+        assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Lobby, "K7QX"));
+        // B392: a lobby link's start: the first device to press anything joins it, no controllers screen
+        let mut m = Menu { screen: Screen::Assign, doubles: true, net: View { paste: "K7QX".into(), go: Some(Go::Code), ..default() }, ..default() };
+        let fx = m.step(dev, Press { down: true, ..default() });
+        assert_eq!((m.screen, m.seats), (Screen::Lobby, [Some(dev), None, None, None]));
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
     }
 
     #[test]
@@ -2633,10 +2674,8 @@ mod tests {
         for (sel, id, doubles, fit) in [(0, "S", false, 1), (1, "D", true, 2)] {
             m.screen = Screen::Lobbies;
             m.sel = sel;
-            m.step(dev, ok);
-            assert_eq!((m.screen, m.doubles, m.local_max()), (Screen::Assign, doubles, fit));
             let fx = m.step(dev, ok);
-            assert_eq!(m.screen, Screen::Lobby);
+            assert_eq!((m.screen, m.doubles, m.local_max()), (Screen::Lobby, doubles, fit), "B392: straight into it");
             let Some(Effect::Online(Fx::Net(Cmd::Join(code, picks)))) = fx.into_iter().find(|e| matches!(e, Effect::Online(_))) else { panic!() };
             assert_eq!((code.as_str(), picks.len()), (id, 1));
             // seated: the lobby's character select; ready there: the picks into the held seat
