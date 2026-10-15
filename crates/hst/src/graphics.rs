@@ -71,7 +71,9 @@ impl Graphics {
     /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen and the iOS app's first
     /// run): Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`), at 67% scale with 2x
     /// MSAA. M91: an iPhone 15 Pro at 100%/2x is GPU-bound on the Grand Indoor Palace (40 fps); a phone's dense screen
-    /// hides the lower scale.
+    /// hides the lower scale. B413: with Fewer Shadows and Skip Off-Screen on (the speed-ups that measurably help);
+    /// Mesh stays 100%: 75% and 50% showed no gain native (dGPU, iGPU) or in a 4x-throttled phone browser, as the
+    /// characters' few thousand triangles aren't what a phone's frame waits on.
     pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
     pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
@@ -630,6 +632,10 @@ mod tests {
         assert_eq!(Graphics { cull: false, ..default() }.flags()[8..], ["--cull", "off"]);
         assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "2x"]);
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
+        // B413: the cheap presets run with the speed-ups that help, at full Mesh
+        for p in [Graphics::PHONE, Graphics::LOW, Graphics::STEAM_DECK] {
+            assert!(p.fewer_shadows && p.cull && p.mesh == 100);
+        }
         // B343: Fewer Shadows passes only off its default and reads back as a flag; B412: a preset sets it
         let g = Graphics { fewer_shadows: !FEWER_SHADOWS, ..default() };
         assert_eq!(g.preset(), "Custom");
