@@ -39,14 +39,22 @@ fn decode(png: &[u8]) -> Option<Image> {
     Image::from_buffer(png, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok()
 }
 
-/// The court mods' values on the select's strip, after the disc eleven (none in a vanilla lobby).
-pub(super) fn values(m: &Menu) -> impl Iterator<Item = usize> {
-    let vanilla = m.online() && m.net.room.as_ref().is_some_and(|r| r.vanilla);
+/// The court mods' values on the picker, after the disc eleven (none in a vanilla lobby; B450: online, only those
+/// every peer in the lobby has installed, `Room::courts`).
+pub(super) fn values(m: &Menu) -> impl Iterator<Item = usize> + '_ {
+    let room = m.net.room.as_ref().filter(|_| m.online());
+    let vanilla = room.is_some_and(|r| r.vanilla);
     let n = if vanilla { 0 } else { m.court_mods.len() };
-    COURTS + 1..COURTS + 1 + n
+    let shared = move |x: &Court| room.is_none_or(|r| r.names.keys().all(|p| r.courts.get(p).is_some_and(|c| c.contains(&x.id))));
+    (COURTS + 1..COURTS + 1 + n).filter(move |&c| m.court_mod_of(c).is_some_and(shared))
 }
 
 impl Menu {
+    /// B450: the installed court mods' ids (every peer's Hello carries them).
+    pub(super) fn court_mod_ids(&self) -> Vec<String> {
+        self.court_mods.iter().map(|x| x.id.clone()).collect()
+    }
+
     /// The court mod that court value `c` picks, if it's one.
     pub(super) fn court_mod_of(&self, c: usize) -> Option<&Court> {
         self.court_mods.get(c.checked_sub(COURTS + 1)?)
@@ -183,12 +191,12 @@ mod tests {
         let last = *STRIP.last().unwrap();
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: last, court_mods: vec![court(1, 5), court(3, 9)], ..default() };
         m.sel = 1;
+        // B450: the picker's disc row, then its mods row
         let mut want = vec![COURTS];
         want.extend(STRIP);
-        want.extend([COURTS + 1, COURTS + 2]);
-        assert_eq!(strip_order(&m), want);
+        assert_eq!(court_picker::rows(&m), [want, vec![COURTS + 1, COURTS + 2]]);
         m.step(Dev::Keys, press(|p| &mut p.ok));
-        m.step(Dev::Keys, press(|p| &mut p.right));
+        m.step(Dev::Keys, press(|p| &mut p.down));
         assert_eq!(m.court, COURTS + 1);
         m.step(Dev::Keys, press(|p| &mut p.ok));
         assert_eq!((m.court, m.picking), (COURTS + 1, None));
@@ -220,7 +228,7 @@ mod tests {
         m.net.go = Some(Go::Host);
         m.net.hosting = true;
         m.net.room = Some(Room::default());
-        assert_eq!(strip_order(&m).len(), 1 + STRIP.len() + 2, "the mods online");
+        assert_eq!(court_picker::rows(&m)[1].len(), 2, "the mods online");
         let mut fx = Vec::new();
         m.online_host(&mut fx);
         assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Venue(9, ..))))), "{fx:?}");
@@ -231,7 +239,7 @@ mod tests {
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::CourtMod(None)))), "a disc court: no mod");
         m.net.room.as_mut().unwrap().vanilla = true;
         m.sel = 1;
-        assert_eq!(strip_order(&m).len(), 1 + STRIP.len(), "a vanilla lobby: none");
+        assert!(court_picker::rows(&m)[1].is_empty(), "a vanilla lobby: none");
         // a guest: the room's mod by name if it's installed here, else its layout's disc name
         let t = Text { msg: (0..300).map(|i| format!("msg{i}")).collect(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
         let mut r = Room { court: 9, court_mod: Some(("gag_c03".into(), "Court 03".into())), ..default() };
@@ -267,19 +275,17 @@ mod tests {
         assert_eq!(m.room_court_value(&r), 4, "not installed: the layout");
     }
 
-    /// M8f6: the court select with a hundred court mods (long names) at every aspect: the strip scrolls (at most
-    /// `STRIP_SHOWN` slots, the pick among them) and the screen draws within the menu's quad pool.
+    /// M8f6: the court picker with a hundred court mods (long names) at every aspect: the mods row scrolls (B450: a
+    /// page at a time, the pick in view) and the screen draws within the menu's quad pool.
     #[test]
-    fn a_hundred_court_mods_fit_the_strip() {
+    fn a_hundred_court_mods_fit_the_picker() {
         let t = pointer::tests::text_with_mods(0);
         let court = |n: usize| crate::mods_court::Court { dir: format!("mods/c{n}").into(), id: format!("c{n}"), name: "A Rather Long Court Name Here".into(), source: "Some Game: Its Subtitle".into(), layout: (n % 11) as u8, light: None, sky: false, gimmick: false, bgm: None, ambience: Vec::new(), lens_flare: None, people: None };
         for a in [4.0, 21.0 / 9.0, 16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 0.4] {
             for pick in [COURTS, COURTS + 1, COURTS + 50, COURTS + 100] {
                 let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: pick, court_mods: (0..100).map(court).collect(), grid: Grid::fit(a), ..default() };
                 (m.sel, m.picking) = (1, Some(0));
-                let rects = strip_rects(&m).0;
-                assert_eq!(rects.iter().filter(|r| r[2] > 0.0).count(), STRIP_SHOWN);
-                assert!(rects[strip_at(&m)][2] > 0.0, "{a} {pick}: the pick is off the strip");
+                assert!(court_picker::shown(&m).iter().any(|&(_, c, _)| c == pick), "{a} {pick}: the pick is out of view");
                 let n = drawn(&m, &t, &Bindings::default(), &[], 0, 0.0).out.len();
                 assert!(n < POOL * 9 / 10, "{a} {pick}: {n} quads");
             }

@@ -355,6 +355,14 @@ impl Menu {
         out.push(Effect::Sound(2));
     }
 
+    /// B450: the lobby as it stands under the court picker opened from it (the court card chosen).
+    pub(super) fn venue_under(&self) -> Menu {
+        let mut m = self.clone();
+        (m.screen, m.picking, m.net.venue) = (Screen::Lobby, None, false);
+        m.sel = m.items().iter().position(|it| *it == Item::Set(0)).unwrap_or(0);
+        m
+    }
+
     /// The court or umpire select opened from the lobby closed: back on its pill, the venue sent if it changed.
     pub(super) fn venue_picked(&mut self, out: &mut Vec<Effect>) {
         if !std::mem::take(&mut self.net.venue) {
@@ -1959,6 +1967,16 @@ pub(super) fn sample(m: &mut Menu) {
             m.heard(Event::Failed("Couldn't reach the host (timed out).".into()));
         }
         "lobbies-none" => m.heard(Event::Found(vec![])),
+        // B450: the host's court picker over the lobby; ACE-42 lacks every third court mod (left off its row)
+        "lobby-courts" => {
+            let ids = m.court_mod_ids();
+            let r = m.net.room.as_mut().unwrap();
+            for p in ["host", peers[0]] {
+                r.courts.insert(p.into(), ids.clone());
+            }
+            r.courts.insert(peers[1].into(), ids.iter().enumerate().filter(|(i, _)| i % 3 != 2).map(|(_, x)| x.clone()).collect());
+            m.pick_venue(0, &mut Vec::new());
+        }
         _ => {}
     }
 }
@@ -2022,6 +2040,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
                 // the name may have changed since the network started
                 if matches!(c, Cmd::Host(_) | Cmd::Join(..) | Cmd::Quick(_)) {
                     n.send(Cmd::Name(menu.net.cfg.as_ref().map_or_else(String::new, |c| c.name.clone())));
+                    n.send(Cmd::Courts(menu.court_mod_ids()));
                 }
                 n.send(c)
             }
@@ -2032,6 +2051,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
                     cfg.relay = Relay::Off;
                 }
                 let n = Net::start(cfg);
+                n.send(Cmd::Courts(menu.court_mod_ids()));
                 n.send(c);
                 commands.insert_resource(n);
             }
