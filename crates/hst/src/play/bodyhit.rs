@@ -12,7 +12,7 @@ use hst_sim::pose::Nodes;
 
 use super::{Figure, Game, Phase};
 use crate::Args;
-use crate::character::Motion;
+use crate::character::{CharacterData, Motion};
 
 /// Per player its character's collision size (m); the point's pop-up, and whether it has been made; the ball's
 /// position a tick ago (its last move is the way it came); the pop-up's alpha a tick ago (drawn between the two).
@@ -31,6 +31,7 @@ struct View(Handle<StandardMaterial>, [Handle<Image>; 2]);
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Posed>()
+        .init_resource::<Bones>()
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, (detect.before(super::simulate), place_ball.before(super::simulate), (age, bounce_words).after(super::simulate), pose.after(crate::character::tick)))
         .add_systems(Update, (draw, draw_words).after(super::balloons));
@@ -84,7 +85,7 @@ fn setup(
 }
 
 /// Swinging, diving or whiffing players aren't tested (the game's stroke state).
-fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, posed: Res<Posed>, q: Query<&Figure, With<Motion>>) {
+fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, posed: Res<Posed>, bones: Res<Bones>, q: Query<&Figure, With<Motion>>) {
     let last = std::mem::replace(&mut hits.last, g.flight.ball.pos);
     if g.phase == Phase::Serve {
         g.body_hit = None;
@@ -107,8 +108,8 @@ fn detect(mut g: ResMut<Game>, mut hits: ResMut<Hits>, posed: Res<Posed>, q: Que
             continue;
         }
         let sk = &data.skeleton;
-        let bone = |n: &str| sk.names.iter().position(|b| b == n);
-        let (Some(locals), Some(head), Some(neck), Some(spine)) = (posed.locals(f.0), bone("Bip01Head"), bone("Bip01Neck"), bone("Bip01Spine")) else {
+        let at = bones.of(f.0, data).at;
+        let (Some(locals), Some(head), Some(neck), Some(spine)) = (posed.locals(f.0), at[0], at[1], at[2]) else {
             continue;
         };
         let player = super::player_matrix(p);
@@ -141,9 +142,62 @@ fn place_ball(mut g: ResMut<Game>) {
 pub(super) struct Posed(Vec<Option<(usize, Nodes)>>);
 
 impl Posed {
-    /// Player `i`'s nodes' local matrices as of this tick's motion step.
+    /// Player `i`'s nodes' local matrices as of this tick's motion step (kept up only for `Bones::SEEN` and their
+    /// ancestors).
     pub(super) fn locals(&self, i: usize) -> Option<&[[[f32; 4]; 4]]> {
         Some(&self.0.get(i)?.as_ref()?.1.local)
+    }
+}
+
+/// Per player (by figure) where the bones the match reads off `Posed` are in its skeleton, and which nodes their
+/// world matrices are built from: `pose` samples only those (P43), the rest of the skeleton is never looked at.
+#[derive(Resource, Default)]
+pub(super) struct Bones(Vec<Option<(usize, Seen)>>);
+
+/// One skeleton's `Bones::SEEN` (`None`: not in it) and the nodes on their chains up to the root.
+#[derive(Clone)]
+pub(super) struct Seen {
+    pub at: [Option<usize>; 7],
+    keep: Vec<bool>,
+}
+
+impl Bones {
+    /// Every bone a sim system takes from `Posed`: the body hit's head, neck and spine, the footsteps' toes, pelvis,
+    /// spine and head. A new reader adds its bone here.
+    pub const SEEN: [&str; 7] = ["Bip01Head", "Bip01Neck", "Bip01Spine", "Bip01Spine1", "Bip01Pelvis", "Bip01RToe0", "Bip01LToe0"];
+
+    fn update(&mut self, i: usize, data: &std::sync::Arc<CharacterData>) -> &Seen {
+        if self.0.len() <= i {
+            self.0.resize(i + 1, None);
+        }
+        let id = std::sync::Arc::as_ptr(data) as usize;
+        if self.0[i].as_ref().is_none_or(|(k, _)| *k != id) {
+            self.0[i] = Some((id, Seen::new(&data.skeleton)));
+        }
+        &self.0[i].as_ref().unwrap().1
+    }
+
+    /// Player `i`'s bones in `data`'s skeleton (worked out here if `pose` hasn't cached them).
+    pub(super) fn of(&self, i: usize, data: &std::sync::Arc<CharacterData>) -> std::borrow::Cow<'_, Seen> {
+        match self.0.get(i) {
+            Some(Some((k, seen))) if *k == std::sync::Arc::as_ptr(data) as usize => std::borrow::Cow::Borrowed(seen),
+            _ => std::borrow::Cow::Owned(Seen::new(&data.skeleton)),
+        }
+    }
+}
+
+impl Seen {
+    fn new(sk: &hst_sim::pose::Skeleton) -> Seen {
+        let at = Bones::SEEN.map(|n| sk.names.iter().position(|b| b == n));
+        let mut keep = vec![false; sk.parent.len()];
+        for mut n in at.into_iter().flatten() {
+            keep[n] = true;
+            while let Some(p) = sk.parent[n] {
+                keep[p] = true;
+                n = p;
+            }
+        }
+        Seen { at, keep }
     }
 }
 
@@ -152,10 +206,12 @@ impl Posed {
 /// tick's weight from each node's held value (as `character::animate` draws it). The held fade samples the frozen
 /// outgoing pose and mixes the new motion's frame 0 over it.
 // ponytail: a same-motion restart through the point's reset to no motion doesn't rebind (only a change of motion does)
-pub(super) fn pose(mut posed: ResMut<Posed>, g: Res<Game>, q: Query<(&Figure, &Motion)>) {
+pub(super) fn pose(mut posed: ResMut<Posed>, mut bones: ResMut<Bones>, g: Res<Game>, q: Query<(&Figure, &Motion)>) {
     for (f, m) in &q {
         let Some(data) = g.data.get(f.0) else { continue };
         let (sk, Some(new)) = (&data.skeleton, data.motions.get(&m.id)) else { continue };
+        let keep = &bones.update(f.0, data).keep;
+        let keep = |n: usize| keep[n];
         if posed.0.len() <= f.0 {
             posed.0.resize(f.0 + 1, None);
         }
@@ -171,14 +227,14 @@ pub(super) fn pose(mut posed: ResMut<Posed>, g: Res<Game>, q: Query<(&Figure, &M
         let old = data.motions.get(&(m.fade.id as usize)).filter(|_| m.fade.clip);
         match (m.mix, old) {
             (Some((w, true)), Some(old)) => {
-                nodes.sample(old, m.fade.sampled);
-                nodes.mix(new, 0.0, w, 23);
+                nodes.sample_kept(old, m.fade.sampled, keep);
+                nodes.mix_kept(new, 0.0, w, 23, keep);
             }
             (Some((w, false)), Some(old)) => {
-                nodes.sample(new, m.clock.sampled);
-                nodes.mix(old, m.fade.sampled, w, 23);
+                nodes.sample_kept(new, m.clock.sampled, keep);
+                nodes.mix_kept(old, m.fade.sampled, w, 23, keep);
             }
-            _ => nodes.sample(new, m.clock.sampled),
+            _ => nodes.sample_kept(new, m.clock.sampled, keep),
         }
     }
 }

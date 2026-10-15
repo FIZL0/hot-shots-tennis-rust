@@ -91,7 +91,7 @@ fn lin(v: f32) -> f32 {
 /// One game frame: the players' toes and bones as the motion player posed them this tick, and their matrices,
 /// step the sim. The run object updates after the players (it takes their hit events the same frame), so the dive
 /// rings draw from the sound manager's generator after the frame's strokes.
-fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, posed: Res<super::bodyhit::Posed>, q: Query<(&Figure, &Motion)>, rc: Option<Res<super::replay_camera::ReplayCamera>>) {
+fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, posed: Res<super::bodyhit::Posed>, bones: Res<super::bodyhit::Bones>, q: Query<(&Figure, &Motion)>, rc: Option<Res<super::replay_camera::ReplayCamera>>) {
     let Some(mut fx) = fx else { return };
     let fx = &mut *fx;
     // the game clears the run object as a point is set up
@@ -113,22 +113,18 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
             let p = g.players.get(i)?;
             let pd = p.dive.as_ref();
             let (dive, lunge, dive_over) = fx.dives.get_mut(i).map_or((false, 0.0, false), |w| w.see(pd.map(|d| (d.slide, d.cut()))));
-            let sk = &data.skeleton;
-            let locals = posed.locals(i)?;
-            let pm = super::player_matrix(p);
-            let joint = |n: &str| sk.names.iter().position(|b| b == n).map(|k| hst_sim::pose::node_world(sk, locals, k, &pm));
+            posed.locals(i)?;
+            // a skeleton without one of the bones has no runner
+            let at = bones.of(i, data).at;
+            at[0].and(at[3]).and(at[4]).and(at[5]).and(at[6])?;
             Some((
                 i,
                 Runner {
                     character: g.chars[i] as usize,
                     motion: m.id as i32,
                     sub: sub(&g, i, reacted),
-                    toes: [joint("Bip01RToe0")?[3], joint("Bip01LToe0")?[3]],
-                    m: pm,
+                    m: super::player_matrix(p),
                     slide: states.get(i).is_some_and(|&s| s != 0),
-                    pelvis: joint("Bip01Pelvis")?,
-                    spine: joint("Bip01Spine1")?,
-                    head: joint("Bip01Head")?[3],
                     dive,
                     lunge,
                     dive_over,
@@ -138,7 +134,31 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
         })
         .collect();
     runners.sort_by_key(|(i, _)| *i);
-    let runners: Vec<Runner> = runners.into_iter().map(|(_, r)| r).collect();
+    // the toes, pelvis, spine and head only when this frame's step can read them (`Feet::reads`): each is a chain of
+    // VU0 products up the skeleton
+    let runners: Vec<Runner> = runners
+        .into_iter()
+        .enumerate()
+        .map(|(p, (i, mut r))| {
+            let data = &g.data[i];
+            let at = bones.of(i, data).at;
+            let joint = |n: usize| at[n].zip(posed.locals(i)).map_or([[0.0; 4]; 4], |(k, locals)| hst_sim::pose::node_world(&data.skeleton, locals, k, &r.m));
+            let [toes, pelvis, spine, head] = fx.feet.reads(&fx.table, p, r.character, r.motion, r.dive);
+            if toes {
+                r.toes = [joint(5)[3], joint(6)[3]];
+            }
+            if pelvis {
+                r.pelvis = joint(4);
+            }
+            if spine {
+                r.spine = joint(3);
+            }
+            if head {
+                r.head = joint(0)[3];
+            }
+            r
+        })
+        .collect();
     let c = fx.table.courts.get(fx.court).map_or(10, |_| fx.court);
     let dusty = fx.table.courts[c].dusty && !fx.wet;
     let wind = w.map_or([0.0; 4], |w| hst_sim::weather::wind(w.today().degrees, w.today().speed));

@@ -151,6 +151,19 @@ pub struct Feet {
 }
 
 impl Feet {
+    /// Which of runner `p`'s toes, pelvis, spine and head `tick` can read this frame (its matrix always): the toes
+    /// in a motion that steps, a dive or while a puff of theirs waits to be aimed, the pelvis for a sit-down burst
+    /// not yet spent or a dive, the spine for the one character's burst, the head for a dive. The others may be left
+    /// at their defaults, which saves building those bones' matrices.
+    pub fn reads(&self, t: &Foot, p: usize, character: usize, motion: i32, dive: bool) -> [bool; 4] {
+        let spent = self.burst.get(p).copied().unwrap_or(false);
+        let st = t.steps.get(character);
+        let table = |v: Option<&Vec<bool>>| v.and_then(|v| v.get(motion as usize)).copied().unwrap_or(false);
+        let (runs, burst) = (table(st.map(|s| &s.runs)), table(st.map(|s| &s.burst)));
+        let aiming = self.puffs.iter().any(|u| u.aim && u.player == p);
+        [runs || dive || aiming, burst && !spent || dive, character == 0xd && motion == 0x2f && !spent, dive]
+    }
+
     /// One frame on `court`: steps (when `stepping`), then every puff and footprint ages. `dusty` and `wet` pick the
     /// puff (dust, spray, none) and footprint looks; `wind` is the weather's wind vector; `rand` the sound manager's
     /// generator, drawn twice per dive-ring puff.

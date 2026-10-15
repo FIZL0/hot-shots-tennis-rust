@@ -273,3 +273,51 @@ FixedUpdate 792 → 121; `Main` inclusive ~10.4 → 6.4 ms (different load, comp
 - Online play: peers with different `HST_EXECUTOR` settings could, in principle, run an ambiguous pair of sim systems
   in different orders; the netplay/rollback tests build their own app (not through `mode.rs`), so they don't cover
   this. Default builds all use the single-threaded order, which is fixed, so peers agree.
+## P43 — characters' per-frame CPU (2026-10-15)
+
+Traced (P35): `character::animate` 114 µs, `bodyhit::pose` 72, `foot_fx::tick` 52, `net_hide::hide_around_eye` 32
+per frame. What each did and what changed:
+
+- **`bodyhit::pose`** (sim, FixedUpdate) sampled every node of every player's clip with VU0 math and built world
+  matrices for all of them, though `detect` and foot_fx only read 7 bones (head, neck, spine, spine1, pelvis, both
+  toes). New `bodyhit::Bones` resource caches the 7 node indices + a keep mask (those chains and their ancestors)
+  per character data; `pose` now samples only kept nodes (`Nodes::sample_kept`/`mix_kept` in hst-sim `pose.rs`, the
+  same arithmetic per node; `sample` also stops computing the Hermite twice). `Posed` holds only those chains up to
+  date — a new reader of another bone must add it to `Bones::SEEN`.
+- **`foot_fx::tick`**: the cost was not `Feet::tick` (~1.3 µs) but the VU0 `node_world` chains for toes, pelvis,
+  spine and head of every runner every tick. `Feet::reads` (hst-sim `foot.rs`) says which of them this tick's
+  `Feet::tick` actually reads (toes: running / dive / a puff aimed for that player; pelvis: unspent burst or dive;
+  spine: the one character+motion that uses it; head: dive); the rest are skipped.
+- **`character::animate`** sampled every clip every frame (VU0/ps2 math, i.e. slow software float) and recomputed arm
+  IK and face weights. Now, per rig, the pose is sampled once at each sim tick's two ends with host f32 + musl
+  (`Clip::sample_drawn`, drawing only) and frames in between slerp/lerp between those two poses by the overstep
+  fraction; arm IK turns are cached per tick, face weights only written when the face clock moves, joints written
+  with `set_if_neq` (fewer changed transforms to propagate).
+- **`net_hide`**: `reach` computed once per frame instead of per prop/player, an exact AABB early-out before the
+  segment test (`in_front_rejection_is_exact`: 20k random cases agree with the full test).
+
+### Proof
+- Sim unchanged: `four_bot_control_cost` (headless, `--ignored`) match hash `9e33bf44b069eeab` at 6000 ticks before
+  and after; 20000 ticks `9f0d2c0f57dfe3b0`. Temporary shadow checks (removed again): the restricted `Posed`'s kept
+  nodes bit-equal to full sampling over 80,000 player-ticks; foot_fx with lazy bones gave bincode-identical `Feet`
+  and sound RNG vs. full bones over 20k ticks.
+- `drawn_sampler_close` (hst-sim tests/motion.rs): host sampler vs. the VU0 one, chars 1 and 6, all ANI2 clips,
+  330,720 track samples: worst quaternion component 2.43e-4 (~0.03°), position 3.4e-7.
+- Headless per tick: bodyhit::pose 110 → 43 µs, foot_fx::tick 91 → 40 µs.
+- Traced profile (`tools/profile.sh`, machine at load ~20–27 from other agents; relative only), µs/frame
+  before → after: animate 290 → 63, bodyhit::pose 121 → 36, foot_fx::tick 111 → 38, net_hide 54 → 44 (before the
+  reach hoist), prepare_skins 126 → 105, extract_skins 82 → 78, propagate_parent_transforms 355 → 269.
+- Shots at 120 fps (`context/perf/p43/shot_{6,9,13}.png`): poses, racket arms, faces, ponytails look normal.
+- Skins (prepare/extract_skins ~180 µs) left alone: every part lists all joints; compacting them touches cull/shade/
+  lod/mods indices → follow-up **P51**.
+
+### Not verified / not 1:1
+- Drawn poses between ticks are a slerp between the two tick-end poses, not the clip sampled at the in-between
+  time, and use host float instead of VU0 math (≤2.5e-4 per quaternion component): rendering only, sim untouched.
+  Not put next to an old-binary shot frame-for-frame (wall-clock `--shot-at` can't hit the same frame).
+- `Posed` (in snapshots) now holds stale values for bones outside `Bones::SEEN`; sim outputs are identical, but
+  snapshots differ byte-wise from older builds' (not a wire format between versions).
+- foot_fx's lazy bones: the 20k-tick check covered 30 dive runner-ticks and no pelvis burst; the rule follows
+  `Feet::tick`'s reads, the rare branches aren't separately exercised.
+- Profiles on a heavily shared machine; no idle-machine fps numbers (P35's umbrella re-bench).
+- Not run on wasm/iOS/Android; no platform code changed. No PCSX2 comparison: no gameplay change (hash identical).

@@ -809,74 +809,175 @@ pub fn put_away(minor: bool, shown: Option<&Visibility>) -> bool {
 }
 
 /// Sample every character's motion into its joints (unkeyed joints at rest, as the game binds a motion).
-pub fn animate(time: Res<Time<Fixed>>, mut rigs: Query<(&Rig, &Motion, &mut bevy::mesh::morph::MorphWeights, Has<crate::shadow::Minor>, Option<&Visibility>)>, mut joints: Query<&mut Transform>, mut pose: Local<Vec<Transform>>) {
-    for (rig, motion, mut weights, minor, shown) in &mut rigs {
+///
+/// P43: the pose at each end of the tick (the last two ticks' sampled times) is sampled once (in host arithmetic,
+/// `Clip::sample_drawn`) and kept, and a frame between ticks blends the two poses (slerp, lerp) instead of sampling
+/// the clip at the blended time; joints and face weights are written only when they change.
+pub fn animate(
+    time: Res<Time<Fixed>>,
+    mut rigs: Query<(Entity, &Rig, &Motion, &mut bevy::mesh::morph::MorphWeights, Has<crate::shadow::Minor>, Option<&Visibility>)>,
+    mut joints: Query<&mut Transform>,
+    mut cache: Local<bevy::platform::collections::HashMap<Entity, Posing>>,
+    mut frame: Local<u32>,
+) {
+    *frame = frame.wrapping_add(1);
+    for (root, rig, motion, mut weights, minor, shown) in &mut rigs {
         if put_away(minor, shown) {
             continue;
         }
+        let c = cache.entry(root).or_default();
+        c.frame = *frame;
+        c.face(rig, motion, &mut weights);
+        let Some(new) = rig.data.drawn(motion.id) else { continue };
         let fading = rig.data.drawn(motion.fade.id as usize).filter(|_| motion.fade.clip);
-        // the face: each bound track's weight at the face clock's last sampled time (unbound targets 0)
-        // ponytail: the key cursor restarts from 0 each sample; the game walks from the last key, ≤1 ulp apart after a wrap
+        // between the last two ticks' sampled times (across a loop's wrap); a mod's own clip on its own clock
+        let (a, b) = if rig.data.visual.contains_key(&motion.id) { (motion.drawn_prev, motion.drawn.sampled) } else { (motion.prev, motion.clock.sampled) };
+        let b = if b < a && motion.clock.looping { b + new.length } else { b };
+        // the base pose, and the pose mixed over its first 23 tracks (the player's blend count) by the fade; a held
+        // fade's pose doesn't move within the tick
+        let (clip, ends, over) = match (motion.mix, fading) {
+            (Some((w, true)), Some(old)) => (old, [motion.fade.sampled; 2], Some((new, 0.0, w))),
+            (Some((w, false)), Some(old)) => (new, [new.wrap(a, motion.clock.looping), new.wrap(b, motion.clock.looping)], Some((old, motion.fade.sampled, w))),
+            _ => (new, [new.wrap(a, motion.clock.looping), new.wrap(b, motion.clock.looping)], None),
+        };
+        let keys = ends.map(|t| PoseKey::new(&rig.data, clip, t, over));
+        let k = c.ends(&rig.data, keys, clip, over);
+        let f = if keys[0] == keys[1] { 0.0 } else { time.overstep_fraction() };
+        c.arm(rig, motion.arm);
+        let arm = c.arm.as_ref().filter(|_| motion.arm.is_some()).map_or(&[][..], |a| &a.1);
+        let (pa, pb) = (&c.poses[k[0]].1, &c.poses[k[1]].1);
+        for (j, joint) in rig.data.joints.iter().enumerate() {
+            let Ok(mut tf) = joints.get_mut(rig.joints[j]) else { continue };
+            let ((qa, va), (qb, vb)) = (pa[j], pb[j]);
+            let mut rotation = if f == 0.0 { qa } else { qa.slerp(qb, f) };
+            // the contact IK turns the arm joints in their parents' frames (the game's local·Q, rows; translation kept)
+            if let Some(q) = arm.iter().find(|a| a.0 == j).map(|a| a.1) {
+                rotation = (q * rotation).normalize();
+            }
+            let to = Transform { translation: if f == 0.0 { va } else { va.lerp(vb, f) }, rotation, scale: joint.rest.scale };
+            tf.set_if_neq(to);
+        }
+    }
+    let now = *frame;
+    cache.retain(|_, c| c.frame == now);
+}
+
+/// `animate`'s per-character state: the two poses last sampled (each joint's rotation and translation), the arm
+/// IK's turns for this tick, and the face it last wrote.
+#[derive(Default)]
+pub struct Posing {
+    poses: [(Option<PoseKey>, Vec<(Quat, Vec3)>); 2],
+    arm: Option<(([[f32; 4]; 4], u32, usize), Vec<(usize, Quat)>)>,
+    face: Option<(usize, u32)>,
+    frame: u32,
+}
+
+/// What a sampled pose depends on: the character, the clip and its time, and the crossfade's clip, time and weight.
+#[derive(Clone, Copy, PartialEq)]
+struct PoseKey {
+    data: usize,
+    clip: usize,
+    t: u32,
+    over: Option<(usize, u32, u32)>,
+}
+
+impl PoseKey {
+    fn new(data: &Arc<CharacterData>, clip: &Clip, t: f32, over: Option<(&Clip, f32, f32)>) -> PoseKey {
+        let id = |c: &Clip| c as *const Clip as usize;
+        PoseKey { data: Arc::as_ptr(data) as usize, clip: id(clip), t: t.to_bits(), over: over.map(|(c, t, w)| (id(c), t.to_bits(), w.to_bits())) }
+    }
+}
+
+impl Posing {
+    /// The slots holding the poses for the two ends' keys, sampling any missing one into a slot the other end
+    /// isn't using.
+    fn ends(&mut self, data: &CharacterData, keys: [PoseKey; 2], clip: &Clip, over: Option<(&Clip, f32, f32)>) -> [usize; 2] {
+        let mut at = keys.map(|k| self.poses.iter().position(|p| p.0 == Some(k)));
+        for e in 0..2 {
+            if at[e].is_none() {
+                // the slot the other end doesn't hold (both free: the first)
+                let s = match at[1 - e] {
+                    Some(o) => 1 - o,
+                    None => e,
+                };
+                self.sample(s, data, keys[e], clip, over);
+                at[e] = Some(s);
+                if keys[0] == keys[1] {
+                    at[1 - e] = Some(s);
+                }
+            }
+        }
+        at.map(|s| s.unwrap())
+    }
+
+    /// Sample `clip` at the key's time into slot `s`: unkeyed joints at rest, the crossfade mixed over.
+    fn sample(&mut self, s: usize, data: &CharacterData, key: PoseKey, clip: &Clip, over: Option<(&Clip, f32, f32)>) {
+        let (slot, out) = &mut self.poses[s];
+        *slot = Some(key);
+        out.clear();
+        out.extend(data.joints.iter().map(|j| (j.rest.rotation, j.rest.translation)));
+        let t = f32::from_bits(key.t);
+        for (k, track) in clip.tracks.iter().enumerate() {
+            let Some(o) = out.get_mut(track.node) else { continue };
+            let (rot, pos) = clip.sample_drawn(k, t);
+            // a rotation key is the conjugate of the joint's local rotation
+            if let Some([x, y, z, w]) = rot {
+                o.0 = Quat::from_xyzw(-x, -y, -z, w).normalize();
+            }
+            if let Some(p) = pos {
+                o.1 = Vec3::from(p);
+            }
+        }
+        // ponytail: an unkeyed base track mixes from the rest pose (the game's from whatever its node last held)
+        if let Some((other, t, w)) = over {
+            for (k, track) in other.tracks.iter().enumerate().take(23) {
+                let Some(o) = out.get_mut(track.node) else { continue };
+                let (rot, pos) = other.sample_drawn(k, t);
+                let r = o.0;
+                let (q, p) = hst_sim::motion::mix(([-r.x, -r.y, -r.z, r.w], o.1.into()), (rot.unwrap_or([-r.x, -r.y, -r.z, r.w]), pos.unwrap_or(o.1.into())), w);
+                if rot.is_some() {
+                    o.0 = Quat::from_xyzw(-q[0], -q[1], -q[2], q[3]).normalize();
+                }
+                if pos.is_some() {
+                    o.1 = Vec3::from(p);
+                }
+            }
+        }
+    }
+
+    /// The contact IK's turn of each arm joint this tick (slerped from none by its weight).
+    fn arm(&mut self, rig: &Rig, arm: Option<([[f32; 4]; 4], f32)>) {
+        let Some((quats, w)) = arm else { return };
+        let key = (quats, w.to_bits(), Arc::as_ptr(&rig.data) as usize);
+        if self.arm.as_ref().is_none_or(|(a, _)| *a != key) {
+            let turns = ["Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"]
+                .iter()
+                .zip(quats)
+                .filter_map(|(name, q)| {
+                    let j = rig.data.joint(name)?;
+                    let [x, y, z, w] = hst_sim::quat::slerp([0.0, 0.0, 0.0, 1.0], q, w);
+                    Some((j, Quat::from_xyzw(-x, -y, -z, w).normalize()))
+                })
+                .collect();
+            self.arm = Some((key, turns));
+        }
+    }
+
+    /// The face: each bound track's weight at the face clock's last sampled time (unbound targets 0), written when
+    /// the face or its time changed.
+    // ponytail: the key cursor restarts from 0 each sample; the game walks from the last key, ≤1 ulp apart after a wrap
+    fn face(&mut self, rig: &Rig, motion: &Motion, weights: &mut Mut<bevy::mesh::morph::MorphWeights>) {
+        let key = (Arc::as_ptr(&rig.data) as usize ^ motion.face, motion.face_clock.sampled.to_bits());
+        if self.face == Some(key) {
+            return;
+        }
+        self.face = Some(key);
         let w = weights.weights_mut();
         w.fill(0.0);
         if let Some(face) = rig.data.faces.get(&motion.face) {
             let t = hst_sim::ps2::mul(motion.face_clock.sampled, 80.0);
             for (target, ticks, values) in &face.tracks {
                 w[*target] = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];
-            }
-        }
-        let Some(new) = rig.data.drawn(motion.id) else { continue };
-        // between the last two ticks' sampled times (across a loop's wrap); a mod's own clip on its own clock
-        let (a, b) = if rig.data.visual.contains_key(&motion.id) { (motion.drawn_prev, motion.drawn.sampled) } else { (motion.prev, motion.clock.sampled) };
-        let b = if b < a && motion.clock.looping { b + new.length } else { b };
-        let t = new.wrap(a + (b - a) * time.overstep_fraction(), motion.clock.looping);
-        // the base pose, and the pose mixed over its first 23 tracks (the player's blend count) by the fade
-        let (clip, t, over) = match (motion.mix, fading) {
-            (Some((w, true)), Some(old)) => (old, motion.fade.sampled, Some((new, 0.0, w))),
-            (Some((w, false)), Some(old)) => (new, t, Some((old, motion.fade.sampled, w))),
-            _ => (new, t, None),
-        };
-        // posed here, then written only where a joint changed (P41: a still joint isn't marked for propagation)
-        pose.clear();
-        pose.extend(rig.data.joints.iter().map(|j| j.rest));
-        for (k, track) in clip.tracks.iter().enumerate() {
-            let tf = &mut pose[track.node];
-            let (rot, pos) = clip.sample(k, t);
-            // a rotation key is the conjugate of the joint's local rotation
-            if let Some([x, y, z, w]) = rot {
-                tf.rotation = Quat::from_xyzw(-x, -y, -z, w).normalize();
-            }
-            if let Some(p) = pos {
-                tf.translation = Vec3::from(p);
-            }
-        }
-        // ponytail: an unkeyed base track mixes from the rest pose (the game's from whatever its node last held)
-        if let Some((other, t, w)) = over {
-            for (k, track) in other.tracks.iter().enumerate().take(23) {
-                let tf = &mut pose[track.node];
-                let (rot, pos) = other.sample(k, t);
-                let r = tf.rotation;
-                let (q, p) = hst_sim::motion::mix(([-r.x, -r.y, -r.z, r.w], tf.translation.into()), (rot.unwrap_or([-r.x, -r.y, -r.z, r.w]), pos.unwrap_or(tf.translation.into())), w);
-                if rot.is_some() {
-                    tf.rotation = Quat::from_xyzw(-q[0], -q[1], -q[2], q[3]).normalize();
-                }
-                if pos.is_some() {
-                    tf.translation = Vec3::from(p);
-                }
-            }
-        }
-        // the contact IK turns the arm joints in their parents' frames (the game's local·Q, rows; translation kept)
-        if let Some((quats, w)) = motion.arm {
-            for (name, q) in ["Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"].iter().zip(quats) {
-                let Some(j) = rig.data.joint(name) else { continue };
-                let tf = &mut pose[j];
-                let [x, y, z, w] = hst_sim::quat::slerp([0.0, 0.0, 0.0, 1.0], q, w);
-                tf.rotation = (Quat::from_xyzw(-x, -y, -z, w).normalize() * tf.rotation).normalize();
-            }
-        }
-        for (e, p) in rig.joints.iter().zip(pose.iter()) {
-            if let Ok(mut tf) = joints.get_mut(*e) {
-                tf.set_if_neq(*p);
             }
         }
     }
