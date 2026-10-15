@@ -515,6 +515,9 @@ struct Menu {
     /// B269: the roster cell the last pick readied on (`None` inside: the Random card); the next computer player's
     /// cursor starts there.
     last: Option<Option<Who>>,
+    /// B428: the roster section that pick was readied in (`Player::tab`): the next computer player's cursor opens
+    /// there too (Favorites stays Favorites).
+    last_tab: u8,
     /// B297: a local match was started from this menu this session; its setup is still here (the Rematch card).
     rematch: bool,
     /// The umpire picker's Preview Voice presses so far (each plays the next of [`CALLS`]).
@@ -562,6 +565,7 @@ impl Default for Menu {
             add: default(),
             paused: false,
             last: None,
+            last_tab: 0,
             rematch: false,
             calls: 0,
             editing: None,
@@ -841,6 +845,7 @@ impl Menu {
             && self.seats[q].is_none() && !self.players[q].ready
         {
             self.put(q, c);
+            self.players[q].tab = self.last_tab;
             self.skip_taken();
         }
     }
@@ -1234,6 +1239,7 @@ impl Menu {
                         self.skip_taken();
                         out.push(Sound(2));
                         self.last = Some(self.cell(p));
+                        self.last_tab = self.players[p].tab;
                         if self.online() && self.net.edit == Some(p) {
                             self.online_bot_ready(p, &mut out);
                         } else if self.online() && (0..self.players()).all(|q| self.seats[q].is_none() || self.players[q].ready) {
