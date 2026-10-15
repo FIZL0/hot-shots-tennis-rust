@@ -423,8 +423,9 @@ fn device_tiles(d: &mut Draw, seats: &[(&str, String)], [x, y, w, _]: [f32; 4]) 
                 d.box3(r, 8.0, [None, None, Some([40.0, 36.0, 44.0])], 40.0);
                 dashed(d, r, 8.0, [72.0, 66.0, 78.0]);
                 d.centred(&p, cx, r[1] + 22.0, 16.0, WHITE);
-                // B362: "Press ✕ / Enter" in the pads' and the keyboard's button art
-                press_hint(d, "", cx, r[1] + 49.0, 8.5, tw - 8.0, WHITE, true);
+                // B362: "Press ✕ / Enter" in the pads' and the keyboard's button art; no Enter once the keyboard holds a seat
+                let keys = !seats.iter().any(|(g, _)| *g == "keys");
+                press_hint(d, "", cx, r[1] + 49.0, 8.5, tw - 8.0, WHITE, keys);
                 d.centred("to join", cx, r[1] + 62.0, 8.5, WHITE);
             }
         }
