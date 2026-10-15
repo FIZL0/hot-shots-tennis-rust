@@ -2630,8 +2630,8 @@ fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
     let u = m.umpire as usize;
     let (name, sub) = match (u, m.umpire_mod_of(u)) {
         (UMPIRES, _) => ("Random".to_string(), "Any of the 5 umpires".to_string()),
-        // M8f3: a mod by its name, its game and the disc umpire it calls (and sits) as
-        (_, Some(x)) => (x.name.clone(), format!("{}, calls as {}", x.source.as_str().split(':').next_back().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("Mod"), m.umpire_name(text, x.donor as usize))),
+        // M8f3: a mod by its name and its game; B408: not its donor, which only fills missing calls and timing
+        (_, Some(x)) => (x.name.clone(), x.game().to_string()),
         _ => (m.umpire_name(text, u), format!("Umpire {} of {UMPIRES}", u + 1)),
     };
     let [cx, cy, cw, ch] = name_card(d, m, &name, &sub, false);
