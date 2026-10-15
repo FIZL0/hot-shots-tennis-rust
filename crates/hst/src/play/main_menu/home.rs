@@ -130,9 +130,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
     let head = format!("{pads} pad{}  -  Disc: SCUS-97610", if pads == 1 { "" } else { "s" });
     let w = d.width(&head, 16.0);
     d.outlined(|d| d.text(&head, 624.0 - w, 18.0, 16.0, WHITE));
-    let version = concat!("v", env!("CARGO_PKG_VERSION"), " - ", env!("HST_COMMIT"));
-    let w = d.width(version, 10.0);
-    d.outlined(|d| d.text(version, 624.0 - w, 37.0, 10.0, WHITE));
+    // B374: a release build's own tag
+    let version = format!("{} - {}", crate::update::VERSION.unwrap_or(concat!("v", env!("CARGO_PKG_VERSION"))), env!("HST_COMMIT"));
+    let w = d.width(&version, 10.0);
+    d.outlined(|d| d.text(&version, 624.0 - w, 37.0, 10.0, WHITE));
     d.anchor = super::Anchor::Centre;
 
     let rows = m.main_rows();

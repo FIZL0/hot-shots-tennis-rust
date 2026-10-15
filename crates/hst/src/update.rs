@@ -14,7 +14,8 @@
 //! the release's `SHA256SUMS` (signed with minisign, the key in [`PUBLIC_KEY`]), swaps it in (Windows can't replace
 //! a running .exe: it becomes `hst.exe.old`, removed at the next start) and starts it with the same arguments. A game
 //! whose folder can't be written (installed system-wide, Flatpak, Steam) only gets the release page.
-//! `HST_UPDATE_API=<url>` checks another releases/latest JSON (a local test server).
+//! `HST_UPDATE_API=<url>` checks another releases/latest JSON (a local test server); `HST_UPDATE_NOW=1` installs what
+//! it finds without waiting for the button (an unattended end-to-end run).
 
 /// The release page the desktop notice's Download opens.
 pub const RELEASES: &str = "https://github.com/FIZL0/hot-shots-tennis-rust/releases/tag/alpha";
@@ -103,7 +104,13 @@ pub fn latest() -> Option<String> {
             loop {
                 match ours {
                     Ok(v) => match rt.block_on(check(&api, v, ASSET)) {
-                        Ok(f) => STATE.lock().unwrap().found = f,
+                        Ok(f) => {
+                            let now = f.is_some() && std::env::var_os("HST_UPDATE_NOW").is_some();
+                            STATE.lock().unwrap().found = f;
+                            if now {
+                                act();
+                            }
+                        }
                         Err(e) => bevy::log::info!("update check: {e}"),
                     },
                     Err(ours) => match rt.block_on(alpha()) {
