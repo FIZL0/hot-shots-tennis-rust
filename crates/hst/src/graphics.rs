@@ -85,9 +85,11 @@ impl Default for Graphics {
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
     pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
-    /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen): full resolution, but
-    /// Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`).
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen and the iOS app's first
+    /// run): Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`), at 67% scale with 2x
+    /// MSAA. M91: an iPhone 15 Pro at 100%/2x is GPU-bound on the Grand Indoor Palace (40 fps); a phone's dense screen
+    /// hides the lower scale.
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
     pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
@@ -530,7 +532,7 @@ mod tests {
         assert_eq!(Graphics { windowed: true, ..default() }.flags().last().unwrap(), "--windowed");
         assert_eq!(Graphics { cull: false, ..default() }.preset(), "Default");
         assert_eq!(Graphics { cull: false, ..default() }.flags()[8..], ["--cull", "off"]);
-        assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "100", "--shadows", "low", "--msaa", "4x"]);
+        assert_eq!(Graphics::PHONE.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "2x"]);
         assert_eq!(Graphics::LOW.flags(), ["--fps", "60", "--scale", "67", "--shadows", "low", "--msaa", "off"]);
         // B343: the speed-up switches pass only off their defaults, keep through a preset and read back as flags
         let g = Graphics { fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, ..default() };
