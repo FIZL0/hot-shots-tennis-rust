@@ -115,6 +115,9 @@ const css = `
 .touch button.chat svg { width: calc(var(--u) * .42); height: calc(var(--u) * .42); vertical-align: middle; fill: currentColor; }
 /* B112: upright, the pad sits under the picture (the 4:3 screen is letterboxed mid-height), sized by the width */
 @media (orientation: portrait) { .touch:not(.duo) { --u: min(12vw, 7vh); } .touch:not(.duo):not(.menu) .zone { top: 50%; } }
+/* B313: upright, the shoulders and Select/Start sit over the face buttons (as in B118's 1v1), not along the top edge:
+   there the status bar and the notch (viewport-fit=cover) covered them, and the thumbs are at the bottom anyway */
+@media (orientation: portrait) { .touch button.small { top: auto !important; bottom: calc(env(safe-area-inset-bottom) + var(--u) * 4.1) !important; } }
 /* B118: each player's set at their own end (a phone upright: the bottom and top 45%), the shoulders and Select/Start
    over the face buttons instead of along the screen's far edge */
 .touch.duo { --u: min(11vw, 6.5vh); }
