@@ -71,6 +71,14 @@ mono/gecko install dialogs on the user's desktop.
 Never `rm` with a glob (`rm -f context/x/*`): Claude Code's rm check prompts even in bypass mode and unattended
 runs sit on it until it auto-denies. Write each run to a fresh `context/<task>/runN/`, or let the tool overwrite its files.
 
+## Sharing the main checkout
+Other sessions and the runners' merges work in this same checkout at the same time. In it, commit only the paths you
+changed: `git commit -m "…" -- <paths>`, never `git commit -a` or `git add -A`/`.` (they sweep up other sessions'
+half-done edits). Commit as soon as a change is solid; uncommitted work can end up stashed or in someone else's
+commit. `.git/MERGE_HEAD` exists → a merge is under way: wait for it, don't commit or touch the index. Anything bigger
+than a quick edit while runners are going: work in your own worktree (`git worktree add ../opentennis-<slug>`) and
+merge it into main when done. `tools/done.sh` (`git add -A`) is for the runners' task worktrees, not this checkout.
+
 ## If you get stuck, move on
 Never wait or loop on one obstacle. If a tool hangs, PCSX2 won't cooperate, the same fix fails twice, something
 needs the human, or ~20 minutes go by without progress: write what happened and what you tried in the prompt's
