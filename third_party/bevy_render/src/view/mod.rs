@@ -1200,6 +1200,7 @@ pub fn prepare_view_targets(
     mut commands: Commands,
     clear_color_global: Res<ClearColor>,
     render_device: Res<RenderDevice>,
+    render_adapter: Res<crate::renderer::RenderAdapter>,
     mut texture_cache: ResMut<TextureCache>,
     cameras: Query<(
         Entity,
@@ -1212,6 +1213,12 @@ pub fn prepare_view_targets(
     mut main_texture_atomics: Local<HashMap<MainTextureKey, Weak<AtomicUsize>>>,
 ) {
     main_texture_atomics.retain(|_, weak| weak.strong_count() > 0);
+    // opentennis: WebGL2 has no view formats; an 8-bit main texture's sRGB view was a validation error there that
+    // quit the app (hud_gamma's LDR scene image)
+    let view_formats = render_adapter
+        .get_downlevel_capabilities()
+        .flags
+        .contains(wgpu::DownlevelFlags::VIEW_FORMATS);
 
     let mut textures = <HashMap<_, _>>::default();
     for (entity, camera, view, texture_usage, msaa) in cameras.iter() {
@@ -1266,8 +1273,8 @@ pub fn prepare_view_targets(
                 format: main_texture_format,
                 usage: texture_usage.0,
                 view_formats: match main_texture_format {
-                    TextureFormat::Bgra8Unorm => &[TextureFormat::Bgra8UnormSrgb],
-                    TextureFormat::Rgba8Unorm => &[TextureFormat::Rgba8UnormSrgb],
+                    TextureFormat::Bgra8Unorm if view_formats => &[TextureFormat::Bgra8UnormSrgb],
+                    TextureFormat::Rgba8Unorm if view_formats => &[TextureFormat::Rgba8UnormSrgb],
                     _ => &[],
                 },
             };

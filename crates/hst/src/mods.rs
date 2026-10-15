@@ -874,6 +874,22 @@ pub fn load(
     images: &mut impl Store<Image>,
     bindposes: &mut impl Store<SkinnedMeshInverseBindposes>,
 ) -> Result<CharacterData, String> {
+    load_with(iso, m, costume, meshes, materials, images, bindposes, None)
+}
+
+/// [`load`] with only the motions `only` (and their faces) if given, as `character::load_disc_with` (B439: a select
+/// card's three; every motion was ~80 % of a mod's load, a frame of its own in the browser).
+#[allow(clippy::too_many_arguments)]
+pub fn load_with(
+    iso: &mut Iso,
+    m: &Mod,
+    costume: usize,
+    meshes: &mut impl Store<Mesh>,
+    materials: &mut impl Store<StandardMaterial>,
+    images: &mut impl Store<Image>,
+    bindposes: &mut impl Store<SkinnedMeshInverseBindposes>,
+    only: Option<&[usize]>,
+) -> Result<CharacterData, String> {
     let file = m.dir.join(m.costumes.get(costume).ok_or_else(|| format!("{}: no costume {costume}", m.id))?);
     let ctx = |e: String| format!("{}: {e}", file.display());
     let (doc, blob) = open(&file)?;
@@ -1008,7 +1024,7 @@ pub fn load(
     };
 
     // the donor's motions; its face tracks (`face\x01joy_eye`) bind by the name after the object prefix
-    let Motions { motions, paths, pelvis, arm, mut faces, stance_ball } = character::disc_motions(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()))?;
+    let Motions { motions, paths, pelvis, arm, mut faces, stance_ball } = character::disc_motions_with(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()), only)?;
     // the donor's eye tracks on nodes the costume lacks drive its §4c eye materials (those the donor's own model
     // binds: a track naming no node of it plays on neither)
     if !eyes.is_empty() {
@@ -1018,7 +1034,7 @@ pub fn load(
         }
     }
     let visual = match &m.motions {
-        Some(f) => own_motions(&m.dir.join(f), &skeleton, &motions)?,
+        Some(f) => own_motions(&m.dir.join(f), &skeleton, &motions, only)?,
         None => HashMap::new(),
     };
     let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
@@ -1044,7 +1060,7 @@ fn eye_materials(dir: &Path) -> Vec<String> {
 /// without `_pc%02d`), keys the skeleton's joints by name with their local rotation and translation in game space.
 /// Its key times are seconds at 60 Hz (the source's own speed); it may run past the donor clip (drawn on its own
 /// clock, `Motion::drawn`) but not stop short of it. Gameplay keeps reading the donor's clip.
-fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -> Result<HashMap<usize, Clip>, String> {
+fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>, only: Option<&[usize]>) -> Result<HashMap<usize, Clip>, String> {
     use hst_data::ani::{Anim, MOTIONS, Track};
     use gltf::animation::util::ReadOutputs;
     let (doc, blob) = open(path)?;
@@ -1053,6 +1069,9 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>) -
     for a in doc.animations() {
         let name = a.name().unwrap_or("");
         let id = MOTIONS.iter().position(|m| m.replace("_pc%02d", "") == name).ok_or_else(|| ctx(format!("animation `{name}` is not a motion name")))?;
+        if only.is_some_and(|o| !o.contains(&id)) {
+            continue;
+        }
         let d = donor.get(&id).ok_or_else(|| ctx(format!("`{name}`: the donor has no clip {id:#x} to time it by")))?;
         let mut keys: Vec<(&gltf::animation::Channel, Vec<f32>)> = Vec::new();
         let channels: Vec<_> = a.channels().collect();
@@ -1363,6 +1382,39 @@ mod tests {
         for name in ["getagrip_pc00_emi", "fore_pc00_phoebe"] {
             own_motions_of(&mut iso, name);
         }
+    }
+
+    /// B439: a select card's load (`load_with` the inspect motions) has those motions and own motions, the same
+    /// clips as the whole load's, and no others.
+    #[test]
+    fn a_card_load_has_only_its_motions() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods/fore_pc00_phoebe");
+        let Ok(m) = read(&dir) else { return eprintln!("no mods/hst-mods/fore_pc00_phoebe, skipped") };
+        let only = &crate::inspect::MOTIONS;
+        let mut s = Stores(default(), default(), default(), default());
+        let all = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let card = load_with(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3, Some(only)).unwrap();
+        let ids = |h: &HashMap<usize, Clip>| {
+            let mut v: Vec<usize> = h.keys().copied().collect();
+            v.sort();
+            v
+        };
+        let want: Vec<usize> = ids(&all.motions).into_iter().filter(|id| only.contains(id)).collect();
+        assert!(!want.is_empty() && ids(&card.motions) == want);
+        assert_eq!(ids(&card.visual), ids(&all.visual).into_iter().filter(|id| only.contains(id)).collect::<Vec<_>>());
+        for (got, of) in [(&card.motions, &all.motions), (&card.visual, &all.visual)] {
+            for (id, clip) in got {
+                let full = &of[id];
+                assert_eq!((clip.length, clip.ticks_per_frame), (full.length, full.ticks_per_frame));
+                for k in 0..8 {
+                    let t = clip.length * k as f32 / 8.0;
+                    assert!(clip.locals(&card.skeleton, t) == full.locals(&all.skeleton, t), "clip {id:#x}");
+                }
+            }
+        }
+        assert!(card.faces.keys().all(|id| only.contains(id)));
+        assert_eq!((card.parts.len(), card.joints.len()), (all.parts.len(), all.joints.len()));
     }
 
     fn own_motions_of(iso: &mut Iso, name: &str) {
