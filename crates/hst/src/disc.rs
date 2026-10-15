@@ -11,7 +11,7 @@ use std::process::Command;
 
 /// `$XDG_DATA_HOME/hst` (else `~/.local/share/hst`); `%APPDATA%\hst` on Windows; the app's Documents on iOS (the
 /// folder the Files app shows, so the ISO, settings.txt and mods/ go in and out there).
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     let env = |k| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     if cfg!(target_os = "ios") {
         return env("HOME").unwrap_or_default().join("Documents");
@@ -33,7 +33,7 @@ pub fn resolve(argv: &mut Vec<String>) {
     #[cfg(target_os = "ios")]
     if argv.is_empty() {
         let iso = std::fs::read_dir(data_dir()).into_iter().flatten().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")));
-        let disc = Some(pack_path()).filter(|p| p.exists()).or(iso).unwrap_or_else(|| fail("No disc image: put your Hot Shots Tennis (USA) ISO in the app's folder in the Files app"));
+        let disc = Some(pack_path()).filter(|p| p.exists()).or(iso).unwrap_or_else(|| crate::ios::no_disc());
         argv.push(disc.to_string_lossy().into_owned());
         return;
     }

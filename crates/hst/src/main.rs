@@ -22,6 +22,8 @@ mod court_anim;
 mod cull;
 #[cfg(not(target_arch = "wasm32"))]
 mod disc;
+#[cfg(target_os = "ios")]
+mod ios;
 mod effects;
 mod graphics;
 mod handshake;
@@ -237,6 +239,8 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    #[cfg(target_os = "ios")]
+    ios::log_to_documents(&disc::data_dir());
     // `hst net …`: the lobby flow in a terminal (`net::cli`)
     // `hst net … --play [disc] [flags]`: the online match once everyone's in
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
@@ -300,7 +304,11 @@ fn start(argv: Vec<String>) {
     if let Some((w, h)) = std::env::var("HST_WINDOW").ok().and_then(|v| v.split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
         resolution = bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0);
     }
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
+    let plugins = DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
+    // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`)
+    #[cfg(target_os = "ios")]
+    let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, ..default() });
+    app.add_plugins(plugins);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]

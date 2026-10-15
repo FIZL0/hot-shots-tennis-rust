@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Unsigned IPA of hst for the user to sign (M91): release build (tools/ios-build.sh), stripped, in a
 # Payload/HotShotsTennis.app with Info.plist + icon, zipped. Usage: tools/ios-ipa.sh [OUT.ipa]  (default target/HotShotsTennis.ipa)
-# On the phone: the app's folder in the Files app ("On My iPhone → Hot Shots Tennis") takes the ISO, settings.txt and mods/.
+# On the phone: the app's folder in the Files app ("On My iPhone → Hot Shots") takes the ISO, settings.txt and mods/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$(realpath -m "${1:-target/HotShotsTennis.ipa}")
-tools/ios-build.sh build --release -p hst
+HST_BUILD=$(git rev-list --count HEAD) tools/ios-build.sh build --release -p hst
 stage=target/aarch64-apple-ios/ipa
 app=$stage/Payload/HotShotsTennis.app
 rm -rf target/aarch64-apple-ios/ipa
