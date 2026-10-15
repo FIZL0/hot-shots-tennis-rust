@@ -482,6 +482,8 @@ struct Menu {
     umpire_mods: Vec<crate::mods_umpire::Umpire>,
     /// M8f6: the installed court mods, on the court select after the disc eleven (`court_mods`).
     court_mods: Vec<crate::mods_court::Court>,
+    /// B400: their pictures, by the same index (`umpire_mods::load`; None: it ships none).
+    umpire_pics: Vec<Option<umpire_mods::Pic>>,
     /// B368: each player's column's first row on view ([`Menu::page`]), and the tile it was last scrolled to
     /// (`Menu::follow`).
     scroll: [usize; 4],
@@ -543,6 +545,7 @@ impl Default for Menu {
             mods: Vec::new(),
             umpire_mods: Vec::new(),
             court_mods: Vec::new(),
+            umpire_pics: Vec::new(),
             scroll: [0; 4],
             followed: [None; 4],
             newest: Vec::new(),
@@ -1471,6 +1474,8 @@ enum Tex {
     Pill,
     /// B362: a style's ✕ (the keyboard's Enter) in the legend's art (`legend::Buttons`), whole.
     Button(legend::Style),
+    /// B400: umpire mod `k`'s picture (`umpire_mods::Pics`), in its pixels.
+    Umpire(usize),
 }
 
 /// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
@@ -2545,7 +2550,9 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     // its middle square inside its edge lines; just her name beside it
     let ([fu, fv, w, h], fh) = (face.1, 26.0);
     let (src, fw) = if face.1 == RANDOM_TILE { ([fu + (w - h) / 2.0 + 4.0, fv + 4.0, h - 8.0, h - 8.0], fh) } else { (face.1, fh * w / h) };
-    if face.1 == RANDOM_TILE {
+    if umpire_mods::face(d, m, u, [sx + 22.0, sy + 106.0], fh) {
+        // B400: a mod's own head
+    } else if face.1 == RANDOM_TILE {
         // B356: the "?" in the same circle as a disc face: its dark rim and white ring, the tile clipped round inside
         random_face(d, src, [sx + 22.0, sy + 106.0], fh);
     } else {
@@ -2769,8 +2776,12 @@ fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
     }
     let [x, y0, w, h] = s;
     d.box3(s, 16.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
+    // B400: a mod's own picture, else its donor's still
+    let mine = umpire_mods::stage(d, m, u, s);
     let u = m.umpire_donor(u);
-    if u < UMPIRES {
+    if mine {
+        // drawn
+    } else if u < UMPIRES {
         let (sw, sh) = (190.0, 336.0);
         let ph = (h - 16.0).min((w - 16.0) * sh / sw);
         let pw = ph * sw / sh;
@@ -2873,6 +2884,10 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
             d.q(tex, src, r, if on { WHITE } else { [100.0; 3] }, 128.0);
         }
         d.hit(r, pointer::Act::Pick(v));
+        // B400: a mod with its own picture: its head on the card
+        if m.sel != 1 && v > UMPIRES && umpire_mods::card(d, m, v, r, on, text) {
+            continue;
+        }
         let rgb = if on { GOLD } else { WHITE };
         let cx = r[0] + r[2] / 2.0;
         if m.sel == 1 {
@@ -3173,7 +3188,7 @@ fn draw(
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
     images: Res<Assets<Image>>,
-    buttons: Option<Res<legend::Buttons>>,
+    (buttons, umpire_pics): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>),
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -3256,6 +3271,13 @@ fn draw(
             },
             Tex::Button(s) => match buttons.as_ref().and_then(|b| b.0.get(&s)) {
                 Some((h, _)) => h.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
+            Tex::Umpire(k) => match umpire_pics.as_ref().and_then(|p| p.handles.get(k).cloned().flatten()) {
+                Some(h) => h,
                 None => {
                     *vis = Visibility::Hidden;
                     continue;
@@ -3367,6 +3389,7 @@ pub fn plugin(app: &mut App) {
     // M14: the button legend
     legend::plugin(app);
     app.add_systems(Update, legend::fill.after(step));
+    app.init_resource::<umpire_mods::Pics>().add_systems(Update, umpire_mods::load.before(draw));
     app.add_systems(Update, trace::trace.after(online::poll).run_if(trace::on));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,

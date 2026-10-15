@@ -1,9 +1,115 @@
 //! M8f3: umpire mods on the confirm screen's umpire select, after the disc five (`crate::mods_umpire`). A pick's
 //! value past Random (`UMPIRES`) is mod `value - UMPIRES - 1` of `Menu::umpire_mods`; the match gets its donor
 //! (`--umpire`, the timing) and the mod (`--umpire-mod DIR`), an online room the donor and the mod's id.
+//!
+//! B400: a mod's own picture (`previews/umpire.png`, the mods repo's standard §3) stands in for the disc's: its head
+//! on the strip's card and the confirm screen's round face, the whole picture on the select's stage. Without one a
+//! mod keeps its plain named card and its donor's face and still.
 
-use super::{Menu, Text, UMPIRES};
+use std::path::PathBuf;
+
+use bevy::asset::RenderAssetUsages;
+use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+
+use super::{Draw, Menu, Tex, Text, UMPIRES, WHITE};
 use crate::mods_umpire::Umpire;
+
+/// B400: an umpire mod's picture: its size and the square round its head, in its pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Pic {
+    pub size: [f32; 2],
+    pub face: [f32; 4],
+}
+
+/// B400: the umpire mods' pictures (`Tex::Umpire`), by `Menu::umpire_mods` index, and the folders they were read for.
+#[derive(Resource, Default)]
+pub(super) struct Pics {
+    dirs: Vec<PathBuf>,
+    pub handles: Vec<Option<Handle<Image>>>,
+}
+
+/// Reads the umpire mods' pictures whenever the installed list isn't the one they were read for.
+pub(super) fn load(mut menu: ResMut<Menu>, mut pics: ResMut<Pics>, mut images: ResMut<Assets<Image>>) {
+    let dirs: Vec<PathBuf> = menu.umpire_mods.iter().map(|x| x.dir.clone()).collect();
+    if pics.dirs == dirs && menu.umpire_pics.len() == dirs.len() {
+        return;
+    }
+    let read: Vec<Option<(Pic, Image)>> = dirs.iter().map(|d| crate::modfs::read(&d.join("previews/umpire.png")).ok().and_then(|b| decode(&b))).collect();
+    menu.umpire_pics = read.iter().map(|r| r.as_ref().map(|r| r.0)).collect();
+    pics.handles = read.into_iter().map(|r| r.map(|r| images.add(r.1))).collect();
+    pics.dirs = dirs;
+}
+
+/// A picture's PNG: its [`Pic`] and image.
+fn decode(png: &[u8]) -> Option<(Pic, Image)> {
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
+    let face = head(&img)?;
+    let (w, h) = img.dimensions();
+    let pic = Pic { size: [w as f32, h as f32], face };
+    Some((pic, Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, img.into_raw(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)))
+}
+
+/// The square round a seated umpire's head: as wide as 0.36 of the figure's height, from just over its top, centred
+/// on what's drawn in its top fifth (the head and hat). None for a picture with nothing drawn.
+fn head(img: &image::RgbaImage) -> Option<[f32; 4]> {
+    let solid: Vec<(u32, u32)> = img.enumerate_pixels().filter(|p| p.2[3] > 127).map(|p| (p.0, p.1)).collect();
+    let (top, foot) = (solid.iter().map(|p| p.1).min()?, solid.iter().map(|p| p.1).max()?);
+    let tall = (foot - top + 1) as f32;
+    let crown: Vec<f32> = solid.iter().filter(|p| ((p.1 - top) as f32) < 0.2 * tall).map(|p| p.0 as f32 + 0.5).collect();
+    let cx = crown.iter().sum::<f32>() / crown.len() as f32;
+    let s = 0.36 * tall;
+    Some([cx - s / 2.0, top as f32 - 0.05 * s, s, s])
+}
+
+/// B400: umpire mod `v`'s card on the strip in `r` when it has a picture: its head across the card (cut to the card's
+/// shape), the name on its foot as Random's. False: no picture (the plain named card).
+pub(super) fn card(d: &mut Draw, m: &Menu, v: usize, r: [f32; 4], on: bool, text: &Text) -> bool {
+    let Some((i, pic)) = picture(m, v) else { return false };
+    let [fx, fy, fs, _] = pic.face;
+    // the head's square widened to the card's shape about its middle, its top kept
+    let w = fs * r[2] / r[3];
+    d.q(Tex::Solid, [0.0; 4], r, if on { [70.0, 66.0, 86.0] } else { [44.0, 40.0, 54.0] }, 128.0);
+    d.q(Tex::Umpire(i), [fx + fs / 2.0 - w / 2.0, fy, w, fs], r, if on { WHITE } else { [100.0; 3] }, 128.0);
+    let name = m.umpire_name(text, v);
+    let rgb = if on { super::GOLD } else { WHITE };
+    d.outlined(|d| d.label(&name, r[0] + r[2] / 2.0, r[1] + r[3] - 14.0, 12.0, r[2] - 4.0, rgb));
+    true
+}
+
+/// B400: umpire mod `v`'s whole picture on the select's stage `[x, y, w, h]`, as big as fits. False: no picture.
+pub(super) fn stage(d: &mut Draw, m: &Menu, v: usize, [x, y, w, h]: [f32; 4]) -> bool {
+    let Some((i, pic)) = picture(m, v) else { return false };
+    let [sw, sh] = pic.size;
+    let ph = (h - 16.0).min((w - 16.0) * sh / sw);
+    let pw = ph * sw / sh;
+    d.q(Tex::Umpire(i), [0.0, 0.0, sw, sh], [x + (w - pw) / 2.0, y + (h - ph) / 2.0, pw, ph], WHITE, 128.0);
+    true
+}
+
+/// B400: umpire mod `v`'s round face of `size` centred on `[x, y]` (the confirm card's): the disc faces' dark rim and
+/// white ring, its head clipped round inside. False: no picture.
+pub(super) fn face(d: &mut Draw, m: &Menu, v: usize, [x, y]: [f32; 2], size: f32) -> bool {
+    let Some((i, pic)) = picture(m, v) else { return false };
+    for (inset, rgb) in [(0.0, [36.0, 35.0, 34.0]), (0.7, WHITE)] {
+        let r = size / 2.0 - inset;
+        for (src, dst) in super::super::menu_art::pill_quads(0, [x - r, y - r, 2.0 * r, 2.0 * r]) {
+            d.q(Tex::Pill, src, dst, rgb, 128.0);
+        }
+    }
+    let r = size / 2.0 - 2.2;
+    d.q(Tex::Solid, [0.0; 4], [x - r, y - r, 2.0 * r, 2.0 * r], [70.0, 66.0, 86.0], 128.0);
+    d.out.last_mut().unwrap().round = [r; 4];
+    d.q(Tex::Umpire(i), pic.face, [x - r, y - r, 2.0 * r, 2.0 * r], WHITE, 128.0);
+    d.out.last_mut().unwrap().round = [r; 4];
+    true
+}
+
+/// Umpire value `v`'s mod index and picture, if it's a mod with one.
+fn picture(m: &Menu, v: usize) -> Option<(usize, Pic)> {
+    let i = v.checked_sub(UMPIRES + 1)?;
+    Some((i, (*m.umpire_pics.get(i)?)?))
+}
 
 /// The umpire mods' values on the select's strip, after the disc five.
 pub(super) fn values(m: &Menu) -> impl Iterator<Item = usize> {
@@ -92,5 +198,31 @@ mod tests {
         m.umpire_mods.pop();
         m.umpire_in_range();
         assert_eq!(m.umpire as usize, UMPIRES);
+    }
+
+    /// B400: a mod's `previews/umpire.png` gives its head's square (0.36 of the figure's height, centred on its top
+    /// fifth); only mod values with a picture draw one, a blank picture is none.
+    #[test]
+    fn umpire_mod_pictures_find_the_head() {
+        // a 100-tall figure from y 20: a 20-wide head at x 40..60 on a 60-wide body at x 10..70
+        let mut img = image::RgbaImage::new(80, 130);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            if (20..40).contains(&y) && (40..60).contains(&x) || (40..120).contains(&y) && (10..70).contains(&x) {
+                *p = image::Rgba([200, 100, 50, 255]);
+            }
+        }
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let (pic, _) = super::decode(&png).unwrap();
+        let s = 0.36 * 100.0;
+        assert_eq!(pic, super::Pic { size: [80.0, 130.0], face: [50.0 - s / 2.0, 20.0 - 0.05 * s, s, s] });
+        let mut blank = Vec::new();
+        image::RgbaImage::new(8, 8).write_to(&mut std::io::Cursor::new(&mut blank), image::ImageFormat::Png).unwrap();
+        assert!(super::decode(&blank).is_none());
+        let m = Menu { umpire_pics: vec![None, Some(pic)], ..default() };
+        assert_eq!(super::picture(&m, UMPIRES + 2), Some((1, pic)));
+        for v in [0, UMPIRES, UMPIRES + 1, UMPIRES + 3] {
+            assert_eq!(super::picture(&m, v), None);
+        }
     }
 }
