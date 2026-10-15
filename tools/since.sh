@@ -8,7 +8,7 @@ cut=(cut -c1-140)  # ponytail: hard line cap keeps it cheap; raise if lines get 
 {
 echo "== since $(git log -1 --format='%h %cd' --date=format:'%m-%d %H:%M' "$rev")"
 echo "-- changes"
-git log --no-merges --reverse --format='%s' "$rev"..HEAD | "${cut[@]}"
+git log --no-merges --reverse --format='%s' "$rev"..HEAD | grep -vE '^(TODO|plan):' | "${cut[@]}"  # task-list edits aren't changes
 echo "-- newly blocked"
 blk() { grep -o '^- \[~\] \*\*[^*]*\*\*' | cut -d'*' -f3 | sort -u; }
 comm -13 <(git show "$rev":plan/TODO.md | blk) <(blk < plan/TODO.md) | while read -r id; do
