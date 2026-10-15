@@ -4,7 +4,8 @@
 //! EE side in FPU arithmetic (`ps2`), the micro program's in VU arithmetic (`vu0`).
 #![deny(clippy::float_arithmetic)]
 
-use crate::{ps2, vu0};
+use crate::ps2::F;
+use crate::vu0::Vf;
 
 /// The noise phase wraps at the table's length.
 const SPAN: f32 = 32.0;
@@ -12,7 +13,7 @@ const SPAN: f32 = 32.0;
 /// The global wind rate the deformers scale by: speed·0.0889 + 0.2, set at every game from its wind (`adda 0, 0.2;
 /// madd speed, k`). Before the first game it is 1.0.
 pub fn wind(speed: f32) -> f32 {
-    ps2::madd(ps2::add(0.0, 0.2), f32::from_bits(0x3db6_0b61), speed)
+    (F::ZERO + 0.2).madd(f32::from_bits(0x3db6_0b61), speed).0
 }
 
 /// One deformer's EE state: the noise frequency, and the phase now and a frame ago (the VU draws with the latter).
@@ -28,23 +29,23 @@ pub struct Noise {
 impl Noise {
     /// From the `.NOI` entry's period: 500/period.
     pub fn new(period: f32) -> Self {
-        Noise { freq: ps2::mul(500.0, ps2::div(1.0, period)), phase: 0.0, prev: -1.0, amp: 0.0, rate: 0.0 }
+        Noise { freq: (500.0 * (1.0 / F(period))).0, phase: 0.0, prev: -1.0, amp: 0.0, rate: 0.0 }
     }
 
     /// The per-frame update: amplitude and rate from the wind, the previous phase kept, the phase advanced by
     /// `dt`·rate and wrapped into [0, 32). `amp` is the entry's first amplitude (the other two go unread).
     pub fn step(&mut self, dt: f32, rate: f32, amp: f32, wind: f32) {
-        self.amp = ps2::mul(wind, ps2::mul(f32::from_bits(0x3b17_3ca7), amp)); // amp / 433.3
-        self.rate = ps2::mul(wind, ps2::mul(f32::from_bits(0x3dcc_cccd), rate));
+        self.amp = (wind * (F(f32::from_bits(0x3b17_3ca7)) * amp)).0; // amp / 433.3
+        self.rate = (wind * (F(f32::from_bits(0x3dcc_cccd)) * rate)).0;
         self.prev = self.phase;
-        self.phase = ps2::madd(ps2::add(0.0, self.phase), dt, self.rate);
+        self.phase = (F::ZERO + self.phase).madd(dt, self.rate).0;
         if self.phase < SPAN {
             while self.phase < 0.0 {
-                self.phase = ps2::add(self.phase, SPAN);
+                self.phase = (F(self.phase) + SPAN).0;
             }
         } else {
             while self.phase >= SPAN {
-                self.phase = ps2::sub(self.phase, SPAN);
+                self.phase = (F(self.phase) - SPAN).0;
             }
         }
     }
@@ -63,7 +64,7 @@ pub fn table() -> [f32; 32] {
     let mut r = 0x4049_0fd0u32 & 0x7f_ffff | 0x3f80_0000; // RINIT with the game's π, 3.14159012
     std::array::from_fn(|k| {
         r = (r << 1 ^ (r >> 4 & 1) ^ (r >> 22 & 1)) & 0x7f_ffff | 0x3f80_0000; // RNEXT
-        vu0::mul(vu0::add(f32::from_bits(r), 2.0), if k % 2 == 0 { 0.25 } else { -0.25 })
+        ((Vf(f32::from_bits(r)) + 2.0) * if k % 2 == 0 { 0.25 } else { -0.25 }).0
     })
 }
 
@@ -71,23 +72,24 @@ pub fn table() -> [f32; 32] {
 /// weight. Each lane reads the noise of another: x of (z + y), y of (x + z), z of (y + x).
 pub fn deform(t: &[f32; 32], p: [f32; 3], weight: f32, freq: f32, prev: f32, amp: f32) -> [f32; 3] {
     let trunc = |x: f32| x.trunc(); // FTOI0 then ITOF0
-    let s = [vu0::add(p[0], p[2]), vu0::add(p[1], p[0]), vu0::add(p[2], p[1])];
+    let trunc = |x: Vf| Vf(trunc(x.0));
+    let s = [Vf(p[0]) + p[2], Vf(p[1]) + p[0], Vf(p[2]) + p[1]];
     let mut floor = [0i32; 3];
-    let mut frac = [0f32; 3];
+    let mut frac = [Vf(0.0); 3];
     for k in 0..3 {
-        let x = vu0::madd(vu0::add(0.0, prev), s[k], freq);
+        let x = (0.0 + Vf(prev)).madd(s[k], freq);
         let whole = trunc(x);
-        let f = vu0::sub(x, whole);
-        let g = trunc(vu0::sub(f, 1.0)); // −1 for f ≤ 0 (so a whole x lands on frac 1), else 0
-        floor[k] = vu0::add(whole, g) as i32;
-        frac[k] = vu0::sub(f, g);
+        let f = x - whole;
+        let g = trunc(f - 1.0); // −1 for f ≤ 0 (so a whole x lands on frac 1), else 0
+        floor[k] = (whole + g).0 as i32;
+        frac[k] = f - g;
     }
     std::array::from_fn(|k| {
         let j = (k + 2) % 3; // lane x reads z, y reads x, z reads y
-        let a = t[(floor[j] & 31) as usize];
-        let b = t[(vu0::add(floor[j] as f32, 1.0) as i32 & 31) as usize];
-        let n = vu0::madd(vu0::mul(a, 1.0), frac[j], vu0::sub(b, a));
-        vu0::madd(vu0::mul(p[k], 1.0), vu0::mul(amp, n), weight)
+        let a = Vf(t[(floor[j] & 31) as usize]);
+        let b = t[((Vf(floor[j] as f32) + 1.0).0 as i32 & 31) as usize];
+        let n = (a * 1.0).madd(frac[j], b - a);
+        (Vf(p[k]) * 1.0).madd(amp * n, weight).0
     })
 }
 
@@ -101,7 +103,7 @@ mod tests {
         assert!(t.iter().step_by(2).all(|&v| (0.75..1.0).contains(&v)));
         assert!(t.iter().skip(1).step_by(2).all(|&v| (-1.0..=-0.75).contains(&v)));
         // RINIT 0x40490fd0 → R 0x3fc90fd0; the first RNEXT shifts in bit 4 (1) ^ bit 22 (1) = 0
-        assert_eq!(t[0], vu0::mul(vu0::add(f32::from_bits(0x3f92_1fa0), 2.0), 0.25));
+        assert_eq!(t[0], ((Vf(f32::from_bits(0x3f92_1fa0)) + 2.0) * 0.25).0);
     }
 
     #[test]

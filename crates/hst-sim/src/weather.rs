@@ -4,8 +4,9 @@
 //! Weathers: 0 clear, 1 cloudy, 2 rain, 3 heavy rain (4 and 5 are drawn like 2 and 3 but never scheduled).
 //! Rain (2 and 3) also makes running slower to pick up (`player::Stats::new`) and the dive thud wet
 //! (`sound::dive_thud`).
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
+use crate::ps2::{self, F};
 
 /// Games in a schedule; the game counter wraps around it.
 pub const GAMES: usize = 65;
@@ -96,8 +97,8 @@ pub fn schedule(odds: &Odds, wind: &Wind, games: i32, sets: i32, players: i32, m
                         9.0
                     } else {
                         // adda base; madd (5 − base)·(2⁻³²·u)
-                        let u = ps2::mul(2.328_306_4e-10, ps2::utof(rand()));
-                        ps2::madd(ps2::add(0.0, wind.speed), ps2::sub(5.0, wind.speed), u)
+                        let u = 2.328_306_4e-10 * F(ps2::utof(rand()));
+                        (F::ZERO + wind.speed).madd(5.0 - F(wind.speed), u).0
                     };
                     g.degrees = dirs[r15(&mut rand) as usize % dirs.len()];
                 }
@@ -130,7 +131,7 @@ impl Look {
 }
 
 pub fn look(weather: u8, row: [f32; 6]) -> Look {
-    let f = |v: f32| (v >= 0.0).then(|| (1.0 - v) * 255.0);
+    let f = |v: f32| (v >= 0.0).then(|| ((1.0 - F(v)) * 255.0).0);
     let v = |v: f32| (v >= 0.0).then_some(v);
     Look { sky: f(row[0]), bg: f(row[1]), far: f(row[2]), z: [v(row[3]), v(row[4])], scale: row[5], grey: weather >= 2 }
 }
@@ -138,9 +139,9 @@ pub fn look(weather: u8, row: [f32; 6]) -> Look {
 /// The court shadow's strength S (0..255) in this weather.
 pub fn shadow(s: u32, weather: u8) -> u32 {
     match weather {
-        1 => (s as f32 * 0.75) as u32,
-        2 => (s as f32 * 0.5) as u32,
-        3 => (s as f32 * 0.25) as u32,
+        1 => (F(s as f32) * 0.75).0 as u32,
+        2 => (F(s as f32) * 0.5).0 as u32,
+        3 => (F(s as f32) * 0.25).0 as u32,
         _ => s,
     }
 }
@@ -181,14 +182,14 @@ pub fn shows(weather: u8) -> (bool, bool, bool) {
 /// The wind as the game sets it at each game: the row of a turn about Y by `degrees` (wrapped into ±π) that points
 /// where it blows, times `speed` / 60 (metres a frame). Footstep puffs drift by it.
 pub fn wind(degrees: f32, speed: f32) -> [f32; 4] {
-    let mut a = ps2::mul(degrees, 0.017453292);
+    let mut a = F(degrees) * 0.017453292;
     if 3.1415927 < a {
-        a = ps2::sub(a, 6.2831855);
+        a = a - 6.2831855;
     } else if a < -3.1415927 {
-        a = ps2::add(a, 6.2831855);
+        a = a + 6.2831855;
     }
-    let s = ps2::mul(speed, 0.016666668);
-    crate::world::rot_y(a)[2].map(|v| ps2::mul(v, s))
+    let s = F(speed) * 0.016666668;
+    crate::world::rot_y(a.0)[2].map(|v| (F(v) * s).0)
 }
 
 #[cfg(test)]

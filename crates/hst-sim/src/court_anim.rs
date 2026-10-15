@@ -11,7 +11,7 @@
 
 use hst_data::{mdl::Model, mor::Tracks, mtl::Material};
 
-use crate::{effect::Channel, face, motion::Clock, ps2};
+use crate::{effect::Channel, face, motion::Clock, ps2::F};
 
 struct UvTrack {
     ticks: Vec<i32>,
@@ -103,7 +103,7 @@ impl CourtAnim {
     pub fn tick(&mut self) {
         if !self.uva.is_empty() {
             self.uva_clock.tick(self.uva_length);
-            let t = ps2::mul(self.uva_clock.sampled, self.uva_tpf);
+            let t = (F(self.uva_clock.sampled) * self.uva_tpf).0;
             for tr in &mut self.uva {
                 let v = face::sample(&tr.ticks, &tr.values, t, &mut tr.cursor, true);
                 tr.value = [v[0], v[1]];

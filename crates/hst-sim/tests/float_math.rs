@@ -8,25 +8,25 @@ use std::path::Path;
 
 /// Modules with plain `f32` arithmetic left (no deny attribute yet).
 const PLAIN: &[&str] = &[
-    "aim", "ai", "bodyhit", "camera", "clouds", "contact", "cutaway", "effect", "flow", "foot", "instant", "judge", "libm",
-    "mesh", "motion", "npc", "params", "pose", "position", "quat", "rally", "rng", "serve", "shade", "sound", "stats",
-    "swing", "tornado", "umpire", "weather", "world",
+    "aim", "ai", "camera", "cutaway", "effect", "flow", "foot", "instant", "judge", "libm",
+    "motion", "npc", "params", "pose", "position", "rally", "rng", "serve", "shade", "sound", "stats",
+    "swing", "umpire",
 ];
 
 /// Modules still calling `ps2::add(…)`, `vu0::mul(…)` … instead of the operators.
 const CALLS: &[&str] = &[
-    "aim", "ai", "bodyhit", "clouds", "contact", "court_anim", "effect", "face", "foot", "instant", "judge", "libm", "mesh",
-    "motion", "noise", "npc", "params", "pose", "position", "quat", "rally", "rng", "serve", "shade", "sound", "swing",
-    "tornado", "weather", "world",
+    "aim", "ai", "effect", "face", "foot", "instant", "judge", "libm",
+    "motion", "npc", "params", "pose", "position", "rally", "rng", "serve", "shade", "sound", "swing",
 ];
 
 const OPS: [&str; 8] = ["add", "sub", "mul", "div", "madd", "msub", "sqrt", "lerp"];
 
 /// Whether `src` calls a `ps2`/`vu0` arithmetic function: a qualified call, or one imported by name.
+/// `vu0::lerp` is the four-lane blend (a vector helper like `vu0::dot3`), not a lane op.
 fn calls_by_hand(src: &str) -> bool {
-    let qualified = ["ps2::", "vu0::"]
-        .iter()
-        .any(|m| OPS.iter().any(|op| src.contains(&format!("{m}{op}(")) || src.contains(&format!("{m}{op},"))));
+    let qualified = ["ps2::", "vu0::"].iter().any(|m| {
+        OPS.iter().filter(|&&op| !(*m == "vu0::" && op == "lerp")).any(|op| src.contains(&format!("{m}{op}(")) || src.contains(&format!("{m}{op},")))
+    });
     let imported = src.lines().filter(|l| l.trim_start().starts_with("use crate::ps2") || l.trim_start().starts_with("use crate::vu0")).any(|l| {
         l.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| OPS.contains(&w))
     });
