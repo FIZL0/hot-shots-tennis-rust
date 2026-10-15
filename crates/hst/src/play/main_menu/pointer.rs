@@ -523,7 +523,7 @@ pub(super) mod tests {
             Vec2::new(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0)
         };
         let right = Press { right: true, ..default() };
-        // the host's lobby: the mouse moved onto Copy Link selects it, then the pad's ↓ to Public holds
+        // the host's lobby: the mouse moved onto Copy Link selects it, then the pad's → to Public holds
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         super::super::online::sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
@@ -532,7 +532,7 @@ pub(super) mod tests {
         let at = centre(&m, copy);
         frame(&mut app, &mut m, at, 0);
         assert_eq!(m.sel, copy, "hovering selects");
-        m.step(Dev::Keys, Press { down: true, ..default() });
+        m.step(Dev::Keys, right);
         assert_eq!(m.sel, copy + 1);
         for n in 1..30 {
             if n == 10 {

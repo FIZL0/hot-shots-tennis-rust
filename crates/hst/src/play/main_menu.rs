@@ -2640,13 +2640,9 @@ fn face_frame(d: &mut Draw, (tex, src): (Tex, [f32; 4]), x: f32, y: f32, size: f
     d.q(tex, src, [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
 }
 
-/// B295: the side card's width, a seat row's height and pitch, and the gap between the teams' groups.
+/// B295: the side card's width.
 const SIDE_W: f32 = 190.0;
-const ROW_H: f32 = 34.0;
-const ROW_PITCH: f32 = 38.0;
-const TEAM_GAP: f32 = 18.0;
-/// B295: the status chips' words on white (the mockup's): Host pink, Ready orange, a computer green.
-const CHIP_HOST: [f32; 3] = [88.0, 24.0, 53.0];
+/// B295: the status chips' words on white (the mockup's): Ready orange, a computer green.
 const CHIP_READY: [f32; 3] = [90.0, 48.0, 3.0];
 const CHIP_COM: [f32; 3] = [30.0, 61.0, 15.0];
 
@@ -2672,39 +2668,6 @@ impl Grid {
     }
 }
 
-/// B295: team `k`'s group (of `per` seats) in the seats column `col`.
-fn team_box(col: [f32; 4], per: usize, k: usize) -> [f32; 4] {
-    let h = 24.0 + ROW_PITCH * per as f32;
-    [col[0], col[1] + (h + TEAM_GAP) * k as f32, col[2], h]
-}
-
-/// B295: seat `i`'s row (1P, 2P on the first team; doubles 3P, 4P on the second).
-fn seat_rect(col: [f32; 4], doubles: bool, i: usize) -> [f32; 4] {
-    let per = 1 + doubles as usize;
-    let [x, y, w, _] = team_box(col, per, i / per);
-    [x + 6.0, y + 22.0 + ROW_PITCH * (i % per) as f32, w - 12.0, ROW_H]
-}
-
-/// B295: the context help under the seats.
-fn help_rect(col: [f32; 4], doubles: bool) -> [f32; 4] {
-    let [x, y, w, h] = team_box(col, 1 + doubles as usize, 1);
-    [x, y + h + 8.0, w, 40.0]
-}
-
-/// B295: the teams' groups ("Team 1", "Team 2") behind the seat rows.
-fn team_boxes(d: &mut Draw, col: [f32; 4], doubles: bool) {
-    for k in 0..2 {
-        let [x, y, w, h] = team_box(col, 1 + doubles as usize, k);
-        d.box3([x, y, w, h], 12.0, [Some(INK), Some(WHITE), Some(CREAM)], 120.0);
-        d.text(&format!("TEAM {}", k + 1), x + 10.0, y + 5.0, 12.0, [38.0, 51.0, 32.0]);
-    }
-}
-
-/// B295: the help line's box under the seats, `s` word-wrapped onto its two lines (shrunk to fit).
-fn help_line(d: &mut Draw, col: [f32; 4], doubles: bool, s: &str) {
-    help_box(d, help_rect(col, doubles), s);
-}
-
 /// The help box at `[x, y, w, h]`.
 fn help_box(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &str) {
     d.box3([x, y, w, h], 10.0, [None, None, Some(WHITE)], 96.0);
@@ -2727,50 +2690,6 @@ fn help_box(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &str) {
 fn left(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32, rgb: [f32; 3]) {
     let w = d.width(s, size).min(max);
     d.label(s, x + w / 2.0, y, size, max, rgb);
-}
-
-/// B295: what a seat row shows.
-struct SeatRow<'a> {
-    /// the player (its colour and tag)
-    p: usize,
-    face: Option<(Tex, [f32; 4])>,
-    name: &'a str,
-    /// the name dimmed (still picking)
-    faint: bool,
-    who: &'a str,
-    /// the status chip's words and their colour (None: see-through, white words)
-    chip: (&'a str, Option<[f32; 3]>),
-    /// taken (not an open seat)
-    filled: bool,
-    /// the cursor's
-    on: bool,
-}
-
-/// B295: a seat's row (`mockups/Lobby`): the player's colour, "NP", the face, the character over the player, the
-/// status chip at the right end (`end` units in from it, for a ✕), gold-ringed when chosen.
-fn seat_row(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &SeatRow, end: f32) {
-    let fill = if s.filled { CARD_FILL[s.p] } else { CARD_FILL[s.p].map(|c| c * 0.45) };
-    let ring = if s.on { GOLD } else if s.filled { WHITE } else { [60.0; 3] };
-    d.box3([x, y, w, h], 12.0, [Some(INK), Some(ring), Some(fill)], 128.0);
-    d.text(&format!("{}P", s.p + 1), x + 8.0, y + 8.0, 18.0, WHITE);
-    let fx = x + 50.0;
-    match s.face {
-        Some(f) => face_frame(d, f, fx, y + h / 2.0, h - 6.0, WHITE),
-        None => {
-            let r = (h - 6.0) / 2.0;
-            for (src, dst) in super::menu_art::pill_quads(0, [fx - r, y + h / 2.0 - r, 2.0 * r, 2.0 * r]) {
-                d.q(Tex::Pill, src, dst, [40.0; 3], 128.0);
-            }
-        }
-    }
-    let (words, fill) = s.chip;
-    let cw = d.width(words, 12.0).min(90.0) + 18.0;
-    let cx = x + w - end - 6.0 - cw;
-    d.pill_at([cx, y + 8.0, cw, 18.0], [fill.map_or([40.0; 3], |_| [60.0; 3]), fill.map_or([40.0; 3], |_| WHITE), fill.map_or([40.0; 3], |_| WHITE)], if fill.is_some() { 128.0 } else { 70.0 });
-    d.label(words, cx + cw / 2.0, y + 10.0, 12.0, cw - 6.0, fill.unwrap_or(WHITE));
-    let (tx, tw) = (fx + h / 2.0 + 4.0, cx - fx - h / 2.0 - 10.0);
-    left(d, s.name, tx, y + 2.0, 17.0, tw, if s.faint { [100.0; 3] } else { WHITE });
-    left(d, s.who, tx, y + 20.0, 11.0, tw, [118.0; 3]);
 }
 
 /// The confirm screen (B295, ours after `mockups/Lobby`): the seats as rows by team with the original's VS between
@@ -3642,24 +3561,6 @@ mod tests {
         assert!(gold(0) && !gold(1));
     }
 
-    /// B282: a seat row draws a disc character's name and a mod's the same way: our font's glyphs, same size and
-    /// colour (no disc name-sheet art for one and text for the other).
-    #[test]
-    fn seat_names_one_style() {
-        let glyphs = ('A'..='z').map(|c| (c, (0.0, 0.0, 16.0))).collect();
-        let t = Text { msg: Vec::new(), glyphs, grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
-        let name = |s: &str| {
-            let mut d = Draw { out: Vec::new(), text: &t, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
-            let row = SeatRow { p: 0, face: None, name: s, faint: false, who: "", chip: ("", None), filled: true, on: false };
-            seat_row(&mut d, [0.0, 0.0, 300.0, 40.0], &row, 0.0);
-            let font: Vec<_> = d.out.iter().filter(|q| q.tex == Tex::Font && q.dst[1] == 2.0).map(|q| (q.dst[3], q.rgb, q.alpha)).collect();
-            assert!(d.out.iter().all(|q| !matches!(q.tex, Tex::Sheet(_))), "{s}: no sheet art");
-            font
-        };
-        let (disc, mods) = (name(CHAR_NAMES[0]), name("Anya"));
-        assert!(!disc.is_empty() && disc[0] == mods[0] && disc.iter().chain(&mods).all(|&q| q == disc[0]));
-    }
-
     /// A 2160-pixel-high view: a box's middle and bottom slices on the 3P row meet on a half pixel (238 units); snapped,
     /// the middle slice ends on the pixel the bottom one starts on, so no seam shows the team box through the row.
     #[test]
@@ -4321,7 +4222,7 @@ mod tests {
     }
 
     /// B295: the lobby and confirm screens at any aspect: the seats column and side card in the view, apart, over the
-    /// legend strip; the seats and help line in their column; every button on the side card, none overlapping.
+    /// legend strip; every button on the side card, none overlapping (B370: the lobby's items in the view, apart).
     #[test]
     fn lobby_and_confirm_fit_the_window() {
         use super::super::widescreen::{share, vplace, vshare};
@@ -4338,9 +4239,6 @@ mod tests {
                 assert!(t + h <= legend + 1e-3, "{a} {r:?}");
             }
             assert!(!overlap(col, side), "{a}");
-            for doubles in [false, true] {
-                assert!(inside(help_rect(col, doubles), col), "{a} {doubles}");
-            }
             let mut m = Menu { screen: Screen::Confirm, grid: g, ..default() };
             let rows = confirm_rects(&m);
             assert!(rows.iter().all(|&r| inside(r, side)) && (0..5).all(|i| (0..i).all(|j| !overlap(rows[i], rows[j]))), "{a} {rows:?}");
@@ -4355,8 +4253,8 @@ mod tests {
                 assert!(rects.iter().all(|&x| inside(x, [l, t, r - l, b - t])), "{a} {hosting} {rects:?}");
                 for i in 0..rects.len() {
                     for j in 0..i {
-                        // a computer's ✕ sits on its own seat's row
-                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 26.0, "{a} {hosting} {i} {j} {rects:?}");
+                        // a computer's ✕ sits on its own seat's card
+                        assert!(!overlap(rects[i], rects[j]) || rects[i][2] == 22.0, "{a} {hosting} {i} {j} {rects:?}");
                     }
                 }
             }

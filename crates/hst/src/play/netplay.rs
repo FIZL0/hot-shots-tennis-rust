@@ -604,6 +604,10 @@ pub fn flags(room: &Room, me: &str, devices: &[Option<super::controls::Seat>], e
         "--pads".into(),
         super::controls::Seat::flag(&seats),
     ]);
+    // B370: the select's hand toggles, by match slot
+    if order.iter().any(|&s| pick(s).is_some_and(|p| p.swap)) {
+        a.extend(["--swap-hands".into(), order.iter().map(|&s| if pick(s).is_some_and(|p| p.swap) { "1" } else { "0" }).collect::<Vec<_>>().join(",")]);
+    }
     a.extend(extra.iter().cloned());
     a
 }
@@ -696,6 +700,12 @@ mod tests {
         let flag = |f: &str| a[a.iter().position(|x| x == f).unwrap() + 1].clone();
         assert_eq!((flag("--chars"), flag("--outfits")), ("5,7,6,8".into(), "2,1,0,2".into()));
         assert_eq!((flag("--pads"), flag("--court"), flag("--sets"), flag("--games")), ("99,k,0,99".into(), "3".into(), "2".into(), "3".into()));
+        assert!(!a.contains(&"--swap-hands".to_string()), "no toggle on: no flag");
+        // B370: 2P's (the guest's first) hand toggle, at its match slot
+        let mut room = room;
+        room.seats[1].as_mut().unwrap().pick.swap = true;
+        let a = flags(&room, "host", &[None, None], &[]);
+        assert_eq!(a[a.iter().position(|x| x == "--swap-hands").unwrap() + 1], "0,0,1,0");
     }
 
     /// The court intro online (B42e): the guest's ✕ on its intro tick 10 skips on both machines at tick 10 + delay,
