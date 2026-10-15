@@ -104,6 +104,9 @@ const css = `
   font-size: calc(var(--u) * .3); opacity: .7; }
 /* B112: upright, the pad sits under the picture (the 4:3 screen is letterboxed mid-height), sized by the width */
 @media (orientation: portrait) { .touch:not(.duo) { --u: min(12vw, 7vh); } .touch:not(.duo):not(.menu) .zone { top: 50%; } }
+/* B313: upright, the shoulders and Select/Start sit over the face buttons (as in B118's 1v1), not along the top edge:
+   there the status bar and the notch (viewport-fit=cover) covered them, and the thumbs are at the bottom anyway */
+@media (orientation: portrait) { .touch button.small { top: auto !important; bottom: calc(env(safe-area-inset-bottom) + var(--u) * 4.1) !important; } }
 /* B118: each player's set at their own end (a phone upright: the bottom and top 45%), the shoulders and Select/Start
    over the face buttons instead of along the screen's far edge */
 .touch.duo { --u: min(11vw, 6.5vh); }
@@ -117,10 +120,10 @@ const layout = [
   ['circle', '○', right(0.2, 1.5)],
   ['square', '□', right(2.6, 1.5)],
   ['triangle', '△', right(1.4, 2.7)],
-  ['l1', 'L1', 'left: calc(env(safe-area-inset-left) + var(--u) * .4); top: calc(var(--u) * .3)', 'small'],
-  ['r1', 'R1', 'right: calc(env(safe-area-inset-right) + var(--u) * .4); top: calc(var(--u) * .3)', 'small'],
-  ['select', 'SELECT', 'left: calc(50% - var(--u) * 1.8); top: calc(var(--u) * .3)', 'small'],
-  ['start', 'START', 'left: calc(50% + var(--u) * .3); top: calc(var(--u) * .3)', 'small'],
+  ['l1', 'L1', 'left: calc(env(safe-area-inset-left) + var(--u) * .4); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
+  ['r1', 'R1', 'right: calc(env(safe-area-inset-right) + var(--u) * .4); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
+  ['select', 'SELECT', 'left: calc(50% - var(--u) * 1.8); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
+  ['start', 'START', 'left: calc(50% + var(--u) * .3); top: calc(env(safe-area-inset-top) + var(--u) * .3)', 'small'],
 ];
 const style = document.createElement('style');
 style.textContent = css;
