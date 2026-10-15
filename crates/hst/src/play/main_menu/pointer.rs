@@ -31,6 +31,9 @@ pub(super) enum Act {
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
     Tab(usize),
+    /// B372: a Browse tile (cursor slot `i`): the mouse over it selects it; a tap selects it, a tap on the one a tap
+    /// chose presses ✕ (a finger going down only, not hovering, so a drag scrolls without choosing).
+    Tile(usize),
 }
 
 /// ✕.
@@ -165,6 +168,21 @@ impl Menu {
             }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
+            Act::Tile(i) if tap => {
+                if self.add.tile_tap(i) && self.sel == i {
+                    out = self.step(dev, OK);
+                } else {
+                    self.choose(i);
+                    self.add.tile_tap(i);
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Tile(i) => {
+                if self.choose(i) {
+                    self.add.b_untap();
+                    out.push(Effect::Sound(0));
+                }
+            }
         }
         out
     }
@@ -244,6 +262,8 @@ pub(in crate::play) fn pointer(
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
     let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(_)));
+    // the mouse also hovers Browse's tiles (a finger doesn't: it scrolls them)
+    let mouse_hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(_) | Act::Tile(_)));
     // touch
     for t in touches.iter_just_pressed() {
         if st.finger.is_none() {
@@ -280,7 +300,7 @@ pub(in crate::play) fn pointer(
         // hidden: still follow what's under it, so waking it (a compositor's stray motion as the pointer hides or shows)
         // doesn't pull the pad's or keyboard's cursor back to the row it rests on; only moving onto another row does
         if let Some(c) = win.cursor_position() {
-            (st.mouse, st.hovered) = (Some(c), hover(at(c, SLOP)));
+            (st.mouse, st.hovered) = (Some(c), mouse_hover(at(c, SLOP)));
         }
     } else if now - st.touched > 0.6 {
         let c = win.cursor_position();
@@ -288,7 +308,7 @@ pub(in crate::play) fn pointer(
         // coming back to the same row doesn't select it again
         if c.is_some() && c != st.mouse {
             st.mouse = c;
-            let a = c.and_then(|c| hover(at(c, SLOP)));
+            let a = c.and_then(|c| mouse_hover(at(c, SLOP)));
             if a != st.hovered {
                 st.hovered = a;
                 out(a, false);
