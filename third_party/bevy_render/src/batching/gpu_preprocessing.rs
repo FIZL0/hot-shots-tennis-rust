@@ -1883,6 +1883,9 @@ pub fn batch_and_prepare_binned_render_phase<BPI, GFBD>(
             for main_entity in unbatchables.entities.keys() {
                 let Some(input_index) = GFBD::get_binned_index(&system_param_item, *main_entity)
                 else {
+                    // hst B395: same as B385's CPU path: keep this entity's slot so the ones after it keep their own
+                    // indices
+                    unbatchables.buffer_indices.skip();
                     continue;
                 };
                 let output_index = data_buffer.add() as u32;
