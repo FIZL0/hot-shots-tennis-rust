@@ -311,7 +311,14 @@ fn start(argv: Vec<String>) {
     if let Some((w, h)) = std::env::var("HST_WINDOW").ok().and_then(|v| v.split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
         resolution = bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0);
     }
-    app.add_plugins(DefaultPlugins.set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
+    // HST_WEBGL2=1: the web WebGL2 build's limits on the desktop (no storage buffers, CPU batching, uniform skins), with
+    // the browser's usual 8k/2k (3D) textures, to reproduce WebGL2-only renderer bugs natively (B385)
+    let mut render = bevy::render::settings::WgpuSettings::default();
+    if std::env::var_os("HST_WEBGL2").is_some() {
+        render.priority = bevy::render::settings::WgpuSettingsPriority::WebGL2;
+        render.limits = bevy::render::settings::WgpuLimits { max_texture_dimension_2d: 8192, max_texture_dimension_3d: 2048, ..bevy::render::settings::WgpuLimits::downlevel_webgl2_defaults() };
+    }
+    app.add_plugins(DefaultPlugins.set(bevy::render::RenderPlugin { render_creation: render.into(), ..default() }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]
