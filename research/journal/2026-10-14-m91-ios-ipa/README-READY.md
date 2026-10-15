@@ -1,0 +1,31 @@
+# M91 — native iOS IPA built on Linux
+
+User 2026-10-14: the browser build runs poorly on an iPhone 13 Pro; wants a native IPA they sign themselves. No Mac.
+
+## Toolchain (all on Linux, no sudo)
+- `tools/ios-sdk.py Xcode.xip` → `~/.local/share/hst-ios/iPhoneOS.sdk` (Xcode 27.1 RC → iOS 27.1 SDK, ~2 min).
+  Two traps in the .xip, both handled there:
+  - hard links: the bytes sit in one entry (usually MacOSX.sdk's); every other link is a same-size `NULLcanary`
+    placeholder, so plain `cpio` gives 2338 garbage headers. The odc inode field (18 bits) wraps, so links are matched
+    on dev + inode + size (an inode-only match put a .swiftinterface into stdint.h). Exits if two different files share a key.
+  - linker stubs: Xcode 27's .tbd files list only `arm64e-ios, arm64e.x1-ios`; no lld (rustup's is 23.1) knows
+    `arm64e.x1`, and there is no arm64 entry at all. arm64 apps link against arm64e system libraries (Apple's ld allows
+    it), so `arm64e.x1-ios` is renamed `arm64-ios`.
+- `tools/ios-build.sh [cargo args]`: clang + rustup's `gcc-ld/ld64.lld`, SDKROOT, iOS 15.0 minimum.
+- `tools/ios-ipa.sh` → `target/HotShotsTennis.ipa` (unsigned, 35 MB; binary stripped 175 → 106 MB). Bundle id
+  `io.github.fizl0.hst`, landscape, full screen, Files-app sharing on, icon = `web/icon-180.png`.
+
+## Code changes for iOS
+- `libc` pinned to 0.2.189 (Cargo.lock): 0.2.190 made `in6_ifreq` and the `RTM_*`/`RTAX_*` routing constants
+  macOS-only, which breaks `netdev`/`netwatch` (iroh) on iOS. Unpin once they adapt.
+- `bevy/system_clipboard` only off iOS (arboard has no iOS backend; the in-app clipboard remains).
+- `rfd` only on desktop; iOS's Add mod says to use the Files app (`modstore::pick`).
+- `disc.rs`: data dir = `$HOME/Documents` on iOS; no import before the window (launch watchdog): runs from the pack
+  if present, else straight from the first `*.iso` in Documents.
+
+## Not done / next
+- Input: gilrs has no iOS backend and the touch controls are `web/touch.js` (browser only), so the app reaches the
+  menu but can't be driven. Next: a GameController-framework bridge (Xbox/PS/MFi pads), then native touch controls.
+- No ISO in Documents → the app exits (message only on stderr). Wants an in-app screen.
+- LAN discovery (mDNS) needs Apple's multicast entitlement, which free signing can't get; internet play should work.
+- Not yet run on a device: **waiting on the user** to sign, install and launch it.
