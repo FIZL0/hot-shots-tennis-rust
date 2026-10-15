@@ -46,3 +46,11 @@ pad_dir_flip 18a470
 shot_frames_trunc 38176c
 pad_mode 189f40
 pad_motor 18a480
+# R4 (crates/hst-oracle/tests/rng.rs). newlib rand() (state: the reentrancy struct's +0xa8; the struct's pointer
+# at newlib_impure_ptr): hst_sim::ps2_rand::Rand::next
+newlib_rand 11f840
+newlib_impure_ptr 1b80f0
+# MT19937 object (0x9d0 bytes: words at +4, index +0x9c4, {0, 0x9908b0df} at +0x9c8): seed (a0 object, a1 seed)
+# and draw (a0 object): hst_sim::ps2_rand::Mt::new / next
+mt_seed 19f4f0
+mt_next 19f5c0

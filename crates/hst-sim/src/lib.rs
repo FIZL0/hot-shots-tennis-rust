@@ -3,6 +3,7 @@
 pub mod ball;
 pub mod params;
 pub mod ps2;
+pub mod ps2_rand;
 pub mod rng;
 pub mod shot;
 pub mod contact;
@@ -32,7 +33,6 @@ pub mod sound;
 pub mod umpire;
 pub mod npc;
 pub mod ai;
-pub mod mt;
 pub mod aim;
 pub mod rally;
 pub mod position;

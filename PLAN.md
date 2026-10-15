@@ -79,7 +79,8 @@ README *Character mods* — links the mods repo (../opentennis-mods: standard, t
 
 `crates/hst-sim/src/` — the game, bit-exact, no Bevy
 
-- arithmetic: `ps2.rs` EE FPU · `vu0.rs` VU0 · `libm.rs` game sinf/acosf/atan2f · `quat.rs` matrix↔quat, slerp
+- arithmetic: `ps2.rs` EE FPU · `vu0.rs` VU0 · `libm.rs` game sinf/acosf/atan2f · `quat.rs` matrix↔quat, slerp ·
+  `ps2_rand.rs` newlib `rand()` + MT19937 (no game code; `rng.rs` = the match's four generators on top)
 - ball: `ball.rs` Flight, bounces, materials, COURTS · `contact.rs` plane sweep · `mesh.rs` triangle sweep, world
   query · `world.rs` prop placement, 20 m grid · `court.rs` court collision world from disc
 - shots: `shot.rs` TRAJ tables, launch · `params.rs` per-character shot records · `swing.rs` contact search,
