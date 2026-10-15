@@ -51,7 +51,8 @@ pub static MESH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 /// Set for `--shot` and unattended (HST_BG) runs: their fixed-size window never goes fullscreen (`main.rs`).
 pub static KEEP_WINDOWED: AtomicBool = AtomicBool::new(false);
 
-pub const FPS: [u32; 5] = [30, 60, 120, 144, 0];
+/// P44: 240/360/480 for high-refresh monitors (the sim stays 60 Hz; drawing interpolates between ticks).
+pub const FPS: [u32; 8] = [30, 60, 120, 144, 240, 360, 480, 0];
 pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
 pub const SHADOWS: [Shadows; 3] = [Shadows::Off, Shadows::Low, Shadows::High];
 pub const MSAA: [u32; 3] = [1, 2, 4];
@@ -165,6 +166,13 @@ impl Graphics {
     }
 
     pub fn present_mode(&self) -> PresentMode {
+        // `HST_PRESENT=fifo|mailbox|immediate` (P44): one present mode for frame-pacing benches, over Vsync
+        match std::env::var("HST_PRESENT").as_deref() {
+            Ok("fifo") => return PresentMode::Fifo,
+            Ok("mailbox") => return PresentMode::Mailbox,
+            Ok("immediate") => return PresentMode::Immediate,
+            _ => {}
+        }
         if self.vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync }
     }
 
@@ -215,6 +223,7 @@ pub fn plugin(app: &mut App) {
         // the swapchain acquire: waits there while the GPU is still busy with earlier frames (P28)
         use bevy::render::{RenderSystems as R, view::prepare_windows};
         r.add_systems(bevy::render::Render, (mark::<7>.in_set(R::PrepareViews).before(prepare_windows), mark::<8>.in_set(R::PrepareViews).after(prepare_windows)));
+        r.add_systems(RenderGraph, limit_present.in_set(G::Finish));
         #[cfg(target_os = "ios")]
         r.add_systems(RenderGraph, (gpu_time::<false>.in_set(G::Begin), gpu_time::<true>.after(G::Render).before(G::Submit)));
     }
@@ -368,7 +377,9 @@ fn frame_start(mut split: ResMut<Split>, log: Option<ResMut<SplitLog>>) {
             let ms = |a: bevy::platform::time::Instant, b: bevy::platform::time::Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
             let frame = ms(t0, now);
             let acquire = t7.zip(t8).map_or(0.0, |(a, b)| ms(a, b));
-            for (sum, v) in split.0.iter_mut().zip([frame, ms(t0, t3), ms(t1, t2), ms(t3, t4), ms(t4, t5), ms(t5, t6)]) {
+            // the frame limit's sleep (`limit_present`) is between 5 and 6: idle, not submit
+            let slept = SLEPT_US.load(Ordering::Relaxed) as f32 / 1000.0;
+            for (sum, v) in split.0.iter_mut().zip([frame, ms(t0, t3), ms(t1, t2), ms(t3, t4), ms(t4, t5), (ms(t5, t6) - slept).max(0.0)]) {
                 *sum += v;
             }
             split.0[6] = split.0[6].max(frame);
@@ -632,11 +643,12 @@ fn fps_counter(
     }
 }
 
-/// The frame limit: sleep away what's left of the frame's time.
-// ponytail: thread::sleep overshoots by the OS timer's slack (≈0.1 ms on Linux); spin the last bit if that shows
+/// The frame limit for `limit_present`; `HST_PACE=main` (P44): sleep here instead, at the main world's frame end (the
+/// old limiter: up to a frame less input lag, uneven presents).
 fn limit(g: Res<Graphics>, mut next: Local<Option<Instant>>) {
+    LIMIT.store(g.fps, Ordering::Relaxed);
     // the browser paces frames itself (and can't sleep)
-    if g.fps == 0 || cfg!(target_arch = "wasm32") {
+    if g.fps == 0 || cfg!(target_arch = "wasm32") || !PACE_MAIN.load(Ordering::Relaxed) {
         *next = None;
         return;
     }
@@ -649,6 +661,38 @@ fn limit(g: Res<Graphics>, mut next: Local<Option<Instant>>) {
     }
     *next = Some(at + frame);
 }
+
+/// The frame limit (fps, 0 = none), from the main world's `Graphics` to the render world's `limit_present`.
+static LIMIT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// `HST_PACE=main`: `limit` sleeps instead of `limit_present`.
+static PACE_MAIN: std::sync::LazyLock<AtomicBool> = std::sync::LazyLock::new(|| AtomicBool::new(std::env::var("HST_PACE").is_ok_and(|v| v == "main")));
+
+/// The frame limit (P44): sleep away what's left of the frame's time after its submit, right before its present, so
+/// presents come evenly spaced. Sleeping at the main world's frame end instead (`HST_PACE=main`) paced when rendering
+/// started, and the render world's varying time then spread the presents: at a 60 fps cap, frame-to-frame jitter
+/// 1.4–3.0 ms there vs 0.5–0.7 ms here (journal 2026-10-15-p35-high-fps/p44-pacing.md). Like vsync, the main world
+/// then waits on the render world, up to a frame more input lag than sleeping at its own frame end.
+// ponytail: thread::sleep overshoots by the OS timer's slack (≈0.06 ms on Linux); spin the last bit if that shows
+fn limit_present(mut next: Local<Option<Instant>>) {
+    let fps = LIMIT.load(Ordering::Relaxed);
+    if fps == 0 || cfg!(target_arch = "wasm32") || PACE_MAIN.load(Ordering::Relaxed) {
+        *next = None;
+        SLEPT_US.store(0, Ordering::Relaxed);
+        return;
+    }
+    let frame = Duration::from_secs_f64(1.0 / fps as f64);
+    let now = Instant::now();
+    let at = next.filter(|&t| t + frame > now).unwrap_or(now);
+    SLEPT_US.store(at.saturating_duration_since(now).as_micros() as u32, Ordering::Relaxed);
+    if at > now {
+        std::thread::sleep(at - now);
+    }
+    *next = Some(at + frame);
+}
+
+/// `limit_present`'s last sleep, µs (for Show FPS → Detailed's split).
+static SLEPT_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(test)]
 mod tests {
