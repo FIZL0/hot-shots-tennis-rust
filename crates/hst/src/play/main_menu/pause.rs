@@ -581,8 +581,11 @@ mod tests {
     fn back_returns_to_pause() {
         let aspect = super::super::options::page(Screen::Display).iter().position(|o| *o == super::super::options::Opt::Aspect).unwrap();
         let mut m = Menu { screen: Screen::Display, sel: aspect, ..default() };
-        let fx = m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
+        // B326: ✕ picks the row, → changes it, ✕ keeps it
+        m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
+        let fx = m.step(super::super::Dev::Keys, Press { right: true, ..default() });
         assert!(m.settings.3 == 1 && fx.contains(&super::super::Effect::SaveSettings));
+        m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         m.step(super::super::Dev::Keys, Press { back: true, ..default() });
         assert_eq!(m.screen, Screen::Main);
     }
@@ -615,8 +618,11 @@ mod tests {
         // the Sound tab (2), then its Menu Music row (4)
         app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Tab(2), true));
         app.update();
-        app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(4, super::super::pointer::OK), true));
-        app.update();
+        // B326: a tap picks the row, a tap on its value's right half changes it, a tap on the row keeps it
+        for k in [super::super::pointer::OK, Press { right: true, ..default() }, super::super::pointer::OK] {
+            app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(4, k), true));
+            app.update();
+        }
         assert_eq!(app.world().resource::<Menu>().settings.0[1], !was, "Menu Music didn't change");
         assert!(std::fs::read_to_string(dir.join("settings.txt")).is_ok(), "settings not saved");
         app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::press(|k| k.back = true), true));

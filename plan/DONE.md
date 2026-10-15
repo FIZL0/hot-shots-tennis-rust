@@ -506,6 +506,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B364** Mesh detail graphics setting: add a polygon scale option in the graphics settings called "mesh" that lets players render models at lower poly counts, especially modded characters (user 2026-10-14) → crates/hst/src/graphics.rs · crates/hst/src/character.rs · crates/hst/src/play/main_menu/options.rs
 - [x] **B317** New versions: the web page no longer reloads itself when a new build is pushed; instead a notice says a new version is out with a Refresh button (only if the service worker makes that easy). Desktop builds show the same notice with a Download button (the release page) instead of refreshing — files: web/sw.js, web/index.html, crates/hst/src/play/main_menu/home.rs
 - [x] **B316** Settings → Display's Renderer row shows the generic Off/On choices instead of WebGPU/WebGL2: fill each row's choices from its own list (RENDERERS) rather than hardcoded labels, so no row shows another's words — files: crates/hst/src/play/main_menu/options.rs, crates/hst/src/play/main_menu.rs (RENDERERS)
+- [x] **B326** Settings menus: Left/Right on a highlighted row shouldn't change it; select the row (✕/Enter/click) to edit it, Left/Right to change, ✕ keep / ○ cancel, as the lobby's Games and Sets settings do; update the legend (`legend.rs` acts) to match — crates/hst/src/play/main_menu/options.rs, crates/hst/src/play/main_menu/legend.rs, crates/hst/src/play/main_menu/online.rs
 
 
 ### Shots

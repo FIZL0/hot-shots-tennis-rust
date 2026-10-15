@@ -165,14 +165,17 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if m.main_rows().get(s) == Some(&super::home::Row::Quit) { "Quit" } else { "Choose" })]),
         Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
-            v.push((Act::UpDown, "Option"));
-            if let Some(&o) = options::page(m.screen).get(s).filter(|o| !options::locked(**o)) {
-                v.push((Act::LeftRight, "Change"));
-                if options::ok_changes(o) {
+            let open = options::page(m.screen).get(s).is_some_and(|o| !options::locked(*o));
+            if m.editing.is_some() && open {
+                // B326: the row picked: ◀ ▶ change it, ✕ keeps, ○ puts it back
+                v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Keep"), (Act::Back, "Cancel")]);
+            } else {
+                v.push((Act::UpDown, "Option"));
+                if open {
                     v.push((Act::Ok, "Change"));
                 }
+                v.extend([(Act::Costume, "Page"), (Act::Back, "Back")]);
             }
-            v.extend([(Act::Costume, "Page"), (Act::Back, "Back")]);
         }
         Screen::Controls if m.rebinding.is_some() => v.extend([(Act::Type, "Press the new key or button"), (Act::Cancel, "Cancel")]),
         Screen::Controls => {
@@ -951,6 +954,14 @@ mod tests {
         let mut m = base(Screen::Main);
         m.add.ask = Some(0);
         starts.push((m, Dev::Keys));
+        // B326: a Settings row picked, on every row of every page
+        for s in [Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings] {
+            for sel in 0..options::page(s).len() {
+                let mut m = base(s);
+                (m.sel, m.editing) = (sel, Some(m.settings));
+                starts.push((m, Dev::Keys));
+            }
+        }
         let mut m = base(Screen::Controls);
         m.rebinding = Some(0);
         starts.push((m, Dev::Keys));

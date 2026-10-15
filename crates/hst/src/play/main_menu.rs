@@ -548,6 +548,8 @@ struct Menu {
     rematch: bool,
     /// The umpire picker's Preview Voice presses so far (each plays the next of [`CALLS`]).
     calls: usize,
+    /// B326: a Settings page's row is being changed (row `sel`), with the settings it opened on (○ puts them back).
+    editing: Option<Settings>,
 }
 
 impl Default for Menu {
@@ -581,6 +583,7 @@ impl Default for Menu {
             duo: false,
             rematch: false,
             calls: 0,
+            editing: None,
         }
     }
 }
@@ -1017,7 +1020,9 @@ impl Menu {
                 }
             }
             Screen::Display | Screen::Graphics | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
-                rows(options::page(self.screen).len(), &mut self.sel, &mut out);
+                if self.editing.is_none() {
+                    rows(options::page(self.screen).len(), &mut self.sel, &mut out);
+                }
                 self.step_page(k, &mut out);
             }
             Screen::Controls => {
@@ -1787,7 +1792,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     menu.screen = match screen.as_str() {
         "settings" | "display" => Screen::Display,
         "graphics" => Screen::Graphics,
-        "sound" => Screen::Sound,
+        "sound" | "sound-edit" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
         "mobile" => Screen::Mobile,
         "controls" => Screen::Controls,
@@ -1844,6 +1849,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         if let Some(sel) = [("sets", 2), ("games", 3)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             menu.sel = sel;
             menu.picking = Some(if sel == 2 { menu.sets } else { menu.games as usize });
+        }
+        // B326: a Settings row picked (Effects Volume)
+        if screen == "sound-edit" {
+            (menu.sel, menu.editing) = (1, Some(menu.settings));
         }
         if let Some(sel) = [("courts", 1), ("umpires", 4)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             (menu.sel, menu.court, menu.umpire) = (sel, 8, 2);
