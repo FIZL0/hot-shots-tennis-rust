@@ -283,7 +283,7 @@ async fn get_meta(rev: &str, id: &str) -> Option<Meta> {
 /// two authors' mods sharing an id are both listed (B248).
 fn merge(lists: Vec<Vec<Entry>>) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
-    for e in lists.into_iter().flatten() {
+    for e in lists.into_iter().flatten().filter(|e| !crate::mods::dropped(&e.meta.id)) {
         if !out.iter().any(|o| o.meta.id == e.meta.id && (o.meta.author == e.meta.author || o.meta.sha256 == e.meta.sha256)) {
             out.push(e);
         }
@@ -307,7 +307,7 @@ pub fn list(fresh: bool) {
     if !fresh {
         let c = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok());
         if let Some(c) = c.filter(|c| now().saturating_sub(c.at) < CACHE_SECS) {
-            return send(Event::Listing(Ok(c.entries)));
+            return send(Event::Listing(Ok(c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id)).collect())));
         }
     }
     spawn(async {
@@ -1105,6 +1105,10 @@ mod tests {
         let by = |id: &str, rev: &str, who: &str, sha: &str| Entry { meta: Meta { author: who.into(), sha256: sha.into(), ..e(id, rev).meta }, ..e(id, rev) };
         let got = merge(vec![vec![by("a", "main", "x", "1")], vec![by("a", "refs/pr/9", "y", "2"), by("a", "refs/pr/8", "z", "1"), by("a", "refs/pr/7", "y", "3")]]);
         assert_eq!(got.iter().map(|e| e.rev.as_str()).collect::<Vec<_>>(), ["main", "refs/pr/9"]);
+        // B381: HST's four human chair umpires aren't listed, Robot Tennis is
+        let ids = ["hst_umpire_00_chika", "hst_umpire_01_suzuki", "hst_umpire_02_lily", "hst_umpire_03_robottennis", "hst_umpire_04_anna", "getagrip_pc12_suzuki"];
+        let got = merge(vec![ids.iter().map(|id| e(id, "main")).collect()]);
+        assert_eq!(got.iter().map(|e| e.meta.id.as_str()).collect::<Vec<_>>(), ["getagrip_pc12_suzuki", "hst_umpire_03_robottennis"]);
     }
 
     /// B250: a re-upload by its uploader goes onto their open PR, or a new PR once merged; the same zip, or an older

@@ -144,9 +144,9 @@ mod tests {
         panic!("{}: longest rally {best} shots, mod returned a ball: {mod_hit}", m.id);
     }
 
-    /// M1g: the five chair umpires, packaged by the mods repo (`tools/rerig/hst_umpires.py` -> `mods/hst-mods`), are
-    /// in the custom roster (`mods::list` of `mods/`, readable TParam row, as the select builds it), load as a model
-    /// and each plays a rally (skipped without the ISO or the umpire mods).
+    /// M1g: the chair umpires, packaged by the mods repo (`tools/rerig/hst_umpires.py` -> `mods/hst-mods`), are
+    /// in the custom roster (`mods::list` of `mods/`, readable TParam row, as the select builds it; all but B381's
+    /// four [`mods::dropped`], so only Robot Tennis), load as a model and each plays a rally (skipped without the ISO or the umpire mods).
     #[test]
     fn umpires_are_on_the_roster_and_play_a_rally() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods"));
@@ -155,7 +155,7 @@ mod tests {
             return eprintln!("no ISO or umpire mods under mods/, skipped");
         }
         let ids: Vec<&str> = ump.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, ["hst_umpire_00_chika", "hst_umpire_01_suzuki", "hst_umpire_02_lily", "hst_umpire_03_robottennis", "hst_umpire_04_anna"]);
+        assert_eq!(ids, ["hst_umpire_03_robottennis"]);
         let mut iso = Iso::open(ISO).unwrap();
         for m in &ump {
             mods::tparam(&mut iso, m).unwrap_or_else(|e| panic!("{}: no TParam row, left off the select: {e}", m.id));
