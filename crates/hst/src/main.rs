@@ -36,6 +36,7 @@ mod hud_gamma;
 mod inspect;
 mod loading;
 mod mash;
+mod lod;
 mod merge;
 mod mode;
 mod noise;
@@ -172,7 +173,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--original" => gfx.original = true,
             "--show-fps" => gfx.show_fps = 1,
             "--show-fps-detailed" => gfx.show_fps = 2,
-            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--cull" => {
                 let v = a.next().unwrap_or_default();
                 gfx.set("cull", &v);
@@ -314,6 +315,7 @@ fn start(argv: Vec<String>) {
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
     app.add_plugins(MaterialPlugin::<effects::Fx>::default());
     app.add_systems(PostUpdate, effects::morph_on_cpu);
+    graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     app.add_plugins(graphics::plugin).insert_resource(gfx);
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin));
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
@@ -391,6 +393,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
+    graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     mode::Mode::new(move |app| {
         app.insert_resource(gfx);
         // the app's own `--shot` goes on through the match

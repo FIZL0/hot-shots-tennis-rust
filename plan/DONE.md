@@ -503,6 +503,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B319** Character select: entering the roster puts every cursor on Random by default; when the select moves on to a computer player's pick (after a human readies), its cursor starts on the character just picked (its next free costume, as now) instead of Random — files: crates/hst/src/play/main_menu.rs (Menu::step Screen::Chars, preset_coms, put) — covered by B346 (select opens on Random, COM cards carry the last pick)
 - [x] **B362** Controller button hints and layout options: the join screen's empty player slots say "press x to join", but every hint that tells the player to use a controller should show controller icons instead of text; add an option to switch the icon layout to match the controller in use (PS, Xbox, Switch, or generic) (user 2026-10-14) → crates/hst/src/play/key_hints.rs · crates/hst/src/play/main_menu/options.rs · crates/hst/src/play/main_menu/legend.rs
 - [x] **B318** Main menu's "1v1 on this phone" label runs past its pill: reword it shorter (e.g. "1v1 Here" / "Pass & Play") or fit it, at any aspect — files: crates/hst/src/play/main_menu/home.rs
+- [x] **B364** Mesh detail graphics setting: add a polygon scale option in the graphics settings called "mesh" that lets players render models at lower poly counts, especially modded characters (user 2026-10-14) → crates/hst/src/graphics.rs · crates/hst/src/character.rs · crates/hst/src/play/main_menu/options.rs
 
 
 ### Shots

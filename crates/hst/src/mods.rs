@@ -841,6 +841,9 @@ pub fn load(
                 .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_INDEX, VertexAttributeValues::Uint16x4(v.joints))
                 .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, v.weights)
                 .with_inserted_indices(Indices::U32(v.idx));
+            // B364: fewer triangles at Graphics → Mesh below 100 %, the morphing (face) vertices kept
+            let moving: Vec<bool> = (0..count).map(|i| v.morph.iter().any(|t| t.1.get(i).is_some_and(|d| *d != [0.0; 3]))).collect();
+            crate::lod::detail(&mut mesh, &moving);
             let morphed = v.morph.iter().any(|t| t.1.iter().any(|d| *d != [0.0; 3]));
             if morphed {
                 let zero = vec![[0.0; 3]; count];
@@ -871,12 +874,13 @@ pub fn load(
             for mesh in rdoc.meshes() {
                 for p in mesh.primitives() {
                     let v = prim(&p, &rblob, &[]).map_err(|e| format!("{}: {e}", f.display()))?;
-                    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+                    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
                         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, v.pos)
                         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, v.nrm)
                         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, v.uv)
                         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, v.col)
                         .with_inserted_indices(Indices::U32(v.idx));
+                    crate::lod::detail(&mut mesh, &[]);
                     out.push((meshes.add(mesh), rh[p.material().index().unwrap_or(rh.len() - 1)].clone()));
                 }
             }
