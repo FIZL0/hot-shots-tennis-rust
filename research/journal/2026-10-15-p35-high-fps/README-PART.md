@@ -56,3 +56,4 @@ whatever still keeps it under 480 fps.
 
 ### Not verified / not 1:1
 - Frame rate target: not measured this run (machine shared with parallel agents; parts P36–P48 not landed yet).
+- P36 (shadow casters): research/journal/2026-10-15-p36-shadow-casters/
