@@ -643,6 +643,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B421** Mobile stretch aspect ratio: add a "stretch" aspect ratio option on mobile (iOS and Android) that fills the whole screen, ignoring the island and notch safe-area rule we made (user 2026-10-15) → crates/hst/src/play/widescreen.rs · crates/hst/src/graphics.rs · crates/hst/src/play/touch_pad.rs
 - [x] **B440** Rematch default selection: when returning to the menu after a match, "rematch" should not be selected by default; the default selection should be local (user 2026-10-15) → crates/hst/src/play/match_stats.rs · crates/hst/src/play/main_menu/home.rs · crates/hst/src/play/main_menu/cursor.rs
 - [x] **B427** Singles / Doubles pill button hint (user 2026-10-15): the top-right mode pill shows its button glyph (□ / X / Tab per device) like the Costume LB/RB and Hand chips do → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/legend.rs
+- [x] **B426** Roster mod tiles missing (user 2026-10-15, phone portrait): the 'Hot Shots Golf Fore! 5' heading shows under the Hot Shots Tennis rows but no tiles under it although there's room, so players can't tell there are more characters; find whether the lines on view stop at the heading or the mod previews never draw, and fix → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/play/main_menu/previews.rs
 
 
 ### Shots

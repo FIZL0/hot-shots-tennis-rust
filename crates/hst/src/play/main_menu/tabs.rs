@@ -523,4 +523,34 @@ mod tests {
         m.point(Dev::Keys, pointer::Act::Cell(0, flat(&secs, 1, 1)), false);
         assert_eq!(m.cell(0), Some(Who::Mod(11)));
     }
+
+    /// B426: a grid whose last whole line is a section's heading shows the top of that section's first row in
+    /// what's left under it, cut at the grid's foot (a tall phone held upright, two players), and a tap there picks it.
+    #[test]
+    fn a_heading_at_the_foot_shows_its_rows_top() {
+        let mut m = menu();
+        m.seats[1] = Some(Dev::Keys);
+        m.players[1] = super::super::Player::fresh();
+        m.mods.truncate(3);
+        m.mods.extend((0..8).map(|i| a_mod(i, "Hot Shots Golf Fore! 5")));
+        m.grid = Grid::fit_at(0.68, 1.2);
+        let v = m.view(0);
+        assert_eq!(v.lines[v.end - 1], Line::Head(1));
+        let c = m.columns();
+        let [_, gy, _, gh] = c.parts(0).grid;
+        let first = flat(&v.secs, 1, 0);
+        let (_, tiles) = c.laid(0, &v);
+        let peek: Vec<_> = tiles.iter().filter(|t| t.0 >= first).collect();
+        assert_eq!(peek.len(), c.cols);
+        assert!(peek.iter().all(|t| t.2[1] < gy + gh && (t.2[1] + t.2[3] - (gy + gh)).abs() < 1e-3 && t.2[3] < c.tile[1]), "{peek:?}");
+        // drawn cut at the foot, the hit too
+        let t = super::super::pointer::tests::text_with_mods(m.mods.len());
+        let d = super::super::drawn(&m, &t, &super::super::Bindings::default(), &[], 0, 0.0);
+        let hit = d.hits.iter().find(|h| h.act == super::super::pointer::Act::Cell(0, first)).expect("the peeking tile's hit");
+        assert!((hit.rect[1] + hit.rect[3] - (gy + gh)).abs() < 1e-3, "{:?}", hit.rect);
+        let [x, y, w, _] = peek[0].2;
+        let mine: Vec<_> = d.out.iter().filter(|q| q.dst[0] >= x && q.dst[0] < x + w && q.dst[1] >= y && q.dst[1] < gy + gh).collect();
+        assert!(mine.len() >= 2);
+        assert!(mine.into_iter().all(|q| q.dst[1] + q.dst[3] <= gy + gh + 1e-3));
+    }
 }
