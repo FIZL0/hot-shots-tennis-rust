@@ -5,7 +5,9 @@ edition = "2024"
 publish = false
 
 # Test-only: runs the original's own functions (loaded from the user's disc at test time) so ports can be
-# compared against them bit for bit without PCSX2. Nothing ships with it.
+# compared against them bit for bit without PCSX2. Nothing ships with it. The interpreter is our own
+# FIZL0/ps2-oracle (fix or extend it there, tag a release, bump the tag here: AGENT.md).
 [dependencies]
 hst-data = { path = "../hst-data" }
 hst-sim = { path = "../hst-sim" }
+ps2-oracle = { git = "https://github.com/FIZL0/ps2-oracle", tag = "v0.1.1" }

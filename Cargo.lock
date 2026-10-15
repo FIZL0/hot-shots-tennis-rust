@@ -3654,6 +3654,7 @@ version = "0.1.0"
 dependencies = [
  "hst-data",
  "hst-sim",
+ "ps2-oracle",
 ]
 
 [[package]]
@@ -3662,6 +3663,7 @@ version = "0.1.0"
 dependencies = [
  "hst-data",
  "libm",
+ "ps2-float",
  "serde",
 ]
 
@@ -6035,6 +6037,22 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "ps2-float"
+version = "0.2.0"
+source = "git+https://github.com/FIZL0/ps2-float?tag=v0.2.0#817751d2d1efadbec4fad9f4eda6fead93115360"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "ps2-oracle"
+version = "0.1.1"
+source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.1#f9e908284ed87e28bb7abee5c64d537bb1267e5d"
+dependencies = [
+ "ps2-float",
+]
 
 [[package]]
 name = "pxfm"

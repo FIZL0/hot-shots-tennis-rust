@@ -79,8 +79,9 @@ README *Character mods* — links the mods repo (../opentennis-mods: standard, t
 
 `crates/hst-sim/src/` — the game, bit-exact, no Bevy
 
-- arithmetic: `ps2.rs` EE FPU · `vu0.rs` VU0 · `libm.rs` game sinf/acosf/atan2f · `quat.rs` matrix↔quat, slerp ·
-  `ps2_rand.rs` newlib `rand()` + MT19937 (no game code; `rng.rs` = the match's four generators on top)
+- arithmetic: `ps2.rs` EE FPU · `vu0.rs` VU0 · `libm.rs` game sinf/acosf/atan2f (all three re-export our
+  `ps2-float` crate, ../ps2-float) · `quat.rs` matrix↔quat, slerp · `rng.rs` the match's four generators on
+  ps2-float's newlib `rand()` + MT19937
 - ball: `ball.rs` Flight, bounces, materials, COURTS · `contact.rs` plane sweep · `mesh.rs` triangle sweep, world
   query · `world.rs` prop placement, 20 m grid · `court.rs` court collision world from disc
 - shots: `shot.rs` TRAJ tables, launch · `params.rs` per-character shot records · `swing.rs` contact search,
@@ -93,6 +94,9 @@ README *Character mods* — links the mods repo (../opentennis-mods: standard, t
 - `replay.rs` fixture reader · `bin/replay.rs` replay CLI · `bin/state_hash.rs` per-tick hash, same on x86_64/aarch64/wasm32 (`tests/platforms.rs`); transcendentals only via `libm` (game's) or `musl`, never std
 - tests: `ball_path flights live world` (ball) · `shot_tables swing serve` · `player motion` · `score replay` ·
   `camera cutaway`
+
+`crates/hst-oracle` — test-only function oracle: `hst.rs` (disc check, `HstEe::game`/`from_ram`, `addr`) on our
+`ps2-oracle` interpreter (../ps2-oracle); tests compare ports to the game's own functions
 
 `crates/hst/src/` — the Bevy app
 

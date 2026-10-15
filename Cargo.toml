@@ -15,6 +15,10 @@ opt-level = 3
 # the oracle interprets the game's code: unoptimised, a 10k-input MT19937 check takes 40 s instead of 4
 [profile.dev.package.hst-oracle]
 opt-level = 3
+[profile.dev.package.ps2-oracle]
+opt-level = 3
+[profile.dev.package.ps2-float]
+opt-level = 3
 [profile.dev.package.hst]
 opt-level = 1
 

@@ -1,8 +1,8 @@
-//! newlib's `rand()` and the MT19937 against `hst_sim::ps2_rand`, through the oracle. Needs `context/iso/` (skips
+//! newlib's `rand()` and the MT19937 against `hst_sim::rng` (`ps2-float`), through the oracle. Needs `context/iso/` (skips
 //! without it).
 
-use hst_oracle::{Ee, addr};
-use hst_sim::ps2_rand::{Mt, Rand};
+use hst_oracle::{Ee, HstEe, addr};
+use hst_sim::rng::{Mt, Rand};
 
 fn rng(seed: &mut u64) -> u64 {
     *seed ^= *seed << 13;
@@ -35,14 +35,14 @@ fn newlib_rand() {
 const OBJ: u32 = 0x01e0_0000;
 
 fn state(ee: &Ee) -> Mt {
-    Mt(std::array::from_fn(|k| ee.read(OBJ + 4 + 4 * k as u32, 4) as u32), ee.read(OBJ + 0x9c4, 4) as usize)
+    Mt::from_words(std::array::from_fn(|k| ee.read(OBJ + 4 + 4 * k as u32, 4) as u32), ee.read(OBJ + 0x9c4, 4) as usize)
 }
 
 fn put(ee: &mut Ee, m: &Mt) {
-    for (k, &w) in m.0.iter().enumerate() {
+    for (k, &w) in m.0.0.iter().enumerate() {
         ee.write(OBJ + 4 + 4 * k as u32, 4, w as u128);
     }
-    ee.write(OBJ + 0x9c4, 4, m.1 as u128);
+    ee.write(OBJ + 0x9c4, 4, m.0.1 as u128);
 }
 
 /// Seeding from random seeds gives the same 624 words and index; then draws from random states at every index
@@ -67,7 +67,7 @@ fn mt19937() {
         assert_eq!(state(&ee), Mt::new(s), "seed {s:#x}");
     }
     for k in 0..12_000 {
-        let mut m = Mt(std::array::from_fn(|_| rng(&mut seed) as u32), k % 627);
+        let mut m = Mt::from_words(std::array::from_fn(|_| rng(&mut seed) as u32), k % 627);
         put(&mut ee, &m);
         ee.call(next_at, &[OBJ as u64], &[], 100_000);
         assert_eq!((ee.v0() as u32, state(&ee)), (m.next(), m.clone()), "draw {k}");

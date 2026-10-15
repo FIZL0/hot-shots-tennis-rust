@@ -1,7 +1,7 @@
 //! The walking spectators' wander tick (dodge, turn back, court edges, collisions) against the game's, on random
 //! states of one walker in a court 4 match (its animation calls stubbed: they only record the animation picked).
 
-use hst_oracle::{Ee, addr};
+use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::npc::{Around, Walker, Wander};
 use hst_sim::vu0::V4;
 

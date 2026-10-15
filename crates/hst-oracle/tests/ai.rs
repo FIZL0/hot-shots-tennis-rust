@@ -1,7 +1,7 @@
 //! AI decisions against `hst_sim::ai`, through the oracle. Needs `context/iso/` and `context/ram/s05.bin`
 //! (skips without them).
 
-use hst_oracle::{Ee, addr};
+use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::ai::Runner;
 use hst_sim::player::Stats;
 

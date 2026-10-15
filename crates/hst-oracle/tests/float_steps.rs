@@ -7,7 +7,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use hst_oracle::{Ee, addr};
+use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::player::{Stats, pad_dir, turned};
 use hst_sim::shot::{Bounds, Table, lookup};
 
