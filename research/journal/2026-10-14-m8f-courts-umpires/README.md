@@ -24,3 +24,6 @@ One README per task; iterations below, newest last.
   down/clap frames, c09/c16 stands, crowd sounds; HST-MODS exporter + standard §2b); HST places them, cues them on
   the disc gallery's ticks (cheer/clap/groan/win/lose, serve/rally/change_ends, line judge point), plays their
   sounds; replays unchanged.
+- `6-GAG-C17-BARS-FINAL.md` — M8f5a2 done: c17's bars were NORMA's 17 m opaque cable strands 9–12 m in front of
+  HST's (further-back) match eye; the exporter drops gimmick.glb islands in HST's resting view within 20 m of the eye
+  (HST-MODS d22e1cc). c05's basket goals have the same cause → M8f5a3.
