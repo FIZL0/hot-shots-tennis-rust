@@ -1614,6 +1614,14 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
             v.b.offline = true;
             v.b.wish = Some(v.store.iter().flatten().skip(3).step_by(7).map(Entry::key).collect());
             m.sel = v.browse_acts() + 1;
+            // B444: `HST_LONG=<secs>`: the first two mods' titles too long for their tiles, the chosen one's slid that far
+            if let Some(t) = std::env::var("HST_LONG").ok().and_then(|t| t.parse::<f32>().ok()) {
+                for e in v.store.iter_mut().flatten().take(2) {
+                    e.meta.name = format!("{} of the Extremely Long Title Edition", e.meta.name);
+                    e.meta.source = "Mario Tennis: Power Tour Deluxe Collection".into();
+                }
+                v.b.roll = (t, m.sel);
+            }
             match child.as_deref() {
                 Some("search") => (v.b.search, m.sel) = ("ma".into(), 0),
                 Some("keys") => (v.b.search, v.b.osk) = ("ma".into(), Some(12)),
@@ -2015,7 +2023,7 @@ fn browse_pictures(menu: &mut Menu, shelf: &mut Shelf, images: &mut Assets<Image
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Shelf>().add_systems(Update, (page.before(super::draw), grid::typing.before(super::step)));
+    app.init_resource::<Shelf>().add_systems(Update, (page.before(super::draw), grid::typing.before(super::step), grid::roll_time.before(super::draw)));
 }
 
 #[cfg(test)]
