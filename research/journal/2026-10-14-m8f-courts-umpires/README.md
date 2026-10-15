@@ -8,3 +8,6 @@ One README per task; iterations below, newest last.
   packaged as umpire mods with all 24 calls, donors by sameness/overrun. Next: M8f3 (loader).
 - `3-UMPIRE-LOADER-FINAL.md` — M8f3 done: umpire mods on Select Umpire, `--umpire-mod`, calls over the donor's
   bank timed by the donor, online by id. Lily answers 0_13 (for M8f2).
+- `4-GAG-COURTS-FINAL.md` — M8f5 done: 16 Get a Grip courts → court mods in ../HST-MODS (court/sky/gimmick glb,
+  lights, fog, BGM + ambience loops, lens flare, layout by surface + run-off); standard §2 gets singles/doubles
+  variants. Next: M8f6 (court loader).
