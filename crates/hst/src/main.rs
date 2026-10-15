@@ -24,6 +24,8 @@ mod cull;
 mod disc;
 #[cfg(target_os = "ios")]
 mod ios;
+#[cfg(target_os = "android")]
+mod android;
 mod effects;
 mod graphics;
 mod handshake;

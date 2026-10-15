@@ -60,6 +60,10 @@ block2 = "0.6"
 wgpu = "29"
 raw-window-handle = "0.6"
 
+# Android: the window's safe area and the on-screen pad's haptic tick through JNI (`android.rs`; android-activity's own jni)
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

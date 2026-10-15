@@ -450,12 +450,17 @@ fn window(g: Res<Graphics>, mut w: Query<&mut Window, With<PrimaryWindow>>) {
 
 /// Every scene camera (`hud_gamma::Scene`) at the same sample count: cameras sharing a target with different counts
 /// get separate main textures, and the later one (`popups.rs`'s overlay, which doesn't clear) covers the court blank.
-fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>, added: Query<(), Added<crate::hud_gamma::Scene>>) {
+fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>, added: Query<(), Added<crate::hud_gamma::Scene>>, adapter: Option<Res<bevy::render::renderer::RenderAdapter>>) {
     if !g.is_changed() && added.is_empty() {
         return;
     }
-    // Browser WebGPU only takes 1 or 4 samples (createTexture rejects 2), so 2x draws as 4x there.
-    let m = Msaa::from_samples(if cfg!(all(target_arch = "wasm32", feature = "webgpu")) && g.msaa == 2 { 4 } else { g.msaa });
+    // Browser WebGPU only takes 1 or 4 samples (createTexture rejects 2), so 2x draws as 4x there; M102: so does a GPU
+    // that can't take 2 for the main and depth textures (4 is WebGPU's guarantee; Android's SwiftShader, Phone's 2x)
+    let no_2x = adapter.is_some_and(|a| {
+        use bevy::render::render_resource::TextureFormat;
+        [TextureFormat::Rgba16Float, TextureFormat::Depth32Float].iter().any(|&f| !a.get_texture_format_features(f).flags.sample_count_supported(2))
+    });
+    let m = Msaa::from_samples(if (cfg!(all(target_arch = "wasm32", feature = "webgpu")) || no_2x) && g.msaa == 2 { 4 } else { g.msaa });
     for mut c in &mut q {
         c.set_if_neq(m);
     }

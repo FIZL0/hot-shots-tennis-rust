@@ -181,7 +181,7 @@ fn vibration_about() -> &'static str {
     #[cfg(target_arch = "wasm32")]
     let can = crate::web::vibration();
     #[cfg(not(target_arch = "wasm32"))]
-    let can = if cfg!(target_os = "ios") { "haptic" } else { "vibrate" };
+    let can = if cfg!(any(target_os = "ios", target_os = "android")) { "haptic" } else { "vibrate" };
     match &*can {
         "haptic" => "A light haptic tick on each press of the on-screen controls.",
         "vibrate" => "Buzz briefly on each press of the on-screen controls. Android: not while the phone's ringer is on Silent.",

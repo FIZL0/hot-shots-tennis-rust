@@ -3604,6 +3604,7 @@ dependencies = [
  "iroh-mainline-address-lookup",
  "iroh-mdns-address-lookup",
  "iroh-tickets",
+ "jni 0.21.1",
  "js-sys",
  "libc",
  "minisign-verify",

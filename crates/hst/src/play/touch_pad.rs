@@ -12,7 +12,15 @@
 //! neither presses it again nor lets it go when it lifts, and a button is down for at least one frame, so a tap shorter
 //! than a frame still counts. A press gives the phone's light haptic tick (Settings → Mobile → Vibration).
 //!
-//! The base app's (`mode.rs`): its pad entity and resource outlive every mode switch. On with `target_os = "ios"`;
+//! M102: the Android app's too (`tools/apk.sh`), where native touches arrive as `TouchInput` like the iPhone's; its safe
+//! area is the edge-to-edge window's system bars and camera cutout (`android.rs`).
+//!
+//! M102: it draws on its own camera, straight on the window: the UI (`hud_gamma`) is drawn only into the Aspect
+//! Ratio's centred view, 16:9 by default on a phone, which would clip a pad laid out for the whole window (the
+//! touches are the window's). It hides under the loading screen; it covers the chat.
+//!
+//! The base app's (`mode.rs`): its pad entity and resource outlive every mode switch. On with `target_os = "ios"` or
+//! `"android"`;
 //! `HST_TOUCH=1` puts it on anywhere (a desktop touch screen, `--shot`s of its layout). Never touches the sim: it is
 //! only a gamepad.
 
@@ -25,17 +33,17 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 /// The pad's name: `emote::touch` knows it by its start ("Touch controls", as the browser's).
-const NAME: &str = "Touch controls (iPhone)";
+const NAME: &str = if cfg!(target_os = "android") { "Touch controls (Android)" } else { "Touch controls (iPhone)" };
 /// Sony's USB vendor id: the menus' legend draws ✕ ○ □ △ for the pad, as its buttons are.
 const SONY: u16 = 0x054c;
 
 /// The Vibration setting (Settings → Mobile), as the menus last had it.
 pub(crate) static BUZZ: AtomicBool = AtomicBool::new(true);
 
-/// Whether this app is played by touch: the iPhone app, or anything with `HST_TOUCH` set.
+/// Whether this app is played by touch: the iPhone or Android app, or anything with `HST_TOUCH` set.
 pub(crate) fn on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| cfg!(target_os = "ios") || std::env::var_os("HST_TOUCH").is_some_and(|v| v != "0"))
+    *ON.get_or_init(|| cfg!(any(target_os = "ios", target_os = "android")) || std::env::var_os("HST_TOUCH").is_some_and(|v| v != "0"))
 }
 
 /// The buttons, in `KEYS` order: ✕ ○ □ △ (face) then L1 R1 Select Start (small).
@@ -213,6 +221,9 @@ static MENU: AtomicBool = AtomicBool::new(true);
 struct Ours;
 #[derive(Component)]
 struct Root;
+/// The pad's camera: after `hud_gamma`'s composite (order 51), on the whole window.
+#[derive(Component)]
+struct PadCamera;
 #[derive(Component)]
 struct KeyNode(usize);
 #[derive(Component)]
@@ -288,6 +299,14 @@ fn drive(
         if let Some(h) = handle {
             pad.safe = crate::ios::safe_area(h);
         }
+        #[cfg(target_os = "android")]
+        if let Some(px) = crate::android::safe_area() {
+            let safe = px.map(|v| v / win.scale_factor());
+            if safe != pad.safe {
+                info!("touch pad: safe area {safe:?} in a {}×{} window", win.width(), win.height());
+                pad.safe = safe;
+            }
+        }
         #[cfg(not(target_os = "ios"))]
         let _ = handle;
     }
@@ -326,6 +345,8 @@ fn drive(
     if buzz && BUZZ.load(Ordering::Relaxed) {
         #[cfg(target_os = "ios")]
         crate::ios::haptic();
+        #[cfg(target_os = "android")]
+        crate::android::haptic();
     }
     let Ok((_, mut g)) = gamepads.get_mut(entity) else { return };
     for (k, (b, _)) in KEYS.iter().enumerate() {
@@ -365,6 +386,8 @@ fn draw(
     mut images: ResMut<Assets<Image>>,
     root: Query<Entity, With<Root>>,
     mut vis: Query<&mut Visibility, With<Root>>,
+    mut camera: Query<&mut Camera, With<PadCamera>>,
+    loading: Query<(), With<crate::mode::Loading>>,
     mut keys: Query<(&KeyNode, &mut Node, &mut BackgroundColor), (Without<Glyph>, Without<StickNode>)>,
     mut glyphs: Query<(&Glyph, &mut Node), (Without<KeyNode>, Without<StickNode>)>,
     mut stick: Query<(&StickNode, &mut Node, &mut Visibility), (Without<KeyNode>, Without<Glyph>, Without<Root>)>,
@@ -379,10 +402,16 @@ fn draw(
         return;
     };
     let _ = root;
+    let shown = pad.shown && loading.is_empty();
     for mut v in &mut vis {
-        v.set_if_neq(if pad.shown { Visibility::Inherited } else { Visibility::Hidden });
+        v.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
     }
-    if !pad.shown {
+    for mut c in &mut camera {
+        if c.is_active != shown {
+            c.is_active = shown;
+        }
+    }
+    if !shown {
         return;
     }
     let l = Layout::new(Vec2::new(win.width(), win.height()), pad.safe);
@@ -430,8 +459,22 @@ fn draw(
 fn spawn(commands: &mut Commands, art: &[(Handle<Image>, f32); 8]) {
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     let abs = || Node { position_type: PositionType::Absolute, border_radius: BorderRadius::MAX, ..default() };
-    // over the HUD and the menus, under the loading screen (`mode.rs`), the chat and the frame counter
-    commands.spawn((Ours, Root, full, Visibility::Hidden, GlobalZIndex(i32::MAX - 2))).with_children(|p| {
+    // over the composited picture, black bars included: its own (HDR) main texture cleared clear, blended on top (a
+    // camera sharing the composite's would write its own copy of the bars over them); no sprites, UI only by its target
+    let out = bevy::camera::CameraOutputMode::Write { blend_state: Some(bevy::render::render_resource::BlendState::PREMULTIPLIED_ALPHA_BLENDING), clear_color: ClearColorConfig::None };
+    let camera = commands
+        .spawn((
+            Ours,
+            PadCamera,
+            Camera2d,
+            Camera { order: 60, clear_color: ClearColorConfig::Custom(Color::NONE), output_mode: out, is_active: false, ..default() },
+            bevy::camera::Hdr,
+            bevy::core_pipeline::tonemapping::Tonemapping::None,
+            Msaa::Off,
+            bevy::camera::visibility::RenderLayers::none(),
+        ))
+        .id();
+    commands.spawn((Ours, Root, full, Visibility::Hidden, UiTargetCamera(camera))).with_children(|p| {
         p.spawn((StickNode::Base, Node { border: UiRect::all(Val::Px(2.0)), ..abs() }, BackgroundColor(BASE), BorderColor::all(LINE), Visibility::Hidden));
         p.spawn((StickNode::Knob, abs(), BackgroundColor(ON), Visibility::Hidden));
         for (k, (image, _)) in art.iter().enumerate() {
