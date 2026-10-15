@@ -915,6 +915,8 @@ pub fn load(
                 .with_inserted_indices(Indices::U32(v.idx));
             // B364: fewer triangles at Graphics → Mesh below 100 %, the morphing (face) vertices kept
             let moving: Vec<bool> = (0..count).map(|i| v.morph.iter().any(|t| t.1.get(i).is_some_and(|d| *d != [0.0; 3]))).collect();
+            // G6: Graphics → Smooth Normals
+            crate::smooth::normals(&mut mesh);
             crate::lod::detail(&mut mesh, &moving);
             let morphed = v.morph.iter().any(|t| t.1.iter().any(|d| *d != [0.0; 3]));
             if morphed {
@@ -952,6 +954,8 @@ pub fn load(
                         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, v.uv)
                         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, v.col)
                         .with_inserted_indices(Indices::U32(v.idx));
+                    // G6: Graphics → Smooth Normals
+                    crate::smooth::normals(&mut mesh);
                     crate::lod::detail(&mut mesh, &[]);
                     out.push((meshes.add(mesh), rh[p.material().index().unwrap_or(rh.len() - 1)].clone()));
                 }
