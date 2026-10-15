@@ -16,7 +16,7 @@ Ground rules every sub-task keeps (from the parent line and PLAN.md):
 Sub-tasks, in order:
 - [x] **M8f1** Standard + `kind`: court and umpire sections of the mod standard; `mod.json` `kind` (absent =
   character); `mods.rs` reads it and the character roster skips other kinds quietly.
-- [ ] **M8f2** Get a Grip umpire voices → umpire mods (../HST-MODS): decode `gag_vcNN[ab]` cue→wave, map each cue
+- [x] **M8f2** Get a Grip umpire voices → umpire mods (../HST-MODS): decode `gag_vcNN[ab]` cue→wave, map each cue
   to the HST call it fills by transcript (whisper, as B209), package `out/mods/gag_umpNN/`, list calls covered.
 - [ ] **M8f3** Umpire mod loader: umpire select lists installed umpire mods after the disc five; a match plays the
   mod's clips in sound slot 5 with donor fallback and donor timing; `--umpire-mod DIR`; online: the host's umpire
