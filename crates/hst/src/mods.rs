@@ -16,6 +16,8 @@ use hst_sim::pose::{Clip, Skeleton};
 
 use crate::character::{self, CharacterData, Joint, Motions, Store};
 
+pub mod umpire;
+
 /// The skeleton every mod is rigged to (names, parents, HST pc00's bind frames).
 const SKELETON: &str = include_str!("../hst_skeleton.json");
 /// The face channels a morph face must carry (§4a).

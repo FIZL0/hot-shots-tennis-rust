@@ -142,6 +142,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let mut slot_mods = Vec::new();
     let (mut umpire, mut sets, mut games, mut pads, mut upscale) = (4, 1, 4, None, true);
     let mut roster = None;
+    *mods::umpire::CHOSEN.lock().unwrap() = None;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -191,6 +192,8 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--fullscreen" => gfx.windowed = false,
             "--music" => music = true,
             "--umpire" => umpire = a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire),
+            // M8f4: an umpire mod drawn on the chair (its donor's timing and calls)
+            "--umpire-mod" => *mods::umpire::CHOSEN.lock().unwrap() = a.next().map(Into::into),
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
             "--games" => games = a.next().and_then(|r| r.parse().ok()).unwrap_or(games),
             "--pads" => {
@@ -224,6 +227,9 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--outfits" => outfits = a.next().map(|s| s.split(',').filter_map(|c| c.trim().parse().ok()).collect()).unwrap_or_default(),
             _ => archives.push(x),
         }
+    }
+    if let Some(u) = mods::umpire::chosen() {
+        umpire = u.donor;
     }
     // the original's picture: 4:3 with the disc's own textures
     if gfx.original {

@@ -40,6 +40,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, step.after(character::tick).before(super::play_sounds))
         .add_systems(Update, (draw_cheers.after(super::camera), draw_crowd, look.after(character::animate)))
+        .add_systems(FixedUpdate, mod_umpire.after(step).before(super::play_sounds))
+        .add_systems(Update, mod_look.after(look))
         .add_systems(PostUpdate, cull_crowd.before(bevy::transform::TransformSystems::Propagate));
 }
 
@@ -132,6 +134,8 @@ fn setup(
     // with Batch Crowd on, the figures of one model share its loaded meshes and materials (`shade::Shared`)
     let batch = gfx.is_some_and(|g| g.batch_crowd);
     let mut loaded = std::collections::HashMap::new();
+    // M8f4: an umpire mod's own model, drawn in the disc one's place
+    let modded = crate::mods::umpire::chosen().and_then(|u| crate::mods::umpire::load(&u, &mut *meshes, &mut *materials, &mut *images, &mut *bindposes).inspect_err(|e| warn!("{e}")).ok().flatten()).map(Arc::new);
     let mut load = |(stem, anims): (String, Vec<String>), share: bool| {
         if let Some(d) = loaded.get(&(stem.clone(), anims.clone())).filter(|_| share) {
             return Some(Arc::clone(d));
@@ -163,7 +167,7 @@ fn setup(
     for c in npc::spawn(&list, &plants, &game.npc_roster(n as u32), &walkers, players) {
         match c.kind {
             npc::Kind::Umpire => {
-                let Some(data) = load(layout::umpire_files(args.umpire), false) else { continue };
+                let Some(data) = modded.clone().or_else(|| load(layout::umpire_files(args.umpire), false)) else { continue };
                 // she faces the court centre: rows (up × forward, up, forward, chair)
                 let ([x, z], p) = (umpire.forward, umpire.pos);
                 let world = [[z, 0.0, -x, 0.0], [0.0, 1.0, 0.0, 0.0], [x, 0.0, z, 0.0], [p[0], p[1], p[2], 1.0]];
@@ -257,6 +261,9 @@ fn setup(
     }
     if let Some((e, _)) = &npcs.umpire {
         commands.entity(*e).remove::<crate::shadow::Minor>();
+    }
+    if let (Some((e, _)), Some(_)) = (&npcs.umpire, &modded) {
+        commands.entity(*e).insert(ModUmpire::default());
     }
     npcs.uncull = hidden;
     if let Ok(look) = crate::effects::look(&mut iso, "npc/clap", &mut materials, &mut images) {
@@ -1041,5 +1048,53 @@ mod b283_tests {
         assert!(!super::crowd_shown(-30.0, 700.0));
         assert!(!super::crowd_shown(0.0005, 700.0));
         assert!(!super::crowd_shown(0.5, 700.0));
+    }
+}
+
+/// M8f4: the umpire is a mod's model (`mods::umpire`), on its own `wait` clock.
+#[derive(Component, Default)]
+struct ModUmpire {
+    wait: f32,
+}
+
+/// A mod umpire's clips over `step`'s: during play (the disc's still first idle frame) its `wait` loops if it has
+/// one; a turn it lacks holds the idle's first frame. Looks only: the match never reads the umpire's pose.
+fn mod_umpire(g: Res<Game>, mut q: Query<(&character::Rig, &mut Motion, &mut ModUmpire)>) {
+    let (motion, over) = (g.umpire.motion as usize, g.umpire.over);
+    for (rig, mut m, mut u) in &mut q {
+        match rig.data.motions.get(&crate::mods::umpire::WAIT) {
+            Some(c) if motion == 0 && !over => {
+                show(&mut m, crate::mods::umpire::WAIT, u.wait, true);
+                u.wait = (u.wait + 1.0) % c.length.max(1.0);
+                continue;
+            }
+            _ => u.wait = 0.0,
+        }
+        if !rig.data.motions.contains_key(&motion) {
+            show(&mut m, 0, 0.0, false);
+        }
+    }
+}
+
+/// [`look`] for a mod umpire, whose head joint has the model's axes (standard §3b: +Z the face, +Y down) rather
+/// than the disc's bone axes: the same 0.7 of the turn toward `Umpire::head` within ±70°, and of the tilt within
+/// 35° down and 25° up, about the head's y then x.
+fn mod_look(g: Res<Game>, npcs: Option<Res<Npcs>>, rigs: Query<(&character::Rig, &Transform), With<ModUmpire>>, mut joints: Query<&mut Transform, Without<character::Rig>>) {
+    let Some((e, _)) = npcs.as_ref().and_then(|n| n.umpire.as_ref()) else { return };
+    let Ok((rig, at)) = rigs.get(*e) else { return };
+    let Some(head) = ["head", "Bip01Head"].into_iter().find_map(|n| rig.data.joint(n)) else { return };
+    let rest = rig.data.joints[head].rest;
+    let mut m = rest.to_matrix();
+    let mut j = rig.data.joints[head].parent;
+    while let Some(k) = j {
+        let Ok(tf) = joints.get(rig.joints[k]) else { return };
+        m = tf.to_matrix() * m;
+        j = rig.data.joints[k].parent;
+    }
+    let p = (at.to_matrix() * m).inverse().transform_point3(Vec3::from(g.umpire.head));
+    let yaw = (0.7 * p.x.atan2(p.z)).clamp(-70f32.to_radians(), 70f32.to_radians());
+    let tilt = (0.7 * (-p.y).atan2(p.x.hypot(p.z))).clamp(-35f32.to_radians(), 25f32.to_radians());
+    if let Ok(mut tf) = joints.get_mut(rig.joints[head]) {
+        *tf = rest.with_rotation(rest.rotation * Quat::from_rotation_y(yaw) * Quat::from_rotation_x(tilt));
     }
 }
