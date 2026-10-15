@@ -8,6 +8,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
+- [ ] **B377** rollback_survives_a_tab_out is flaky in the full tools/check.sh run under parallel load (passes alone): 'the guest's picture flipped to the shared camera for [10, 133, 20, 1] / [2, 192] rounds' (assert since B314/B299) — files: crates/hst/src/play/netplay.rs
 - [ ] **B376** No post-point replays when hosting online on Steam Deck: on Linux (Steam Deck), hosting an online match with 3 bots, no post-point replay plays after a point and the camera just stays in the same place; it should play the replay and cut-away camera as in other matches (user 2026-10-14) → crates/hst/src/play/instant_replay.rs · crates/hst/src/play/replay_camera.rs · crates/hst/src/play/cutaway.rs
 - [ ] **B375** Can't switch to doubles: P1 can no longer press X/square to change to doubles; restore that ability (user 2026-10-14) → crates/hst/src/play/controls.rs · crates/hst/src/play/main_menu.rs · crates/hst/src/play/main_menu/home.rs
 - [ ] **B374** Self-updater for the Linux and Windows builds (user 2026-10-14; spec plan/B374.md): background check against GitHub's latest v* release, menu offer, signed SHA256SUMS + sha256 check, swap the binary (Windows rename to .old), relaunch; release.sh uploads bare binaries + signed sums → crates/hst/src/update.rs (new) · crates/hst/src/main.rs · crates/hst/src/play/main_menu.rs · crates/hst/src/play/main_menu/options.rs · crates/hst/src/handshake.rs · tools/release.sh
