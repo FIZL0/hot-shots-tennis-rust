@@ -39,3 +39,9 @@ User 2026-10-14: the browser build runs poorly on an iPhone 13 Pro; wants a nati
 - No ISO in Documents → the app exits (message only on stderr). Wants an in-app screen.
 - LAN discovery (mDNS) needs Apple's multicast entitlement, which free signing can't get; internet play should work.
 - Not yet run on a device: **waiting on the user** to sign, install and launch it.
+
+## Build 2010: gamepads
+Build 2008/2009 open on the 15 Pro (scene fix works) but had no controller input: gilrs has no iOS backend. Added one
+in `third_party/gilrs-core/src/platform/ios/`: polls `GCController.controllers` → extended gamepad each frame, emits
+gilrs events with the default codes (A/B/X/Y = south/east/west/north, triggers as 0..1 axes). No-disc hint shrunk
+(VMin 3.5, shorter text). Waiting on the user: does a paired controller drive the menu and a match?
