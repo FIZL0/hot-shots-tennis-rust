@@ -23,7 +23,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(FixedUpdate, step.after(super::replay_camera::step).before(super::start_effects));
 }
 
-fn step(mut g: ResMut<Game>, mut s: ResMut<Swing>, d: Option<Res<super::cutaway::Director>>) {
+pub(super) fn step(mut g: ResMut<Game>, mut s: ResMut<Swing>, d: Option<Res<super::cutaway::Director>>) {
     let Phase::ChangeEnds(n) = g.phase else {
         s.run = None;
         s.last = Some(g.cam.view);
