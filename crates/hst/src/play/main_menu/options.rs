@@ -5,7 +5,7 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::ASPECTS;
-use super::{BROWN, CHAT, SWAY_LOD, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{BROWN, CHAT, SWAY_LOD, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -55,6 +55,8 @@ pub(super) enum Opt {
     Mesh,
     /// B344: far/unseen characters' sway less often.
     SwayLod,
+    /// B374: look for a newer release at start (`crate::update`), desktop only.
+    UpdateCheck,
 }
 use Opt::*;
 
@@ -82,7 +84,7 @@ const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, Me
 /// What a preset sets, then the textures.
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Mesh, Upscaled, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
-const MODS: &[Opt] = &[Downloads, AtOnce, OnlineMods, Chat];
+const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
 const MOBILE: &[Opt] = &[Vibration];
 /// B289: Online Mod Downloads' values.
@@ -132,6 +134,7 @@ fn label(o: Opt) -> &'static str {
         Chat => "Chat",
         Renderer => "Renderer",
         Vibration => "Vibration",
+        UpdateCheck => "Check for Updates",
         FewerShadows => "Fewer Shadows",
         BatchCrowd => "Batch Crowd",
         MergeMeshes => "Merge Court Meshes",
@@ -172,6 +175,7 @@ fn about(o: Opt) -> &'static str {
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. A change asks first: the page reloads into it.",
         Vibration => vibration_about(),
+        UpdateCheck => "Look for a newer version when the game starts. The main menu offers it: Update downloads and checks it, then restarts the game into it (or opens its page where the game can't replace itself).",
         FewerShadows => "At Low shadows, only the players, the umpire and what shades the court cast: fewer draws. Off: Low casts as many as High.",
         BatchCrowd => "Draw identical court creatures together in one draw, from the next match. Off by default: no measurable gain.",
         SwayLod => "Hair and clothes swaying in the wind: On moves it every other frame on far players and not at all on players out of view (less work each frame). Off: every player every frame.",
@@ -287,6 +291,10 @@ impl Settings {
             }
             Renderer => self.5 = (self.5 as isize + d).rem_euclid(RENDERERS.len() as isize) as u8,
             Vibration => self.0[VIBRATION] = !self.0[VIBRATION],
+            UpdateCheck => {
+                self.0[UPDATE_CHECK] = !self.0[UPDATE_CHECK];
+                crate::update::CHECK.store(self.0[UPDATE_CHECK], std::sync::atomic::Ordering::Relaxed);
+            }
             FewerShadows => g.fewer_shadows = !g.fewer_shadows,
             BatchCrowd => g.batch_crowd = !g.batch_crowd,
             MergeMeshes => g.merge_meshes = !g.merge_meshes,
@@ -329,6 +337,7 @@ impl Settings {
             Chat => on_off(self.0[CHAT]),
             Renderer => RENDERERS[self.5 as usize].1.into(),
             Vibration => on_off(self.0[VIBRATION]),
+            UpdateCheck => on_off(self.0[UPDATE_CHECK]),
             FewerShadows => on_off(g.fewer_shadows),
             BatchCrowd => on_off(g.batch_crowd),
             SwayLod => on_off(self.0[SWAY_LOD]),

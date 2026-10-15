@@ -42,7 +42,7 @@ if ! grep -qx "version = \"$version\"" crates/hst/Cargo.toml; then
     git commit -q -m "Release $tag" crates/hst/Cargo.toml Cargo.lock
 fi
 
-tools/build.sh all
+HST_VERSION=$tag tools/build.sh all  # B374: update.rs compares this tag
 out=dist/release
 rm -rf "$out" && mkdir -p "$out"
 tar -czf "$out/hst-linux-x86_64.tar.gz" -C dist/linux .
@@ -51,6 +51,9 @@ cp dist/linux/hst "$out/hst-linux-x86_64"
 cp dist/windows/hst.exe "$out/hst-windows-x86_64.exe"
 (cd "$out" && sha256sum hst-* > SHA256SUMS)
 minisign -S -s "$key" -m "$out/SHA256SUMS" -x "$out/SHA256SUMS.sig" -t "Hot Shots Tennis Remastered $tag"
+# the game checks against the key built into it (update.rs): refuse a release it would turn down
+minisign -V -P "$(sed -n 's/^pub const PUBLIC_KEY: &str = "\(.*\)";/\1/p' crates/hst/src/update.rs)" -m "$out/SHA256SUMS" -x "$out/SHA256SUMS.sig" -q \
+    || { echo "SHA256SUMS.sig doesn't match update.rs's PUBLIC_KEY: wrong key?" >&2; exit 1; }
 
 body=$out/notes.md
 {

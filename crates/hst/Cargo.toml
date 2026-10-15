@@ -57,6 +57,8 @@ iroh-mdns-address-lookup = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 # Add mod's file picker on desktop (the xdg portal on Linux; the browser build uses the page's input)
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+# B374: the self-updater's check of a release's signed SHA256SUMS (`update.rs`; no dependencies)
+minisign-verify = "0.3"
 
 [features]
 # the browser build on WebGPU (`tools/web.sh` builds it beside the default WebGL2 one; the page picks)

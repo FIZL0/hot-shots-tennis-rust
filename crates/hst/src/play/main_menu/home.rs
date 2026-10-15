@@ -130,9 +130,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
     let head = format!("{pads} pad{}  -  Disc: SCUS-97610", if pads == 1 { "" } else { "s" });
     let w = d.width(&head, 16.0);
     d.outlined(|d| d.text(&head, 624.0 - w, 18.0, 16.0, WHITE));
-    let version = concat!("v", env!("CARGO_PKG_VERSION"), " - ", env!("HST_COMMIT"));
-    let w = d.width(version, 10.0);
-    d.outlined(|d| d.text(version, 624.0 - w, 37.0, 10.0, WHITE));
+    // B374: a release build's own tag
+    let version = format!("{} - {}", crate::update::VERSION.unwrap_or(concat!("v", env!("CARGO_PKG_VERSION"))), env!("HST_COMMIT"));
+    let w = d.width(&version, 10.0);
+    d.outlined(|d| d.text(&version, 624.0 - w, 37.0, 10.0, WHITE));
     d.anchor = super::Anchor::Centre;
 
     let rows = m.main_rows();
@@ -208,7 +209,7 @@ fn name(r: Row) -> &'static str {
         Row::Mods => "Mods",
         Row::Settings => "Settings",
         Row::Duo => "1v1 Here",
-        Row::Update => crate::update::BUTTON,
+        Row::Update => crate::update::button(),
         Row::Quit => "Quit",
     }
 }
@@ -267,6 +268,7 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Settings => text.msg(190).to_string(),
         Row::Duo => "Two players, one phone: lay it flat between you, each plays from their own end.".into(),
         Row::Update if cfg!(target_arch = "wasm32") => "A new version is out. Refresh loads this page again with it; your settings and mods stay.".into(),
+        Row::Update if crate::update::installs() => "A new version is out. Update downloads it, checks its signature and restarts the game into it; your settings and mods stay.".into(),
         Row::Update => "A new version is out. Download opens its release page: swap this game for the new build, keeping your settings and mods beside it.".into(),
         Row::Quit => "Close the game.".into(),
     };
@@ -299,6 +301,7 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         }
         Row::Duo => vec![("Players", "2".into()), ("Pads", "On screen".into()), ("Phone", "Flat".into())],
         Row::Update if cfg!(target_arch = "wasm32") => vec![("Refresh", "Reloads this page".into()), ("Keeps", "Settings, mods, ISO".into())],
+        Row::Update if crate::update::installs() => vec![("Update", "Download, check, restart".into()), ("Keeps", "Settings, mods, ISO".into())],
         Row::Update => vec![("Download", "GitHub release page".into()), ("Builds", "Linux, Windows".into())],
         Row::Settings => vec![("Pages", options::tabs_shown().len().to_string()), ("Upscaled", on(m.settings.0[0])), ("Menu music", on(m.settings.0[1]))],
         Row::Quit => vec![],
@@ -375,7 +378,7 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, pads: usize, [x, y, w, h]: [f32; 4]) 
         }
         Row::Update => {
             // this build's and the new one's, side by side
-            let (old, new) = (env!("HST_COMMIT").to_string(), crate::update::latest().unwrap_or_default());
+            let (old, new) = (crate::update::ours(), crate::update::latest().unwrap_or_default());
             let tw = ((w - 80.0) / 2.0).min(150.0);
             let x0 = x + (w - 2.0 * tw - 40.0) / 2.0;
             for (k, (label, v, fill)) in [("NOW", old, OFF), ("NEW", new, ON)].into_iter().enumerate() {
@@ -385,6 +388,16 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, pads: usize, [x, y, w, h]: [f32; 4]) 
                 d.label(&v, r[0] + tw / 2.0, r[1] + 26.0, 24.0, tw - 16.0, WHITE);
             }
             d.outlined(|d| d.centred(">", x0 + tw + 20.0, y + 52.0, 28.0, WHITE));
+            // B374: the install's progress bar and words
+            if let Some((says, k)) = crate::update::progress() {
+                let bw = 2.0 * tw + 40.0;
+                if let Some(k) = k {
+                    let r = [x0, y + 108.0, bw, 14.0];
+                    d.box3(r, 7.0, [Some(INK), Some(WHITE), Some(OFF)], 128.0);
+                    d.box3([r[0], r[1], (bw * k).max(14.0), 14.0], 7.0, [None, None, Some(ON)], 128.0);
+                }
+                d.outlined(|d| d.label(&says, x0 + bw / 2.0, y + 126.0, 12.0, bw, WHITE));
+            }
         }
         Row::Quit => {}
     }
