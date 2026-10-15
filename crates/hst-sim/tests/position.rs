@@ -132,7 +132,7 @@ fn formation_pick_matches_the_game() {
         };
         for line in d.lines().skip(1) {
             let words = list(line, "words");
-            let mut mt = Mt(std::array::from_fn(|k| words.get(k).copied().unwrap_or(0)), 0);
+            let mut mt = Mt::from_words(std::array::from_fn(|k| words.get(k).copied().unwrap_or(0)), 0);
             let draws: Vec<u32> = (0..4).map(|_| mt.next()).collect();
             let (ctl, setup, row, got) = (list(line, "ctl"), list(line, "setup"), list(line, "row"), list(line, "formation"));
             let mut want = [0u8; 4];

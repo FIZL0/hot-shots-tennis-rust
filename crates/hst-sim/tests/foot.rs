@@ -222,7 +222,7 @@ fn any_key(u: &Puff) -> (u8, Vec<u32>, [i32; 4], [bool; 2]) {
 }
 
 fn mt(fr: &[u8]) -> hst_sim::weather::Mt {
-    hst_sim::weather::Mt(std::array::from_fn(|k| i(fr, MT + 4 + 4 * k) as u32), i(fr, MT + 0x9c4) as usize)
+    hst_sim::weather::Mt::from_words(std::array::from_fn(|k| i(fr, MT + 4 + 4 * k) as u32), i(fr, MT + 0x9c4) as usize)
 }
 
 #[test]

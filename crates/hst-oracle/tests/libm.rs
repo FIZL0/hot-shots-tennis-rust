@@ -1,6 +1,6 @@
 //! The game's libm against `hst_sim::libm`, through the oracle. Needs `context/iso/` (skips without it).
 
-use hst_oracle::{Ee, addr};
+use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::libm;
 
 /// xorshift: deterministic inputs without a dependency.

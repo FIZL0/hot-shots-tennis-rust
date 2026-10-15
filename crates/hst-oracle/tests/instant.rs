@@ -1,7 +1,7 @@
 //! The instant replay decision against `hst_sim::instant::decide`, through the oracle. Needs `context/iso/` and
 //! `context/ram/s05.bin` (skips without them).
 
-use hst_oracle::{Ee, addr};
+use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::instant::{Point, decide};
 
 fn rng(seed: &mut u64) -> u32 {

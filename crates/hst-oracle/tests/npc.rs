@@ -1,7 +1,7 @@
 //! The ball-hit obstacles' box test and the ball speed against `hst_sim::npc`, through the oracle. Needs
 //! `context/iso/` and `context/ram/s03.bin` (the box extents are set at run time; skips without them).
 
-use hst_oracle::{Ee, addr};
+use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::npc::{ball_kmh, boxes_overlap, obstacle_extents};
 
 fn rng(seed: &mut u64) -> u32 {

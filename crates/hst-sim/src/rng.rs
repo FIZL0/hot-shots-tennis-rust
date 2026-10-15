@@ -1,4 +1,4 @@
-//! The game's random sources: newlib's `rand()` and its MT19937s (`ps2_rand`), and how the match uses them.
+//! The game's random sources: newlib's `rand()` and its MT19937s (`ps2-float`'s `rand`), and how the match uses them.
 //!
 //! The match keeps four generators: the shared one (the match object's: weather schedule, placement, mis-hits, wild
 //! aims, shouts, voice banks, effects), the AI's (seeded 1 when the game starts, reseeded from a shared draw as each
@@ -10,15 +10,44 @@
 use crate::ps2::{self, F};
 use hst_data::{ani::{self, Anim}, iso::Iso, xb::Archive};
 
-pub use crate::ps2_rand::{Mt, Rand};
+pub use ps2_float::rand::Rand;
+
+/// One of the game's MT19937s: `ps2-float`'s generator (`init_genrand`/`genrand_int32` through `Deref`) with the
+/// game's ways of drawing from it below.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Mt(pub ps2_float::rand::Mt);
+
+impl std::ops::Deref for Mt {
+    type Target = ps2_float::rand::Mt;
+    fn deref(&self) -> &ps2_float::rand::Mt {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Mt {
+    fn deref_mut(&mut self) -> &mut ps2_float::rand::Mt {
+        &mut self.0
+    }
+}
 
 /// The game's use of its MT19937s (the generator object and its draws). The game never reseeds `rand()`: it is 1 at
 /// boot.
 impl Mt {
+    /// `init_genrand(seed)`.
+    pub fn new(seed: u32) -> Mt {
+        Mt(ps2_float::rand::Mt::new(seed))
+    }
+
+    /// The 624 words and the next word's index.
+    pub fn from_words(words: [u32; 624], index: usize) -> Mt {
+        Mt(ps2_float::rand::Mt(words, index))
+    }
+
     /// The generator as the game keeps it in RAM: the words at +4, the index at +0x9c4 (0x9d0 bytes, little-endian).
     pub fn from_ram(b: &[u8]) -> Mt {
         let w = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
-        Mt(std::array::from_fn(|k| w(4 + 4 * k)), w(0x9c4) as usize)
+        Mt::from_words(std::array::from_fn(|k| w(4 + 4 * k)), w(0x9c4) as usize)
     }
 
     /// The game's usual draw: bits 16..30 (`% n` and `% 100 < chance` are taken from it).

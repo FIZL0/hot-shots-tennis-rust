@@ -4,7 +4,7 @@
 //! `context/ram/` (skips without them).
 
 use hst_data::{ani, iso::Iso, mdl, xb::Archive};
-use hst_oracle::{Ee, addr, root};
+use hst_oracle::{Ee, HstEe, addr, root};
 use hst_sim::pose::{Clip, Path, Skeleton};
 use hst_sim::serve::{ServeArm, overhead_solve, serve_arm, underhand_solve};
 

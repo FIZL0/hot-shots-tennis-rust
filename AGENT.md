@@ -11,6 +11,11 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
   README) may be committed, in `docs/screenshots/`; not texture sheets, raw captures or bulk dumps.
 - Exactness: ported math uses `hst_sim::ps2` (PCSX2's EE FPU model: chop rounding, aligned adds) wherever the
   original's float results must match bit for bit.
+- The PS2 libraries are ours: FIZL0/ps2-float (`../ps2-float`: EE FPU, VU0, the SDK's fdlibm, newlib rand/MT;
+  `hst_sim::ps2`/`vu0`/`libm`/`rng` re-export it) and FIZL0/ps2-oracle (`../ps2-oracle`: the R5900 interpreter under
+  `hst-oracle`), tag-pinned git dependencies shared with the decomp kits. Agents may fix and extend them when a port
+  needs it (new op, missing function, wrong rounding): change it there with a test, tag a release, bump the tag here
+  and in the kits (`crates/game-sim`, `crates/kit-oracle`), run their tests. Never copy them back in.
 - Research: our own scripts and notes are in `research/` (in git: no game data, no decompiled code, no captures or
   screenshots); everything derived from the disc or the running game is in `context/` (git-ignored). Journal:
   `research/journal/YYYY-MM-DD-<slug>/`, one README per task, newest iteration file says whose move it is:
@@ -44,7 +49,8 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
 - Function oracle (`crates/hst-oracle`): for a pure function of its arguments and RAM (math, AI decisions, table
   lookups) check the port with `Ee::game()`/`Ee::from_ram(dump)` + `call(addr(name), ints, floats, budget)` over
   ≥10k generated inputs instead of recording it (names → addresses in `research/oracle.txt`; examples in its
-  `tests/`). An unknown op panics with its address: add it to the interpreter. Timing, frame flow, VU0 and
+  `tests/`; `use hst_oracle::HstEe` for those two). An unknown op panics with its address: add it to the interpreter
+  (ps2-oracle, see above). Timing, frame flow, VU0 and
   rendering still need PCSX2 recordings.
 - `CAPTURE FAILED` from any PINE tool means the output file is incomplete: fix PCSX2, re-record.
 - Wrap-up is one call, no subagent: `tools/done.sh <ID> "<msg>"` (tests, tick, commit) or `… --blocked "<why>"`.

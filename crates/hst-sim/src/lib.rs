@@ -3,7 +3,6 @@
 pub mod ball;
 pub mod params;
 pub mod ps2;
-pub mod ps2_rand;
 pub mod rng;
 pub mod shot;
 pub mod contact;
