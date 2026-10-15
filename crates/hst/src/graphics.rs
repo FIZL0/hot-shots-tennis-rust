@@ -1,7 +1,7 @@
-//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA, ambient occlusion (G1, beyond the original) and the original
+//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA, ambient occlusion (G1), soft shadows (G4; both beyond the original) and the original
 //! 640×448 mode (`hud_gamma.rs` draws it; it also fixes the aspect ratio to 4:3 and turns upscaled textures off, `main.rs`).
 //! The menu edits the [`Graphics`] resource (applied live) and passes it to a match as flags
-//! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--ao low|high`, `--original`, `--mesh N`). The simulation stays a fixed
+//! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--ao low|high`, `--soft-shadows`, `--original`, `--mesh N`). The simulation stays a fixed
 //! 60 Hz tick whatever these are. Defaults draw as before these settings existed.
 
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
@@ -31,6 +31,9 @@ pub struct Graphics {
     /// original mode; the 3D cameras then draw without MSAA (SSAO needs it off), SMAA smoothing the edges instead
     /// when Anti-aliasing is on.
     pub ao: u8,
+    /// G4: contact-hardening sun shadows (`gs.wgsl`'s own filter: sharp where a caster meets the ground, softer the
+    /// higher it is) instead of Bevy's fixed Gaussian. Not in the original mode, nor on WebGL2.
+    pub soft_shadows: bool,
     /// Draw as the PS2 did: the court at 640×448 and the HUD at 448 lines, scaled up unfiltered (overrides `scale`).
     pub original: bool,
     /// A window instead of borderless fullscreen on the current monitor (the default, B96). Not part of a preset.
@@ -78,19 +81,19 @@ const MERGE_MESHES: bool = false;
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen): full resolution, but
     /// Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`).
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
-    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, ao: 0, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -101,6 +104,7 @@ impl Graphics {
             "scale" | "render_scale" => self.scale = v.trim_end_matches('%').parse::<u32>().map_or(self.scale, |s| s.clamp(25, 100)),
             "msaa" | "anti_aliasing" => self.msaa = MSAA.into_iter().find(|&m| msaa_name(m) == v).unwrap_or(self.msaa),
             "original" => self.original = v != "off",
+            "soft_shadows" | "soft-shadows" => self.soft_shadows = v != "off",
             "ao" | "ambient_occlusion" => self.ao = AO.iter().position(|&n| n == v).map_or(self.ao, |i| i as u8),
             "windowed" => self.windowed = v != "off",
             "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
@@ -120,12 +124,13 @@ impl Graphics {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
         let on = |b: bool| if b { "on" } else { "off" };
         format!(
-            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\nambient_occlusion = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\ncull = {}\nmesh = {}\n",
+            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\nambient_occlusion = {}\nsoft_shadows = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\ncull = {}\nmesh = {}\n",
             on(self.vsync),
             self.scale,
             self.shadows.name(),
             msaa_name(self.msaa),
             AO[self.ao.min(2) as usize],
+            on(self.soft_shadows),
             on(self.original),
             on(self.windowed),
             ["off", "on", "detailed"][self.show_fps.min(2) as usize],
@@ -142,6 +147,9 @@ impl Graphics {
         let mut f = vec!["--fps".into(), self.fps.to_string(), "--scale".into(), self.scale.to_string(), "--shadows".into(), self.shadows.name().into(), "--msaa".into(), msaa_name(self.msaa).into()];
         if self.ao > 0 {
             f.extend(["--ao".into(), AO[self.ao.min(2) as usize].into()]);
+        }
+        if self.soft_shadows {
+            f.push("--soft-shadows".into());
         }
         if self.vsync {
             f.push("--vsync".into());
@@ -195,6 +203,12 @@ impl Graphics {
         self.ao > 0 && !self.original && !cfg!(all(target_arch = "wasm32", not(feature = "webgpu")))
     }
 
+    /// Whether the sun's shadows draw soft (G4): set, shadows on, not in the original mode (G2 gives that its own
+    /// look), and not on WebGL2 (`gs.wgsl` reads the shadow map's texels, which its depth array can't).
+    pub fn soft_on(&self) -> bool {
+        self.soft_shadows && self.shadows != Shadows::Off && !self.original && !cfg!(all(target_arch = "wasm32", not(feature = "webgpu")))
+    }
+
     pub fn present_mode(&self) -> PresentMode {
         if self.vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync }
     }
@@ -226,7 +240,7 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Graphics>()
         .add_systems(PreStartup, mesh_detail)
         .add_systems(First, mesh_detail)
-        .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), ao.after(msaa), fps_counter))
+        .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), ao.after(msaa), soft_shadows, fps_counter))
         .add_systems(Last, limit);
     // Show FPS → Detailed: where the frame's time goes (`frame_start`)
     use bevy::app::RunFixedMainLoopSystems as F;
@@ -379,6 +393,22 @@ fn ao(
     }
 }
 
+/// G4: Soft Shadows on every scene camera. Bevy's per-view shadow filter is the switch: Temporal (otherwise unused
+/// here) makes `gs.rs` build the court's draws with `gs.wgsl`'s own soft filter; off removes it, leaving Bevy's
+/// default (Gaussian) as before.
+fn soft_shadows(mut commands: Commands, g: Res<Graphics>, q: Query<(Entity, Has<bevy::light::ShadowFilteringMethod>), With<crate::hud_gamma::Scene>>, added: Query<(), Added<crate::hud_gamma::Scene>>) {
+    if !g.is_changed() && added.is_empty() {
+        return;
+    }
+    for (e, has) in &q {
+        if g.soft_on() && !has {
+            commands.entity(e).insert(bevy::light::ShadowFilteringMethod::Temporal);
+        } else if !g.soft_on() && has {
+            commands.entity(e).remove::<bevy::light::ShadowFilteringMethod>();
+        }
+    }
+}
+
 /// Shadow quality: off, or the shadow map's size and cascades (high = Bevy's default 2048 and 4 cascades).
 fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalLightShadowMap>, mut lights: Query<(Entity, Mut<DirectionalLight>)>) {
     if !g.is_changed() && !lights.iter().any(|(_, l)| l.is_added()) {
@@ -514,7 +544,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, ao: 2, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES, cull: !p.cull, mesh: 50 };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, ao: 2, soft_shadows: true, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES, cull: !p.cull, mesh: 50 };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -553,5 +583,10 @@ mod tests {
         assert_eq!((g.preset(), &g.flags()[8..]), ("Custom", &["--ao".to_string(), "high".into()][..]));
         let mut back = Graphics::default();
         assert!(back.set("ao", "high") && back == g);
+        // G4: Soft Shadows likewise; off in the original mode and with the shadows off
+        let g = Graphics { soft_shadows: true, ..default() };
+        assert_eq!((g.preset(), &g.flags()[8..]), ("Custom", &["--soft-shadows".to_string()][..]));
+        assert!(g.soft_on() == !cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))));
+        assert!(!Graphics { original: true, ..g }.soft_on() && !Graphics { shadows: Shadows::Off, ..g }.soft_on());
     }
 }

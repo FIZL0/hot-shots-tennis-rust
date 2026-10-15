@@ -474,6 +474,13 @@ impl Material for GsMaterial {
                 f.shader_defs.push("GS_AO".into());
             }
         }
+        // G4: Soft Shadows (`graphics::soft_shadows` marks the view with Bevy's Temporal filter; not on WebGL2)
+        let filter = key.mesh_key & bevy::pbr::MeshPipelineKey::SHADOW_FILTER_METHOD_RESERVED_BITS;
+        if !prepass && filter == bevy::pbr::MeshPipelineKey::SHADOW_FILTER_METHOD_TEMPORAL && !cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))) {
+            if let Some(f) = descriptor.fragment.as_mut() {
+                f.shader_defs.push("GS_SOFT".into());
+            }
+        }
         // the browser build is WebGL2's (no noperspective)
         #[cfg(target_arch = "wasm32")]
         for defs in [Some(&mut descriptor.vertex.shader_defs), descriptor.fragment.as_mut().map(|f| &mut f.shader_defs)].into_iter().flatten() {

@@ -1,6 +1,6 @@
 // PS2 GS colour path for court models (see gs.rs). Values are in PS2 units: 1.0 = 0x80 for vertex/material colour
 // and alpha, texel colour 1.0 = 0xff, texel alpha 1.0 = 0x80 (mtl.rs expands it to 0xff).
-#import bevy_pbr::{mesh_view_bindings as view_bindings, mesh_view_types, shadows}
+#import bevy_pbr::{mesh_view_bindings as view_bindings, mesh_view_types, shadows, shadow_sampling}
 #import bevy_pbr::{mesh_bindings::mesh, mesh_functions, skinning, morph, forward_io::Vertex}
 #import bevy_pbr::view_transformations::position_world_to_clip
 
@@ -183,14 +183,92 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     return out;
 }
 
+#ifdef GS_SOFT
+// G4 (Soft Shadows, not the original's): contact-hardening edges. A blocker search finds how high above the ground
+// the caster is along the sun; the penumbra's radius grows SOFT_SPREAD metres a metre of it, up to SOFT_MAX, so a
+// player's feet stay sharp and a tall tree's canopy blurs. `graphics::soft_shadows` turns it on by giving the view
+// Bevy's Temporal filter (its key's only spare state); this replaces Bevy's filter, so there is no temporal noise.
+// (the real sun's is ~0.005; 3× that reads as soft without washing out a tall pole's shadow)
+const SOFT_SPREAD: f32 = 0.015;
+const SOFT_MAX: f32 = 0.25;
+
+fn soft_cascade(i: u32, c: u32, pos: vec4<f32>) -> f32 {
+    let light = &view_bindings::lights.directional_lights[i];
+    let cascade = &(*light).cascades[c];
+    let texel = (*cascade).texel_size;
+    // Bevy's biases (`sample_directional_cascade`), the ground's normal up
+    let p = vec4(pos.xyz + (*light).shadow_normal_bias * texel * vec3(0.0, 1.0, 0.0) + (*light).shadow_depth_bias * (*light).direction_to_light.xyz, pos.w);
+    let ll = shadows::world_to_directional_light_local(i, c, p);
+    if ll.w == 0.0 {
+        return 1.0;
+    }
+    let layer = i32((*light).depth_texture_base_index + c);
+    let size = vec2<f32>(textureDimensions(view_bindings::directional_shadow_textures));
+    // the cascade is orthographic: shadow-map depth per metre along the light is its projection's z row's length
+    let m = (*cascade).clip_from_world;
+    let per_metre = length(vec3(m[0].z, m[1].z, m[2].z));
+    // blocker search, 6×6 texels over the widest penumbra (at most ~2 texels apart, so the estimate doesn't jump): the casters' mean depth (reversed Z: nearer the sun is
+    // larger; the ground itself doesn't cast)
+    let reach = SOFT_MAX / texel;
+    var sum = 0.0;
+    var n = 0.0;
+    for (var y = 0; y < 6; y++) {
+        for (var x = 0; x < 6; x++) {
+            let o = (vec2(f32(x), f32(y)) - 2.5) * 0.4 * reach;
+            let t = clamp(vec2<i32>(floor(ll.xy * size + o)), vec2(0), vec2<i32>(size) - 1);
+            let d = textureLoad(view_bindings::directional_shadow_textures, t, layer, 0);
+            if d > ll.z {
+                sum += d;
+                n += 1.0;
+            }
+        }
+    }
+    let height = select(0.0, (sum / max(n, 1.0) - ll.z) / per_metre, n > 0.0);
+    // PCF over the penumbra: k×k bilinear comparisons at most ~2 texels apart (k grows with it, fewer near contact)
+    let r = clamp(height * SOFT_SPREAD / texel, 1.0, reach);
+    let k = clamp(i32(ceil(r)) + 1, 3, 9);
+    let step = 2.0 * r / f32(k - 1);
+    var lit = 0.0;
+    for (var y = 0; y < k; y++) {
+        for (var x = 0; x < k; x++) {
+            let o = (vec2(f32(x), f32(y)) * step - r) / size;
+            lit += shadow_sampling::sample_shadow_map_hardware(ll.xy + o, ll.z, layer);
+        }
+    }
+    return lit / f32(k * k);
+}
+
+// as Bevy's `fetch_directional_shadow`, each cascade through `soft_cascade`
+fn soft_shadow(i: u32, pos: vec4<f32>, view_z: f32) -> f32 {
+    let light = &view_bindings::lights.directional_lights[i];
+    let c = shadows::get_cascade_index(i, view_z);
+    if c >= (*light).num_cascades {
+        return 1.0;
+    }
+    var shadow = soft_cascade(i, c, pos);
+    if c + 1u < (*light).num_cascades {
+        let far = (*light).cascades[c].far_bound;
+        let near = (1.0 - (*light).cascades_overlap_proportion) * far;
+        if -view_z >= near {
+            shadow = mix(shadow, soft_cascade(i, c + 1u, pos), (-view_z - near) / (far - near));
+        }
+    }
+    return shadow;
+}
+#endif
+
 // 1 lit, 0 in shadow: the first directional light that casts shadows (the match's sun)
 fn sun_visibility(in: VertexOutput) -> f32 {
     for (var i = 0u; i < view_bindings::lights.n_directional_lights; i++) {
         if (view_bindings::lights.directional_lights[i].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
             let v = view_bindings::view.view_from_world;
             let view_z = dot(vec4(v[0].z, v[1].z, v[2].z, v[3].z), in.world_position);
+#ifdef GS_SOFT
+            return soft_shadow(i, in.world_position, view_z);
+#else
             // receivers are the flat ground: up is its normal
             return shadows::fetch_directional_shadow(i, in.world_position, vec3(0.0, 1.0, 0.0), view_z, in.position.xy);
+#endif
         }
     }
     return 1.0;
