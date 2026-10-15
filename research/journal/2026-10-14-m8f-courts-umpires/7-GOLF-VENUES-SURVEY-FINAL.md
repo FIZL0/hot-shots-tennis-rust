@@ -1,6 +1,6 @@
 # M8f10 — Fore! / Open Tee 2 / Out of Bounds venues and umpires (2026-10-15)
 
-Research and tools only. Everything is in ../open-tennis-mods (453c8f8, 68606db: `notes/venues.md`, `tools/venues/`);
+Research and tools only. Everything is in ../opentennis-mods (453c8f8, 68606db: `notes/venues.md`, `tools/venues/`);
 nothing changed in this repo's code. The court-mod exports are split off as M8f10a1–a3.
 
 ## What was found

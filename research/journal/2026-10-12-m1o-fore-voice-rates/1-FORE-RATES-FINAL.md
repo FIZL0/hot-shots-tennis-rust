@@ -1,6 +1,6 @@
 # M1o: Fore mod voices too high pitched (FINAL)
 
-## Fix (open-tennis-mods)
+## Fix (opentennis-mods)
 - 106a626 `tools/audio.py`: each Fore SShd sample is written at its true rate 44100 · 2^((note − root + fine/16)/12),
   from the tone record (root +2, fine i8 +3, sample address/8 +4, the `snd.rs` layout). Fore's driver
   (`MODULES2/SNDN2DRV.IRX`) uses the same 192-steps-per-octave pitch rule as HST's (`snd::pitch`, N3a), so the tone's

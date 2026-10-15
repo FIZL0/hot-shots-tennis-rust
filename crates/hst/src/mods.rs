@@ -1,7 +1,7 @@
-//! Standard character mods (open-tennis-mods `standard/HST-CHARACTER-STANDARD.md` v1): `mods/<id>/mod.json` and its `.glb`
+//! Standard character mods (opentennis-mods `standard/HST-CHARACTER-STANDARD.md` v1): `mods/<id>/mod.json` and its `.glb`
 //! costumes, read into the same [`CharacterData`] as a disc character. The body comes from the mod; motions,
 //! `.MOR` faces, arm table and (by `donor`) the game logic's tables come from the donor character on the disc.
-//! A model that fails §7's conformance (open-tennis-mods `tools/rerig/check.py`, ported) is rejected with the failed checks.
+//! A model that fails §7's conformance (opentennis-mods `tools/rerig/check.py`, ported) is rejected with the failed checks.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -521,7 +521,7 @@ fn worlds(doc: &gltf::Document) -> Vec<Mat4> {
     (0..parent.len()).map(|i| world(i, doc, &parent, &mut w)).collect()
 }
 
-/// §7's checks (open-tennis-mods `tools/rerig/check.py`): the failures as `Err`, else the warnings.
+/// §7's checks (opentennis-mods `tools/rerig/check.py`): the failures as `Err`, else the warnings.
 fn conform(doc: &gltf::Document, blob: &[u8], morph_face: bool) -> Result<Vec<String>, String> {
     let (mut fail, mut warn) = (Vec::new(), Vec::new());
     let std: serde_json::Value = serde_json::from_str(SKELETON).unwrap();
@@ -1147,7 +1147,7 @@ mod tests {
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
     /// Test mods (local, `research/journal/2026-10-08-m1a-mod-loader`): `test_pc00` is HST's pc00 through
-    /// open-tennis-mods `tools/rerig/rerig.py`, `test_broken` the same with `Bip01LThigh` renamed, `fore_pc00_phoebe` a packaged mod.
+    /// opentennis-mods `tools/rerig/rerig.py`, `test_broken` the same with `Bip01LThigh` renamed, `fore_pc00_phoebe` a packaged mod.
     const MODS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/mods");
 
     struct Stores(Assets<Mesh>, Assets<StandardMaterial>, Assets<Image>, Assets<SkinnedMeshInverseBindposes>);

@@ -10,7 +10,7 @@ are consistent with the skeleton (IB·W = F), so skin_space's IB check can't tel
 Which umpires have them: u_02 (both hands, legs on Bip01Pelvis), u_03 (hands), u_04 (a piece on the pelvis),
 u_05 (left hand), u_06 (right hand), u_07 (hands). u_00 and u_01 have none, so Natasha and Nate were fine.
 
-## Fix (open-tennis-mods c79756e)
+## Fix (opentennis-mods c79756e)
 - `tools/psp2gltf/i3d.py`: `MeshPart.bone_local` = flag bit 3.
 - `tools/psp2gltf/build.py` `skin_space`: a bone-local group goes to model space by its bone's bind world
   (`world[bone] @ F`), then skins to that bone as before.

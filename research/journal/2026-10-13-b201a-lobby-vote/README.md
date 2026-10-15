@@ -28,5 +28,5 @@ seconds left; OK votes (and can change the vote), the host also has End Vote.
 - "Host decides which ones are votable" is the host choosing the topic when opening the vote; no per-option
   allow-list.
 - `tools/check.sh -p hst`: 225 pass; `mods::tests::mod_eyes_follow_the_donors_uva` and `modfs::tests::real_mods_install`
-  fail on a mod in the external `../open-tennis-mods/out/mods/fore_pc00_phoebe` (its mod.json's `costumes` path is outside the
+  fail on a mod in the external `../opentennis-mods/out/mods/fore_pc00_phoebe` (its mod.json's `costumes` path is outside the
   mod folder): state of that repo, not this change (no mods code touched).

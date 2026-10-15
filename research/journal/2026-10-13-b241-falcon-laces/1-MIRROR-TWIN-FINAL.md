@@ -1,6 +1,6 @@
 # B241: Falcon's shoe laces off his boots
 
-**Cause: the mod (open-tennis-mods `tools/rerig/mirror.py`), not our renderer.**
+**Cause: the mod (opentennis-mods `tools/rerig/mirror.py`), not our renderer.**
 
 Falcon (fore_pc09) is left-handed, so his costumes ship pre-mirrored. His lace bows (Material #2237, 24 verts) are
 skinned 100% to two extra joints, `node78` (child of `Bip01 L Calf`) and `node84` (child of `R Calf`). Fore's own
@@ -11,7 +11,7 @@ mirror.py called any joint with |bind x| < 5 mm and no L/R name twin "midline" (
 x = 0, so each twinned itself: the vertices were reflected to the other foot but kept their joint, and each boot's
 laces followed the opposite leg (with the default viewer pose they hung between the feet, seen from behind).
 
-Fix (open-tennis-mods ab53ea3): midline only if the whole parent chain is on the midline. The lace joints then pair by
+Fix (opentennis-mods ab53ea3): midline only if the whole parent chain is on the midline. The lace joints then pair by
 position + twin parent (node78 ↔ node84). The same bug hit three oob mods, fixed by the same change: Jasmine `h_mimi`
 (under `R_ering02`), Kate `udewa` (under `Bip01RForearmRoll`, now gets a mirrored copy), S. Maruyama `pl1/pl2`
 (under the feet). Regenerated only the 21 costumes whose mirror output changed (old vs new mirror.py on the same

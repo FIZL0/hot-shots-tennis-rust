@@ -3513,7 +3513,7 @@ mod tests {
         assert_eq!(txt_of(&dns_txt(&t)).as_deref(), Some(t.as_str()));
         assert_eq!(code_in(" k7qx "), Some("K7QX".into()));
         assert_eq!(code_in(&link("K7QX")), Some("K7QX".into()));
-        assert_eq!(code_in("https://fizl0.github.io/open-tennis/?code=k7qx&x=1"), Some("K7QX".into()));
+        assert_eq!(code_in("https://fizl0.github.io/opentennis/?code=k7qx&x=1"), Some("K7QX".into()));
         assert_eq!(code_in("https://opentennis.dev/?code=k7qx&x=1"), Some("K7QX".into()));
         assert_eq!(code_in("K0QX"), None, "0 isn't a symbol");
         assert_eq!(code_in("K7QXY"), None);

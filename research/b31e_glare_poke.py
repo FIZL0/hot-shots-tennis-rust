@@ -9,7 +9,7 @@ p=Pine(step=True)
 p.lockstep=False; p.load_state(5); time.sleep(5)
 fl=lambda a:struct.unpack('<f',struct.pack('<I',p._u32(a)))[0]
 F=lambda x:struct.unpack('<I',struct.pack('<f',x))[0]
-d=f"/home/ryha/repos/open-tennis-slots/pcsx2/s{os.environ['HST_PCSX2']}/PCSX2/snaps"
+d=f"/home/ryha/repos/opentennis-slots/pcsx2/s{os.environ['HST_PCSX2']}/PCSX2/snaps"
 p.lockstep=True; p.pause()
 for tag,v in [('lk_off',0.0),('lk_on',0.8),('lk_off2',0.0)]:
     fw=[fl(0x1e7f50+4*i) for i in range(3)]

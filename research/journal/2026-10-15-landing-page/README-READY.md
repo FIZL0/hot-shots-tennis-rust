@@ -32,7 +32,7 @@ Discord invite (user): https://discord.gg/kCkz5hFNXG
 
 ## v4 (artifact version 15)
 - Header nav removed. The page now opens with a full-width Discord join banner and the OpenTennis logo
-  (`context/logo/open-tennis-logo.svg`). The site uses a copy with the black background rect taken out and the
+  (`context/logo/opentennis-logo.svg`). The site uses a copy with the black background rect taken out and the
   viewBox cropped to the art (195 108 1040 820). Do the same when it moves into `web/`.
 - "Share mods on Discord" button removed. Settings intro now reads "Change settings without starting the game."
   The "mod didn't load" row is gone.
@@ -41,5 +41,5 @@ Discord invite (user): https://discord.gg/kCkz5hFNXG
 - The logo now sits on the left of a band under the Discord bar. The band's background is the autumn court
   screenshot, darkened. The title "Tennis, the way it played on PS2." moved into that band, next to the logo,
   capped at 68px. Before this, at wide windows it wrapped into four short lines in half the page.
-- Added an "Open source on GitHub" button (github.com/FIZL0/open-tennis) under the title, and a GitHub
+- Added an "Open source on GitHub" button (github.com/FIZL0/opentennis) under the title, and a GitHub
   link in the footer.

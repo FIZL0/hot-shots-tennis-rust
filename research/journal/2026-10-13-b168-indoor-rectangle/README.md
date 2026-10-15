@@ -17,7 +17,7 @@ B157's guard band (`gs.wgsl` `GS_GUARD`) took the GS band 2048 ± 1280 as ±4 ha
 pixels per 4:3 half-width. It dropped the box's bottom triangles, so near the camera the floor blended over the
 blue clear colour instead of black.
 
-The original's stage-7 GS dump (`../open-tennis/context/b157/c07_draws.txt`, prim 279) draws the box as a black
+The original's stage-7 GS dump (`../opentennis/context/b157/c07_draws.txt`, prim 279) draws the box as a black
 `tstripx8`: 6 of its 10 triangles, bb x −813..1453, y 60..992. Projecting the box with the same frame's camera
 (`c07.ram`, eye 0x1e7d20, forward/down rows, tan 0x1e7d64 = tan 10°):
 - Bottom near corners (±14, 13.2, −26.5): 4.068 half-widths, 7.855 half-heights. That puts them at GS x ±1133,

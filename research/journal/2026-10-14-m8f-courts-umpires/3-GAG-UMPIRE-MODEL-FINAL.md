@@ -1,7 +1,7 @@
 # M8f4 — Get a Grip umpire model + motions
 
 ## What was done
-- open-tennis-mods `tools/psp2gltf/export_getagrip_umpires.py` (commit 30b8165 there): for u_00..u_07 builds the raw glTF
+- opentennis-mods `tools/psp2gltf/export_getagrip_umpires.py` (commit 30b8165 there): for u_00..u_07 builds the raw glTF
   with `build.py` from `umpire.xb` (`u_NN.psp.i3r`, motions `u_NN_{h,r,l,w}.i3m`, u_00's where a umpire has only
   `_s`), then bakes it into game space under `game_space` (Y down, metres, facing +Z): joint locals K·L·K⁻¹ with
   K = f·diag(−1,−1,1), f = 0.8554/57.9 m per GaG cm (Gloria's calibration, as the GaG player mods), head ×0.6277
@@ -22,7 +22,7 @@
   `mod_umpire` (after `step`: `wait` loop during play, missing turn → idle frame 0) and `mod_look` (after `look`:
   head toward `Umpire::head` about the head's y then x, 0.7 of the angle, yaw ±70°, tilt 35° down/25° up). No
   play.rs change; nothing the sim reads (umpire state, RNG, timing) is touched: the rig is draw-only.
-- Test: `mods::umpire::tests::a_get_a_grip_umpire_loads` loads all 8 from ../open-tennis-mods/out/mods when built (skipped
+- Test: `mods::umpire::tests::a_get_a_grip_umpire_loads` loads all 8 from ../opentennis-mods/out/mods when built (skipped
   otherwise: game data), checks the 4 clips, lengths, pelvis 0..15 cm above the seat in the idle.
 
 ## Verified

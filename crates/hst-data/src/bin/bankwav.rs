@@ -1,5 +1,5 @@
 //! bankwav <iso> <archive> <bank.hd> <out dir> — every one-note take of a sound bank as `<program>_<key>.wav`
-//! (16-bit mono at the rate the game plays it), the mod voice layout (open-tennis-mods standard §5). Takes of several
+//! (16-bit mono at the rate the game plays it), the mod voice layout (opentennis-mods standard §5). Takes of several
 //! notes are listed and skipped. Writes game data: keep `out dir` out of git.
 use hst_data::{exe, iso::Iso, snd::{self, Bank}, xb::Archive};
 

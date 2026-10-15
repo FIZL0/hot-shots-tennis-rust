@@ -9,7 +9,7 @@ and left.
 ## Fix
 - `mods::override_ok(k, v)` is the one rule, used by `read` and `Wire::check`: a TParam.csv column, value up to
   64 characters, no comma or control character (the row is re-joined with commas for `ReachStats::from_tparam`).
-  A mod that breaks the rule is refused at read time. All 1,944 overrides in `../open-tennis-mods/out/mods` pass.
+  A mod that breaks the rule is refused at read time. All 1,944 overrides in `../opentennis-mods/out/mods` pass.
   Column names come from one `COLUMNS` constant shared by the web and native builds, and peers already have to
   run the same `BUILD` to join, so builds agree on them.
 - The error now names the key and the value (`mod "x": params.override `nope` is not a TParam.csv column`).

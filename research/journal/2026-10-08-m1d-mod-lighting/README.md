@@ -26,7 +26,7 @@ edges. Detail: `1-lighting-FINAL.md`.
 - Fog is always on for mod materials (true of every disc character batch; a mod can't turn it off).
 - A mod material without `hst_mtl` gets shininess/highlight 0 (matte), the standard's default.
 - The mod side has 4 more GS draw entries than the disc (same distinct draws). Not traced; no visible effect.
-- Mods already packaged in open-tennis-mods `out/` were not re-exported, so they have no highlights or sway until
+- Mods already packaged in opentennis-mods `out/` were not re-exported, so they have no highlights or sway until
   rebuilt with the new `hst-gltf` + `rerig.py`.
 - Pixels within ~2 px of silhouette edges differ by up to 65 grey levels: the rerigged mesh's transforms differ
   sub-pixel. This is geometry, not lighting.

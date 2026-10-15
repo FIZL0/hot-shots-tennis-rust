@@ -3,7 +3,7 @@
 
     tools/dev_stats.py        # scan transcripts, update research/dev-stats.json (ledger) and web/stats.json (totals)
 
-Reads the Claude Code transcripts of every open-tennis checkout and slot (~/.claude/projects/*open-tennis*/, plus the
+Reads the Claude Code transcripts of every opentennis checkout and slot (~/.claude/projects/*opentennis*/, plus the
 pre-rename HST-Remastered ones), subagents included. Numbers only, never transcript text. The ledger keeps each
 transcript's counts by file, so a transcript Claude Code later deletes still counts: run it often (release.sh,
 done.sh) and keep `cleanupPeriodDays` high in ~/.claude/settings.json.
@@ -62,7 +62,7 @@ def scan(f, seen):
 
 def main():
     ledger = json.loads(LEDGER.read_text()) if LEDGER.exists() else {}
-    files = [f for d in PROJECTS.glob('*') if 'open-tennis' in d.name or 'HST-Remastered' in d.name
+    files = [f for d in PROJECTS.glob('*') if 'opentennis' in d.name or 'HST-Remastered' in d.name
              for f in d.rglob('*.jsonl')]
     seen = set()
     for f in sorted(files, key=lambda f: f.stat().st_mtime):

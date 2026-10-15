@@ -2,7 +2,7 @@
 
 ## What landed
 
-**Mods repo** (../open-tennis-mods, commit "Get a Grip court galleries -> npcs.json people"):
+**Mods repo** (../opentennis-mods, commit "Get a Grip court galleries -> npcs.json people"):
 - `tools/psp2gltf/export_getagrip_gallery.py` (run after the court exporter) adds `npcs.json`, `npcs/*.glb`,
   `npcs/*.wav` to each `out/mods/gag_cNN_*`:
   - 14 courts with a `courtNN_gallery.xb`: one billboard card glb per look `gall00..06` (the 1 × 1.95 m quad,

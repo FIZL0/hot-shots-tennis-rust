@@ -19,7 +19,7 @@ against all 14 rows:
 Experts all share 計 ≥ 808 (beginners 743–784). Agili's direction (higher = better?) isn't known: the experts sit at
 25–30, beginners at 40, JJ at 10; the remap keeps a mod's order on it whichever way it reads.
 
-## The rule (open-tennis-mods `tools/rerig/gag_stats.py` `expert`)
+## The rule (opentennis-mods `tools/rerig/gag_stats.py` `expert`)
 For each band column (the power, spin, control, timing-window, speed, stamina and reach columns above): the mod's
 current value (its `params.override`, else its base row's) has a place among HST's 14 rows of that column (average
 rank, ties share it); the new value sits at the same place between the experts' lowest and highest (interpolated over
@@ -33,8 +33,8 @@ step runs once; `params_why` keeps the source-stat reasoning for the old value.
 Wired into `package.py` (game mods) and `hst_umpires.py` (umpire mods) before they write `mod.json`;
 `python3 tools/rerig/gag_stats.py [out/mods]` applied it in place to the 92 packed mods (90 changed, Anya and Wendy
 skipped by id; the 5 umpire mods included — they're playable mod characters) and asserts every band value and
-ai_row is inside the experts' own. Committed in open-tennis-mods 56aaf18. The remaster's `mods/hst-mods` is a symlink to
-`open-tennis-mods/out/mods`, so the local game sees the new packs at once; `mods.rs` needed no change (params are read as
+ai_row is inside the experts' own. Committed in opentennis-mods 56aaf18. The remaster's `mods/hst-mods` is a symlink to
+`opentennis-mods/out/mods`, so the local game sees the new packs at once; `mods.rs` needed no change (params are read as
 before).
 
 ## Checks

@@ -4,7 +4,7 @@
 Get a Grip's SGXD banks name cues (NAME ids 0x2000cccc), not waves. Cue c plays SEQD group 0 sequence c; each
 sequence keys on with `d0 01 NN`, where NN is the note **in decimal digits** (0x32 = note 32, 0x40 = note 40): across
 all 14k Get a Grip sequences the digit reading always lands on an RGND region's key range, the raw byte often
-doesn't. The region holding the note gives the wave. ../open-tennis-mods `tools/audio.py sgxd_cue_waves`.
+doesn't. The region holding the note gives the wave. ../opentennis-mods `tools/audio.py sgxd_cue_waves`.
 - Umpire banks `gag_vcNN{a,b}`: 45 cues, 45 regions, cue c → note 32+c → region c → wave c (identity).
 - The old inferred rule (cue c → region c) agreed for the playable `sgv/dgv_PC00-13` banks, was one off from cue 5 on
   in 44 of 46 `dgv_NPC_*` banks (checked by transcript on `dgv_NPC_m06a`: decoded `start_0` "Shall we?", `match`
@@ -33,7 +33,7 @@ Unused: `ballhit` (no HST call), `tiebreak_Nup/down` (HST calls no tiebreak poin
 (chattier, "That's out!"), the `_rev` copies.
 
 ## Packaged
-../open-tennis-mods `tools/rerig/gag_umpires.py [HST dir]` → `out/mods/gag_umpNN_<name>/` (8 mods, `kind: umpire`, 24 calls
+../opentennis-mods `tools/rerig/gag_umpires.py [HST dir]` → `out/mods/gag_umpNN_<name>/` (8 mods, `kind: umpire`, 24 calls
 each, `calls`, `calls_why` cue per call). Donor: the same umpire where HST has one (Suzuki 1, Robot Tennis 3 — both
 also the least-overrun fit), else the same-sex HST umpire whose takes the clips overrun least: Natasha, Kanani,
 Gloria → Lily; Nate, Xavier, Helghast → Suzuki. `todo` lists calls > 0.1 s longer than the donor's (2_3 "change sides"

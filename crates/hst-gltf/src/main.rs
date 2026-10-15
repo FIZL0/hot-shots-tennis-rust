@@ -1,12 +1,12 @@
 //! hst-gltf — export Hot Shots Tennis characters to glTF 2.0 binaries (reference rigs for modding; other games'
-//! characters are extracted by the open-tennis-mods tools).
+//! characters are extracted by the opentennis-mods tools).
 //!
 //! ```text
 //! hst-gltf info <file.mdl>                    node tree of a model
 //! hst-gltf hst  <HST xb root> <out dir>       HST pc00 costume 0 + racket + its PCANI motions (reference rig)
 //! hst-gltf retarget <mdl> <mtl> <out.glb> <ani2…>  Biped motions (e.g. HST's) onto a model, names matched sans spaces
 //! hst-gltf umpires <HST xb root> <out dir>   the five chair umpires u00..u04 (court 1's HOLE01.XB; every court
-//!                                             carries the same files) with their idle/turn motions, for open-tennis-mods
+//!                                             carries the same files) with their idle/turn motions, for opentennis-mods
 //!                                             `tools/rerig/hst_umpires.py` (umpires as playable mods, M1g)
 //! ```
 //! A .glb holds the model's node tree as joints (game space: Y down, feet at the origin, under a `game_space`

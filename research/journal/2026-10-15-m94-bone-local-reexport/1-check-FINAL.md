@@ -10,7 +10,7 @@ bodies 32, 111, 152, 157, 185, 186 and 206, the full body157, c03 `gi06_NIWATORI
   origin that hid the whole body. After: it sits on the torso, with arms, legs and shoes outside it. No character set in
   `characters.json` uses body 157, so no `pcNN_*.glb` changes.
 - `export_getagrip_courts.py 3 16`: both `gimmick.glb` came out byte-identical to the ones on disk. c03's was already
-  re-exported after the fix (open-tennis-mods d22e1cc, M8f5a2, was committed after c79756e). c16 places the rigid
+  re-exported after the fix (opentennis-mods d22e1cc, M8f5a2, was committed after c79756e). c16 places the rigid
   `c16_gi09_kusudama.psp.i3r` (looping the `_b01_Break` motion, which doesn't move a rigid model), not the
   bone-local `_b01` model, so nothing changes.
 - The adhoc bodies and the three gimmick models alone were built into separate glbs (`build.build` for the bodies,
@@ -19,7 +19,7 @@ bodies 32, 111, 152, 157, 185, 186 and 206, the full body157, c03 `gi06_NIWATORI
   place). The chicken's head, beak and comb sit on its neck. The sparrow's left wing mirrors its right. kusudama_b01 posed
   by `_b01_Break`: closed ball at t=0, in the same place as the rigid model; split open with the banner hanging from
   0.3 s.
-- Nothing to commit in open-tennis-mods: the code fix is M93's, and `out/` is git-ignored.
+- Nothing to commit in opentennis-mods: the code fix is M93's, and `out/` is git-ignored.
 
 ## Not verified / not 1:1
 - No in-game comparison: Get a Grip (PSP) can't be run here. The checks are render.py pictures of the exports, compared

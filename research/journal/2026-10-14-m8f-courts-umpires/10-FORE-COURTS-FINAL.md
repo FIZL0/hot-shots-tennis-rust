@@ -1,10 +1,10 @@
 # M8f10a2 — Fore! golf venues as court mods (FINAL)
 
 ## What
-`../open-tennis-mods/tools/fore2gltf/src/court.rs` (open-tennis-mods 5411330): `fore2gltf court <out/files/fore>
+`../opentennis-mods/tools/fore2gltf/src/court.rs` (opentennis-mods 5411330): `fore2gltf court <out/files/fore>
 <out/venues/fore.json> <HST iso> <out/mods> [course…] [--end -]` writes `out/mods/fore_cCC_<stem>/` (`mod.json`,
 `court.glb`, `sky.glb`) for 14 of Fore!'s 15 courses in ~1 s each. Full method and the per-course table are in
-open-tennis-mods `notes/venues.md` → *Fore! (`tools/fore2gltf court`)*.
+opentennis-mods `notes/venues.md` → *Fore! (`tools/fore2gltf court`)*.
 
 - **Spot.** The flattest fitting survey spot whose ground the hole model actually draws (≥ 95 % of 0.5 m points
   under the slab). The mini-golf height maps run on as flat green far past the drawn holes. Course 14 has no

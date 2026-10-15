@@ -18,7 +18,7 @@ if t.get('tool_name') == 'Bash' and DUMP.search(cmd) and not re.search(
 # pgrep/pkill -f -> tools/pgrep, which skips the caller's own shell (pkill -f pat killed it, pgrep -f pat always found itself)
 ROOT = __file__.rsplit('/tools/', 1)[0]
 # test runs: the 120 s default Bash timeout moved check.sh/done.sh to the background, and agents then polled them with
-# sleep/pgrep loops for up to 10 min (/home/ryha/repos/open-tennis/tools/pgrep -f also matched the other slots' runs). Run them in the foreground with a
+# sleep/pgrep loops for up to 10 min (/home/ryha/repos/opentennis/tools/pgrep -f also matched the other slots' runs). Run them in the foreground with a
 # long timeout (BASH_MAX_TIMEOUT_MS in .claude/settings.json allows it) and refuse the polling
 TESTS = re.compile(r'tools/(check|done)\.sh|\bcargo (test|build|nextest)\b')
 if t.get('tool_name') == 'Bash' and (re.search(r'/tasks/\w+\.output', cmd) or TESTS.search(cmd)) and re.search(

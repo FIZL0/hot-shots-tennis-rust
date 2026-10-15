@@ -23,7 +23,7 @@ What M1 asked, and where each part landed:
   "closed costume" check, online pick and `args()` (`--slot-mod m DIR`, `--outfits` k), so the match goes through
   M1c's mod path unchanged.
 - `HST_SELECT` takes `c/k` (costume k) for shots.
-- Standard §6 documents it (open-tennis-mods 732c6fd).
+- Standard §6 documents it (opentennis-mods 732c6fd).
 
 Checked: tests `costume_pack_extends_a_disc_character`, `checks_the_manifest`; a scratch pack (Get a Grip Gloria's two
 outfits as `costume_of: 12`) in `context/m1/run1/select.png` (Gloria costume 1 / 11 / 12 cards: disc, set3, set4) and

@@ -35,7 +35,7 @@ harmless: the baker's `forget_png` cleared it.)
   the cache fills in the background on the select.
 - **`own_motions` skips channels for joints this costume lacks** instead of failing. Test:
   `mods::tests::motions_skip_joints_a_costume_lacks` (Phoebe's 8 costumes load with their own motions). The
-  ../open-tennis-mods standard §6 is updated to match (open-tennis-mods 866158e). `RENDER` is not bumped: nothing about the drawing
+  ../opentennis-mods standard §6 is updated to match (opentennis-mods 866158e). `RENDER` is not bumped: nothing about the drawing
   changed, and the costumes that had baked loaded the same before.
 
 ## Results (`context/b99/`)

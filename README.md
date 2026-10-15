@@ -122,7 +122,7 @@ made on your machine, not shipped.
 Custom characters go in `mods/<id>/` beside the ISO (`mod.json` and one `.glb` per costume) and show up in the
 character select. The mod standard, a tutorial for making your own, and the tools that extract the other Hot Shots
 games' characters and package them as mods are in the mods repo:
-<https://github.com/FIZL0/open-tennis-mods> (`standard/`, `tools/`). The game checks models against its copy
+<https://github.com/FIZL0/opentennis-mods> (`standard/`, `tools/`). The game checks models against its copy
 of the skeleton, `crates/hst/hst_skeleton.json`; keep it equal to the mods repo's `standard/hst_skeleton.json`.
 
 ### Mod store

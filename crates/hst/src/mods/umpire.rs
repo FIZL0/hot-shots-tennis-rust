@@ -211,9 +211,9 @@ mod tests {
     #[test]
     fn a_get_a_grip_umpire_loads() {
         // the mods repo beside this checkout (or beside the worktrees' folder)
-        let at = |up: &str| Path::new(env!("CARGO_MANIFEST_DIR")).join(up).join("open-tennis-mods/out/mods");
+        let at = |up: &str| Path::new(env!("CARGO_MANIFEST_DIR")).join(up).join("opentennis-mods/out/mods");
         let Some(root) = ["../../..", "../../../.."].map(at).into_iter().find(|d| d.join("gag_ump00_natasha/umpire.glb").is_file()) else {
-            eprintln!("skipped: no Get a Grip umpire built in ../open-tennis-mods/out/mods");
+            eprintln!("skipped: no Get a Grip umpire built in ../opentennis-mods/out/mods");
             return;
         };
         let mut app = App::new();

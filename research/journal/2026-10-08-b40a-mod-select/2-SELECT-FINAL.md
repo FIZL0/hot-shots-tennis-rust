@@ -22,8 +22,8 @@
 ## Verified
 - `play::main_menu::tests::custom_page_picks_a_mod`: page toggle, mod costume wrap at its count, lock rule,
   list ends, args (`--chars 5,5 --outfits 0,1`, two `--slot-mod`), back from confirm, no-mods refusal.
-- `mods::tests::lists_the_custom_roster` with `HST_MODS=~/repos/open-tennis-mods/out/mods`: all 87 listed.
-- `--shot` of the menu with `mods/` → open-tennis-mods `out/mods` (`context/b40a/custom_page.png`): 87 mods on 4 pages,
+- `mods::tests::lists_the_custom_roster` with `HST_MODS=~/repos/opentennis-mods/out/mods`: all 87 listed.
+- `--shot` of the menu with `mods/` → opentennis-mods `out/mods` (`context/b40a/custom_page.png`): 87 mods on 4 pages,
   four cards with Fore! Phoebe, Get a Grip Emi, Out of Bounds Jasmine, Open Tee Mika previews, names, styles.
 - `--shot` of a bot match with the menu's flags, Phoebe (costume 2) vs Jasmine (`context/b40a/match_two_mods.png`):
   both on court mid-rally.

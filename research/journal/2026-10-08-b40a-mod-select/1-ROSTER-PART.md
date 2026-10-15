@@ -1,7 +1,7 @@
 # 1 — roster scan (agent continues once B40 and M1c land)
 
 - `mods::list(Path::new("mods"))` → `Vec<Mod>` (name, costumes, donor, hand; stats via `mods::tparam`).
-- Test `mods::tests::lists_the_custom_roster` (`HST_MODS=~/repos/open-tennis-mods/out/mods`): all 87 packaged mods are
+- Test `mods::tests::lists_the_custom_roster` (`HST_MODS=~/repos/opentennis-mods/out/mods`): all 87 packaged mods are
   listed, each of Fore!, Get a Grip, Open Tee, Out of Bounds (`fore_`, `getagrip_`, `opentee_`, `oob_`) is
   present, and a folder with a bad `mod.json` is left out. Passes.
 

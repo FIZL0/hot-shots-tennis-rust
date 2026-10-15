@@ -1,6 +1,6 @@
 # R1 → M1j mod sizing: implemented, done-when half met (needs a ruling)
 
-Implemented in ../open-tennis-mods (`tools/rerig/sizing.py`): every game is sized at packaging, with one factor per source
+Implemented in ../opentennis-mods (`tools/rerig/sizing.py`): every game is sized at packaging, with one factor per source
 game taken from its own height data, so each game's relative heights are kept. Fore has no height data, so it gets
 model height × 0.9685. Every `mod.json` records a `size_why`.
 

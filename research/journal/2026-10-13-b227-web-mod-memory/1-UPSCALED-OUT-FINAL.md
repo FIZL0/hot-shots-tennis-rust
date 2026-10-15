@@ -3,7 +3,7 @@
 ## Cause
 The page read every installed mod file from OPFS into wasm memory before `run` (`web.rs add_mod_file` →
 `modfs` MEM), and the select's preview baker then decoded them with the "upscaled textures" setting on (its
-default). Sizes of the mods repo's builds (`../open-tennis-mods/out/mods`, 92 mods):
+default). Sizes of the mods repo's builds (`../opentennis-mods/out/mods`, 92 mods):
 
 | | all mods | Anya (`oob_pc12_anya`) |
 |---|---|---|

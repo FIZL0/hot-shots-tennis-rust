@@ -9,15 +9,15 @@ Every mod's hair now moves the way its source game moves it, or stays rigid wher
   disc either); Ratchet (pc22) has no `.NOI` in any of his 72 models.
 - **Out of Bounds (PS3)**: the `.rem` tail after the node tree is collision primitives (ellipsoid/box/cylinder,
   0x88 bytes) and spring chains (`u32 n`, then n × 16 floats + bone name), interleaved; all 102 models parse to
-  EOF. Format, parameter table and chains per character in open-tennis-mods `notes/oob.md` *Dynamics*. 11 of 17
+  EOF. Format, parameter table and chains per character in opentennis-mods `notes/oob.md` *Dynamics*. 11 of 17
   characters have chains (ponytails, braids, ribbons, earrings, ears, Dino's scarf).
 - **Get a Grip / Open Tee 1/2 (PSP)**: no dynamics. Skeletons are Bip01 + rigid attachment nodes
   (`Bip01Head9pony`); no `.i3m` track in any of the three games names hair, ponytail, ribbon, earring or skirt
-  (open-tennis-mods `notes/psp-formats.md` *No hair dynamics*). Rigid hair is the source's.
+  (opentennis-mods `notes/psp-formats.md` *No hair dynamics*). Rigid hair is the source's.
 
 ## What changed
 
-- open-tennis-mods `8d6bc53`: `rem.py` parses the dynamics, `export.py` writes standard §3b `extras.spring`
+- opentennis-mods `8d6bc53`: `rem.py` parses the dynamics, `export.py` writes standard §3b `extras.spring`
   `{limit, stiffness, gravity, damping, oob: raw 16 words}`, `rerig.py` keeps it, standard §3b written. OOB mods
   rebuilt (`export.py`, `rerig/batch.py oob`, `package.py oob`: 102/102 pass).
 - HST `crates/hst/src/spring.rs` (new): a mods-only mass-spring. Each spring joint is a mass at the joint, its
