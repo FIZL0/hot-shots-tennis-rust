@@ -3178,6 +3178,14 @@ fn draw(
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);
             img.rect = Some(Rect::new(u * k, v * k, (u + w) * k, (v + h) * k));
         }
+        // an icon with its own image ignores `src`, but a tile cut at the grid's foot (roster `cut`) keeps its top part,
+        // not the whole face squeezed
+        // ponytail: icons are square, so the cut is src's height over its width; a real src mapping if one isn't
+        if matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && h < w
+            && let Some(size) = images.get(&img.image).map(|i| i.size().as_vec2())
+        {
+            img.rect = Some(Rect::new(0.0, 0.0, size.x, size.y * h / w));
+        }
         img.image_mode = if quad.tile { NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: scale / super::menu_art::wall_k() } } else { NodeImageMode::Stretch };
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
         img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
