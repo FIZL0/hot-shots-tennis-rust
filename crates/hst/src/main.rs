@@ -1477,6 +1477,26 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// M8f6: `--court-mod DIR` plays on the mod's layout court unless `--stage`/`--court` say otherwise; a broken
+    /// one is dropped (the disc court plays).
+    #[test]
+    fn court_mod_flags() {
+        let dir = std::env::temp_dir().join(format!("hst-court-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"court","id":"c","name":"C","layout":4}"#).unwrap();
+        std::fs::write(dir.join("court.glb"), b"x").unwrap();
+        let cli = |f: &[&str]| parse(["x.iso", "--play"].iter().chain(f).map(|s| s.to_string()));
+        let d = dir.display().to_string();
+        let c = cli(&["--court-mod", &d]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.map(|c| c.id)), (Some(5), 5, Some("c".into())));
+        let c = cli(&["--stage", "2", "--court", "2", "--court-mod", &d]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.is_some()), (Some(2), 2, true));
+        std::fs::remove_file(dir.join("court.glb")).unwrap();
+        let c = cli(&["--court-mod", &d]);
+        assert_eq!((c.args.stage, c.court_mod.is_none()), (None, true));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn pow2_pads_with_edge_texels() {
         let t = |w: u32, h: u32| mtl::Texture { width: w, height: h, rgba: (0..w * h * 4).map(|i| (i / 4) as u8).collect(), mips: Vec::new(), psm: 0, levels: Vec::new(), clut: Vec::new() };

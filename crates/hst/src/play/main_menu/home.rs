@@ -56,7 +56,7 @@ impl Menu {
         } else {
             format!("Singles - {} vs {}", name(0), name(1))
         };
-        let court = if self.court == COURTS { "Random Court".to_string() } else { text.msg(276 + 2 * self.court).to_string() };
+        let court = self.court_short(text, self.court);
         let sets = SETS[self.sets];
         (teams, format!("{court} - {sets} set{}", if sets == 1 { "" } else { "s" }))
     }
@@ -272,7 +272,7 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Local => {
             let mut v = vec![("Singles", "1-2 players".to_string()), ("Doubles", "3-4 players".into())];
             if m.rematch {
-                let court = if m.court == COURTS { "Random Court".to_string() } else { text.msg(276 + 2 * m.court).to_string() };
+                let court = m.court_short(text, m.court);
                 v.push(("Last match", format!("{}, {court}", if m.doubles { "Doubles" } else { "Singles" })));
             }
             v

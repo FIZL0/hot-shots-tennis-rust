@@ -53,8 +53,8 @@ pub struct Track {
 
 impl Track {
     /// The disc court BGMs' loudness at the match's level 55: the RMS of their mix, as a fraction of full scale
-    /// (`court_bgm_loudness` measures it: 0.068 to 0.119 over the eleven, this their middle).
-    pub const BGM_RMS: f32 = 0.09;
+    /// (`court_bgm_loudness` measures it over their first 20 s: 0.051 to 0.080 over the eleven, this their median).
+    pub const BGM_RMS: f32 = 0.069;
 
     /// A RIFF PCM16 wav looping over frames `at` (`[0, 0]`, or an end past the file: to its end), its gain set so
     /// its RMS over the loop is `rms` of full scale.
@@ -686,6 +686,12 @@ impl Sound {
     #[cfg(test)]
     pub fn takes_sounding(&self) -> usize {
         self.0.lock().unwrap().voices.iter().filter(|v| v.0.pcm.is_some()).count()
+    }
+
+    /// M8f6: how many loops (a court mod's BGM and ambience) are playing, for tests.
+    #[cfg(test)]
+    pub fn looping(&self) -> usize {
+        self.0.lock().unwrap().loops.len()
     }
 
     /// B77: the match paused. As the original's per-frame update does while paused, every play the match re-levels

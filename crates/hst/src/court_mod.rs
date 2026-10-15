@@ -105,7 +105,7 @@ fn setup(
     let mut store = Store { meshes: &mut meshes, images: &mut images, materials: &mut materials, binds: &mut binds, kept: &mut kept };
     for (file, sky) in [("court.glb", false), ("gimmick.glb", false), ("sky.glb", true)] {
         let path = c.dir.join(file);
-        if !crate::modfs::is_file(&path) || std::env::var("HST_MOD_SKIP").is_ok_and(|k| file.contains(&k)) {
+        if !crate::modfs::is_file(&path) {
             continue;
         }
         let parent = if sky {
