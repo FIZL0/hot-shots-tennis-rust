@@ -1217,7 +1217,7 @@ pub(super) fn legend(m: &Menu) -> Vec<(super::super::legend::Act, &'static str)>
     if v.b.osk.is_some() {
         return vec![(L::Move, "Move"), (L::Ok, "Type"), (L::Page, "Delete"), (L::Back, "Close")];
     }
-    let mut l = vec![(L::Move, "Browse")];
+    let mut l = vec![(L::Move, "Move")];
     match v.slot(m.sel) {
         Slot::Search => l.extend([(L::Type, "Type"), (L::Ok, "Keyboard")]),
         Slot::Tile(_) => {
