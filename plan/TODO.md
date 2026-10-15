@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B387** Mod menu reload prompt can be dismissed with back, and has no reload after Later: when exiting the mod menu, pressing back should not dismiss the reload prompt; the player must press Later. Choosing Later should leave a reload button available in the mod menu, since after dismissing the prompt there is currently no way to reload (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu.rs · crates/hst/src/mods.rs
 - [ ] **B386** Match celebration music not playing: the music that should play during a match celebration is silent; it should play even when in-game music is set to off. Also check that the loss and annihilation sounds play (user 2026-10-15) → crates/hst/src/audio.rs · crates/hst/src/play/match_stats/ceremony.rs · crates/hst/src/play/match_stats.rs
 - [~] **B380** Remove Open Tee 1 characters from the modded game characters: drop every Open Tee 1 character mod completely, since Open Tee 2 has the same characters in better versions plus more characters (user 2026-10-14) → crates/hst/src/mods.rs · crates/hst/src/modstore.rs · crates/hst/src/play/main_menu/mods_screen.rs BLOCKED: work done + committed; tick once mods/hst-mods link (main checkout, removed mid-run by another session) is back and umpires_are_on_the_roster_and_play_a_rally passes (fails on HEAD too)
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:

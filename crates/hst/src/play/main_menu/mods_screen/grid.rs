@@ -149,10 +149,14 @@ pub(super) enum Slot {
 }
 
 impl View {
-    /// The heading's words: the sorts, then Refresh (an author's mods: Download all, All mods).
+    /// The heading's words: the sorts, then Refresh (an author's mods: Download all, All mods), then Reload while
+    /// mods changed since the start (B387: the way back to the Reload a Later put off).
     pub(super) fn words(&self) -> Vec<&'static str> {
         let mut w = SORTS.to_vec();
         w.extend(if self.by.is_some() { &["Download all", "All mods"][..] } else { &["Refresh"][..] });
+        if self.changed {
+            w.push("Reload");
+        }
         w
     }
 
@@ -501,6 +505,12 @@ impl Menu {
                     self.download_all(&b.author, b.list, out);
                 }
                 "All mods" => self.mods_back(out),
+                "Reload" => {
+                    out.push(Sound(2));
+                    if let Err(e) = super::reload(out) {
+                        self.add.status = e;
+                    }
+                }
                 _ => {
                     self.add.b.sort = [Sort::Newest, Sort::Az, Sort::Uploader][i];
                     self.add.top = 0;
@@ -1135,6 +1145,7 @@ pub(super) fn info(m: &Menu) -> String {
             "A-Z" => "By name.".into(),
             "Uploader" => "By who shared them, each tile saying who.".into(),
             "Refresh" => "Read the store's list again.".into(),
+            "Reload" => "Restart the game with the mods as they are now: new ones join the select, removed ones leave it.".into(),
             "Download all" => format!("Install every mod by {} you don't have yet.", v.by.as_ref().map_or("", |b| super::who(&b.author))),
             _ => "Back to every mod in the store.".into(),
         },
