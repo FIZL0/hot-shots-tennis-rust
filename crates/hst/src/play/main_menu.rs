@@ -2883,12 +2883,13 @@ const CALLS: [(u8, u8); 5] = [(1, 1), (0, 9), (2, 1), (0, 10), (2, 4)];
 struct Kept(Menu);
 
 #[allow(clippy::too_many_arguments)]
-/// B247: the page is played by touch (a phone or tablet, `web/touch.js`): its 1P seat is the screen's.
+/// B247: the page is played by touch (a phone or tablet, `web/touch.js`; M91a1: the iPhone app, `touch_pad.rs`): its
+/// 1P seat is the screen's.
 fn touch_page() -> bool {
     #[cfg(target_arch = "wasm32")]
     return crate::web::touched();
     #[cfg(not(target_arch = "wasm32"))]
-    false
+    super::touch_pad::on()
 }
 
 fn step(
@@ -2944,6 +2945,8 @@ fn step(
     }
     #[cfg(target_arch = "wasm32")]
     crate::web::touch_buzz(menu.settings.0[VIBRATION]);
+    #[cfg(not(target_arch = "wasm32"))]
+    super::touch_pad::BUZZ.store(menu.settings.0[VIBRATION], std::sync::atomic::Ordering::Relaxed);
     let dt = time.delta_secs();
     // B221: the pointer's acts (`pointer.rs`), as its device's
     let mut acts = pending.as_mut().map(|p| std::mem::take(&mut p.0)).unwrap_or_default();

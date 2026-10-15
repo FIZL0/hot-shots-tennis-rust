@@ -84,6 +84,7 @@ mod serve_check;
 mod tick_input;
 mod timing;
 mod tornado;
+pub(crate) mod touch_pad;
 mod umpire_mod;
 mod replay_pace;
 mod weather;

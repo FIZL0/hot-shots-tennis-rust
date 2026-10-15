@@ -133,3 +133,69 @@ pub fn no_disc() -> ! {
         .run();
     std::process::exit(0)
 }
+
+// UIKit only on the main thread: the on-screen pad's calls go through its dispatch queue
+unsafe extern "C" {
+    static _dispatch_main_q: std::ffi::c_void;
+    fn dispatch_async_f(queue: *const std::ffi::c_void, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
+}
+
+/// M91a1: the light haptic tick of an on-screen pad press (the Vibration setting; `play/touch_pad.rs`).
+pub fn haptic() {
+    // SAFETY: the main queue lives for the process; `tick` takes no context
+    unsafe { dispatch_async_f(&raw const _dispatch_main_q, std::ptr::null_mut(), tick) };
+}
+
+extern "C" fn tick(_: *mut std::ffi::c_void) {
+    use std::sync::atomic::{AtomicPtr, Ordering};
+    // one generator, made on first use and kept (main thread only)
+    static GENERATOR: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+    unsafe {
+        let obj: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let with_style: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let mut g = GENERATOR.load(Ordering::Relaxed);
+        if g.is_null() {
+            let class = objc_getClass(c"UIImpactFeedbackGenerator".as_ptr());
+            if class.is_null() {
+                return;
+            }
+            // UIImpactFeedbackStyleLight
+            g = with_style(obj(class, sel_registerName(c"alloc".as_ptr())), sel_registerName(c"initWithStyle:".as_ptr()), 0);
+            GENERATOR.store(g, Ordering::Relaxed);
+        }
+        if !g.is_null() {
+            obj(g, sel_registerName(c"impactOccurred".as_ptr()));
+        }
+    }
+}
+
+/// UIKit's `UIEdgeInsets`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Insets {
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+}
+
+/// The window's safe-area insets (left, top, right, bottom) in points, the window's logical px: the notch or Dynamic
+/// Island's side and the home indicator's strip. As last read: each call asks the main thread for them anew.
+pub fn safe_area(window: &bevy::window::RawHandleWrapper) -> [f32; 4] {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SAFE: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+    extern "C" fn read(view: *mut std::ffi::c_void) {
+        unsafe {
+            let insets: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> Insets = std::mem::transmute(objc_msgSend as *const ());
+            let i = insets(view, sel_registerName(c"safeAreaInsets".as_ptr()));
+            for (a, v) in SAFE.iter().zip([i.left, i.top, i.right, i.bottom]) {
+                a.store((v as f32).to_bits(), Ordering::Relaxed);
+            }
+        }
+    }
+    if let raw_window_handle::RawWindowHandle::UiKit(h) = window.get_window_handle() {
+        // SAFETY: the view lives as long as the window, which outlives this frame's request
+        unsafe { dispatch_async_f(&raw const _dispatch_main_q, h.ui_view.as_ptr(), read) };
+    }
+    SAFE.each_ref().map(|a| f32::from_bits(a.load(Ordering::Relaxed)))
+}

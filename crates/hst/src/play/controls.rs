@@ -317,11 +317,12 @@ impl PadSlots {
     /// Drop pads gone from `present`, then give each new one the first free slot (in connection order). With seats a
     /// pad seat prefers its own pad and the others stay empty.
     pub fn update(&mut self, present: &[Entity]) {
-        self.update_with(present, cfg!(target_arch = "wasm32"));
+        self.update_with(present, cfg!(target_arch = "wasm32") || super::touch_pad::on());
     }
 
     /// `update`; `keys_take_spare`: the keyboard seat also takes a pad no other seat wants. B244: in the browser a phone's
-    /// menus are tapped (the keyboard's seat), so the touch pad (web/touch.js) must drive that seat in the match.
+    /// menus are tapped (the keyboard's seat), so the touch pad (web/touch.js; the iPhone app's `touch_pad.rs`) must
+    /// drive that seat in the match.
     pub fn update_with(&mut self, present: &[Entity], keys_take_spare: bool) {
         for s in &mut self.0 {
             if s.is_some_and(|e| !present.contains(&e)) {

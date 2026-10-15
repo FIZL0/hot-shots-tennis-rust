@@ -3610,6 +3610,7 @@ dependencies = [
  "n0-future",
  "n0-mainline",
  "qrcode",
+ "raw-window-handle",
  "reqwest",
  "rfd",
  "rustls",
