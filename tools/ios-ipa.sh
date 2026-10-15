@@ -51,6 +51,7 @@ cat > "$app/Info.plist" <<EOF
 	<key>UISupportedInterfaceOrientations~ipad</key><array>
 		<string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key><true/>
 	<key>UIFileSharingEnabled</key><true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
 	<key>NSLocalNetworkUsageDescription</key><string>Finds and joins matches on your local network.</string>
