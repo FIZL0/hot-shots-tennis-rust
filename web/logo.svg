@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1400 1020" width="1400" height="1020">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="195 108 1040 820" width="1040" height="820">
   <defs>
     <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/><stop offset=".45" stop-color="#e4e6e8"/>
@@ -27,7 +27,6 @@
       <feMerge><feMergeNode in="rg"/><feMergeNode in="rb"/><feMergeNode in="rh"/><feMergeNode in="rb2"/><feMergeNode in="rk"/></feMerge>
     </filter>
   </defs>
-  <rect width="100%" height="100%" fill="#000"/>
   <!-- border: rings traced from a softened silhouette of the words, court and ball, like the original -->
   <use href="#art" filter="url(#rings)"/>
   <g id="art">

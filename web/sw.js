@@ -1,7 +1,7 @@
 // Offline play: the page, its scripts and the game are kept in the browser's cache and served from it, refreshed from
 // the network whenever it answers (the disc pack is in OPFS, never in this cache: nothing from the disc is hosted).
 const CACHE = 'hst';
-const SHELL = ['./', 'touch.js', 'worker.js', 'opfs.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'pkg/hst.js', 'pkg/hst_bg.wasm'];
+const SHELL = ['./', 'site.js', 'site.css', 'logo.svg', 'touch.js', 'worker.js', 'opfs.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'pkg/hst.js', 'pkg/hst_bg.wasm'];
 
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
