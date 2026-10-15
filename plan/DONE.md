@@ -553,6 +553,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **C5** C2 follow-up, shots and match: convert these modules the same way as C2 (plan/C2.md: F/Vf operators, deny attr, drop from tests/float_math.rs lists, hash_trace unchanged) → hst-sim/src/params.rs · swing.rs · serve.rs · aim.rs · instant.rs · rally.rs · judge.rs · flow.rs
 - [x] **B387** Mod menu reload prompt can be dismissed with back, and has no reload after Later: when exiting the mod menu, pressing back should not dismiss the reload prompt; the player must press Later. Choosing Later should leave a reload button available in the mod menu, since after dismissing the prompt there is currently no way to reload (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu.rs · crates/hst/src/mods.rs
 - [x] **M8f5** (in M8f) Get a Grip courts to glTF (`game/200_court/courtNN*`, `201_court`): ground, obj_0/1, gimmick, sky, lens flare, lighting from `1_courtsetting`, `cNN_se.csv` ambience, BGM; each with the disc layout it plays as (surface, size) → ../HST-MODS `tools/psp2gltf` `notes/getagrip.md` | j: 2026-10-14-m8f-courts-umpires
+- [x] **B388** Keyboard can take over for player one when the controller disconnects: if P1's controller is disconnected, a keyboard should be able to take over P1 so the player can go back a menu and continue, instead of being stuck (user 2026-10-15) → crates/hst/src/play/controls.rs · crates/hst/src/play/menu.rs · crates/hst/src/play/main_menu.rs
 
 
 ### Shots
