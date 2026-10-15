@@ -651,13 +651,23 @@ def main():
         if n not in procs and os.path.isdir(slot(n)):
             tid = git('branch', '--show-current', cwd=slot(n)).stdout.strip().removeprefix('task/')
             git('checkout', '-q', '--detach', cwd=slot(n))  # idle slots let go of old task/<ID>s, or start() can't take them
-            # a session that ended while no runner watched (B347, 2026-10-14: it exited as the runner restarted)
-            # left its branch unmerged: merge it now like any finished slot
-            if tid and (commits := git('log', '--format=%s', f'main..task/{tid}').stdout.splitlines()):
-                log(f'slot {n}: {tid} ended while no runner was up; merging its {len(commits)} commits')
-                tried.add(tid)
-                (t := threading.Thread(target=finish, args=(tid, n, '(unknown)', commits))).start()
-                merging.append(t)
+    # branches a previous runner never merged: sessions that ended while no runner watched (B347), or finished ones
+    # still waiting in its merge queue when it was stopped (B326/B355…, 2026-10-14). Merge them like any finished slot;
+    # skip ones handed to the master, checked out somewhere (running slots, other worktrees) or not open tasks.
+    held = {l.removeprefix('branch refs/heads/') for l in git('worktree', 'list', '--porcelain').stdout.splitlines()
+            if l.startswith('branch ')}
+    handed = open(os.path.join(NOTES, 'overnight.log'), errors='replace').read() if os.path.exists(
+        os.path.join(NOTES, 'overnight.log')) else ''
+    open_ids = {m.group(1) for l in git('show', 'main:plan/TODO.md').stdout.splitlines() if (m := TASK.match(l))}
+    for b in git('branch', '--format=%(refname:short)', '--list', 'task/*').stdout.split():
+        tid = b.removeprefix('task/')
+        if b in held or tid not in open_ids or f'{tid}: left for the master' in handed:
+            continue
+        if commits := git('log', '--format=%s', f'main..{b}').stdout.splitlines():
+            log(f'{tid}: finished while no runner was up (or before a restart merged it); merging its {len(commits)} commits')
+            tried.add(tid)
+            (t := threading.Thread(target=finish, args=(tid, 0, '(unknown)', commits))).start()
+            merging.append(t)
     while True:
         for n in free_at:
             if n in procs and not alive(procs[n][0]):
