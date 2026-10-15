@@ -24,6 +24,8 @@ mod cull;
 mod disc;
 #[cfg(target_os = "ios")]
 mod ios;
+#[cfg(target_os = "android")]
+mod android;
 mod effects;
 mod graphics;
 mod handshake;
@@ -316,8 +318,9 @@ fn main() {
     start(argv);
 }
 
-// Android (NativeActivity, `tools/apk.sh`): the disc is the first .iso in the app's external files dir
-// (/sdcard/Android/data/<package>/files), where settings.txt etc. go too
+// Android (NativeActivity, `tools/apk.sh`): the disc is the pack imported into the app's external files dir
+// (/sdcard/Android/data/<package>/files), where settings.txt etc. go too, else the first .iso there (adb push);
+// with neither, the start page that imports one (`android.rs`, M99)
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: bevy::android::android_activity::AndroidApp) {
@@ -326,8 +329,8 @@ fn android_main(app: bevy::android::android_activity::AndroidApp) {
     // mods/ and the other paths the desktop build keeps beside the binary land in the same dir
     let _ = std::env::set_current_dir(&dir);
     let iso = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("iso")));
-    let iso = iso.unwrap_or_else(|| panic!("hst: put your Hot Shots Tennis ISO in {}", dir.display()));
-    start(vec![iso.to_string_lossy().into_owned()]);
+    let Some(disc) = Some(dir.join("disc.pack")).filter(|p| p.exists()).or(iso) else { android::no_disc(dir) };
+    start(vec![disc.to_string_lossy().into_owned()]);
 }
 
 /// The app for `argv` = disc, flags (see the module doc).
