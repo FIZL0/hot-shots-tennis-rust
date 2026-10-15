@@ -276,9 +276,14 @@ pub fn plugin(app: &mut App) {
         use bevy::render::renderer::{RenderGraph, RenderGraphSystems as G};
         r.add_systems(RenderGraph, (mark::<4>.in_set(G::Begin), mark::<5>.in_set(G::Render).after(bevy::core_pipeline::schedule::camera_driver)))
             .add_systems(bevy::render::Render, mark::<6>.in_set(bevy::render::RenderSystems::Cleanup));
+        // the swapchain acquire: waits there while the GPU is still busy with earlier frames (P28)
+        use bevy::render::{RenderSystems as R, view::prepare_windows};
+        r.add_systems(bevy::render::Render, (mark::<7>.in_set(R::PrepareViews).before(prepare_windows), mark::<8>.in_set(R::PrepareViews).after(prepare_windows)));
+        #[cfg(target_os = "ios")]
+        r.add_systems(RenderGraph, (gpu_time::<false>.in_set(G::Begin), gpu_time::<true>.after(G::Render).before(G::Submit)));
     }
     if std::env::var_os("HST_FPS").is_some() {
-        app.add_systems(Last, log_draws);
+        app.init_resource::<SplitLog>().add_systems(Last, (log_draws, log_split));
     }
 }
 
@@ -329,31 +334,114 @@ fn log_draws(
 
 /// When this frame reached: 0 its start (`First`), 1/2 the fixed-step simulation's start/end, 3 the end of the
 /// game's update, 4 the render graph's start (extract, prepare and queue done), 5 pass encoding done, 6 submitted and
-/// presented. On the web all of it runs on one thread in that order; natively rendering overlaps the next frame.
-static MARKS: std::sync::Mutex<[Option<bevy::platform::time::Instant>; 7]> = std::sync::Mutex::new([None; 7]);
+/// presented, 7/8 the swapchain acquire's start/end (`prepare_windows`, between 3 and 4). On the web all of it runs on
+/// one thread in that order; natively rendering overlaps the next frame.
+static MARKS: std::sync::Mutex<[Option<bevy::platform::time::Instant>; 9]> = std::sync::Mutex::new([None; 9]);
 
 fn mark<const I: usize>() {
     MARKS.lock().unwrap()[I] = Some(bevy::platform::time::Instant::now());
 }
 
 /// Sums of the frames since the counter last showed them, in ms: frame, game (incl. sim), sim, prepare (extract,
-/// prepare, queue), encode, submit (+ present), worst frame, frames.
+/// prepare, queue; with the acquire), encode, submit (+ present), worst frame, frames, then the swapchain acquire (of
+/// prepare) and the GPU's time from the frame's first command buffer starting to its last ending, over that many
+/// frames (Metal only: `gpu_time`).
 #[derive(Resource, Default)]
-struct Split([f32; 8]);
+struct Split([f32; 11]);
 
-fn frame_start(mut split: ResMut<Split>) {
+/// The same for `HST_FPS`'s log, every 5 s.
+#[derive(Resource, Default)]
+struct SplitLog(Split);
+
+fn frame_start(mut split: ResMut<Split>, log: Option<ResMut<SplitLog>>) {
     let now = bevy::platform::time::Instant::now();
     let mut m = MARKS.lock().unwrap();
-    if let [Some(t0), Some(t1), Some(t2), Some(t3), Some(t4), Some(t5), Some(t6)] = *m {
-        let ms = |a: bevy::platform::time::Instant, b: bevy::platform::time::Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
-        let frame = ms(t0, now);
-        for (sum, v) in split.0.iter_mut().zip([frame, ms(t0, t3), ms(t1, t2), ms(t3, t4), ms(t4, t5), ms(t5, t6)]) {
-            *sum += v;
+    let (gpu, gpu_n) = std::mem::take(&mut *GPU_MS.lock().unwrap());
+    for split in std::iter::once(&mut *split).chain(log.map(|l| &mut l.into_inner().0)) {
+        if let [Some(t0), Some(t1), Some(t2), Some(t3), Some(t4), Some(t5), Some(t6), t7, t8] = *m {
+            let ms = |a: bevy::platform::time::Instant, b: bevy::platform::time::Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
+            let frame = ms(t0, now);
+            let acquire = t7.zip(t8).map_or(0.0, |(a, b)| ms(a, b));
+            for (sum, v) in split.0.iter_mut().zip([frame, ms(t0, t3), ms(t1, t2), ms(t3, t4), ms(t4, t5), ms(t5, t6)]) {
+                *sum += v;
+            }
+            split.0[6] = split.0[6].max(frame);
+            split.0[7] += 1.0;
+            split.0[8] += acquire;
         }
-        split.0[6] = split.0[6].max(frame);
-        split.0[7] += 1.0;
+        split.0[9] += gpu;
+        split.0[10] += gpu_n;
     }
-    *m = [Some(now), None, None, None, None, None, None];
+    *m = [Some(now), None, None, None, None, None, None, None, None];
+}
+
+/// `HST_FPS=1`: every 5 s, the frame split (`Split`) to stderr: prep without the swapchain acquire, the acquire (the
+/// CPU waiting for a drawable, i.e. for the GPU), and the GPU's own time per frame where Metal gives it.
+fn log_split(time: Res<Time<Real>>, mut log: ResMut<SplitLog>, mut next: Local<f32>) {
+    let now = time.elapsed_secs();
+    if now < *next {
+        return;
+    }
+    *next = now + 5.0;
+    let [frame, game, sim, prep, enc, sub, worst, n, acquire, gpu, gpu_n] = log.0.0;
+    if n > 0.0 {
+        let a = |v: f32| v / n;
+        let gpu = if gpu_n > 0.0 { format!("{:.2}", gpu / gpu_n) } else { "n/a".into() };
+        eprintln!(
+            "frame split ms: frame {:.2} (worst {worst:.1}) game {:.2} sim {:.2} prep {:.2} acquire {:.2} enc {:.2} submit {:.2} idle {:.2} gpu {gpu}",
+            a(frame),
+            a(game),
+            a(sim),
+            a(prep - acquire),
+            a(acquire),
+            a(enc),
+            a(sub),
+            a((frame - game - prep - enc - sub).max(0.0))
+        );
+    }
+    log.0.0 = [0.0; 11];
+}
+
+/// Metal's GPU time of the frames finished since `frame_start` last took it: ms summed, frames.
+static GPU_MS: std::sync::Mutex<(f32, f32)> = std::sync::Mutex::new((0.0, 0.0));
+
+/// Brackets the frame's command buffers with two of its own (`END` = false: before the render graph's passes, true:
+/// after them, both submitted with them in order) and reads Metal's GPUStartTime of the first and GPUEndTime of the
+/// last when they complete: the GPU's time on the frame's rendering (plus any gap the GPU sat idle inside it, none
+/// when GPU-bound). Each carries a 4-byte fill so Metal schedules it. Bevy's RenderDiagnosticsPlugin only gets CPU
+/// times on Metal (M91 build 2014).
+#[cfg(target_os = "ios")]
+fn gpu_time<const END: bool>(mut ctx: bevy::render::renderer::RenderContext, mut buf: Local<Option<bevy::render::render_resource::Buffer>>) {
+    use wgpu::hal;
+    use objc2_metal::MTLCommandBuffer;
+    static START: std::sync::Mutex<Option<f64>> = std::sync::Mutex::new(None);
+    let device = ctx.render_device().clone();
+    let buf = buf.get_or_insert_with(|| device.create_buffer(&wgpu::BufferDescriptor { label: Some("gpu_time"), size: 4, usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gpu_time") });
+    let done = block2::RcBlock::new(|cb: std::ptr::NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
+        let cb = unsafe { cb.as_ref() };
+        if !END {
+            *START.lock().unwrap() = Some(cb.GPUStartTime());
+        } else if let Some(start) = START.lock().unwrap().take() {
+            let ms = ((cb.GPUEndTime() - start) * 1000.0) as f32;
+            if ms > 0.0 && ms < 1000.0 {
+                let mut g = GPU_MS.lock().unwrap();
+                *g = (g.0 + ms, g.1 + 1.0);
+            }
+        }
+    });
+    // SAFETY: only the raw API records on this encoder; the buffer lives in the Local for the app's life
+    unsafe {
+        let Some(hal_buf) = buf.as_hal::<hal::api::Metal>() else { return };
+        enc.as_hal_mut::<hal::api::Metal, _, _>(|e| {
+            let Some(e) = e else { return };
+            hal::CommandEncoder::clear_buffer(e, &*hal_buf, 0..4);
+            if let Some(cb) = e.raw_command_buffer() {
+                cb.addCompletedHandler(&*done as *const _ as *mut _);
+            }
+        });
+    }
+    ctx.add_command_buffer(enc.finish());
 }
 
 fn window(g: Res<Graphics>, mut w: Query<&mut Window, With<PrimaryWindow>>) {
@@ -530,7 +618,7 @@ fn fps_counter(
         return;
     }
     let fps = d.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS).and_then(|f| f.smoothed()).unwrap_or(0.0);
-    let [frame, game, sim, prep, enc, sub, worst, n] = split.0;
+    let [frame, game, sim, prep, enc, sub, worst, n, acquire, ..] = split.0;
     if g.show_fps == 1 {
         let s = format!("{fps:.0} FPS");
         if text.0 != s {
@@ -550,16 +638,17 @@ fn fps_counter(
         });
         let gpu = adapter.map_or(String::new(), |a| format!("{:?} {}", a.backend, a.name));
         // and to the log (the browser's console: Safari's Web Inspector on a phone)
-        info!("frame split ms: frame {:.2} game {:.2} sim {:.2} render {:.2} (prep {:.2} enc {:.2} submit {:.2}) idle {:.2} meshes {shown} cast {cast}", a(frame), a(game), a(sim), a(render), a(prep), a(enc), a(sub), a((frame - game - render).max(0.0)));
+        info!("frame split ms: frame {:.2} game {:.2} sim {:.2} render {:.2} (prep {:.2} acquire {:.2} enc {:.2} submit {:.2}) idle {:.2} meshes {shown} cast {cast}", a(frame), a(game), a(sim), a(render), a(prep - acquire), a(acquire), a(enc), a(sub), a((frame - game - render).max(0.0)));
         text.0 = format!(
-            "{fps:.0} FPS  {:.1} ms (worst {worst:.1})\ncpu {:.1}  idle {:.1}\n game {:.1} (sim {:.1})\n render {:.1}: prep {:.1} enc {:.1} submit {:.1}\nmeshes {shown} drawn, {cast} cast shadows\n{size} shadows {} msaa {} | {gpu}",
+            "{fps:.0} FPS  {:.1} ms (worst {worst:.1})\ncpu {:.1}  idle {:.1}\n game {:.1} (sim {:.1})\n render {:.1}: prep {:.1} acquire {:.1} enc {:.1} submit {:.1}\nmeshes {shown} drawn, {cast} cast shadows\n{size} shadows {} msaa {} | {gpu}",
             a(frame),
             a(game + render),
             a((frame - game - render).max(0.0)),
             a(game),
             a(sim),
             a(render),
-            a(prep),
+            a(prep - acquire),
+            a(acquire),
             a(enc),
             a(sub),
             g.shadows.name(),
@@ -567,7 +656,7 @@ fn fps_counter(
         );
     }
     if frame >= 500.0 || g.show_fps == 1 {
-        split.0 = [0.0; 8];
+        split.0 = [0.0; 11];
     }
     // 16 lines of the PS2's 448 (detailed: 11, it has six)
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
