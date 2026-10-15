@@ -19,6 +19,26 @@ for abi in ${HST_ABIS:-arm64-v8a}; do
     mkdir -p "$out/lib/$abi"
     "$T/llvm-strip" -o "$out/lib/$abi/libhst.so" target/$t/release/examples/libhst.so
 done
+# Launcher icon: the OpenTennis badge (web/logo.svg minus its black backdrop) on the court green. Adaptive foreground
+# is 108dp, the badge 64dp wide (its drawn corners stay inside the 72dp mask circle); legacy ones are 48dp square/round.
+bg='#1d5c3a'; res=$out/res; rm -rf "$res"; mkdir -p "$res/mipmap-anydpi-v26" "$res/values"
+sed '/<rect width="100%" height="100%" fill="#000"\/>/d' web/logo.svg | rsvg-convert -w 2800 | magick - -trim +repage "$out/badge.png"
+dp() { awk "BEGIN{print int($1*$s+.5)}"; }
+for d in mdpi:1 hdpi:1.5 xhdpi:2 xxhdpi:3 xxxhdpi:4; do
+    s=${d#*:}; dir=$res/mipmap-${d%:*}; mkdir -p "$dir"; a=$(dp 108); l=$(dp 48); r=$(awk "BEGIN{print 24*$s}")
+    magick -size ${a}x$a xc:none \( "$out/badge.png" -resize "$(dp 64)x" \) -gravity center -composite "$dir/ic_launcher_foreground.png"
+    magick -size ${l}x$l xc:none -fill "$bg" -draw "roundrectangle 0,0 $((l-1)),$((l-1)) $(dp 8),$(dp 8)" \
+        \( "$out/badge.png" -resize "$(dp 44)x" \) -gravity center -composite "$dir/ic_launcher.png"
+    magick -size ${l}x$l xc:none -fill "$bg" -draw "circle $r,$r $r,0" \
+        \( "$out/badge.png" -resize "$(dp 40)x" \) -gravity center -composite "$dir/ic_launcher_round.png"
+done
+echo "<resources><color name=\"ic_launcher_background\">$bg</color></resources>" >"$res/values/ic_launcher.xml"
+for n in ic_launcher ic_launcher_round; do
+    echo '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@color/ic_launcher_background"/><foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>' >"$res/mipmap-anydpi-v26/$n.xml"
+done
+rm -f "$out/res.zip"; "$BT/aapt2" compile --dir "$res" -o "$out/res.zip"
 cat >"$out/AndroidManifest.xml" <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.fizl0.hst"
@@ -26,7 +46,8 @@ cat >"$out/AndroidManifest.xml" <<'EOF'
   <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36"/>
   <uses-feature android:glEsVersion="0x00030000"/>
   <uses-permission android:name="android.permission.INTERNET"/>
-  <application android:label="Hot Shots Tennis" android:hasCode="false" android:extractNativeLibs="false"
+  <application android:label="OpenTennis" android:icon="@mipmap/ic_launcher"
+      android:roundIcon="@mipmap/ic_launcher_round" android:hasCode="false" android:extractNativeLibs="false"
       android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
     <activity android:name="android.app.NativeActivity" android:exported="true" android:screenOrientation="sensorLandscape"
         android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode"
@@ -37,7 +58,7 @@ cat >"$out/AndroidManifest.xml" <<'EOF'
   </application>
 </manifest>
 EOF
-"$BT/aapt2" link -o "$out/base.apk" --manifest "$out/AndroidManifest.xml" -I "$JAR" -A crates/hst/assets
+"$BT/aapt2" link -o "$out/base.apk" --manifest "$out/AndroidManifest.xml" -I "$JAR" -A crates/hst/assets "$out/res.zip"
 (cd "$out" && zip -q -0 -r base.apk lib)
 "$BT/zipalign" -f -p 4 "$out/base.apk" "$out/aligned.apk"
 key=$HOME/.android/debug.keystore
