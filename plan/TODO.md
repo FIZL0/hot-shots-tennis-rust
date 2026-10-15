@@ -8,6 +8,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
+- [ ] **B444** Mod titles sidescroll when too long: on the mods screen, a mod's game title that is too big to fit should scroll sideways (marquee) so the whole title can be read, instead of being cut off (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_kind.rs
 - [ ] **B443** Rename "mods wishlist" to "saved mods": everywhere the UI calls it the mods wishlist, it should be called "saved mods" instead (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_kind.rs
 - [ ] **B442** Settings tab switch click and select volume: switching tabs in the settings screen should not play the loud click sound, and the select sound should be slightly quieter by default (user 2026-10-15) → crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/audio.rs · crates/hst/src/play/main_menu/options.rs
 - [ ] **B441** Online name selection uses the mods page popup: the online name entry should use the same popup as the mods page instead of its own, and both popups should support mobile keyboard mode (user 2026-10-15) → crates/hst/src/play/main_menu/names.rs · crates/hst/src/play/popups.rs · crates/hst/src/play/main_menu/online.rs
