@@ -405,7 +405,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         let (tex, src) = tile_face(cell);
         d.q(tex, src, [cx + inset * PX, cy + inset * PY, cw - 2.0 * inset * PX, ch - 2.0 * inset * PY], if full { [45.0; 3] } else { WHITE }, if active { 128.0 } else { 70.0 });
         d.out.last_mut().unwrap().round = [(10.0 - inset) * PX; 4];
-        if let Some(w) = cell && m.favourite(w) {
+        if let Some(w) = cell && m.favorite(w) {
             tabs::star(d, rect);
         }
         d.hit(rect, pointer::Act::Cell(p, k));

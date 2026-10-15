@@ -373,7 +373,7 @@ struct Press {
     right: bool,
     ok: bool,
     back: bool,
-    /// △: a computer player on the seat assignment, an umpire's call; on the select the favourite (B375).
+    /// △: a computer player on the seat assignment, an umpire's call; on the select the favorite (B375).
     card: bool,
     /// L1 / R1: the costume.
     prev: bool,
@@ -515,8 +515,8 @@ struct Menu {
     editing: Option<Settings>,
     /// B327: the Renderer switch's confirm popup is up: the renderer it would switch to and the chosen pill (0 Switch).
     switch: Option<(u8, usize)>,
-    /// B369: the select's favourite characters (`favourites.txt`).
-    favs: tabs::Favourites,
+    /// B369: the select's favorite characters (`favorites.txt`).
+    favs: tabs::Favorites,
     /// B371: the players' names (`names.rs`).
     names: names::Names,
 }
@@ -575,8 +575,8 @@ enum Effect {
     Online(online::Fx),
     /// The umpire picker's Preview Voice: umpire, voice program, key (`hst_sim::umpire`'s banks).
     Hear(u8, u8, u8),
-    /// B369: `favourites.txt` written.
-    SaveFavourites,
+    /// B369: `favorites.txt` written.
+    SaveFavorites,
 }
 
 impl Menu {
@@ -1173,9 +1173,9 @@ impl Menu {
                     self.players[p].swap = !self.players[p].swap;
                     out.push(Sound(0));
                 }
-                // B369 / B375: △ a favourite (not Random's), the moves on the player's tab
+                // B369 / B375: △ a favorite (not Random's), the moves on the player's tab
                 if k.card && !self.players[p].ready && !self.players[p].random {
-                    self.toggle_favourite(p, &mut out);
+                    self.toggle_favorite(p, &mut out);
                 }
                 if !self.players[p].ready && self.tab_move(p, k) {
                     self.follow(p);
@@ -3088,7 +3088,7 @@ fn step(
                     });
                     commands.insert_resource(crate::mode::Next(Some(crate::match_mode(&args.iso, &a, back))));
                 }
-                Effect::SaveFavourites => {
+                Effect::SaveFavorites => {
                     let path = tabs::path(&args.iso);
                     if let Err(e) = crate::store::write(&path, tabs::text(&menu.favs)) {
                         warn!("{}: {e}", path.display());
