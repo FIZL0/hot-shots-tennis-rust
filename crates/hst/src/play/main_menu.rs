@@ -1874,7 +1874,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.switch = Some((2, 0));
     }
     if !fresh && menu.screen != Screen::Lobby {
-        (menu.screen, menu.sel) = (Screen::Main, 0);
+        menu.after_match();
     } else if menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
