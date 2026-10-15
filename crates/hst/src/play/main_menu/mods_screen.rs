@@ -117,7 +117,7 @@ pub(super) struct View {
     /// choosing one puts up the "use the desktop app" popup (its row while up).
     phone: bool,
     nophone: Option<usize>,
-    /// B372: Browse's grid: its search, filters, sort, wish list and tile pictures.
+    /// B372: Browse's grid: its search, filters, sort, saved mods and tile pictures.
     b: grid::Browse,
     /// B335: the installs since the queue was last empty: done, all (the status's "3/50").
     batch: (usize, usize),
@@ -503,7 +503,7 @@ impl Menu {
         out.push(Effect::Sound(0));
     }
 
-    /// B383: Show `s` in the rail: Everything, Updates and Wish list filter the store's mods, Installed and My
+    /// B383: Show `s` in the rail: Everything, Updates and Saved mods filter the store's mods, Installed and My
     /// uploads are their own grids; a filter keeps the cursor on its option, another page puts it on the search box.
     fn mods_show(&mut self, s: grid::Show, out: &mut Vec<Effect>) {
         let to = match s {
@@ -2271,7 +2271,7 @@ mod tests {
         // the legend says what a tile's buttons do; one kind of mod: no kind switch (B383)
         m.sel = t0 + 2;
         let l = grid::legend(&m).into_iter().map(|x| x.1).collect::<Vec<_>>();
-        assert_eq!(l, ["Move", "Update", "More by", "Wish list", "Back"]);
+        assert_eq!(l, ["Move", "Update", "More by", "Save", "Back"]);
         // Upload: Sign in and Upload all side by side, then the mods
         m.mods_page(Page::Upload, 0);
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
@@ -2574,7 +2574,7 @@ mod tests {
         assert_eq!((ids(m.add.entries()), m.sel, m.add.rows()), (vec!["a1".to_string(), "a2".into(), "a3".into(), "a4".into()], t0, t0 + 4));
         assert_eq!(m.add.status, "4 mods by ann.");
         assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Download all", "All mods"]);
-        // △ again in the author's list says so; □ puts one on the wish list (its Show filter then lists it)
+        // △ again in the author's list says so; □ saves one (its Show filter then lists it)
         m.mods_step(Press { card: true, ..default() }, &mut out);
         assert!(m.add.status.starts_with("These are all ann's"), "{}", m.add.status);
         m.mods_step(Press { page: true, ..default() }, &mut out);

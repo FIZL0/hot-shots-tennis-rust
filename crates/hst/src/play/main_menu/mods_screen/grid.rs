@@ -3,7 +3,7 @@
 //! keys by itself), the Upload button and the downloads' pill; a filter rail on the left (Game, Plays like, Hand,
 //! Show, each option with how many mods it leaves; Show's Installed and My uploads are those grids, the pages the
 //! old tab row had); the tiles in the middle under a heading and the Newest / A-Z / Uploader sort; the chosen mod's
-//! panel on the right (its full picture, △ card, Install / More by / Wish list). The cursor is one number
+//! panel on the right (its full picture, △ card, Install / More by / Save). The cursor is one number
 //! (`Menu::sel`): the search box, Upload, the heading's words, the rail's options, then the tiles, so
 //! `View::hovered` is the tile under it as on every other page.
 //!
@@ -91,7 +91,8 @@ pub(super) struct Browse {
     pub focus: bool,
     /// The on-screen keyboard is up: its key under the cursor.
     pub osk: Option<usize>,
-    /// The wish list by [`Entry::key`] (`mods-wishlist.txt` beside settings.txt / localStorage; None: not read yet).
+    /// The saved mods by [`Entry::key`] (`mods-wishlist.txt` beside settings.txt / localStorage, the old name kept so
+    /// lists carry over; None: not read yet).
     pub wish: Option<HashSet<String>>,
     /// The tile pictures by zip sha256.
     pub pics: HashMap<String, Pic>,
@@ -142,7 +143,7 @@ impl Opt {
                 Show::Installed => "Installed",
                 Show::Updates => "Updates",
                 Show::Mine => "My uploads",
-                Show::Wish => "Wish list",
+                Show::Wish => "Saved mods",
             }
             .into(),
         }
@@ -293,13 +294,13 @@ impl View {
         }
     }
 
-    /// The wish list, read once.
+    /// The saved mods, read once.
     pub(super) fn wish(&mut self) -> &mut HashSet<String> {
         // (the tests start with none)
         self.b.wish.get_or_insert_with(|| if cfg!(test) { None } else { crate::store::read_to_string(WISH).ok() }.map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect()).unwrap_or_default())
     }
 
-    /// □: `e` on or off the wish list (kept at once).
+    /// □: `e` into or out of the saved mods (kept at once).
     fn wish_toggle(&mut self, e: &Entry) -> bool {
         let k = e.key();
         let w = self.wish();
@@ -602,7 +603,7 @@ impl Menu {
                     out.push(Sound(2));
                 } else if k.page {
                     let on = self.add.wish_toggle(&e);
-                    self.add.status = format!("{} {} your wish list.", e.meta.name, if on { "is on" } else { "is off" });
+                    self.add.status = format!("{} {} your saved mods.", e.meta.name, if on { "added to" } else { "removed from" });
                     out.push(Sound(if on { 2 } else { 1 }));
                 } else if k.ok && self.add.page == Page::Mine {
                     self.mine_step(self.sel, out);
@@ -1089,7 +1090,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
 
 /// The chosen mod's panel: its name and ✓ Verified, the game, uploader, version and size, its costumes and hand,
 /// its full picture with its play style and stats card, a line on how it plays, then Install (Update, or Remove),
-/// More by its uploader and Wish list. On the search box, a word or a filter: what it does.
+/// More by its uploader and Save. On the search box, a word or a filter: what it does.
 fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let v = &m.add;
     let [x, y, w, h] = b;
@@ -1134,7 +1135,7 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let pills: Vec<String> = [
         mt.costumes.map(|c| format!("{c} costume{}", if c == 1 { "" } else { "s" })),
         mt.hand.map(|h| if h < 0 { "Left-handed".into() } else { "Right-handed".into() }),
-        v.b.wish.as_ref().filter(|w| w.contains(&e.key())).map(|_| "On wish list".into()),
+        v.b.wish.as_ref().filter(|w| w.contains(&e.key())).map(|_| "Saved".into()),
     ]
     .into_iter()
     .flatten()
@@ -1182,7 +1183,7 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     if !blurb.is_empty() {
         super::super::options::para(d, &blurb, tx, ty, tw, 10.0, 13.0, WHITE);
     }
-    // ✕ Install (Update / Remove), △ More by, □ Wish list
+    // ✕ Install (Update / Remove), △ More by, □ Save
     let installed = v.state(e).or((v.page == Page::Installed).then_some("Installed"));
     // B383: Installed's own mods (one added by hand stays: the game didn't put it in), My uploads' take down
     let by_hand = v.page == Page::Installed && v.local(m.sel).is_some_and(|md| !super::ours(md));
@@ -1200,7 +1201,7 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let buttons: [(String, Press, bool); 3] = [
         (first, OK, true),
         (more, Press { card: true, ..Press::default() }, false),
-        ((if wished { "Off wish list" } else { "Wish list" }).to_string(), Press { page: true, ..Press::default() }, false),
+        ((if wished { "Unsave" } else { "Save" }).to_string(), Press { page: true, ..Press::default() }, false),
     ];
     let _ = hand_x;
     for (k, (word, p, big)) in buttons.iter().enumerate() {
@@ -1344,7 +1345,7 @@ pub(super) fn legend(m: &Menu) -> Vec<(super::super::legend::Act, &'static str)>
                     Some(_) => "Update",
                     None => "Install",
                 }));
-                l.extend([(L::Card, "More by"), (L::Page, "Wish list")]);
+                l.extend([(L::Card, "More by"), (L::Page, "Save")]);
             }
         }
         _ => l.push((L::Ok, "Choose")),
