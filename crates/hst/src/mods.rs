@@ -187,6 +187,12 @@ fn game(source: &str) -> String {
     source.split(" (").next().unwrap_or("").trim().to_string()
 }
 
+/// B380: the first Open Tee's characters are dropped (Open Tee 2 has all of them, in better versions, and more):
+/// the roster, the Mods pages and the store's listing all leave them out. `source` raw or already cut by [`game`].
+pub fn retired(id: &str, source: &str) -> bool {
+    id.starts_with("opentee_") || game(source) == "Hot Shots Golf: Open Tee"
+}
+
 /// What a mod is (`mod.json` `kind`, M8f1; the mods repo's `standard/HST-COURT-UMPIRE-STANDARD.md` §1): absent or
 /// `character` a player, `court` a venue, `umpire` a chair umpire; any other value a kind this build doesn't know
 /// yet (skipped quietly, not broken).
@@ -241,7 +247,7 @@ pub fn list(root: &Path) -> Vec<Mod> {
     let mut dirs: Vec<PathBuf> =
         sub(root).into_iter().filter(|d| !d.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).flat_map(|d| if crate::modfs::is_file(&d.join("mod.json")) { vec![d] } else { sub(&d) }).filter(|d| crate::modfs::is_file(&d.join("mod.json"))).collect();
     dirs.sort();
-    dirs.iter().filter(|d| Kind::of_dir(d) == Kind::Character).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).filter(|m| !dropped(&m.id)).collect()
+    dirs.iter().filter(|d| Kind::of_dir(d) == Kind::Character).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).filter(|m| !dropped(&m.id) && !retired(&m.id, &m.source)).collect()
 }
 
 /// B381: mods left off the custom roster and the store even when installed or uploaded — HST's own chair umpires
@@ -1150,8 +1156,17 @@ mod tests {
         assert_eq!((&row[12][..], &row[40][..], &row[57][..], &row[13][..]), ("4", "10", "170", "4"));
     }
 
-    /// M1f: the PSP mods' heads and faces are unskinned mesh nodes under `Bip01Head`; every costume of every Get a
-    /// Grip and Open Tee mod in `context/mods` carries vertices on the head joint, at rest above its neck.
+    /// B380: Open Tee 1's characters are left out, by id or by source game; Open Tee 2's and the rest stay.
+    #[test]
+    fn open_tee_1_is_retired() {
+        assert!(retired("opentee_pc00_mika", "Hot Shots Golf: Open Tee (PSP) pc00"));
+        assert!(retired("mika_fixed", "Hot Shots Golf: Open Tee"));
+        assert!(retired("opentee_pc09_roger", ""));
+        assert!(!retired("opentee2_pc00_mika", "Hot Shots Golf: Open Tee 2 (PSP) pc00"));
+        assert!(!retired("getagrip_pc00_emi", "Hot Shots Tennis: Get a Grip"));
+        assert!(!retired("fore_pc00_phoebe", "Hot Shots Golf Fore! (PS2) pc00"));
+    }
+
     /// B381: an installed Lily (one of the [`dropped`] chair umpires) stays off the roster, beside a mod that lists
     /// (skipped without `context/mods/test_pc00`).
     #[test]
@@ -1174,13 +1189,15 @@ mod tests {
         assert_eq!(ids, ["test_pc00"]);
     }
 
+    /// M1f: the PSP mods' heads and faces are unskinned mesh nodes under `Bip01Head`; every costume of every Get a
+    /// Grip and Open Tee 2 mod in `context/mods` carries vertices on the head joint, at rest above its neck.
     #[test]
     fn psp_mods_keep_their_heads() {
         let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
         let Ok(dir) = std::fs::read_dir(MODS) else { return eprintln!("no context/mods, skipped") };
         let mut s = Stores(default(), default(), default(), default());
         let mut seen = 0;
-        for e in dir.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("getagrip_") || n.starts_with("opentee"))) {
+        for e in dir.flatten().filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("getagrip_") || n.starts_with("opentee2_"))) {
             let m = read(&e.path()).unwrap();
             for k in 0..m.costumes.len() {
                 let c = load(&mut iso, &m, k, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
@@ -1634,13 +1651,16 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.path())
-            .map(|d| if d.join("mod.json").is_file() { 1 } else { std::fs::read_dir(&d).into_iter().flatten().flatten().filter(|e| e.path().join("mod.json").is_file()).count() })
-            .sum::<usize>();
+            .map(|d| if d.join("mod.json").is_file() { vec![d] } else { std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()).collect() })
+            .flatten()
+            .filter(|d| d.join("mod.json").is_file() && Kind::of_dir(d) == Kind::Character && !d.file_name().unwrap().to_string_lossy().starts_with("opentee_"))
+            .count();
         assert_eq!(all.len(), n);
         assert!(all.iter().all(|m| !m.source.is_empty() && !m.source.contains('(')), "a mod without its source game");
-        for game in ["fore_", "getagrip_", "opentee_", "oob_"] {
+        for game in ["fore_", "getagrip_", "opentee2_", "oob_"] {
             assert!(all.iter().any(|m| m.id.starts_with(game)), "no {game} mod");
         }
+        assert!(!all.iter().any(|m| retired(&m.id, &m.source)), "an Open Tee 1 mod listed (B380)");
         let dir = std::env::temp_dir().join(format!("hst-roster-test-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("broken")).unwrap();
         std::fs::write(dir.join("broken/mod.json"), "{}").unwrap();

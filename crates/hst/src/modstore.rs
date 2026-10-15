@@ -292,6 +292,12 @@ fn merge(lists: Vec<Vec<Entry>>) -> Vec<Entry> {
     out
 }
 
+/// B380: an Open Tee 1 character ([`crate::mods::retired`]) isn't offered; its uploader still sees it under their
+/// own uploads ([`mine`]) to take it down.
+fn retired(e: &Entry) -> bool {
+    crate::mods::retired(&e.meta.id, &e.meta.source)
+}
+
 fn now() -> u64 {
     web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
@@ -307,7 +313,7 @@ pub fn list(fresh: bool) {
     if !fresh {
         let c = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok());
         if let Some(c) = c.filter(|c| now().saturating_sub(c.at) < CACHE_SECS) {
-            return send(Event::Listing(Ok(c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id)).collect())));
+            return send(Event::Listing(Ok(c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id) && !retired(e)).collect())));
         }
     }
     spawn(async {
@@ -317,7 +323,7 @@ pub fn list(fresh: bool) {
             return send(Event::Listing(Err("Can't reach the mod store.".into())));
         }
         let pr = n0_future::join_all(prs.into_iter().map(|(n, who)| entries(format!("refs/pr/{n}"), Some(who)))).await;
-        let all = merge(std::iter::once(main).chain(pr).collect());
+        let all: Vec<Entry> = merge(std::iter::once(main).chain(pr).collect()).into_iter().filter(|e| !retired(e)).collect();
         let _ = crate::store::write(CACHE, serde_json::to_string(&Cached { at: now(), entries: all.clone() }).unwrap());
         send(Event::Listing(Ok(all)));
     });
