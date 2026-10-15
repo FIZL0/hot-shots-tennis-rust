@@ -424,6 +424,20 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let at = c.parts(p);
     let active = is_active(m, n, p);
     let human = matches!(m.seats[p], Some(Dev::Keys | Dev::Pad(_))) || m.remote(p).is_some_and(|s| s.human());
+    // an unjoined seat: an empty card, dashed and dim, its number and the join prompt in the middle
+    if !active && (m.seats[p] == Some(Dev::Open) || !online && m.local_roster()) {
+        let [x, y, w, h] = at.card;
+        rounded(d, at.card, 14.0, hex(BG), 128.0);
+        dashed(d, at.card, 14.0, 2.0, s.soft);
+        let big = (64.0 * PY).min(w * 0.4);
+        let cy = y + h / 2.0;
+        let start = d.out.len();
+        d.centred(&format!("{}P", p + 1), x + w / 2.0, cy - big - 8.0 * PY, big, s.ring);
+        d.out[start..].iter_mut().for_each(|q| q.alpha = 70.0);
+        let keys = !m.seats.contains(&Some(Dev::Keys));
+        home::press_hint(d, " to join", x + w / 2.0, cy + 8.0 * PY, 17.0 * PY, w - 24.0 * PX, WHITE, keys);
+        return;
+    }
     // the card: a rim in the seat's colour, dashed for a computer player
     let [x, y, w, _] = at.card;
     if human || m.seats[p] == Some(Dev::Open) {
@@ -564,20 +578,10 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         let bh = 52.0 * PY;
         let b = [gx + 6.0 * PX, gy + (gh - bh).min(60.0 * PY).max(0.0), gw - 12.0 * PX, bh];
         rounded(d, b, 12.0, s.well, 120.0);
-        let line = if m.seats[p] == Some(Dev::Open) || !online && m.local_roster() {
-            home::JOIN
-        } else if online {
-            "Waiting for a player"
-        } else {
-            "Picks after the players"
-        };
+        let line = if online { "Waiting for a player" } else { "Picks after the players" };
         let size = 15.0 * PY;
         let cy = b[1] + (bh - size) / 2.0;
-        if line == home::JOIN {
-            home::press_hint(d, " to join", b[0] + b[2] / 2.0, cy, size, b[2] - 12.0 * PX, WHITE);
-        } else {
-            d.label(line, b[0] + b[2] / 2.0, cy, size, b[2] - 12.0 * PX, WHITE);
-        }
+        d.label(line, b[0] + b[2] / 2.0, cy, size, b[2] - 12.0 * PX, WHITE);
     }
 
     // the footer: the tab and where the tile is in it
