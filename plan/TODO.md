@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **P34** iOS: confirm P32 on device — Grand Indoor Palace at the Phone preset with HST_FPS gpu ms; if still <60, try an Rgba8 (CompositingSpace::Srgb) main texture → crates/hst/src/graphics.rs · research/journal/2026-10-15-p32-palace-gpu/README-FINAL.md
 - [~] **B403** v1 release: take new screenshots (README/release page) and rename the git repo to opentennis BLOCKED: held for the v1 release (user 2026-10-15)
 - [ ] **B401** Get a Grip modded courts not fully working: the Get a Grip courts should be selectable on the court select screen, show an icon like other courts do, and work properly when played on (user 2026-10-15) → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/previews.rs · crates/hst/src/play/mod_match.rs — branch task/B401 left unmerged (master 2026-10-15): it built its own court-mod loader (mods_court.rs, play/court_mod.rs, main_menu/court_mods.rs) in parallel with M8f6 on main (play/court_mod_match.rs). Redo on top of M8f6, porting only B401's extras from the branch: preview pictures on tile/court screen/confirm (tools/court_previews.sh, HST_COURT_PREVIEW), stand clipping near the camera (GsUniform::court_clip + gs.wgsl/gs_prepass.wgsl), mod name on intro plate/pause/lobby/confirm, window-of-twelve strip; see journal 2026-10-15-b401-gag-courts on the branch
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:

@@ -279,6 +279,31 @@ pub fn plugin(app: &mut App) {
     if std::env::var_os("HST_PASSES").is_some() {
         app.add_plugins(bevy::render::diagnostic::RenderDiagnosticsPlugin).add_systems(Last, log_passes);
     }
+    // `HST_MAIN8=1` (P34): an 8-bit main texture for the 3D cameras; on by default on iOS (tile GPU), `HST_MAIN8=0` off
+    if std::env::var("HST_MAIN8").map_or(cfg!(target_os = "ios"), |v| v != "0") {
+        app.add_systems(PostUpdate, main8.after(bloom));
+    }
+}
+
+/// `HST_MAIN8=1` (P34): the scene cameras draw into an `Rgba8Unorm` main texture instead of `Hdr`'s `Rgba16Float`,
+/// half the colour bandwidth (most of it on a tile GPU with MSAA). Without `Hdr` Bevy gives the main texture the
+/// scene image's format, which is `Rgba8Unorm` unless HDR (G5) is on, and the upscale copies it unconverted, so the
+/// encoded values land in the scene image as before; `CompositingSpace::Srgb` would decode them on that copy. An LDR
+/// view dithers Bevy's PBR in its shader, which `Hdr`'s tonemapping pass skips with `Tonemapping::None`: dither off.
+/// Blends then round to 8 bits after each draw, as the GS's do. Bloom needs `Hdr`, so it stays while bloom or HDR is
+/// on.
+fn main8(mut commands: Commands, g: Res<Graphics>, q: Query<(Entity, Has<bevy::camera::Hdr>), With<crate::hud_gamma::Scene>>) {
+    use bevy::core_pipeline::tonemapping::DebandDither;
+    let hdr = g.hdr_on() || (g.bloom > 0 && !g.original);
+    for (e, has) in &q {
+        if has != hdr {
+            if hdr {
+                commands.entity(e).insert(bevy::camera::Hdr);
+            } else {
+                commands.entity(e).remove::<bevy::camera::Hdr>().insert(DebandDither::Disabled);
+            }
+        }
+    }
 }
 
 /// The app's real time (s, f32 bits) for the render world's logs.
