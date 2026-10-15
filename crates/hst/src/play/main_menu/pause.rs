@@ -76,7 +76,7 @@ pub(in crate::play) struct Systems;
 /// What the overlay draws on: the Settings screens' quads only need the font, the hand, `title_option`,
 /// `wall_option`, `option_00` and our pill (9 quads a pill since its rim, ring and fill are layered); B294's tabs and
 /// panels take up to ~800 (`options::tests::pages_fit`).
-pub(super) const POOL_HERE: usize = 1200;
+pub(super) const POOL_HERE: usize = 1400;
 
 /// One sheet out of a disc archive.
 fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {

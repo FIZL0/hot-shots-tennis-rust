@@ -34,6 +34,8 @@ pub(super) enum Opt {
     Hdr,
     /// G4: contact-hardening sun shadows (`Graphics::soft_shadows`).
     SoftShadows,
+    /// G6: averaged vertex normals on the court's props and the characters (`Graphics::smooth`).
+    Smooth,
     Fps,
     Vsync,
     Original,
@@ -88,9 +90,9 @@ pub(super) fn tab(page: Screen) -> usize {
 
 /// The browser build stays in its page (`graphics::KEEP_WINDOWED`), so it has no Display mode row; it has a
 /// Renderer instead (B273).
-const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] };
+const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, Cull, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, Cull, SwayLod] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Hdr, SoftShadows, Fps, Vsync, Original, Mesh, Upscaled, Cull];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Hdr, SoftShadows, Smooth, Fps, Vsync, Original, Mesh, Upscaled];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
@@ -132,6 +134,7 @@ fn label(o: Opt) -> &'static str {
         Bloom => "Bloom",
         Hdr => "HDR",
         SoftShadows => "Soft Shadows",
+        Smooth => "Smooth Normals",
         Fps => "Frame Limit",
         Vsync => "VSync",
         Original => "Original Mode",
@@ -174,6 +177,7 @@ fn about(o: Opt) -> &'static str {
         Bloom => "Not in the original: a soft glow around the brightest parts of the court (sunlit lines, sky, glare). Off in Original Mode.",
         Hdr => "Not in the original: the court keeps light brighter than the PS2 could show and rolls the brightest parts off smoothly instead of clipping them to flat white or yellow (tonemapping). Off in Original Mode.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
+        Smooth => "Not in the original: light curved surfaces (rackets, posts, the courts' rounded props) smoothly instead of in flat facets; sharp edges stay sharp. Off in Original Mode. Applies to models loaded after a change (the next match).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
         MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
         Mesh => "Draw the players, their rackets and the court's figures (umpire, ball kids, crowd) with this share of their triangles: lower runs faster on a weak GPU, most of all with detailed mod characters. Faces and the edges between parts keep their shape. Applies to characters loaded after a change (the next match).",
@@ -290,6 +294,7 @@ impl Settings {
             Bloom => g.bloom = (g.bloom as isize + d).rem_euclid(BLOOM.len() as isize) as u8,
             SoftShadows => g.soft_shadows = !g.soft_shadows,
             Fps => g.fps = cycle(&FPS, g.fps, d),
+            Smooth => g.smooth = !g.smooth,
             Vsync => g.vsync = !g.vsync,
             Hdr => g.hdr = !g.hdr,
             Original => g.original = !g.original,
@@ -348,6 +353,7 @@ impl Settings {
             Bloom => SHADOW_NAMES[g.bloom.min(2) as usize].into(),
             SoftShadows => on_off(g.soft_shadows),
             Fps => fps_name(g.fps),
+            Smooth => on_off(g.smooth),
             Vsync => on_off(g.vsync),
             Hdr => on_off(g.hdr),
             Original => on_off(g.original),
@@ -633,7 +639,7 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
-        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Bloom | Hdr | SoftShadows | Fps | Vsync | Original);
+        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Bloom | Hdr | SoftShadows | Smooth | Fps | Vsync | Original);
         let note = if preset {
             "Set by Preset. Changing it switches Preset to Custom."
         } else if o == MenuSize {

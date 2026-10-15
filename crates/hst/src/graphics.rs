@@ -1,7 +1,7 @@
-//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA, ambient occlusion (G1), bloom (G3), HDR tonemapping (G5), soft shadows (G4) (all four beyond the original) and the original
+//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA, ambient occlusion (G1), bloom (G3), HDR tonemapping (G5), soft shadows (G4), smoothed normals (G6) (all five beyond the original) and the original
 //! 640×448 mode (`hud_gamma.rs` draws it; it also fixes the aspect ratio to 4:3 and turns upscaled textures off, `main.rs`).
 //! The menu edits the [`Graphics`] resource (applied live) and passes it to a match as flags
-//! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--ao low|high`, `--bloom low|high`, `--hdr`, `--soft-shadows`, `--original`, `--mesh N`). The simulation stays a fixed
+//! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--ao low|high`, `--bloom low|high`, `--hdr`, `--soft-shadows`, `--smooth-normals`, `--original`, `--mesh N`). The simulation stays a fixed
 //! 60 Hz tick whatever these are. Defaults draw as before these settings existed.
 
 use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
@@ -39,6 +39,10 @@ pub struct Graphics {
     /// G4: contact-hardening sun shadows (`gs.wgsl`'s own filter: sharp where a caster meets the ground, softer the
     /// higher it is) instead of Bevy's fixed Gaussian. Not in the original mode, nor on WebGL2.
     pub soft_shadows: bool,
+    /// G6: the court props', rackets' and characters' vertex normals averaged across the PS2's split vertices
+    /// (`smooth.rs`), so curved surfaces light without facets. Applies to models loaded after a change. Not in the
+    /// original mode.
+    pub smooth: bool,
     /// Draw as the PS2 did: the court at 640×448 and the HUD at 448 lines, scaled up unfiltered (overrides `scale`).
     pub original: bool,
     /// A window instead of borderless fullscreen on the current monitor (the default, B96). Not part of a preset.
@@ -65,6 +69,8 @@ pub struct Graphics {
 
 /// `Graphics::mesh` for the loaders, which have no world (`character.rs`, `mods.rs`); kept in step by `mesh_detail`.
 pub static MESH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
+/// Whether the loaders smooth normals (`Graphics::smooth`, off in the original mode); kept in step by `mesh_detail`.
+pub static SMOOTH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// `--merge-meshes` given at launch: 0 not given, 1 off, 2 on; it holds over `Graphics::merge_meshes` (B342).
 pub static MERGE_FORCED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -88,21 +94,21 @@ const MERGE_MESHES: bool = false;
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, bloom: 0, hdr: false, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, bloom: 0, hdr: false, soft_shadows: false, smooth: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, bloom: 0, hdr: false, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, ao: 0, bloom: 0, hdr: false, soft_shadows: false, smooth: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen and the iOS app's first
     /// run): Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`), at 67% scale with 2x
     /// MSAA. M91: an iPhone 15 Pro at 100%/2x is GPU-bound on the Grand Indoor Palace (40 fps); a phone's dense screen
     /// hides the lower scale.
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, ao: 0, bloom: 0, hdr: false, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, ao: 0, bloom: 0, hdr: false, soft_shadows: false, smooth: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, ao: 0, bloom: 0, hdr: false, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
-    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, bloom: 0, hdr: false, soft_shadows: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, ao: 0, bloom: 0, hdr: false, soft_shadows: false, smooth: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 };
+    pub const PRESETS: [(&str, Graphics); 4] = [("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, ao: 0, bloom: 0, hdr: false, soft_shadows: false, smooth: false, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, batch_crowd: BATCH_CROWD, merge_meshes: MERGE_MESHES, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -116,6 +122,7 @@ impl Graphics {
             "hdr" => self.hdr = v != "off",
             "soft_shadows" | "soft-shadows" => self.soft_shadows = v != "off",
             "ao" | "ambient_occlusion" => self.ao = AO.iter().position(|&n| n == v).map_or(self.ao, |i| i as u8),
+            "smooth_normals" | "smooth-normals" => self.smooth = v != "off",
             "bloom" => self.bloom = BLOOM.iter().position(|&n| n == v).map_or(self.bloom, |i| i as u8),
             "windowed" => self.windowed = v != "off",
             "show_fps" => self.show_fps = ["off", "on", "detailed"].iter().position(|&n| n == v).unwrap_or(1) as u8,
@@ -135,7 +142,7 @@ impl Graphics {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
         let on = |b: bool| if b { "on" } else { "off" };
         format!(
-            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\nambient_occlusion = {}\nbloom = {}\nhdr = {}\nsoft_shadows = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\ncull = {}\nmesh = {}\n",
+            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\nambient_occlusion = {}\nbloom = {}\nhdr = {}\nsoft_shadows = {}\nsmooth_normals = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\nbatch_crowd = {}\nmerge_meshes = {}\ncull = {}\nmesh = {}\n",
             on(self.vsync),
             self.scale,
             self.shadows.name(),
@@ -144,6 +151,7 @@ impl Graphics {
             BLOOM[self.bloom.min(2) as usize],
             on(self.hdr),
             on(self.soft_shadows),
+            on(self.smooth),
             on(self.original),
             on(self.windowed),
             ["off", "on", "detailed"][self.show_fps.min(2) as usize],
@@ -169,6 +177,9 @@ impl Graphics {
         }
         if self.soft_shadows {
             f.push("--soft-shadows".into());
+        }
+        if self.smooth {
+            f.push("--smooth-normals".into());
         }
         if self.vsync {
             f.push("--vsync".into());
@@ -287,10 +298,11 @@ pub fn plugin(app: &mut App) {
     }
 }
 
-/// The Mesh setting where the loaders read it (`MESH`).
+/// The Mesh and Smooth Normals settings where the loaders read them (`MESH`, `SMOOTH`).
 fn mesh_detail(g: Res<Graphics>) {
     if g.is_changed() {
         MESH.store(g.mesh, Ordering::Relaxed);
+        SMOOTH.store(g.smooth && !g.original, Ordering::Relaxed);
     }
 }
 
@@ -692,7 +704,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, ao: 2, bloom: 1, hdr: !p.hdr, soft_shadows: true, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES, cull: !p.cull, mesh: 50 };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, ao: 2, bloom: 1, hdr: !p.hdr, soft_shadows: true, smooth: !p.smooth, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, batch_crowd: !BATCH_CROWD, merge_meshes: !MERGE_MESHES, cull: !p.cull, mesh: 50 };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -747,5 +759,10 @@ mod tests {
         assert_eq!((g.preset(), &g.flags()[8..]), ("Custom", &["--soft-shadows".to_string()][..]));
         assert!(g.soft_on() == !cfg!(all(target_arch = "wasm32", not(feature = "webgpu"))));
         assert!(!Graphics { original: true, ..g }.soft_on() && !Graphics { shadows: Shadows::Off, ..g }.soft_on());
+        // G6: Smooth Normals likewise, a switch
+        let g = Graphics { smooth: true, ..default() };
+        assert_eq!((g.preset(), &g.flags()[8..]), ("Custom", &["--smooth-normals".to_string()][..]));
+        let mut back = Graphics::default();
+        assert!(back.set("smooth_normals", "on") && back == g);
     }
 }

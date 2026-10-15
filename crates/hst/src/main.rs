@@ -40,6 +40,7 @@ mod inspect;
 mod loading;
 mod mash;
 mod lod;
+mod smooth;
 mod merge;
 mod mode;
 mod noise;
@@ -181,6 +182,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 roster = Some(inspect::Roster(disc, mods));
             }
             "--vsync" => gfx.vsync = true,
+            "--smooth-normals" => gfx.smooth = true,
             "--original" => gfx.original = true,
             "--hdr" => gfx.hdr = true,
             "--soft-shadows" => gfx.soft_shadows = true,
@@ -931,14 +933,15 @@ fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>, model: &mdl::Model) 
     if idx.is_empty() {
         return None;
     }
-    Some(
-        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
-            .with_inserted_indices(Indices::U32(idx)),
-    )
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
+        .with_inserted_indices(Indices::U32(idx));
+    // G6: Graphics → Smooth Normals
+    smooth::normals(&mut mesh);
+    Some(mesh)
 }
 
 /// Like [`models`], drawn as the GS draws them ([`gs`]): one mesh per material and batch PRIM, its texture raw and
