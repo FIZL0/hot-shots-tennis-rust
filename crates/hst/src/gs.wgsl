@@ -265,6 +265,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     rgb = floor(floor(rgb * 255.0 + 1e-4) * a8 / 128.0) / 255.0;
 #endif
 #endif
-    // the scene holds gamma-encoded values, as the GS's frame buffer (hud_gamma.rs; G5's HDR: past 1 too)
+    // the scene holds gamma-encoded values, as the GS's frame buffer (hud_gamma.rs)
     return vec4(rgb, clamp(a, 0.0, 1.0));
 }
