@@ -171,3 +171,57 @@ Checked by eye (`tools/shot.sh`, `context/perf/p39/`): pause menu (`HST_PAUSE`),
   timed separately; not seen as a hitch in the shots' runs.
 - Absolute fps not compared: other agents loaded the CPU (bench ~100–160 fps both builds); only traced relative cost.
 - Not run on wasm/iOS/Android; the change is plain ECS, no platform code.
+
+## P41 — entity count and visibility (2026-10-15)
+
+New `HST_SCENE_CENSUS=1` (`crates/hst/src/scene_census.rs`): every 5 s, entities with a `ViewVisibility` (what each
+active view's CPU culling walks), meshes per root and per parent kind, hidden ones, active cameras, and how many
+`GlobalTransform`s change per frame and of what. In a 4-bot doubles match on court 1 (before):
+
+- **1852 entities with a `ViewVisibility`**, 665 meshes, 190 UI nodes, and **662 bare transform+visibility
+  entities**: the characters' and effects' skeleton joints, all spawned with `Visibility` though only the racket
+  hangs off a joint (effects' parts hang off a holder).
+- **4 active views** run `check_visibility_cpu_culling` over all of them: the match camera and three 2D cameras of
+  `hud_gamma` (HUD at order 50 on layer 0, so it frustum-tested every 3D mesh; the mix and composite cameras are on
+  layers 30/31 and reject by mask).
+- ~400 `GlobalTransform`s change per frame, almost all joints; court props never (Bevy 0.19's
+  `StaticTransformOptimizations` is on by default and already skips their unchanged subtrees, so no marking needed).
+- Meshes by parent: 226 under 106 near-eye props (`HideAroundEye`/`NearBox`), 50 under 25 shadow-casting props,
+  56 under 20 more `HideAroundEye`, only **40 under 7 plain static court parents**; the rest are rigs and effects.
+
+Changes:
+- `character::spawn`: only the joints from the rig root to `Racket` carry a `Visibility`; `effects::model`'s joints
+  carry none.
+- `hud_gamma`: the HUD camera is on `RenderLayers::none()` (UI ignores render layers; no sprite/Mesh2d exists).
+- `character::animate` poses into a buffer and writes a joint only if it changed (`set_if_neq`), so still joints
+  aren't marked dirty for propagation.
+- A background figure (`shadow::Minor` rig) whose own `Visibility` is `Hidden` (creatures off, set in `npcs::step`
+  in FixedUpdate, before `animate`) isn't posed or sprung (`character::put_away`, `spring::swing`); the frame it shows
+  again is posed as before.
+
+Result: 1852 → **1151** entities with a `ViewVisibility`. Traced (`tools/profile.sh`, 15 s, load average ~28 from
+other agents, so ratios only; `context/perf/p41/{before,after2}.txt`), µs/frame inclusive:
+`check_visibility_cpu_culling` 403 → 284, `propagate_parent_transforms` 368 → 252, `mark_dirty_trees` 318 → 274,
+`mark_newly_hidden_entities_invisible` 106 → 69, `reset_view_visibility` 111 → 92, `hst::character::animate`
+288 → 225; `check_dir_light_mesh_visibility` (cascades, meshes only) unchanged ~265.
+
+Not done, on purpose:
+- **Merging static court meshes**: only 40 meshes sit under plain static parents; the bulk belong to props hidden one
+  by one near the eye, shadow-class props, or backdrops that follow the camera. Merging across them would break that
+  per-prop hiding, and merging blended parts changes their sort (GS draw order kept by `GsMaterial::order`) — little
+  gain for a visible risk.
+- **Despawning what a mode never shows**: ~100 hidden entities left (effect pools, balloon/word pools, creatures off
+  until something starts them); all can show later in the same match, and hidden ones fail the views' first test.
+- `update_mesh_previous_global_transforms` (~140 µs) is Bevy's own (motion-vector history, runs whenever a 3D camera
+  is active); not touched here.
+
+`--shot` of the match after (`context/perf/p41/match.png`): players with rackets, umpire, spectators, net, effects,
+HUD all draw. 708 tests pass.
+
+### Not verified / not 1:1
+- No before/after pixel diff: `--shot-at` is wall-clock, so the shots are different moments; checked by eye
+  (rendering only has to look right).
+- Absolute fps not compared: other agents loaded the CPU (load average ~28); only traced relative costs.
+- A creature that is shown again resumes its spring (hair) from the state it was put away in, against its new pose:
+  a possible one-off settle, not seen; presentation only, no sim state.
+- Not run on wasm/iOS/Android; plain ECS changes, no platform code.

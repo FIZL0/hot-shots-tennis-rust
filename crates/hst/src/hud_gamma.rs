@@ -105,6 +105,8 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
         RenderTarget::Image(ImageRenderTarget { handle: hud.clone(), scale_factor: 1.0 }),
         IsDefaultUiCamera,
         Msaa::Off,
+        // UI only: no layer, so the per-view visibility check rejects every mesh at once (P41)
+        RenderLayers::none(),
     ));
     // HDR like the scene cameras, so the mix lands in the image unencoded
     let last = [(); 2].map(|_| images.add(target(TextureFormat::Rgba8Unorm)));

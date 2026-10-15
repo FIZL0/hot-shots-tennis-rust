@@ -56,6 +56,7 @@ mod spring;
 mod stall;
 mod textures;
 mod ui_census;
+mod scene_census;
 mod ui_pool;
 mod update;
 mod vertex_patch;
@@ -427,6 +428,9 @@ fn start(argv: Vec<String>) {
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
     if std::env::var_os("HST_UI_CENSUS").is_some() {
         app.add_plugins(ui_census::plugin);
+    }
+    if std::env::var_os("HST_SCENE_CENSUS").is_some() {
+        app.add_plugins(scene_census::plugin);
     }
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, (log_fps, log_assets)).add_plugins(stall::plugin);
