@@ -290,6 +290,7 @@ fn world(e: &[u8]) -> World {
         drag: f32_at(e, 0x714),
         floor: i32_at(e, 0x78),
         path: balls(e, tail),
+        path_from: None,
         records: std::array::from_fn(|k| {
             let o = 0x580 + 0x30 * k;
             Shot { stamp: i32_at(e, o), n: i32_at(e, o + 4), kind: i32_at(e, o + 8), pos: quad(e, o + 0x10), vec: quad(e, o + 0x20) }

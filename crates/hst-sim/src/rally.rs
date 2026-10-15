@@ -32,6 +32,39 @@ pub struct PathCopy {
     pub balls: Vec<Ball>,
 }
 
+impl Ball {
+    /// Flight `f`'s path entry (stored y up), `base` bounces before the path.
+    pub fn of(f: &crate::ball::Flight, base: i32) -> Self {
+        let ([x, y, z], [u, v, s]) = (f.ball.pos, f.ball.vel);
+        Ball { pos: [x, (-F(y)).0, z, 0.0], vel: [u, (-F(v)).0, s, 0.0], bounces: base + f.contacts }
+    }
+}
+
+/// What a path not stepped ahead is stepped from: the ball off the net, its shot, the court and the bounces before it.
+/// A held ball's path makes no line call, so nothing but its entries comes of stepping it, and the app leaves that to
+/// the copy, on the frames one is taken (P38).
+#[derive(Clone, Copy, Debug)]
+pub struct PathFrom {
+    pub flight: crate::ball::Flight,
+    pub shot: crate::ball::Shot,
+    pub court: usize,
+    pub base: i32,
+}
+
+impl PathFrom {
+    /// The PATH_MAX entries from it.
+    pub fn step(&self) -> Vec<Ball> {
+        let mut f = self.flight;
+        (0..PATH_MAX)
+            .map(|_| {
+                let b = Ball::of(&f, self.base);
+                f.step(&self.shot, &crate::ball::COURTS[self.court]);
+                b
+            })
+            .collect()
+    }
+}
+
 /// The match as the rally routines read it.
 #[derive(Clone, Debug, Default)]
 pub struct World {
@@ -54,6 +87,8 @@ pub struct World {
     pub floor: i32,
     /// The predicted path (its live window) the AI copies from.
     pub path: Vec<Ball>,
+    /// Or (when set) what to step it from, if a copy is taken.
+    pub path_from: Option<PathFrom>,
     /// The players' shot records (by slot), the path object's mode byte and its line gap.
     pub records: [Shot; 4],
     pub path_mode: u8,
@@ -350,8 +385,10 @@ impl Rally {
             self.len = c.balls.len() as i32;
             return self.len;
         }
-        let n = (self.window.max(0) as usize).min(w.path.len());
-        c.balls = w.path[..n].to_vec();
+        let stepped = w.path_from.map(|p| p.step());
+        let path = stepped.as_ref().unwrap_or(&w.path);
+        let n = (self.window.max(0) as usize).min(path.len());
+        c.balls = path[..n].to_vec();
         c.stamp = w.frame;
         self.len = n as i32;
         self.len

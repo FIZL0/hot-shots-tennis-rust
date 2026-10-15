@@ -38,3 +38,33 @@ All `hst::` systems together: ~1.3 ms/frame self (traced). Follow-ups: P36–P48
 
 Rerun: `tools/profile.sh context/perf/<name>.txt [seconds] [hst args…]` (builds `target/trace`, ~2.5 min first time).
 `samply` needs `perf_event_paranoid` ≤ 1 (root); trace_chrome needs nothing.
+
+## P38 — `hst::play::control` per tick (2026-10-15)
+
+Measured headless, release build, 4-bot doubles on court 1 (`crates/hst/src/play/tick_cost.rs`:
+`tools/check.sh --release -p hst --bin hst four_bot_control_cost -- --ignored --nocapture`, `HST_TICKS=N`; prints
+µs/tick of `control` and an FNV hash of every tick's `state_hash`). Baseline 420 µs/tick, same as the trace.
+
+Timing every call inside `bot` showed that ~99% was `doubles_ai::step` → `path` → `predict`: 180 `Flight::step`s
+(~2 µs each). The P23 cache only helped the second to fourth player in a tick; the ball moves every tick, so each
+tick still stepped the whole path again. Two fixes, neither changes what the AI sees:
+
+- **Shift the path** (`doubles_ai::Steps`): keep the 181 flights the last path went through. If this tick's start
+  (net off, shot, base, court; bincode bytes, so the floats are compared bit for bit) equals last tick's `flights[1]`,
+  the new path is the old one a step further on: drop the first, take one new step. Mode = the last flight's call,
+  gap = the last None→Out step's gap, the same as `predict`. The flights are `#[serde(skip)]` inside `Built`, so
+  they're not in the snapshot or state hash; after a restore the first tick just steps the whole path again.
+- **Held ball, stepped only if copied** (`hst_sim::rally::PathFrom`): through the serve the ball sits in the hand
+  and moves with it every tick (1752 of the 2006 rebuilds that were left). A flight with `lines: None` can't change
+  its call, so mode = its call and there's no gap without stepping it. `path` hands over `World::path_from` instead,
+  and `Rally::copy_path` steps it only on the frames it really copies a path.
+
+Result: `control` 420 → 34 µs/tick. The match hash over 20 000 ticks (3 games, every tick's state) is
+`a2b7cc03e774bdf0` before and after; `path_cache_keeps_the_match` (cached vs `NO_CACHE`, which now also asserts
+each shifted path equals a full `predict`) passes, and so do all 707 tests and `synctest_through_a_change_of_ends`.
+What's left (~30 µs) is the copies of the held ball's path and the rebuilds after hits, net touches and points.
+
+### Not verified / not 1:1
+
+- No PCSX2 check: these are only speed changes, and the 20k-tick hash shows the state is bit-identical. The
+  `tools/profile.sh` traced run in a window wasn't redone; the timing above comes from the headless harness.

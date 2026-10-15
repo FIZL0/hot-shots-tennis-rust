@@ -594,6 +594,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M100** Android app icon (user 2026-10-15): the launcher icon (and round/adaptive versions) from web/logo.svg, the OpenTennis badge, packed by tools/apk.sh (aapt2 res/ mipmaps + android:icon in the manifest); app label OpenTennis. Done when the installed app shows the badge in the launcher and recents → tools/apk.sh · web/logo.svg
 - [x] **B410** Sophie's pigtail hair physics broken: her pigtails' hair physics do not work; the pigtails should move with physics as she moves (user 2026-10-15) → crates/hst/src/spring.rs · crates/hst/src/character.rs
 - [x] **M103** Android themed (monochrome) launcher icon for Android 13+ (user 2026-10-15): a single-colour silhouette of the OpenTennis badge as <monochrome> in mipmap-anydpi-v26/ic_launcher{,_round}.xml, drawn from web/logo.svg by tools/apk.sh like M100's icons (journal 2026-10-15-m100-android-icon). Done when the emulator with themed icons on shows the badge tinted, not the full-colour one → tools/apk.sh · web/logo.svg
+- [x] **P38** **Sim tick cost: hst::play::control (P35)**: ~400 µs per 60 Hz tick (traced) in a 4-bot match; profile inside it (finer `info_span!`s or samply), find the hot path (bot AI search/prediction, per-tick allocations, repeated table scans) and speed it up with identical results: replay/live tests must stay bit-exact. Matters most on slow CPUs and in rollback netplay (resimulated ticks) → crates/hst/src/play.rs (control ~3020) · crates/hst-sim/src | j: 2026-10-15-p35-high-fps
 
 
 ### Shots
