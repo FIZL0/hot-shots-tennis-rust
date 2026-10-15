@@ -572,14 +572,20 @@ pub(crate) fn glyph_aspect(style: Style, i: u8) -> f32 {
 
 /// B362: the styles a "press ✕ / Enter to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if
 /// it names one, for `--shot`s without the pad), then the keyboard's Enter.
-pub(crate) fn join_styles() -> Vec<Style> {
+/// `keys`: the keyboard's Enter too (never on a phone build).
+pub(crate) fn join_styles(keys: bool) -> Vec<Style> {
     let mut v = PADS.lock().map(|p| p.clone()).unwrap_or_default();
     if let Some(s) = forced().filter(|s| *s != Style::Keys) {
         v = vec![s];
     }
-    v.push(Style::Keys);
+    if keys && !MOBILE {
+        v.push(Style::Keys);
+    }
     v
 }
+
+/// A phone build (iOS / Android): no keyboard shortcuts anywhere in the menus.
+pub(crate) const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android"));
 
 fn note_pads(pads: Query<(Entity, &Gamepad)>, all: Query<&Gamepad>) {
     let mut ps: Vec<_> = pads.iter().filter(|(_, g)| controls::readable(g)).map(|(e, _)| e).collect();
@@ -641,7 +647,7 @@ fn track(keys: Res<ButtonInput<KeyCode>>, pads: Query<(Entity, &Gamepad)>, touch
     let deck = || std::env::var("SteamDeck").as_deref() == Ok("1");
     let now = if touches.any_just_pressed() {
         Some(Last::Touch)
-    } else if keys.get_just_pressed().next().is_some() {
+    } else if !MOBILE && keys.get_just_pressed().next().is_some() {
         Some(Last::Keys)
     } else {
         pads.iter()
@@ -950,7 +956,12 @@ pub(crate) fn draw(
     mut chips: ResMut<Chips>,
     mut shown: Local<String>,
 ) {
-    let groups = std::mem::take(&mut legend.0);
+    let mut groups = std::mem::take(&mut legend.0);
+    if MOBILE {
+        // a phone build shows no keyboard shortcuts: only the pads' groups
+        groups.iter_mut().for_each(|g| g.devs.retain(Option::is_some));
+        groups.retain(|g| !g.devs.is_empty());
+    }
     let (Ok(win), Ok((root, mut node, mut vis))) = (window.single(), strip.single_mut()) else { return };
     let hide = groups.is_empty() || (*last == Last::Touch && std::env::var_os("HST_LEGEND").is_none());
     vis.set_if_neq(if hide { Visibility::Hidden } else { Visibility::Inherited });
