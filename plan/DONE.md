@@ -636,6 +636,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B443** Rename "mods wishlist" to "saved mods": everywhere the UI calls it the mods wishlist, it should be called "saved mods" instead (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_kind.rs
 - [x] **B442** Settings tab switch click and select volume: switching tabs in the settings screen should not play the loud click sound, and the select sound should be slightly quieter by default (user 2026-10-15) → crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/audio.rs · crates/hst/src/play/main_menu/options.rs
 - [x] **B444** Mod titles sidescroll when too long: on the mods screen, a mod's game title that is too big to fit should scroll sideways (marquee) so the whole title can be read, instead of being cut off (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_kind.rs
+- [x] **B446** Rework confusing menu wording: the mod menu's wording is bad, and the sign-in prompt reads "sign in: sign in first: sign in, top left", so fix it and review the wording on the other menus too. Rethink the text on most if not all menus, but leave any wording that is already clear or doesn't need changing (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/home.rs · crates/hst/src/play/main_menu/online.rs
 
 
 ### Shots

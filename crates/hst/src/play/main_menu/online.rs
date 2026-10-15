@@ -1247,7 +1247,7 @@ impl Menu {
         if !self.net.wanted.remove(&h) {
             return;
         }
-        let dir = mo::unpack(pack, h, &mo::cache(iso)).map(|m| m.dir).map_err(|e| self.net.status = format!("A mod's files were refused, a stand-in plays it: {e}")).ok();
+        let dir = mo::unpack(pack, h, &mo::cache(iso)).map(|m| m.dir).map_err(|e| self.net.status = format!("A mod's files were rejected, so a stand-in plays it: {e}")).ok();
         self.net.looks.insert(h, dir);
     }
 }
@@ -1275,7 +1275,7 @@ fn name_of(r: &Room, peer: &str) -> String {
 /// B281: after Start, who the match waits for to choose about a mod, and for how long.
 fn waiting(r: &Room) -> String {
     let who: Vec<String> = r.deciding.iter().map(|p| name_of(r, p)).collect();
-    format!("Waiting for {} to choose whether to download a mod: {} s, then a stand-in plays it.", who.join(", "), r.wait)
+    format!("Waiting for {} to decide about downloading a mod ({} s left, then a stand-in plays it).", who.join(", "), r.wait)
 }
 
 fn court_name(text: &super::Text, c: usize) -> String {
@@ -1384,8 +1384,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
             let info = match () {
                 _ if !m.net.status.is_empty() => m.net.status.clone(),
-                _ if !grid && m.net.url => "Tap to type your relay's URL (https://...); Return saves it, Back goes on to n0's relays.".into(),
-                _ if m.net.url => "Your own iroh-relay's URL (https://...): type or Paste it; Save uses it, Back goes on to n0's relays.".into(),
+                _ if !grid && m.net.url => "Tap to type your own relay's URL (https://...). Return saves it; Back switches to n0's public relays.".into(),
+                _ if m.net.url => "Type or Paste your own iroh-relay's URL (https://...). Save uses it; Back switches to n0's public relays.".into(),
                 _ if !grid && m.net.naming => "Tap to type your name; Return saves it.".into(),
                 _ if !grid => "Tap to type the host's code (or paste their link or code); Return joins.".into(),
                 _ if m.net.naming => "Type your name, or pick each letter; Save keeps it.".into(),
@@ -1406,11 +1406,11 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 Some(Item::Seat(i)) if m.mine(*i) => "OK: change character  ·  L1 / R1: costume  ·  Select: hand".into(),
                 Some(Item::Seat(i)) if m.guest(*i).is_some() => format!("{} picks for this seat. X: take them out of the lobby.", m.guest(*i).map_or(String::new(), |g| g.1)),
                 // B201: the host's open and computer seats
-                Some(Item::Seat(i)) if room.is_some_and(|r| r.seats.get(*i).is_some_and(|s| s.is_some())) => "OK: its character and level on the select  ·  L1 / R1: costume  ·  X or Triangle: remove it".into(),
-                Some(Item::Seat(_)) => "OK: add a computer player here and pick it. Left open, Start fills it.".into(),
+                Some(Item::Seat(i)) if room.is_some_and(|r| r.seats.get(*i).is_some_and(|s| s.is_some())) => "OK: change its character and level  ·  L1 / R1: costume  ·  X or Triangle: remove it".into(),
+                Some(Item::Seat(_)) => "OK: add a computer player here. Seats left open are played by the computer at Start.".into(),
                 Some(Item::Remove(i)) if m.guest(*i).is_some() => format!("OK: take {} out of the lobby.", m.guest(*i).map_or(String::new(), |g| g.1)),
                 Some(Item::Remove(_)) => "OK: take this computer player off its seat.".into(),
-                Some(Item::Mode) if !m.can_switch() => "Singles has two seats: free some first.".into(),
+                Some(Item::Mode) if !m.can_switch() => "Singles has only two seats: free the others first.".into(),
                 Some(Item::Mode) => "Left / Right: singles or doubles (everyone readies again).".into(),
                 Some(Item::Button("Start")) => "Start a 4 second countdown, ready or not: open seats are played by the computer.".into(),
                 Some(Item::Button("Code")) if shared(&m.net).is_some() => "OK: show the QR big for a phone to scan (any button puts it away).".into(),
@@ -1422,10 +1422,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 Some(Item::Set(0)) => "OK: choose the court for everyone (Find lists it).".into(),
                 Some(Item::Set(1)) => "Left / Right: the umpire for everyone  ·  OK: choose from their cards".into(),
                 Some(Item::Set(4)) if room.is_some_and(|r| r.vanilla) => "No mods: everyone plays disc characters. Left / Right: allow mods.".into(),
-                Some(Item::Set(4)) => "Mods allowed. Left / Right: a vanilla lobby (seated mods become their base character).".into(),
+                Some(Item::Set(4)) => "Mods allowed. Left / Right: no mods (seated mod characters switch to the character they're based on).".into(),
                 Some(Item::Set(_)) => "Left / Right: change it for everyone.".into(),
                 _ if m.net.pick_next => "Joining: your seats are held while you pick your characters.".into(),
-                Some(Item::Button("Ready")) => "Ready up: when everyone in is, the match starts after 4 seconds, open seats played by the computer.".into(),
+                Some(Item::Button("Ready")) => "Ready up: once everyone is ready, the match starts after 4 seconds. The computer plays any open seats.".into(),
                 _ if room.is_some() && !m.net.hosting => "Leave the lobby. The match starts once every seat is taken and everyone's ready (or the host starts it).".into(),
                 _ if room.is_none() => "The lobby's closed.".into(),
                 _ => "Leave the lobby.".into(),
@@ -1435,8 +1435,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 // pill is the cursor, and it has to be answered
                 lobby::draw(d, m, hand_x, &info);
                 let help = match room.filter(|r| r.wait > 0) {
-                    Some(r) => format!("The match is waiting: choose in {} s, or it plays as its donor in odd colours.", r.wait),
-                    None => "Get its looks, or play it as its donor in odd colours.".into(),
+                    Some(r) => format!("The match is waiting: choose within {} s, or it plays as the character it's based on, in other colours.", r.wait),
+                    None => "Download its looks, or play it as the character it's based on, in other colours.".into(),
                 };
                 d.popup(None);
                 let (sw, sh) = (260.0, 230.0);
@@ -1459,7 +1459,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             }
             d.frame(6, 8);
             // B236: no lobby yet: what's happening, the spinner turning; or why it stopped
-            let sub = "The steps show below; it gives up by itself if nothing answers.";
+            let sub = "Progress shows below. It gives up on its own if nothing answers.";
             match (m.net.pick_next, m.net.go) {
                 (true, _) if m.net.hosting => busy(d, m.net.spin, 230.0, "Creating lobby...", sub),
                 (true, Some(Go::Quick)) => busy(d, m.net.spin, 230.0, "Finding a lobby...", sub),
@@ -1569,13 +1569,13 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
     d.outlined(|d| d.text(ROWS[sel], x + 18.0, y + pic_h - 34.0, 34.0, WHITE));
     let words = match sel {
         1 => "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.".to_string(),
-        2 => "List the open lobbies: this network's first (no internet needed), then the BitTorrent DHT's.".into(),
+        2 => "List the open lobbies: on this network first (no internet needed), then over the internet.".into(),
         0 => "Join the fullest open lobby that has room for your players, or host one and wait.".into(),
         3 => "Type the host's 4-character code, or paste their link or code.".into(),
         4 => format!("Your name on your lobby seats (now {}).", cfg.name),
         _ if m.net.custom => "Advanced, for self-hosted relays: OK types your own iroh-relay's URL (kept in online.txt). Every player needs the same one.".into(),
         _ if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (Custom...) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
-        _ => "Relay for when a direct connection fails: n0's public relays, none, or your own (Custom...).".into(),
+        _ => "The relay carries the match when players can't connect directly: n0's public relays, none, or your own (Custom...).".into(),
     };
     para(d, &words, x + 18.0, y + pic_h + 16.0, w - 36.0, 17.0, 4, INK);
     let open = match m.net.list.len() {
