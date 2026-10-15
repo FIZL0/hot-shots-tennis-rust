@@ -2530,7 +2530,7 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
                 r.base,
                 r.acc,
             );
-            // ponytail: moved straight by the change; the game's mover (0x34a960) also checks collisions
+            // ponytail: moved straight by the change; the game's mover also checks collisions
             p.pos[0] += acc[0] - r.acc[0];
             p.pos[2] += acc[2] - r.acc[2];
             r.acc = acc;

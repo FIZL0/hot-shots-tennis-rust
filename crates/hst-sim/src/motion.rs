@@ -331,7 +331,7 @@ pub fn reaction(body_hit: bool, players: i32, won: bool, game: bool, practice_sh
 }
 
 /// Doubles team reactions (`re_pc00_co01_f` … `co05`, motions 0x30..0x34) a character may play instead of
-/// `gu`/`di` (0x3fc790): characters 5, 7 and 11 have their own sets, the rest by parity.
+/// `gu`/`di` (the game's per-character set table): characters 5, 7 and 11 have their own sets, the rest by parity.
 pub fn team_reactions(character: i32) -> &'static [i32] {
     match character {
         5 => &[0, 1, 3, 4],

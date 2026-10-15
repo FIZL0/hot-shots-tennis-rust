@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Wrap a task up in one call (no subagent): tools/done.sh <ID> "<commit message>" [--blocked "<why + what unblocks>"]
-# Runs the tests and the sim's float lint; passing: ticks <ID> (moves it to plan/DONE.md) or, with --blocked, marks it [~]; then commits
+# Runs tools/audit.sh (no retail addresses), the tests and the sim's float lint; passing: ticks <ID> (moves it to plan/DONE.md) or, with --blocked, marks it [~]; then commits
 # everything. Failing: nothing is ticked or committed — fix it, or commit what's solid and block it.
 cd "$(dirname "$(realpath "$0")")/.."
 [ $# = 2 ] || { [ $# = 4 ] && [ "$3" = --blocked ]; } || { sed -n 2,4p "$0"; exit 2; }
-tools/check.sh || exit 1
+tools/audit.sh && tools/check.sh || exit 1
 # the sim's #![deny(clippy::float_arithmetic)] modules (C2: float math through ps2::F / vu0::Vf); clippy only
 # reports the deny-level lints here, every other lint stays off
 cargo clippy -q -p hst-sim --lib --message-format=short -- -A clippy::all 2>&1 | grep -E 'error' | head -20 | grep . &&
