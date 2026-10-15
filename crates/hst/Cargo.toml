@@ -57,6 +57,9 @@ libc = "0.2"
 objc2 = "0.6"
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "MTLCommandBuffer"] }
 block2 = "0.6"
+# P49: a display link asking ProMotion for 120 Hz (`ios.rs` frame_rate); the versions wgpu-hal already uses
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CAFrameRateRange"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSRunLoop", "NSString", "NSObjCRuntime"] }
 wgpu = "29"
 raw-window-handle = "0.6"
 
