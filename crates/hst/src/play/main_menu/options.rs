@@ -147,7 +147,7 @@ fn about(o: Opt) -> &'static str {
         ShowFps => "Show the frame rate in the bottom-left corner, in the menus and in a match. Detailed: where each frame's time goes (game, simulation, rendering, waiting on the GPU/browser), meshes drawn and the renderer.",
         KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
         ButtonIcons => "The controller buttons the hints show. Auto: each controller's own (PlayStation, Switch, Steam Deck, else Xbox); or the same set for every controller.",
-        Preset => "Default draws at full quality; Steam Deck, Low and Phone trade detail for frame rate.",
+        Preset => "High draws at full quality with every speed-up off; Default looks the same with Fewer Shadows and Skip Off-Screen on; Steam Deck, Low and Phone trade detail for frame rate.",
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
@@ -597,7 +597,7 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
-        let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original);
+        let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original | Mesh | FewerShadows | Cull);
         let note = if preset {
             "Set by Preset. Changing it switches Preset to Custom."
         } else if o == MenuSize {
@@ -943,8 +943,8 @@ mod tests {
         }
     }
 
-    /// The preset steps through the presets; changing what it sets makes it Custom; Display and Show FPS survive a
-    /// preset change; Upscaled Textures takes Upscaled Downloads with it.
+    /// The preset steps through the presets (from Custom to the first, High); changing what it sets makes it Custom;
+    /// Display and Show FPS survive a preset change; Upscaled Textures takes Upscaled Downloads with it.
     #[test]
     fn presets_and_switches() {
         let d = Graphics::default();
@@ -953,12 +953,23 @@ mod tests {
         assert_eq!(s.1, Graphics::STEAM_DECK);
         s.step(Preset, -1);
         assert_eq!(s.1, d);
+        // B412: High before Default, and the speed-up switches are part of a preset
+        s.step(Preset, -1);
+        assert_eq!((s.1, s.value(Preset).as_str()), (Graphics::HIGH, "High"));
+        s.step(FewerShadows, 1);
+        assert_eq!((s.1.fewer_shadows, s.value(Preset).as_str()), (true, "Custom"));
+        s.step(Cull, 1);
+        assert_eq!(s.value(Preset), "Default");
+        s.step(Mesh, -1);
+        assert_eq!((s.1.mesh, s.value(Preset).as_str()), (75, "Custom"));
+        s.step(Mesh, 1);
+        assert_eq!(s.1, d);
         s.step(Scale, -1);
         assert_eq!((s.1.scale, s.value(Preset).as_str()), (85, "Custom"));
         s.step(Display, 1);
         s.step(ShowFps, 1);
         s.step(Preset, 1);
-        assert_eq!((s.1.windowed, s.1.show_fps, s.value(Preset).as_str(), s.value(Display).as_str()), (true, 1, "Default", "Window"));
+        assert_eq!((s.1.windowed, s.1.show_fps, s.value(Preset).as_str(), s.value(Display).as_str()), (true, 1, "High", "Window"));
         assert!(Settings::parse(&s.text()).1.show_fps == 1 && s.flags().contains(&"--show-fps".into()));
         s.step(Original, 1);
         assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
