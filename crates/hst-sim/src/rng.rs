@@ -5,8 +5,9 @@
 //! AI object is made), the court's (spectators, gallery, emitters) and the sound manager's (hit keys, ball bounces,
 //! stroke bits, hit-spark rolls, dive rings). A new point reseeds the shared and the court generator from `rand()` (in
 //! that order); the match start, a change of ends and a new point after a point's end then reseed the sound manager's.
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
+use crate::ps2::{self, F};
 use hst_data::{ani::{self, Anim}, iso::Iso, xb::Archive};
 
 /// The C library's `rand()`: a 64-bit LCG whose state is 1 at boot (the game never reseeds it); each call returns
@@ -76,7 +77,7 @@ impl Mt {
 
     /// A uniform in [0, 1): the word as an unsigned float times 2⁻³².
     pub fn unit(&mut self) -> f32 {
-        ps2::mul(ps2::utof(self.next()), 2.328_306_4e-10)
+        (F(ps2::utof(self.next())) * 2.328_306_4e-10).0
     }
 }
 
@@ -167,6 +168,7 @@ impl Rngs {
     /// manager's first reseed, `clouds` clouds are placed (`clouds`; the court's count for the first game's weather in
     /// singles, none in doubles), and the effects seed is drawn. Returns the effects seed (the effects' LCG restarts
     /// from it at every new point) and the clouds' draws.
+    #[allow(clippy::float_arithmetic)] // the flare's look-right plain f32 (see `Flare`); it is hashed, so it stays
     pub fn setup_rand(&mut self, clouds: usize) -> (u32, Vec<u32>) {
         // each ray: a brightness of `% 100` hundredths, then its angle: the 4096ths of a turn up to it (4096 / 24 = 170
         // each) jittered by `% 85 − 42`
@@ -221,6 +223,7 @@ impl Rngs {
 
     /// One tick of the sun's lens flare while the weather shows it (clear or cloudy): each of its 24 rays' brightness
     /// steps by a `rand() % 11 − 5` hundredth, kept in 0.25..=1.
+    #[allow(clippy::float_arithmetic)] // the flare's look-right plain f32 (see `Flare`); it is hashed, so it stays
     pub fn flare_tick(&mut self) {
         for b in &mut self.flare.bright {
             *b = (*b + ((self.rand.next() % 11) as f32 - 5.0) / 100.0).clamp(0.25, 1.0);
@@ -290,6 +293,7 @@ const DECAY: f32 = 0.96;
 const FADE: u32 = 14;
 const DEG: f32 = 0.017_453_292;
 
+#[allow(clippy::float_arithmetic)] // the menu's look-right plain f32 (see above)
 impl MenuFlame {
     /// The screen's setup: each particle starts alive when `% 3 != 0`, else when a second draw's `& 7 == 0`.
     pub fn new(r: &mut Rand) -> MenuFlame {
