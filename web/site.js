@@ -66,6 +66,9 @@ export async function landing(dir, hasPack) {
       resolve();
     };
     $('#playnow').onclick = go;
+    const auto = $('#autoplay');
+    auto.checked = get('hst-autoplay') === '1';
+    auto.onchange = () => put('hst-autoplay', auto.checked ? '1' : '0');
     for (const a of root.querySelectorAll('.band [data-have]')) a.onclick = e => { e.preventDefault(); go(); };
     importer(go);
   });

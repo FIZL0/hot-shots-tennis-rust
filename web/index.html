@@ -108,7 +108,10 @@
         </ol>
       </div>
     </div>
-    <div class="playnow" data-have hidden><button class="pill gold huge" id="playnow">Play</button></div>
+    <div class="playnow" data-have hidden>
+      <button class="pill gold huge" id="playnow">Play</button>
+      <label><input type="checkbox" id="autoplay"> Skip this page next time (<code>?site</code> brings it back)</label>
+    </div>
   </div></section>
 
   <section id="about"><div class="wrap">
@@ -452,11 +455,11 @@ if (q.has('forget')) {
 }
 // M96: the site (site.js) first on every visit, before any of the game is downloaded; it returns once a disc is
 // imported or Play is pressed. A reload in the same tab after that (the game's own: WebGL2 fallback, GPU lost, update)
-// goes straight back into the game, unless `?site`
+// goes straight back into the game, unless `?site`; so does every visit with the site's autoplay box ticked
 {
   const hasPack = await dir.getFileHandle('disc.pack').then(() => true, () => false);
   let playing = false;
-  try { playing = sessionStorage.getItem('hst-playing') === '1'; } catch {}
+  try { playing = sessionStorage.getItem('hst-playing') === '1' || localStorage.getItem('hst-autoplay') === '1'; } catch {}
   if (!hasPack || !playing || q.has('site')) {
     clearTimeout(stuck);
     boot.hidden = true;
