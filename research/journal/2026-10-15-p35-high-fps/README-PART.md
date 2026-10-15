@@ -94,3 +94,34 @@ umpire and HUD correctly; the shots are different moments (`--shot-at` is wall-c
   idle machine), so only the traced relative cost is reported.
 - Not run on WebGPU in a browser / Android / iOS; only the native Vulkan build ran (the dynamic-offset change is
   standard WebGPU).
+
+## P40 — per-frame mesh writes (2026-10-15)
+
+`noise::draw` (costume sway) and `vertex_patch::write` (its GPU writes):
+- **Sim rate**: the deformers step once a tick and the motion moves once a tick (every `Motion` writer runs in
+  FixedUpdate), so a rig's sway is redrawn only after its motion changed (`Ref<Motion>::is_changed`, kept in
+  `Sway::stale` across a Sway-LOD skip) or its noise stepped. Between ticks the vertices stay put. At ≤60 fps every
+  frame has a tick, so the output is the same as before. Above that, a vertex's bind-space offset ignores the pose's
+  sub-tick interpolation; that only reaches it through the blend of a multi-joint skin, under a millimetre.
+  Checked with a temporary counter at ~300 fps: about 60 redraws per second per rig.
+- **Per recompute**: each joint's posed rotation and its skin term (rotation × inverse bind) are computed once per
+  joint, not once per vertex entry. A run of vertices sharing a skin reuses its inverse. The math is the same, in the
+  same order.
+- **Uploads**: the queued writes share one byte buffer (no `Vec` per write, none per frame in the render world). Runs
+  up to 2 KB apart join into one `write_buffer` (it was 16 vertices). Frames with nothing queued return at once.
+
+Traced (`tools/profile.sh`, 4-bot doubles, court 1, 1280×800; shared machine, so take the ratios, not the fps):
+
+| | before (~80 fps traced) | after (~190–270 fps traced) |
+|---|---:|---:|
+| `hst::noise::draw` µs/frame | 169.6 | 32.8 |
+| `hst::vertex_patch::write` µs/frame | 125.6 | 25.7 |
+
+An intermediate run at ~80 fps (batching only, no joint cache) gave 159.9 / 80.3. Tables are in `context/perf/p40/`.
+`--shot` of the match (`context/perf/p40/match.png`): ponytails and skirts look right.
+
+### Not verified / not 1:1
+- Sway between ticks above 60 fps holds the tick's vertices: not compared side by side with the old every-frame
+  version in motion. It's rendering only and the difference is sub-mm by the argument above; no sim state is touched.
+- fps numbers come from a machine shared with other agents' builds and PCSX2 copies: only the before/after ratio of
+  the two systems is meaningful.
