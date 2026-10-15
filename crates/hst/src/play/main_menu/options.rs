@@ -30,6 +30,8 @@ pub(super) enum Opt {
     Ao,
     /// G3: bloom on the court's brightest parts (`Graphics::bloom`).
     Bloom,
+    /// G5: HDR tonemapping (`Graphics::hdr`).
+    Hdr,
     Fps,
     Vsync,
     Original,
@@ -86,7 +88,7 @@ pub(super) fn tab(page: Screen) -> usize {
 /// Renderer instead (B273).
 const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] } else { &[Display, Aspect, MenuSize, ShowFps, KeyHints, ButtonIcons, FewerShadows, BatchCrowd, MergeMeshes, SwayLod] };
 /// What a preset sets, then the textures.
-const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Fps, Vsync, Original, Mesh, Upscaled, Cull];
+const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Ao, Bloom, Hdr, Fps, Vsync, Original, Mesh, Upscaled, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
@@ -126,6 +128,7 @@ fn label(o: Opt) -> &'static str {
         Msaa => "Anti-aliasing",
         Ao => "Ambient Occlusion",
         Bloom => "Bloom",
+        Hdr => "HDR",
         Fps => "Frame Limit",
         Vsync => "VSync",
         Original => "Original Mode",
@@ -164,6 +167,7 @@ fn about(o: Opt) -> &'static str {
         Ao if locked(o) => "Ambient occlusion needs the WebGPU renderer.",
         Ao => "Not in the original: soft shade in corners and where things meet the ground (SSAO). Uses SMAA instead of MSAA for Anti-aliasing. Off in Original Mode.",
         Bloom => "Not in the original: a soft glow around the brightest parts of the court (sunlit lines, sky, glare). Off in Original Mode.",
+        Hdr => "Not in the original: the court keeps light brighter than the PS2 could show and rolls the brightest parts off smoothly instead of clipping them to flat white or yellow (tonemapping). Off in Original Mode.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
         MergeMeshes => "Draw all copies of each court prop as one mesh (same picture). Off unless it runs faster on your device; turning it on applies from the next match.",
@@ -281,6 +285,7 @@ impl Settings {
             Bloom => g.bloom = (g.bloom as isize + d).rem_euclid(BLOOM.len() as isize) as u8,
             Fps => g.fps = cycle(&FPS, g.fps, d),
             Vsync => g.vsync = !g.vsync,
+            Hdr => g.hdr = !g.hdr,
             Original => g.original = !g.original,
             Cull => g.cull = !g.cull,
             // Upscaled Downloads follows Upscaled Textures (B227)
@@ -337,6 +342,7 @@ impl Settings {
             Bloom => SHADOW_NAMES[g.bloom.min(2) as usize].into(),
             Fps => fps_name(g.fps),
             Vsync => on_off(g.vsync),
+            Hdr => on_off(g.hdr),
             Original => on_off(g.original),
             MergeMeshes => on_off(g.merge_meshes),
             Cull => on_off(g.cull),
@@ -620,7 +626,7 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     d.text("Changes apply right away", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
-        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Bloom | Fps | Vsync | Original);
+        let preset = matches!(o, Scale | Shadows | Msaa | Ao | Bloom | Hdr | Fps | Vsync | Original);
         let note = if preset {
             "Set by Preset. Changing it switches Preset to Custom."
         } else if o == MenuSize {

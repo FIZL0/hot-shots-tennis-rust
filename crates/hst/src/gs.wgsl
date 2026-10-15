@@ -231,7 +231,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
 #else
     // untextured: the GS draws VU1's 8-bit colour as it is (0x80 is 128 of 255, not 1.0 as MODULATE makes it)
+#ifdef GS_HDR
+    rgb = (rgb + spec * 255.0 / 128.0) * 128.0 / 255.0;
+#else
     rgb = min(rgb + spec * 255.0 / 128.0, vec3(255.0 / 128.0)) * 128.0 / 255.0;
+#endif
 #endif
     // alpha test on the 8-bit value
     let a8 = floor(a * 128.0);
@@ -256,7 +260,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef GS_LT80
     if a8 >= 128.0 { discard; }
 #endif
+#ifdef GS_HDR
+    // G5: the GS's 8-bit clamp left to the tonemapper, which rolls off what is brighter than 1 (hud_gamma.rs)
+    rgb = max(rgb, vec3(0.0));
+#else
     rgb = clamp(rgb, vec3(0.0), vec3(1.0));
+#endif
 #ifdef GS_AO
     // G1 (not the original's): the SSAO's visibility takes off the ambient share of the light, before the fog
     // (Bevy's GTAO reads ≈ 0.89 on the open, flat court seen from the match camera: that is 1, unoccluded)
@@ -286,6 +295,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     rgb = floor(floor(rgb * 255.0 + 1e-4) * a8 / 128.0) / 255.0;
 #endif
 #endif
-    // the scene holds gamma-encoded values, as the GS's frame buffer (hud_gamma.rs)
+    // the scene holds gamma-encoded values, as the GS's frame buffer (hud_gamma.rs; G5's HDR: past 1 too)
     return vec4(rgb, clamp(a, 0.0, 1.0));
 }

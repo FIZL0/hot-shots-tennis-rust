@@ -182,6 +182,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             }
             "--vsync" => gfx.vsync = true,
             "--original" => gfx.original = true,
+            "--hdr" => gfx.hdr = true,
             "--show-fps" => gfx.show_fps = 1,
             "--show-fps-detailed" => gfx.show_fps = 2,
             // B344: Sway LOD for the run (the browser's `?sway_lod=on`)
