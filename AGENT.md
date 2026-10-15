@@ -8,7 +8,7 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
   game program from the user's own GAME.BIN at documented offsets, after checking the disc is SCUS-97610 US 1.00.
   No code addresses, no game data in git.
   Second exception (user decision, 2026-10-15): a small curated set of promo screenshots of our own renderer (website,
-  README) may be committed, e.g. `web/shots/`; not texture sheets, raw captures or bulk dumps.
+  README) may be committed, in `docs/screenshots/`; not texture sheets, raw captures or bulk dumps.
 - Exactness: ported math uses `hst_sim::ps2` (PCSX2's EE FPU model: chop rounding, aligned adds) wherever the
   original's float results must match bit for bit.
 - Research: our own scripts and notes are in `research/` (in git: no game data, no decompiled code, no captures or
