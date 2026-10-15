@@ -14,7 +14,9 @@
 //!
 //! M102: the Android app's too (`tools/apk.sh`), where native touches arrive as `TouchInput` like the iPhone's; its safe
 //! area is the edge-to-edge window's system bars and camera cutout (`android.rs`), read by `widescreen` (M106), which
-//! fits the view into it too.
+//! fits the view into it too. B421: at the Aspect Ratio's Stretch the view takes the whole screen, notch and all; the
+//! pad's buttons still keep clear of the safe area (`Layout::new`), where a thumb would hit the island or the system's
+//! home gesture.
 //!
 //! M102: it draws on its own camera, straight on the window: the UI (`hud_gamma`) is drawn only into the Aspect
 //! Ratio's centred view, 16:9 by default on a phone, which would clip a pad laid out for the whole window (the
