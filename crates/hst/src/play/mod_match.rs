@@ -151,8 +151,8 @@ mod tests {
     fn umpires_are_on_the_roster_and_play_a_rally() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods"));
         let ump: Vec<Mod> = mods::list(root).into_iter().filter(|m| m.id.starts_with("hst_umpire_")).collect();
-        if !Path::new(ISO).is_file() || ump.is_empty() {
-            return eprintln!("no ISO or umpire mods under mods/, skipped");
+        if !Path::new(ISO).is_file() || ump.len() < 5 {
+            return eprintln!("no ISO or not all five umpire mods under mods/, skipped");
         }
         let ids: Vec<&str> = ump.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["hst_umpire_00_chika", "hst_umpire_01_suzuki", "hst_umpire_02_lily", "hst_umpire_03_robottennis", "hst_umpire_04_anna"]);

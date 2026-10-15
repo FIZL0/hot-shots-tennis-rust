@@ -88,6 +88,7 @@ Character select previews: cached PNGs in `cache/previews/<boot file>-r<N>/` bes
 
 Character select (B368, `play/main_menu/roster.rs`): one column per player (2 singles, 4 doubles), each with its seat's colours, header (seat, character, device), costume / hand pills, preview beside the play style and stats card, and its own face grid that scrolls on its own (keys/pad, the wheel or a drag over that column); △ does nothing. `HST_MENU=roster1..roster4` shoot 1–4 humans, `roster2-deep` 2P scrolled into the mods.
 `--mod DIR [--mod-slot N]` puts a standard character mod (README *Character mods*) in player N (default the first), costume by `--outfits`.
+Umpire mods (M8f3, `mods_umpire.rs`; mods repo `standard/HST-COURT-UMPIRE-STANDARD.md` §3): `kind: umpire` mods under `mods/` follow the disc five on Select Umpire (△ previews a call); `--umpire-mod DIR` plays one (its `donor` in the chair unless `--umpire` is given). The mod's `voice/<program>_<key>.wav` replaces the donor's take for that call, the donor's plays for the rest, and the donor's word lengths still time the match. Online, the room carries the mod's id (`--umpire-mod-id`): a peer that has it hears it, the others hear the donor. `HST_MENU=umpires-mod` / `confirm-umpire-mod` take screenshots of it.
 Gamepads whose device node is read-only (udev rules that strip write to stop rumble) work through the patched
 `third_party/gilrs-core` (read-only fallback, no rumble).
 

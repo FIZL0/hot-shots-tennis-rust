@@ -216,6 +216,11 @@ pub struct Room {
     pub games: i32,
     pub umpire: u8,
     pub seats: Vec<Option<Seat>>,
+    /// M8f3: the host's umpire mod (id, name); `umpire` is its donor, whose word lengths time the calls on every
+    /// peer. A peer with the mod installed hears it (`--umpire-mod-id`), one without hears the donor. None in a
+    /// vanilla lobby (`netplay::flags`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub umpire_mod: Option<(String, String)>,
     /// Set by the host at the start (M2g): the match's seed (the weather generator's, `main.rs`) and the input delay
     /// in ticks, from the slowest guest's measured round trip.
     #[serde(default)]
@@ -757,6 +762,8 @@ pub enum Cmd {
     /// In the lobby (B195): this machine's chosen picks for the seats it holds; the host's court, sets, games, umpire.
     Picks(Vec<Pick>),
     Venue(usize, usize, i32, u8),
+    /// M8f3: the host's umpire mod (id, name) alongside `Venue`'s umpire (its donor), or none.
+    UmpireMod(Option<(String, String)>),
     /// B201: this machine's players' places on the select; the host's computer player in a seat (`None` opens it);
     /// the host's singles (false) or doubles.
     Live(Vec<Live>),
@@ -1792,6 +1799,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
                 Some(Cmd::Venue(court, sets, games, umpire)) if starting.is_none() => {
                     (room.court, room.sets, room.games, room.umpire) = (court, sets, games, umpire);
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                    dirty = true;
+                }
+                Some(Cmd::UmpireMod(u)) if starting.is_none() && u != room.umpire_mod => {
+                    room.umpire_mod = u;
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                     dirty = true;

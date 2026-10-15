@@ -298,10 +298,16 @@ impl Menu {
         self.send_venue(out);
     }
 
+    /// M8f3: the host's umpire mod (id, name) to everyone, or none.
+    fn umpire_mod_fx(&self) -> Effect {
+        let u = self.umpire_mod_of(self.umpire as usize).map(|x| (x.id.clone(), x.name.clone()));
+        Effect::Online(Fx::Net(Cmd::UmpireMod(u)))
+    }
+
     /// The host's court, sets, games and umpire to everyone.
     fn send_venue(&mut self, out: &mut Vec<Effect>) {
         let (court, umpire) = self.venue();
-        out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Venue(court, self.sets, self.games, umpire)))]);
+        out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Venue(court, self.sets, self.games, umpire))), self.umpire_mod_fx()]);
     }
 
     /// The lobby's Court or Umpire pill (`i` 0 / 1): their select (the confirm screen's picker), back to the lobby
@@ -598,7 +604,7 @@ impl Menu {
     pub(super) fn online_host(&mut self, out: &mut Vec<Effect>) {
         self.go(Screen::Lobby, out);
         let (court, umpire) = self.venue();
-        out.push(Effect::Online(Fx::Net(Cmd::Venue(court, self.sets, self.games, umpire))));
+        out.extend([Effect::Online(Fx::Net(Cmd::Venue(court, self.sets, self.games, umpire))), self.umpire_mod_fx()]);
     }
 
     /// One device's presses on the Online screens.
@@ -1452,7 +1458,11 @@ fn settings_row(d: &mut Draw, m: &Menu, text: &super::Text, items: &[Item]) {
     let (court, sets, games, umpire) = if m.net.hosting { (m.court, m.sets, m.games, m.umpire as usize) } else { (r.court, r.sets, r.games, r.umpire as usize) };
     let values = [
         if court == super::COURTS { "Random".into() } else { text.msg(276 + 2 * court).to_string() },
-        if umpire == super::UMPIRES { "Random".into() } else { text.msg(669 + 2 * umpire).trim_start_matches("Umpire ").to_string() },
+        // M8f3: the host's umpire mod by its name (a guest without it hears the donor)
+        match r.umpire_mod.as_ref().filter(|_| !m.net.hosting && !r.vanilla) {
+            Some((_, name)) => name.clone(),
+            None => m.umpire_name(text, umpire),
+        },
         super::SETS.get(sets).copied().unwrap_or(1).to_string(),
         games.to_string(),
         if r.vanilla { "None" } else { "Allowed" }.to_string(),
