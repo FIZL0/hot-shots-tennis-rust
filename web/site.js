@@ -1,5 +1,5 @@
-// M96: the site (index.html #disc, site.css). Shown before a disc is imported, and with `?site` after (Settings &
-// files without starting the game). Nothing here loads the game's wasm: the ISO import is worker.js's, and Settings &
+// M96: the site (index.html #disc, site.css). Shown on every visit (with a disc imported, its play section is one
+// big Play button), and with `?site` from the game's error screen (Settings & files without starting the game). Nothing here loads the game's wasm: the ISO import is worker.js's, and Settings &
 // files reads and writes the same browser storage the game does (localStorage under the file names `crate::store`
 // uses, OPFS for the disc pack, mods, cards and reports). `landing` resolves once the game should start: a disc was
 // imported, or Play was pressed.
@@ -57,7 +57,8 @@ export async function landing(dir, hasPack) {
   stats();
   return new Promise(resolve => {
     const go = () => {
-      // `?site` dropped, so a reload goes into the game
+      // `?site` dropped and the tab marked, so a reload goes into the game
+      try { sessionStorage.setItem('hst-playing', '1'); } catch {}
       const q = new URLSearchParams(location.search);
       q.delete('site');
       history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}`);

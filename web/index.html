@@ -63,7 +63,8 @@
 <body>
 <input id="modzip" type="file" accept=".zip,application/zip" hidden aria-label="Add mod">
 <input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" aria-label="Lobby code">
-<!-- M96: the site (site.css, site.js): what the page shows before a disc is imported, and with `?site` after. -->
+<!-- M96: the site (site.css, site.js): the page every visit opens on; with a disc imported its play section is one Play
+     button. -->
 <div id="disc" hidden>
   <div class="discord"><div class="wrap">
     <span><b>OpenTennis has a Discord.</b> Find people to play, share mods, report bugs.</span>
@@ -84,17 +85,13 @@
   </div></header>
 
   <section id="play"><div class="wrap">
-    <div class="pick">
+    <div class="pick" data-new>
       <div class="panel">
-        <span class="head gold" data-new>Play in your browser</span>
-        <span class="head gold" data-have hidden>Your disc is ready</span>
-        <p data-new>Pick a disc image of your own copy of the game. OpenTennis copies what it needs (about 170 MB) into this
+        <span class="head gold">Play in your browser</span>
+        <p>Pick a disc image of your own copy of the game. OpenTennis copies what it needs (about 170 MB) into this
           browser's storage once. Nothing is uploaded, and after that you don't need the ISO.</p>
-        <p data-have hidden>This browser already holds the game's data from your disc. Play goes straight to the main
-          menu.</p>
-        <label class="pill gold big" for="iso" data-new>Pick your ISO</label>
-        <input id="iso" type="file" accept=".iso" data-new>
-        <button class="pill gold big" id="playnow" data-have hidden>Play</button>
+        <label class="pill gold big" for="iso">Pick your ISO</label>
+        <input id="iso" type="file" accept=".iso">
         <div class="progress" hidden><i></i></div>
         <p id="status" role="status"></p>
         <div class="needs">
@@ -111,6 +108,7 @@
         </ol>
       </div>
     </div>
+    <div class="playnow" data-have hidden><button class="pill gold huge" id="playnow">Play</button></div>
   </div></section>
 
   <section id="about"><div class="wrap">
@@ -452,11 +450,14 @@ if (q.has('forget')) {
   location.search = q.toString();
   await new Promise(() => {});
 }
-// M96: no disc imported yet, or `?site`: the site (site.js), before any of the game is downloaded; it returns once a
-// disc is imported or Play is pressed
+// M96: the site (site.js) first on every visit, before any of the game is downloaded; it returns once a disc is
+// imported or Play is pressed. A reload in the same tab after that (the game's own: WebGL2 fallback, GPU lost, update)
+// goes straight back into the game, unless `?site`
 {
   const hasPack = await dir.getFileHandle('disc.pack').then(() => true, () => false);
-  if (!hasPack || q.has('site')) {
+  let playing = false;
+  try { playing = sessionStorage.getItem('hst-playing') === '1'; } catch {}
+  if (!hasPack || !playing || q.has('site')) {
     clearTimeout(stuck);
     boot.hidden = true;
     const { landing } = await import('./site.js');
