@@ -181,7 +181,7 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
         let w = if rise >= 0.0 { (rise / (F(7.0) * 0.017453292)).min(1.0) } else { F::ZERO };
         if w != 0.0 {
             let k = w * (1.0 - (rise.abs() / 1.05).min(1.0));
-            speed = (F::ZERO + speed).madd(k * high * near, slowest - speed);
+            speed = (F::ZERO + speed).madd(k * (F(high) * near), slowest - speed);
         }
     }
     // the frames' last step is the same lerp idiom as `frames_plane`'s

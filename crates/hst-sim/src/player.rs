@@ -4,7 +4,7 @@
 #![deny(clippy::float_arithmetic)]
 
 use crate::libm::acosf;
-use crate::ps2::{F, f, f32s, fs};
+use crate::ps2::{F, chop, f, f32s, fs};
 
 /// A character's movement stats (TParam.csv: SPE, Agili, STA, and the stamina a dive / backhand / smash costs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -27,7 +27,8 @@ impl Stats {
     pub fn new(spe: i32, agility: i32, stamina: i32, [dive, backhand, smash]: [i32; 3], weather: u8) -> Self {
         // the game's integer ×150/100 in weather 2 and 3
         let agility = if weather.wrapping_sub(2) < 2 { agility * 150 / 100 } else { agility };
-        Stats { speed: (F(spe as f32) / 10.0).0, agility, stamina, dive, backhand, smash }
+        // the FPU's int-to-float chops too (only shows past 2^24)
+        Stats { speed: (F(chop(spe as f64)) / 10.0).0, agility, stamina, dive, backhand, smash }
     }
 }
 
@@ -569,13 +570,13 @@ pub fn pad_held(b: u8) -> i32 {
 
 /// A human's run direction (game x, z) from the pad: the left stick (`lx`, `ly` bytes, 0x80 centre; bytes ≥ 0x81 drop
 /// by one, so the centre itself reads a hair right/down) rescaled past a 48/127 dead square, or the d-pad (`buttons`
-/// active-high: 0x10 up, 0x20 right, 0x40 down, 0x80 left; right and up win) when both axes sit inside |48|; then
-/// ×1.2, clipped to length 1. Zero outside serve, rally and point-over (phases 2–4). The camera on the +z side flips
-/// it by π about y — not done here (callers negate).
+/// active-high: 0x10 up, 0x20 right, 0x40 down, 0x80 left; right and up win) when both axes sit within |48| (±48
+/// included: the rescaled stick is exactly zero there); then ×1.2, clipped to length 1. Zero outside serve, rally
+/// and point-over (phases 2–4). The camera on the +z side flips it by π about y — not done here (`turned`).
 pub fn pad_dir(buttons: u16, lx: u8, ly: u8, phase: u8) -> [f32; 2] {
     let axis = |b: u8| b as i32 - (b >= 0x81) as i32 - 0x7f;
     let (ix, iy) = (axis(lx), axis(ly));
-    let (mut x, mut z) = if ix.abs() < 48 && iy.abs() < 48 {
+    let (mut x, mut z) = if ix.abs() <= 48 && iy.abs() <= 48 {
         let (r, l, u, d) = (buttons & 0x20 != 0, buttons & 0x80 != 0, buttons & 0x10 != 0, buttons & 0x40 != 0);
         let x = f(if r { 1.0 } else if l { -1.0 } else { 0.0 });
         let z = f(if u { 1.0 } else if d { -1.0 } else { -0.0 });
@@ -601,6 +602,12 @@ pub fn pad_dir(buttons: u16, lx: u8, ly: u8, phase: u8) -> [f32; 2] {
     }
     // the camera matrix (identity) turns −0 into +0
     if (2..=4).contains(&phase) { f32s([x + 0.0, z + 0.0]) } else { [0.0, 0.0] }
+}
+
+/// `pad_dir` seen from a camera on the +z side: turned by π about y. The camera matrix's product leaves the same
+/// values negated, but a zero comes out +0, not −0.
+pub fn turned([x, z]: [f32; 2]) -> [f32; 2] {
+    f32s([-f(x) + 0.0, -f(z) + 0.0])
 }
 
 /// One frame of the server before the toss (play state 1): `dir` is the run direction (`pad_dir`, or a bot's), and

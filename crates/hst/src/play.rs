@@ -2348,7 +2348,8 @@ fn pad_run(g: &Game, i: usize, stick: Vec2, dpad: u16) -> Vec2 {
     };
     let [x, z] = loco::pad_dir(dpad, byte(stick.x), byte(-stick.y), phase);
     if own_camera::flipped(g, i) {
-        Vec2::new(-x, -z)
+        let [x, z] = loco::turned([x, z]);
+        Vec2::new(x, z)
     } else {
         Vec2::new(x, z)
     }
