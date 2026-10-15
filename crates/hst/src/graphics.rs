@@ -196,7 +196,9 @@ pub fn plugin(app: &mut App) {
         .add_systems(PreStartup, mesh_detail)
         .add_systems(First, mesh_detail)
         .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), fps_counter))
-        .add_systems(Last, limit);
+        .add_systems(Last, limit)
+        .add_systems(PreStartup, cpu_clusters)
+        .add_systems(PostUpdate, unclustered.before(bevy::light::SimulationLightSystems::AssignLightsToClusters));
     // Show FPS → Detailed: where the frame's time goes (`frame_start`)
     use bevy::app::RunFixedMainLoopSystems as F;
     app.init_resource::<Split>()
@@ -472,6 +474,38 @@ fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>
     let m = Msaa::from_samples(if (cfg!(all(target_arch = "wasm32", feature = "webgpu")) || no_2x) && g.msaa == 2 { 4 } else { g.msaa });
     for mut c in &mut q {
         c.set_if_neq(m);
+    }
+}
+
+/// P42: the game lights everything with one directional light and ambient; no point or spot light, light probe or
+/// clustered decal is ever spawned (not by effects either), so Bevy's light clustering only costs time: its GPU path
+/// built each 3D camera's cluster buffers anew every frame (`prepare_clusters_for_gpu_clustering`, ~250 µs traced)
+/// and ran five clustering passes. CPU clustering (what Android and WebGL2 use anyway) with `ClusterConfig::None`
+/// on the cameras does nothing per frame. The setting is read every frame, so switching it before the first is enough.
+fn cpu_clusters(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
+    if let Some(mut s) = settings {
+        s.gpu_clustering = None;
+    }
+}
+
+/// A 3D camera whose clustering `unclustered` turned off.
+#[derive(Component)]
+struct Unclustered;
+
+/// No clusters for the 3D cameras while nothing clusterable exists; if a mod or later feature spawns a point/spot
+/// light, probe or decal, the cameras get Bevy's default clustering back (and lose it again when it's gone).
+fn unclustered(
+    mut commands: Commands,
+    cams: Query<(Entity, Has<Unclustered>), With<Camera3d>>,
+    lit: Query<(), Or<(With<PointLight>, With<SpotLight>, With<bevy::light::LightProbe>, With<bevy::light::ClusteredDecal>)>>,
+) {
+    let none = lit.is_empty();
+    for (e, off) in &cams {
+        if none && !off {
+            commands.entity(e).insert((bevy::light::cluster::ClusterConfig::None, Unclustered));
+        } else if !none && off {
+            commands.entity(e).insert(bevy::light::cluster::ClusterConfig::default()).remove::<Unclustered>();
+        }
     }
 }
 
