@@ -646,6 +646,7 @@ fn load(
             acc: Vec::new(),
             clo: Vec::new(),
             last: None,
+            mix: None,
         };
         let (list, plants) = court_layout(&mut iso, n as usize).expect("court layout");
         // the court load shifts the hole model's vertex colours in HSL by the court's and the hole's envir

@@ -12,9 +12,10 @@ use super::{panel, Figure, Game, Phase};
 use crate::character::Rig;
 use crate::weather::Weather;
 use crate::Args;
+use hst_sim::flow::CHANGE_ENDS;
 
 pub fn plugin(app: &mut App) {
-    app.add_plugins(rain::plugin).add_systems(PostStartup, setup.after(super::setup)).add_systems(FixedUpdate, step).add_systems(Update, blobs);
+    app.add_plugins(rain::plugin).add_systems(PostStartup, setup.after(super::setup)).add_systems(FixedUpdate, step).add_systems(Update, (blobs, fade.before(crate::weather::apply)));
 }
 
 /// A player's rain blob.
@@ -67,3 +68,40 @@ fn step(mut g: ResMut<Game>, w: Option<ResMut<Weather>>, mut clear: Local<Vec<i3
         p.stats.agility = if rain { a * 150 / 100 } else { *a };
     }
 }
+
+/// B360 (user 2026-10-15): the original switches the court's look in one frame when the next game's weather lands
+/// on the first point set-up after a change of ends (B377), which shows as the whole picture brightening or
+/// darkening. The picture fades into the new game's look over the change of ends instead and holds it until the
+/// weather lands. Only the look: `Weather` and the sim keep the original's timing.
+fn fade(g: Res<Game>, w: Option<Res<Weather>>, f: Option<ResMut<crate::weather::Fade>>) {
+    let (Some(w), Some(mut f)) = (w, f) else { return };
+    let game = g.score.games_played as usize;
+    let mix = match g.phase {
+        Phase::ChangeEnds(n) => Some((Weather { game, ..w.clone() }.today().weather, weight(n))),
+        // the change of ends is over but its point hasn't been set up yet
+        _ if w.game != game => f.0.map(|(to, _)| (to, 1.0)),
+        _ => None,
+    };
+    f.set_if_neq(crate::weather::Fade(mix));
+}
+
+/// How far the look has faded at change-ends tick `n` (counting down to 0): eased in and out, 0 on the phase's
+/// first tick, 1 on its last.
+fn weight(n: u32) -> f32 {
+    let t = 1.0 - n.min(CHANGE_ENDS) as f32 / CHANGE_ENDS as f32;
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_fade_runs_over_the_change_of_ends() {
+        assert_eq!(weight(CHANGE_ENDS), 0.0);
+        assert_eq!(weight(0), 1.0);
+        assert_eq!(weight(CHANGE_ENDS / 2), 0.5);
+        assert!((0..CHANGE_ENDS).all(|n| weight(n) > weight(n + 1)));
+    }
+}
+
