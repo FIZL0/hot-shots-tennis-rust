@@ -6,7 +6,8 @@ The goal is the same game: the same ball physics, rules, timing and AI, ported f
 frame by frame against the real game, with better rendering on top.
 
 **Play in your browser: <https://opentennis.dev>** (you pick your own ISO; nothing is uploaded).
-Newest unreleased build (every change to main, less tested): <https://beta.opentennis.dev>.
+
+-- Newest unreleased build (every change to main, less tested): <https://beta.opentennis.dev>.
 
 Work in progress. `PLAN.md` holds the rules, `plan/TODO.md` the open tasks, `plan/DONE.md` the finished ones; `plan/REFERENCE.md` lists what works.
 
