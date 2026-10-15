@@ -791,11 +791,10 @@ fn draw(
             Tex::Result(k) => &art.0[9 + k as usize],
         };
         let [u, v, w, h] = quad.src;
-        img.image = handle.clone();
         // B160: a face is its whole image (INPANE's 64×64, or a baked one's larger square)
-        img.rect = (!matches!(quad.tex, Tex::Face(_))).then(|| Rect::new(u, v, u + w, v + h));
+        let rect = (!matches!(quad.tex, Tex::Face(_))).then(|| Rect::new(u, v, u + w, v + h));
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
-        img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
+        crate::ui_pool::paint(&mut img, handle.clone(), rect, Color::srgba(r, g, b, quad.alpha / 128.0));
         let [x, y, w, h] = quad.dst;
         crate::play::widescreen::put(&mut node, x / 6.4, y / 4.48, w / 6.4, h / 4.48);
         vis.set_if_neq(Visibility::Inherited);
@@ -1433,9 +1432,7 @@ fn draw_banners(g: Res<Game>, art: Option<Res<BannerArt>>, mut q: Query<(&Banner
             BannerTex::Match => 6,
             BannerTex::Set => 7,
         };
-        img.image = art.0[k].clone();
-        img.rect = Some(Rect::new(u, v, u + w, v + h));
-        img.color = Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0);
+        crate::ui_pool::paint(&mut img, art.0[k].clone(), Some(Rect::new(u, v, u + w, v + h)), Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0));
         crate::play::widescreen::put(&mut node, x / 6.4, y / 4.48, dw / 6.4, dh / 4.48);
         vis.set_if_neq(Visibility::Inherited);
     }
@@ -1694,9 +1691,7 @@ fn draw_speed(
             vis.set_if_neq(Visibility::Hidden);
             continue;
         };
-        img.image = art.0.clone();
-        img.rect = Some(Rect::new(u, v, u + w, v + h));
-        img.color = Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0);
+        crate::ui_pool::paint(&mut img, art.0.clone(), Some(Rect::new(u, v, u + w, v + h)), Color::srgba(1.0, 1.0, 1.0, alpha as f32 / 128.0));
         // every quad of a readout is on its side of the centre, so they all pin to the same edge
         let (left, width) = super::widescreen::pin(x, dw, share);
         let (top, height) = super::widescreen::vplace(y, dh, aspect, super::widescreen::Anchor::Sides);

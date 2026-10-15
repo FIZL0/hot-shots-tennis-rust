@@ -447,7 +447,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Serving>()
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(FixedUpdate, tick.after(super::simulate))
-        .add_systems(Update, (ceremony::begin, step, draw, draw_banner).chain())
+        .add_systems(Update, (ceremony::begin, step, pool, draw, draw_banner).chain())
         .add_systems(Update, legend.after(step))
         .add_systems(Update, ceremony::pose.after(crate::character::animate).after(crate::character::uv_offsets).before(crate::character::texture_faces))
         .add_systems(PostUpdate, ceremony::hide.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
@@ -511,16 +511,17 @@ fn setup(
     commands
         .spawn((super::widescreen::screen_43(), GlobalZIndex(11), Root))
         .with_children(|p| {
-            for i in 0..POOL {
-                p.spawn((
-                    Slot(i),
-                    ImageNode { image_mode: NodeImageMode::Stretch, ..default() },
-                    Node { position_type: PositionType::Absolute, ..default() },
-                    Visibility::Hidden,
-                ));
-            }
+            // the quads go in ahead of these while the screen is up (`pool`)
             super::name_tags::pool(p, super::name_tags::RESULT);
         });
+}
+
+/// P39: the screen's quads once the match has a result (the ceremony, then the pages), none in play: UI layout walks
+/// hidden nodes too.
+fn pool(mut commands: Commands, g: Res<Game>, root: Query<Entity, (With<Root>, Without<Fade>)>, slots: Query<Entity, With<Slot>>) {
+    for r in &root {
+        crate::ui_pool::keep(&mut commands, r, g.match_stats.result.is_some(), &slots, POOL, |i| (Slot(i), crate::ui_pool::quad()));
+    }
 }
 
 /// The last tick was in the serve.
@@ -716,7 +717,7 @@ fn draw(
     mut fade: Query<&mut BackgroundColor, With<Fade>>,
 ) {
     for mut c in &mut fade {
-        c.0 = Color::BLACK.with_alpha(screen.leaving.map_or(0.0, |t| (t as f32 / 60.0).min(1.0)));
+        c.set_if_neq(BackgroundColor(Color::BLACK.with_alpha(screen.leaving.map_or(0.0, |t| (t as f32 / 60.0).min(1.0)))));
     }
     let (Some(art), Some(panel_art), Some(board_art), Some(colours)) = (art, panel_art, board_art, colours) else {
         return;

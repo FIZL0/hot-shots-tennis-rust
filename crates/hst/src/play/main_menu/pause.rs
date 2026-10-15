@@ -190,10 +190,8 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     commands.insert_resource(Menu { screen: Screen::Display, ..default() });
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     // over the pause screen (`GlobalZIndex(10)`)
+    // the quads only while it's up (`pool`)
     commands.spawn((full, GlobalZIndex(11), Visibility::Hidden, Root)).with_children(|p| {
-        for i in 0..POOL_HERE.min(POOL) {
-            p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
-        }
         let clip = Node { position_type: PositionType::Absolute, overflow: Overflow::clip(), ..default() };
         p.spawn((TickerClip, clip, ZIndex(POOL_HERE as i32), Visibility::Hidden)).with_child((
             bevy::ui::widget::Text::new(""),
@@ -239,6 +237,14 @@ fn opened(
     }
     for mut v in &mut root {
         v.set_if_neq(if ps.open { Visibility::Inherited } else { Visibility::Hidden });
+    }
+}
+
+/// P39: the overlay's quads while it's up, none while it's hidden (UI layout walks hidden nodes too).
+fn pool(mut commands: Commands, root: Query<(Entity, &Visibility), With<Root>>, slots: Query<(Entity, &ChildOf), With<Slot>>) {
+    for (r, v) in &root {
+        let have = slots.iter().filter(|(_, p)| p.parent() == r).map(|(e, _)| e);
+        crate::ui_pool::keep(&mut commands, r, *v != Visibility::Hidden, have, POOL_HERE.min(POOL), |i| (Slot(i), crate::ui_pool::quad()));
     }
 }
 
@@ -411,11 +417,16 @@ fn notice_layout(text: &Text, n: &OnlineNotice) -> (Vec<super::Quad>, Vec<[f32; 
 fn notice_setup(mut commands: Commands) {
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     // over the match's HUD, under the pause screen (which hides this root while it's up, as it did the plain text)
-    commands.spawn((full, GlobalZIndex(9), NoticeRoot)).with_children(|p| {
-        for i in 0..NOTICE_POOL {
-            p.spawn((NoticeSlot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
-        }
-    });
+    // the quads only while a notice is up (`notice_pool`)
+    commands.spawn((full, GlobalZIndex(9), NoticeRoot));
+}
+
+/// P39: the notice's quads while one is up (or `HST_NOTICE` asks for one), none otherwise.
+fn notice_pool(mut commands: Commands, n: Res<OnlineNotice>, root: Query<Entity, With<NoticeRoot>>, slots: Query<Entity, With<NoticeSlot>>, mut env: Local<Option<bool>>) {
+    let env = *env.get_or_insert_with(|| std::env::var_os("HST_NOTICE").is_some());
+    for r in &root {
+        crate::ui_pool::keep(&mut commands, r, env || !n.text.is_empty(), &slots, NOTICE_POOL, |i| (NoticeSlot(i), crate::ui_pool::quad()));
+    }
 }
 
 /// Draws [`OnlineNotice`]; the mouse over a pill chooses it, a click or tap on it answers (sound 0 on a move).
@@ -459,7 +470,7 @@ fn notice_draw(
             continue;
         };
         let three_d = cursor.as_ref().filter(|_| quad.tex == Tex::Cursor);
-        img.image = match (three_d, quad.tex) {
+        let image = match (three_d, quad.tex) {
             (Some(c), _) => c.image.clone(),
             (_, Tex::Solid) => art.0[0].clone(),
             (_, Tex::Font) => art.0[1].clone(),
@@ -467,9 +478,9 @@ fn notice_draw(
             _ => art.0[2].clone(),
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && three_d.is_none()).then(|| Rect::new(u, v, u + w, v + h));
+        let rect = (quad.tex != Tex::Solid && three_d.is_none()).then(|| Rect::new(u, v, u + w, v + h));
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
-        img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
+        crate::ui_pool::paint(&mut img, image, rect, Color::srgba(r, g, b, quad.alpha / 128.0));
         let [mut x, mut y, mut w, mut h] = quad.dst;
         if three_d.is_some() {
             // the hand's image covers `PAD` times its quad, around the same centre (B146)
@@ -478,7 +489,7 @@ fn notice_draw(
         }
         let (left, width) = widescreen::place(x, w, share, quad.anchor);
         let (top, height) = widescreen::vplace(y, h, aspect, quad.anchor);
-        (node.left, node.top, node.width, node.height) = (Val::Percent(left), Val::Percent(top), Val::Percent(width), Val::Percent(height));
+        widescreen::put(&mut node, left, top, width, height);
         vis.set_if_neq(Visibility::Inherited);
     }
 }
@@ -498,10 +509,10 @@ pub(in crate::play) fn plugin(app: &mut App) {
         .init_resource::<super::mods_screen::Shelf>()
         .init_resource::<OnlineNotice>()
         .add_systems(PostStartup, (setup, notice_setup))
-        .add_systems(Update, notice_draw.after(Systems))
+        .add_systems(Update, (notice_pool, notice_draw).chain().after(Systems))
         .add_systems(
             Update,
-            (opened, fit, super::pointer::pointer.run_if(live), super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
+            (opened, pool, fit, super::pointer::pointer.run_if(live), super::step.run_if(live), after, (super::draw, super::ticker_text).run_if(open))
                 .chain()
                 .in_set(Systems),
         )

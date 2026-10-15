@@ -55,6 +55,8 @@ mod shadow;
 mod spring;
 mod stall;
 mod textures;
+mod ui_census;
+mod ui_pool;
 mod update;
 mod vertex_patch;
 mod weather;
@@ -423,6 +425,9 @@ fn start(argv: Vec<String>) {
     #[cfg(target_os = "android")]
     app.add_plugins(android_pad::plugin);
     app.add_systems(Update, (character::texture_faces.after(character::animate), character::uv_offsets));
+    if std::env::var_os("HST_UI_CENSUS").is_some() {
+        app.add_plugins(ui_census::plugin);
+    }
     if std::env::var_os("HST_FPS").is_some() {
         app.add_systems(Last, (log_fps, log_assets)).add_plugins(stall::plugin);
     }

@@ -511,6 +511,7 @@ fn fps_counter(
     mut split: ResMut<Split>,
     meshes: Query<(&ViewVisibility, Has<bevy::light::NotShadowCaster>), With<Mesh3d>>,
     adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
+    (time, mut since): (Res<Time<Real>>, Local<f32>),
 ) {
     let Ok((e, mut text, mut font)) = q.single_mut() else {
         if g.show_fps > 0 {
@@ -532,10 +533,15 @@ fn fps_counter(
     }
     let fps = d.get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS).and_then(|f| f.smoothed()).unwrap_or(0.0);
     let [frame, game, sim, prep, enc, sub, worst, n, acquire, ..] = split.0;
+    *since += time.delta_secs();
+    // P39: four times a second, not every frame: a new string is a text layout and a UI layout pass
     if g.show_fps == 1 {
-        let s = format!("{fps:.0} FPS");
-        if text.0 != s {
-            text.0 = s;
+        if *since >= 0.25 {
+            *since = 0.0;
+            let s = format!("{fps:.0} FPS");
+            if text.0 != s {
+                text.0 = s;
+            }
         }
     } else if frame >= 500.0 {
         let a = |v: f32| v / n;

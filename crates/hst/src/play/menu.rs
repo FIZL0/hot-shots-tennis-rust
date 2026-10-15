@@ -497,7 +497,7 @@ pub fn plugin(app: &mut App) {
         // every sound from here on is the match's until the mode is torn down (`mode.rs`), held while paused
         .add_systems(PreStartup, |s: Option<Res<Sound>>| s.iter().for_each(|s| s.begin_match()))
         .add_systems(PostStartup, setup.after(super::setup))
-        .add_systems(Update, (step.after(super::read_input), draw).chain().before(super::main_menu::pause::Systems))
+        .add_systems(Update, (step.after(super::read_input), pool, draw).chain().before(super::main_menu::pause::Systems))
         // B179: the main menus' 3D hand (`cursor.ani`) points here and on the Settings screens over the match
         .add_systems(Startup, super::main_menu::cursor::setup)
         .add_systems(Update, super::main_menu::cursor::tick.after(draw))
@@ -551,17 +551,14 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             GlobalZIndex(10),
             Root,
-        ))
-        .with_children(|p| {
-            for i in 0..POOL {
-                p.spawn((
-                    Slot(i),
-                    ImageNode { image_mode: NodeImageMode::Stretch, ..default() },
-                    Node { position_type: PositionType::Absolute, ..default() },
-                    Visibility::Hidden,
-                ));
-            }
-        });
+        ));
+}
+
+/// P39: the menu's quads while it's open (`pool`), none in play: UI layout walks hidden nodes too.
+fn pool(mut commands: Commands, menu: Res<Menu>, root: Query<Entity, With<Root>>, slots: Query<Entity, With<Slot>>) {
+    for r in &root {
+        crate::ui_pool::keep(&mut commands, r, menu.open, &slots, POOL, |i| (Slot(i), crate::ui_pool::quad()));
+    }
 }
 
 /// Reads Start/✕/up/down (and clicks or taps on the pills), steps the menu at 60 Hz and holds the match's fixed clock

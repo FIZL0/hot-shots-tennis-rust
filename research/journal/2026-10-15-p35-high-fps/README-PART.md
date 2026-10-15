@@ -125,3 +125,49 @@ An intermediate run at ~80 fps (batching only, no joint cache) gave 159.9 / 80.3
   version in motion. It's rendering only and the difference is sub-mm by the argument above; no sim state is touched.
 - fps numbers come from a machine shared with other agents' builds and PCSX2 copies: only the before/after ratio of
   the two systems is meaningful.
+## P39 — UI layout every frame (2026-10-15)
+
+Cause: Bevy 0.19's `ui_layout_system`, `ui_stack_system`, `update_clipping_system` and `ui_focus_system` walk
+**every** UI node each frame, hidden (`Visibility::Hidden`) or not; taffy's cache only saves the measuring. So their cost
+is the node count, and a match carried the overlays' quad pools all the time. New `HST_UI_CENSUS=1`
+(`crates/hst/src/ui_census.rs`): every 5 s, nodes per UI root and per-frame changes (Node, Text, ImageNode, …).
+In a 4-bot doubles match: **3790 nodes**:
+
+| nodes | root |
+|---:|---|
+| 1601 | online notice pool (`pause.rs` `NoticeRoot`), empty unless a netplay notice is up |
+| 1403 | pause Settings overlay pool (`pause.rs` `Root`), hidden |
+| 409 | result screen pool + name tags (`match_stats.rs`) |
+| 201 | pause menu pool (`menu.rs`) |
+| 176 | the HUD itself (panel, pop-ups, speed, key hints, …) |
+
+Per-frame changes were few: the panel/pop-up/speed quads re-set `ImageNode` (~12/frame), the result screen's fade
+re-set its `BackgroundColor` every frame, the FPS counter rewrote its text on each smoothed-fps change.
+
+Fix:
+- `crates/hst/src/ui_pool.rs`: `keep` spawns a pool's slots under its root (ahead of the root's other children, so the
+  result screen's name tags stay on top) while its screen is up and despawns them when it goes; chained before the
+  draw, so the first frame is drawn. Used by the pause menu (`menu.open`), its Settings overlay (root shown), the
+  result screen (`match_stats.result` set: ceremony + pages) and the online notice (text set or `HST_NOTICE`).
+  `paint` writes a quad's image/rect/tint only when one changed: panel, pop-ups, banner, serve speed, notice.
+- result fade: `set_if_neq`.
+- `main_menu::cursor::tick`: no hand on screen → no wag stepping/posing of the 3D hand (it restarts on showing, as before).
+- FPS counter (On): text refreshed 4×/s instead of every frame.
+
+Result: **190 UI nodes** in play (3790); per-frame changes ~0. Traced (`tools/profile.sh`, 15 s, the same busy
+machine for both, other agents building): `ui_layout_system` **435 → 48 µs/frame**, `ui_stack` 93, `update_clipping`
+53, `ui_focus` 48, `cursor::tick` 34, `propagate_inherited<ComputedUiRenderTargetInfo>` 33 → all under the table's
+28 µs cut-off. Profiles: `context/perf/p39/{before,after}.txt`.
+
+Checked by eye (`tools/shot.sh`, `context/perf/p39/`): pause menu (`HST_PAUSE`), its Graphics page
+(`HST_PAUSE_SETTINGS`), the online notice with pills (`HST_NOTICE`/`_ASK`), the ceremony and the stats page
+(`HST_STATS`, `_PAGE`) all draw as before; stats page compared with the old binary: same (incl. its existing
+"pts" overlapping the rating digits, not from this change).
+
+### Not verified / not 1:1
+- No pixel diff for the pause, Settings, notice and ceremony shots: checked by eye only (front-end/presentation, not
+  gameplay; `--shot-at` is wall-clock). Only the stats page was put next to an old-binary shot.
+- Opening the pause menu / Settings now spawns 200 / 1400 entities that frame (and despawns them on close): not
+  timed separately; not seen as a hitch in the shots' runs.
+- Absolute fps not compared: other agents loaded the CPU (bench ~100–160 fps both builds); only traced relative cost.
+- Not run on wasm/iOS/Android; the change is plain ECS, no platform code.

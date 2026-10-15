@@ -641,11 +641,10 @@ fn draw(
             .unwrap(),
         };
         let [u, v, w, h] = quad.src;
-        img.image = art.0[tex].clone();
         // B160: a face is its whole image (INPANE's 64×64, or a baked one's larger square)
-        img.rect = (!matches!(quad.tex, Tex::Face(_))).then(|| Rect::new(u, v, u + w, v + h));
+        let rect = (!matches!(quad.tex, Tex::Face(_))).then(|| Rect::new(u, v, u + w, v + h));
         let [r, g, b] = quad.rgb.map(|c| c / 128.0);
-        img.color = Color::srgba(r, g, b, quad.alpha / 128.0);
+        crate::ui_pool::paint(&mut img, art.0[tex].clone(), rect, Color::srgba(r, g, b, quad.alpha / 128.0));
         let [x, y, w, h] = quad.dst;
         let (left, width) = super::widescreen::pin(x, w, share);
         let (top, height) = super::widescreen::vplace(y, h, aspect, super::widescreen::Anchor::Sides);
