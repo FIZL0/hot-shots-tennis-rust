@@ -60,6 +60,10 @@ block2 = "0.6"
 wgpu = "29"
 raw-window-handle = "0.6"
 
+# M99: the Android start page's file picker and restart (`android.rs` → `android/…/HstActivity.java`)
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
