@@ -68,10 +68,12 @@ pub fn to_matrix(q: V4) -> M4 {
 
 /// Quaternion slerp from `a` (t = 0) to `b` (t = 1).
 pub fn slerp(a: V4, b: V4, t: f32) -> V4 {
-    if t == 1.0 {
+    // the FPU's compares read a denormal t as zero
+    let te = ps2_float::fpu::operand(t.to_bits());
+    if te == 1.0 {
         return b;
     }
-    if t == 0.0 {
+    if te == 0.0 {
         return a;
     }
     let (fa, fb) = (fs(a), fs(b));

@@ -644,6 +644,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B440** Rematch default selection: when returning to the menu after a match, "rematch" should not be selected by default; the default selection should be local (user 2026-10-15) → crates/hst/src/play/match_stats.rs · crates/hst/src/play/main_menu/home.rs · crates/hst/src/play/main_menu/cursor.rs
 - [x] **B427** Singles / Doubles pill button hint (user 2026-10-15): the top-right mode pill shows its button glyph (□ / X / Tab per device) like the Costume LB/RB and Hand chips do → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/legend.rs
 - [x] **B426** Roster mod tiles missing (user 2026-10-15, phone portrait): the 'Hot Shots Golf Fore! 5' heading shows under the Hot Shots Tennis rows but no tiles under it although there's room, so players can't tell there are more characters; find whether the lines on view stop at the heading or the mod previews never draw, and fix → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/play/main_menu/previews.rs
+- [x] **T2** Direct tests for untested sim modules: oracle tests (>=10k inputs, to_bits) for `hst-sim/src/contact.rs` plane sweep and `quat.rs` matrix<->quat/slerp (t=0/1, opposite quats); a per-tick rally-state replay test for `hst-sim/src/rally.rs` against match_s05.bin (only reached through ai_rally.rs today)
 
 
 ### Shots

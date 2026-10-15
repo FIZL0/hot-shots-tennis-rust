@@ -8,7 +8,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **T2** Direct tests for untested sim modules: oracle tests (>=10k inputs, to_bits) for `hst-sim/src/contact.rs` plane sweep and `quat.rs` matrix<->quat/slerp (t=0/1, opposite quats); a per-tick rally-state replay test for `hst-sim/src/rally.rs` against match_s05.bin (only reached through ai_rally.rs today)
+- [ ] **T3** VU0 micro mode (vcallms) in ps2-oracle so the slerp micro program can run under the oracle; then drop the micro_slerp hook in hst-oracle/tests/rotation.rs quat_slerp (T2 journal). Files: ../ps2-oracle, crates/hst-oracle/tests/rotation.rs, crates/hst-sim/src/quat.rs
 - [ ] **P52** Per-frame clones in the app: lobby Room deep-copied twice a frame (`play/main_menu/online.rs` settle/align: take() and put back), face morphs allocate 3 buffers per mesh per frame (`effects.rs` morph_on_cpu: write positions in place, same op order), per-tick string/list copies in `play/recover.rs` told/quiet and `play/netplay.rs` mine/loaded (borrow, copy only on insert)
 - [ ] **B453** iPhone Safari: frequent freezes in the menus and on loading screens (user 2026-10-15, build 54125cc; installs fine). Reproduce in the browser build with stall logging, find what blocks the frame → web/index.html
 - [ ] **B452** Android Chrome: the WebGPU build won't start, 'The game stopped: instance dropped in popErrorScope' (user 2026-10-15, build 54125cc); WebGL2 runs fine there. Find the wgpu error-scope/instance lifetime bug, else fall back to WebGL2 when it fires → web/index.html
