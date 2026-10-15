@@ -611,8 +611,8 @@ pub(super) mod tests {
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         super::super::online::sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
-        // seats 1–3, Start Characters, Copy Link (5) Public (6)
-        let copy = 5;
+        // B396: the four cards with the guests' ✕ (0–5), the side panel (6–11), the code (12), Copy Link (13) Public (14)
+        let copy = 13;
         let at = centre(&m, copy);
         frame(&mut app, &mut m, at, 0);
         assert_eq!(m.sel, copy, "hovering selects");
@@ -642,7 +642,7 @@ pub(super) mod tests {
             }
         }
         assert_eq!(seen, (0..keys + 4).collect(), "every key and button reached");
-        // the host's lobby, the mouse resting on 2P's seat: ↑ hides it (a key press) and reaches Singles / Doubles; the
+        // the host's lobby, the mouse resting on 1P's seat: ↓ hides it (a key press) and reaches Leave lobby; the
         // compositor's leave / enter and a stray motion waking it don't pull the cursor back to the seat
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         super::super::online::sample(&mut m);
@@ -651,7 +651,7 @@ pub(super) mod tests {
         frame(&mut app, &mut m, at, 0);
         assert_eq!(m.sel, 0);
         MOUSE_IDLE.store(true, Ordering::Relaxed);
-        m.step(Dev::Keys, Press { up: true, ..default() });
+        m.step(Dev::Keys, Press { down: true, ..default() });
         let mode = m.sel;
         assert_ne!(mode, 0);
         for n in 1..4 {

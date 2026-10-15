@@ -38,6 +38,9 @@ pub const PHRASES: [&str; 8] = ["Good luck!", "Nice shot!", "Oops!", "Well playe
 /// Settings → Chat off (`main_menu::Settings`).
 pub static HIDDEN: AtomicBool = AtomicBool::new(false);
 
+/// B396: the lobby's Chat button asks for the box (1: the typed line) or the pads' phrases (2).
+pub static ASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
 /// `text` as a chat line: control and bidi-override characters out, spaces trimmed, at most [`MAX`] characters;
 /// `None` if nothing is left.
 pub fn clean(text: &str) -> Option<String> {
@@ -185,10 +188,11 @@ fn input(
             chat.lines.push(Line { name, text, age: 0.0 });
         }
     }
+    let ask = ASK.swap(0, Ordering::Relaxed);
     let tapped = !chat.open && tapped(&mut mouse, &mut touches, window.single().ok(), tap.single().ok().filter(|t| t.3.get()).map(|(n, at, t, _)| (n, at, t.physical_size().as_vec2())));
     #[cfg(target_arch = "wasm32")]
     let tapped = crate::web::chat_tapped() && !chat.open || tapped;
-    if !chat.open && (keys.just_pressed(KeyCode::KeyT) || tapped) {
+    if !chat.open && (keys.just_pressed(KeyCode::KeyT) || tapped || ask == 1) {
         chat.open = true;
         typed.clear();
         keys.reset_all();
@@ -226,7 +230,7 @@ fn input(
     phone(&mut was, open);
     // the pads: R2 shows / steps the phrases, L2 says the one shown
     let pads: Vec<_> = pads.iter().filter(|g| crate::play::controls::readable(g)).collect();
-    let next = pads.iter().any(|g| g.just_pressed(GamepadButton::RightTrigger2));
+    let next = pads.iter().any(|g| g.just_pressed(GamepadButton::RightTrigger2)) || ask == 2;
     let say = pads.iter().any(|g| g.just_pressed(GamepadButton::LeftTrigger2));
     let n = chat.phrases().len();
     chat.phrase = match chat.phrase {

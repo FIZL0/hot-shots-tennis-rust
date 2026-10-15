@@ -318,6 +318,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if m.lobby_bot() {
                 v.extend([(Act::Costume, "Costume"), (Act::Card, "Remove")]);
             }
+            // B396: this machine's own card: its costume and hand right there
+            if m.lobby_own() {
+                v.extend([(Act::Costume, "Costume"), (Act::Hand, "Hand")]);
+            }
             if let Some(ok) = m.lobby_ok() {
                 v.push((Act::Ok, ok));
             }
