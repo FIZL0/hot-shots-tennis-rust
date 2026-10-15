@@ -49,6 +49,7 @@ mod lod;
 mod mode;
 mod noise;
 mod play;
+mod preload;
 mod sandbox;
 mod shade;
 mod shadow;
@@ -457,11 +458,13 @@ fn start(argv: Vec<String>) {
             menu_mode(app);
         });
         let a = args.clone();
+        let (iso, early) = (args.iso.clone(), lineup(&args, &slot_mods, viewer_mod.is_some().then_some(mod_slot)));
         let first = mode::Mode::new(move |app| {
             app.insert_resource(a).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
             add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
             court_mod::add(app, court_mod);
-        });
+        })
+        .early(move |world| preload::characters(world, &iso, &early));
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first.back(back))));
     } else if let Some(r) = roster {
         app.add_plugins(inspect::viewer).insert_resource(r);
@@ -475,6 +478,15 @@ fn start(argv: Vec<String>) {
     }
     app.insert_resource(args).insert_resource(ClearColor(Color::srgb(0.25, 0.3, 0.35))).add_systems(Update, (orbit, auto_shot, clouds))
         .add_systems(PostUpdate, (fixed_eye, backdrops, hide_inside).chain().before(bevy::transform::TransformSystems::Propagate)).run();
+}
+
+/// P50: the players' disc characters and costumes (`play::setup`'s line-up), but a mod's slots.
+fn lineup(args: &Args, slot_mods: &[(usize, String)], viewer_slot: Option<usize>) -> Vec<(usize, usize)> {
+    let modded: Vec<usize> = slot_mods.iter().map(|m| m.0).chain(viewer_slot).collect();
+    (0..if args.singles { 2 } else { 4 })
+        .filter(|i| !modded.contains(i))
+        .map(|i| (args.chars.get(i).copied().unwrap_or([6, 1, 2, 3][i]), args.outfits.get(i).copied().unwrap_or(0)))
+        .collect()
 }
 
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
@@ -505,6 +517,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, umpire_mod, court_mod, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
+    let (iso, early) = (args.iso.clone(), lineup(&args, &slot_mods, viewer_mod.is_some().then_some(mod_slot)));
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     mode::Mode::new(move |app| {
         app.insert_resource(gfx);
@@ -517,6 +530,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     })
     .back(back)
     .cover(cover)
+    .early(move |world| preload::characters(world, &iso, &early))
 }
 
 /// Court `n`'s entry list and hole-01 placement records.

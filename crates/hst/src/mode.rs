@@ -3,7 +3,8 @@
 //! crate's resources it added go. The window, the pads, the audio device, the GPU and loaded textures stay up. A mode
 //! builds without the render app, so Bevy plugins with a render side (materials) go in the base app.
 //! A mode with a way back (the match → the menu) turns its `AppExit` into that switch while the window is open.
-//! A switch puts up a loading screen first (on screen through the next mode's blocking Startup) and holds it, game
+//! A switch puts up a loading screen first (on screen through the next mode's Startup, which runs a slice a frame so the
+//! window keeps answering: P50) and holds it, game
 //! time paused, until the next mode's render pipelines are built and its uploads are done; the BGM stops with the old mode. Leaving a running
 //! mode, its last frame zooms up about the screen centre while it fades out over the loading screen first, as the
 //! original's menu → match handoff looks (similar, not frame-matched: user 2026-10-11).
@@ -26,11 +27,14 @@ pub struct Mode {
     build: Build,
     back: Option<Box<Mode>>,
     cover: Option<Cover>,
+    early: Option<Early>,
 }
+
+type Early = Box<dyn FnOnce(&mut World) + Send + Sync>;
 
 impl Mode {
     pub fn new(build: impl FnOnce(&mut App) + Send + Sync + 'static) -> Self {
-        Mode { build: Box::new(build), back: None, cover: None }
+        Mode { build: Box::new(build), back: None, cover: None, early: None }
     }
 
     /// This mode with `more` built on top.
@@ -43,12 +47,20 @@ impl Mode {
             }),
             back: self.back,
             cover: self.cover,
+            early: self.early,
         }
     }
 
     /// Where this mode's `AppExit` goes instead of closing the app.
     pub fn back(mut self, to: Mode) -> Self {
         self.back = Some(Box::new(to));
+        self
+    }
+
+    /// P50: what to start in the background as soon as the switch to this mode begins (before the old mode's fade
+    /// and the loading screen): its start waits for [`crate::preload::busy`] before each system.
+    pub fn early(mut self, f: impl FnOnce(&mut World) + Send + Sync + 'static) -> Self {
+        self.early = Some(Box::new(f));
         self
     }
 
@@ -166,7 +178,7 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Next>()
         .insert_resource(compiling)
         .insert_resource(settle)
-        .add_systems(First, (switch, |w: &mut World| run(w, First), loaded).chain())
+        .add_systems(First, (crate::play::menu_art::land, switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(Update, zoom)
         .add_systems(First, unwarm.before(switch))
         .add_systems(PostUpdate, warm.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
@@ -242,8 +254,15 @@ fn run(world: &mut World, label: impl ScheduleLabel + Clone) {
 }
 
 fn switch(world: &mut World) {
+    if world.contains_resource::<Starting>() {
+        start(world);
+        return;
+    }
     if world.resource::<Next>().0.is_none() {
         return;
+    }
+    if let Some(early) = world.resource_mut::<Next>().0.as_mut().and_then(|m| m.early.take()) {
+        early(world);
     }
     // the loading screen goes up and is presented (pipelined rendering: frames later) before the build blocks
     if leave(world) {
@@ -260,7 +279,7 @@ fn switch(world: &mut World) {
             l.up += 1;
             return;
         }
-        Some(mut l) => *l = Loading { up: l.up, built: true, ..default() },
+        Some(mut l) => *l = Loading { up: l.up, ..default() },
     }
     let next = world.resource_mut::<Next>().0.take().expect("checked");
     if !world.contains_resource::<Base>() {
@@ -281,12 +300,121 @@ fn switch(world: &mut World) {
     std::mem::swap(app.world_mut(), world);
     let mut s = world.remove_resource::<Schedules>().expect("the mode's schedules");
     world.insert_resource(schedules);
-    for label in [PreStartup.intern(), Startup.intern(), PostStartup.intern()] {
-        if let Some(mut x) = s.remove(label) {
-            x.run(world);
+    // P50: its start runs from the next frame on, a slice a frame (`start`)
+    let slice = Arc::new(Slice::default());
+    let stages = [PreStartup.intern(), Startup.intern(), PostStartup.intern()]
+        .into_iter()
+        .filter_map(|label| s.remove(label))
+        .map(|mut x| {
+            x.set_executor(Sliced { inner: bevy::ecs::schedule::SingleThreadedExecutor::new(), next: 0, slice: slice.clone() });
+            x
+        })
+        .collect();
+    let at = bevy::platform::time::Instant::now();
+    world.insert_resource(Starting { stages, slice, running: Running { s, back: next.back, leaving: false }, frames: 0, at });
+}
+
+/// P50: the new mode's start (its PreStartup, Startup and PostStartup systems, in order), run a slice a frame under
+/// the loading screen. Run at once, a match's took 775 ms on an iPhone (build 2316: disc reads, 2263 entities, then
+/// all their textures and meshes uploaded in one render frame), and the frozen window read as 'Not responding' (B415).
+#[derive(Resource)]
+struct Starting {
+    stages: Vec<Schedule>,
+    slice: Arc<Slice>,
+    running: Running,
+    frames: u32,
+    at: bevy::platform::time::Instant,
+}
+
+/// One frame's slice of a start: when it ends, and whether the stage it ran is through.
+#[derive(Default)]
+struct Slice {
+    until: std::sync::Mutex<Option<bevy::platform::time::Instant>>,
+    done: AtomicBool,
+}
+
+/// A frame's slice of the start (ms): a system is never cut, so one that takes longer runs over.
+const SLICE: std::time::Duration = std::time::Duration::from_millis(20);
+/// A start system this slow is logged (ms).
+const SLOW: f32 = 50.0;
+
+/// Runs a start stage's systems one at a time in their order (a single-threaded schedule's) until the frame's slice
+/// is used up, and goes on where it stopped on its next run. Each system's commands are applied right after it.
+struct Sliced {
+    inner: bevy::ecs::schedule::SingleThreadedExecutor,
+    next: usize,
+    slice: Arc<Slice>,
+}
+
+impl bevy::ecs::schedule::SystemExecutor for Sliced {
+    fn init(&mut self, schedule: &bevy::ecs::schedule::SystemSchedule) {
+        self.inner.init(schedule);
+        self.next = 0;
+    }
+
+    fn run(&mut self, schedule: &mut bevy::ecs::schedule::SystemSchedule, world: &mut World, _: Option<&bevy::ecs::schedule::FixedBitSet>, handler: fn(BevyError, bevy::ecs::error::ErrorContext)) {
+        // SAFETY: only read (the count and a name)
+        let n = unsafe { schedule.systems_mut() }.len();
+        let until = self.slice.until.lock().unwrap().unwrap_or_else(bevy::platform::time::Instant::now);
+        while self.next < n {
+            // P50: loads started early still under way: the next system may need them
+            if crate::preload::busy() {
+                break;
+            }
+            // the others skipped (Bevy's stepping): conditions, deferred buffers and errors as the executor has them
+            let mut skip = bevy::ecs::schedule::FixedBitSet::with_capacity(n);
+            skip.insert_range(..);
+            skip.set(self.next, false);
+            let t = bevy::platform::time::Instant::now();
+            self.inner.run(schedule, world, Some(&skip), handler);
+            let ms = t.elapsed().as_secs_f32() * 1e3;
+            if ms > SLOW {
+                // SAFETY: as above
+                info!("start: {} {ms:.1} ms", unsafe { schedule.systems_mut() }[self.next].system().name());
+            }
+            self.next += 1;
+            if bevy::platform::time::Instant::now() >= until {
+                break;
+            }
+        }
+        self.slice.done.store(self.next >= n, Ordering::Relaxed);
+    }
+
+    fn set_apply_final_deferred(&mut self, value: bool) {
+        self.inner.set_apply_final_deferred(value);
+    }
+}
+
+/// This frame's slice of the new mode's start; once it's through, the mode runs and the loading screen waits for its
+/// render side (`loaded`).
+fn start(world: &mut World) {
+    let Some(mut st) = world.remove_resource::<Starting>() else { return };
+    let until = bevy::platform::time::Instant::now() + SLICE;
+    *st.slice.until.lock().unwrap() = Some(until);
+    st.frames += 1;
+    crate::play::menu_art::defer(true);
+    while let Some(x) = st.stages.first_mut() {
+        x.run(world);
+        if !st.slice.done.load(Ordering::Relaxed) {
+            break;
+        }
+        st.stages.remove(0);
+        if bevy::platform::time::Instant::now() >= until {
+            break;
         }
     }
-    world.insert_resource(Running { s, back: next.back, leaving: false });
+    crate::play::menu_art::defer(false);
+    // its menu sheets drawn on the other cores in too
+    if !st.stages.is_empty() || crate::play::menu_art::building() {
+        world.insert_resource(st);
+        return;
+    }
+    crate::preload::clear();
+    info!("started in {} frames, {:.0} ms at {:.2} s", st.frames, st.at.elapsed().as_secs_f32() * 1e3, crate::stall::since_start());
+    world.insert_resource(st.running);
+    for mut l in world.query::<&mut Loading>().iter_mut(world) {
+        l.built = true;
+    }
 }
 
 /// Before the loading screen: ask for the running mode's last frame and wait for it (10 frames at most: no window,
@@ -525,7 +653,7 @@ mod tests {
     /// Frames until the switch (the loading screen's and the old mode's last frame, if they aren't done yet), the
     /// switch's included; nothing quits meanwhile.
     fn loading(app: &mut App) {
-        while app.world().resource::<Next>().0.is_some() {
+        while app.world().resource::<Next>().0.is_some() || app.world().contains_resource::<Starting>() {
             app.update();
             assert!(app.should_exit().is_none(), "a mode asking again while it leaves still goes back");
         }
@@ -571,6 +699,39 @@ mod tests {
         app.world_mut().write_message(AppExit::Success);
         app.update();
         assert!(app.should_exit().is_some(), "the menu's quit quits");
+    }
+
+    /// P50: a start longer than a frame's slice runs over several frames, each system once and in order (one that
+    /// takes longer than a slice runs whole), and the mode's own schedules wait for it.
+    #[test]
+    fn a_long_start_is_spread_over_frames() {
+        #[derive(Resource, Default)]
+        struct Ran(Vec<u32>);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, plugin)).init_resource::<Ran>();
+        let slow = |i| move |mut r: ResMut<Ran>| {
+            std::thread::sleep(SLICE / 2 + std::time::Duration::from_millis(1));
+            r.0.push(i)
+        };
+        app.world_mut().resource_mut::<Next>().0 = Some(Mode::new(move |app| {
+            app.init_resource::<Count>()
+                .add_systems(PreStartup, slow(0))
+                .add_systems(Startup, (slow(1), slow(2), |mut c: Commands| _ = c.spawn(Thing), slow(3)).chain())
+                .add_systems(PostStartup, (slow(4), |q: Query<&Thing>, mut r: ResMut<Ran>| r.0.push(10 + q.iter().count() as u32)).chain())
+                .add_systems(Update, |mut n: ResMut<Count>| n.0 += 1);
+        }));
+        while app.world().resource::<Next>().0.is_some() {
+            app.update();
+        }
+        let mut frames = 0;
+        while app.world().contains_resource::<Starting>() {
+            assert_eq!(app.world().resource::<Count>().0, 0, "the mode ran before its start was through");
+            app.update();
+            frames += 1;
+        }
+        assert_eq!(app.world().resource::<Ran>().0, [0, 1, 2, 3, 4, 11], "each once, in order, the spawn applied");
+        assert!((3..=6).contains(&frames), "{frames} frames");
+        assert!(app.world_mut().query::<&Loading>().single(app.world()).unwrap().built);
     }
 
     /// B111: leaving a match (here its quit while paused) cuts every sound it started, the paused ones included;

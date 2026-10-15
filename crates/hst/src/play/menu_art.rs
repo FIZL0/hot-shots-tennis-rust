@@ -444,6 +444,52 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
     }
     let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !OFF.load(Ordering::Relaxed));
     let Some(sheet) = sheet else { return super::panel::image(images, data) };
+    // P50: while a mode starts, on the async pool (`land` puts it in when it's done)
+    if let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get().filter(|_| DEFER.get()) {
+        let handle = images.reserve_handle();
+        let data = data.to_vec();
+        BUILDING.lock().unwrap().push((handle.clone(), pool.spawn(async move { rebuilt(&data, &name, sheet) })));
+        crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+        return handle;
+    }
+    let handle = images.add(rebuilt(data, &name, sheet));
+    crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+    handle
+}
+
+thread_local! {
+    /// Set while a mode's start runs on this thread (`defer`).
+    static DEFER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// P50: rebuilt sheets still being drawn on the async pool, each with the handle it goes in.
+static BUILDING: std::sync::Mutex<Vec<(Handle<Image>, bevy::tasks::Task<Image>)>> = std::sync::Mutex::new(Vec::new());
+
+/// P50: sheets [`image`] rebuilds on this thread from now (`on`) are drawn on the async pool, not right away: a mode's
+/// start (`mode.rs`) has them drawn on the other cores (one at a time between frames in the browser) while it goes on,
+/// and waits for them ([`building`]). A whole menu's took 0.5 s of one frame on desktop.
+pub(crate) fn defer(on: bool) {
+    DEFER.set(on);
+}
+
+/// Whether any deferred sheet isn't in yet.
+pub(crate) fn building() -> bool {
+    !BUILDING.lock().unwrap().is_empty()
+}
+
+/// Puts each deferred sheet that's done in its image.
+pub(crate) fn land(images: Option<ResMut<Assets<Image>>>) {
+    let Some(mut images) = images else { return };
+    BUILDING.lock().unwrap().retain_mut(|(handle, task)| {
+        let Some(img) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) else { return true };
+        // its mode already gone: nothing to put it in
+        let _ = images.insert(handle.id(), img);
+        false
+    });
+}
+
+/// Sheet `name` (`data`, one of ours) rebuilt.
+fn rebuilt(data: &[u8], name: &str, sheet: &Sheet) -> Image {
     let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
     let (w, h) = (pic.width as usize, pic.height as usize);
     let mut labels = sheet.labels.to_vec();
@@ -474,10 +520,7 @@ pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Hand
         let _ = image::save_buffer(format!("{dir}/{name}.png"), out.data(), out.width(), out.height(), image::ColorType::Rgba8);
     }
     let (w, h) = (out.width(), out.height());
-    let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-    let handle = images.add(img);
-    crate::textures::ours(handle.id(), Vec2::splat(K as f32));
-    handle
+    Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)
 }
 
 /// A menu wall (graph paper: a dark line every 16 texels, a faint one between) drawn again clean at `K`×: a column or
@@ -1109,6 +1152,35 @@ mod tests {
     use super::*;
 
     /// A wall's grid lines survive at `K`×, its stray wobble pixels don't.
+    /// P50: a sheet rebuilt on the async pool while a start defers them lands the same as one drawn right away, and
+    /// only then is nothing left building.
+    #[test]
+    fn a_deferred_sheet_lands_the_same() {
+        let Ok(mut iso) = hst_data::iso::Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let arc_data = iso.read("MENU/MENU04.XB0").expect("menu archive");
+        let arc = hst_data::xb::Archive::parse(&arc_data).expect("xb");
+        let word = arc.read(arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("word.tm2")).expect("word.tm2")).expect("bytes");
+        bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let mut images = Assets::<Image>::default();
+        let now = image(&mut images, &word, "word");
+        defer(true);
+        let later = image(&mut images, &word, "word");
+        defer(false);
+        assert!(images.get(&later).is_none() && building());
+        let mut world = World::new();
+        world.insert_resource(images);
+        let mut land = IntoSystem::into_system(land);
+        land.initialize(&mut world);
+        while building() {
+            land.run((), &mut world).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let images = world.resource::<Assets<Image>>();
+        assert_eq!(images.get(&later).expect("landed").data, images.get(&now).unwrap().data);
+    }
+
     #[test]
     fn wall_grid_drops_wobble() {
         let (paper, dark, faint) = ([200, 200, 200, 255], [100, 100, 100, 255], [150, 150, 150, 255]);
