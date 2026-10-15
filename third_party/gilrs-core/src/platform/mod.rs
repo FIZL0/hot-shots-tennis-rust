@@ -46,6 +46,10 @@ mod platform;
 #[path = "windows_wgi/mod.rs"]
 mod platform;
 
+#[cfg(target_os = "ios")]
+#[path = "ios/mod.rs"]
+mod platform;
+
 #[cfg(target_arch = "wasm32")]
 #[path = "wasm/mod.rs"]
 mod platform;
@@ -54,6 +58,7 @@ mod platform;
     not(any(target_os = "linux")),
     not(target_os = "macos"),
     not(target_os = "windows"),
+    not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
 #[path = "default/mod.rs"]

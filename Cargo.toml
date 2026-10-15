@@ -23,3 +23,5 @@ wgpu = { path = "third_party/wgpu" }
 # B385: on CPU batching (WebGL2) an unbatchable mesh with no batch data this frame keeps its slot and is skipped, instead of
 # shifting the dynamic offsets and indexing past their end (render_phase/mod.rs, batching/no_gpu_preprocessing.rs)
 bevy_render = { path = "third_party/bevy_render" }
+# M91: iOS 27 requires the UIScene lifecycle; winit 0.30 puts its windows in the app's scene (src/platform_impl/ios/window.rs)
+winit = { path = "third_party/winit" }

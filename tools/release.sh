@@ -1,8 +1,8 @@
 #!/bin/bash
 # tools/release.sh VERSION [notes.md] [publish] — a full release (v1.0.0, "Hot Shots Tennis Remastered 1.0.0"): set
-# crates/hst's version to VERSION (a "Release vVERSION" commit if it changes), build Linux + Windows (tools/build.sh
-# all), sign SHA256SUMS with the minisign key (~/.config/hst/release.key, asks its password) and upload to GitHub:
-#   hst-windows-x86_64.zip  hst-linux-x86_64.tar.gz      what players download
+# crates/hst's version to VERSION (a "Release vVERSION" commit if it changes), build Linux + Windows + the unsigned
+# iOS IPA (tools/build.sh all), sign SHA256SUMS with the minisign key (~/.config/hst/release.key, asks its password) and upload to GitHub:
+#   hst-windows-x86_64.zip  hst-linux-x86_64.tar.gz  hst-ios.ipa   what players download
 #   hst-windows-x86_64.exe  hst-linux-x86_64             the bare binaries the updater fetches (plan/B374.md)
 #   SHA256SUMS  SHA256SUMS.sig
 # VERSION with a suffix (1.1.0-rc.1) is a pre-release, never Latest. notes.md is the "New in …" list (Markdown
@@ -49,6 +49,7 @@ tar -czf "$out/hst-linux-x86_64.tar.gz" -C dist/linux .
 (cd dist/windows && zip -q "../release/hst-windows-x86_64.zip" hst.exe)
 cp dist/linux/hst "$out/hst-linux-x86_64"
 cp dist/windows/hst.exe "$out/hst-windows-x86_64.exe"
+cp dist/ios/hst-ios.ipa "$out/hst-ios.ipa"
 (cd "$out" && sha256sum hst-* > SHA256SUMS)
 minisign -S -s "$key" -m "$out/SHA256SUMS" -x "$out/SHA256SUMS.sig" -t "Hot Shots Tennis Remastered $tag"
 # the game checks against the key built into it (update.rs): refuse a release it would turn down
@@ -67,6 +68,7 @@ body=$out/notes.md
     echo "|---|---|---|"
     echo "| **Windows** 10/11 | [\`hst-windows-x86_64.zip\`](https://github.com/$repo/releases/download/$tag/hst-windows-x86_64.zip) | Unzip, then drop your ISO on \`hst.exe\` |"
     echo "| **Linux** / **Steam Deck** | [\`hst-linux-x86_64.tar.gz\`](https://github.com/$repo/releases/download/$tag/hst-linux-x86_64.tar.gz) | Unpack, then \`./hst \"Hot Shots Tennis (USA).iso\"\` |"
+    echo "| **iPhone** / **iPad** (iOS 15+) | [\`hst-ios.ipa\`](https://github.com/$repo/releases/download/$tag/hst-ios.ipa) | Unsigned: sign and install it yourself (AltStore, Sideloadly…), then put your ISO in Files → On My iPhone → Hot Shots. Needs a controller |"
     echo "| **Browser** | [opentennis.dev](https://opentennis.dev/) | Nothing to install |"
     echo
     echo "## What you need"

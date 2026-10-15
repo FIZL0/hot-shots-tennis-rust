@@ -676,7 +676,7 @@ fn partial(r: reqwest::Response, what: &str) -> Result<reqwest::Response, String
 /// Desktop Add mod: the system's file picker for a mod `.zip`, installed like a download (`modfs::install_file`'s
 /// checks) into `root/<id>/` on disk. The browser build picks through the page instead (`web.rs`).
 // ponytail: macOS wants dialogs on the main thread; this runs on a worker (fine on Linux/Windows).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 pub fn pick(root: &Path) {
     let root = root.to_path_buf();
     spawn(async move {
@@ -692,6 +692,12 @@ pub fn pick(root: &Path) {
         })();
         send(Event::Installed(String::new(), got));
     });
+}
+
+/// iOS has no picker yet (M91): mods come in through the app's folder in the Files app.
+#[cfg(target_os = "ios")]
+pub fn pick(_root: &Path) {
+    send(Event::Installed(String::new(), Err("put the mod .zip in Hot Shots Tennis's folder in the Files app".into())));
 }
 
 /// Keeps an installed mod: natively it's on disk already; in the browser the page writes it to OPFS and says how
