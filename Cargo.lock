@@ -6040,16 +6040,16 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "ps2-float"
-version = "0.1.0"
-source = "git+https://github.com/FIZL0/ps2-float?tag=v0.1.0#947b61457682d8b6b679b884b060f51af7be2e9f"
+version = "0.2.0"
+source = "git+https://github.com/FIZL0/ps2-float?tag=v0.2.0#817751d2d1efadbec4fad9f4eda6fead93115360"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ps2-oracle"
-version = "0.1.0"
-source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.0#9568dc7924be471f0039e004f88ef2cc53d7716c"
+version = "0.1.1"
+source = "git+https://github.com/FIZL0/ps2-oracle?tag=v0.1.1#f9e908284ed87e28bb7abee5c64d537bb1267e5d"
 dependencies = [
  "ps2-float",
 ]
