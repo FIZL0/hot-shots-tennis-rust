@@ -587,6 +587,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P34** iOS: confirm P32 on device — Grand Indoor Palace at the Phone preset with HST_FPS gpu ms; if still <60, try an Rgba8 (CompositingSpace::Srgb) main texture → crates/hst/src/graphics.rs · research/journal/2026-10-15-p32-palace-gpu/README-FINAL.md
 - [x] **M8f5a3** Get a Grip c05 (Street) court mod: the basket goal gimmick (`c05_gi12_BasketGoal__00/01`, 4.8 m, centred 5–7.5 m behind each baseline) covers the middle of HST's match view (Get a Grip's camera is closer, M8f5a2). Decide how to keep it out of the view (drop the near-end one, move it back, or a loader-side fade near the eye, standard §2) and fix ../HST-MODS `export_getagrip_courts.py` (`clear_view`/`EYE_CLEAR`) | j: 2026-10-14-m8f-courts-umpires
 - [x] **M8f10** (in M8f) Fore! / Open Tee 2 / Out of Bounds venues that can host a tennis court, and any umpires there, as court/umpire mods → ../HST-MODS notes, tools | j: 2026-10-14-m8f-courts-umpires
+- [x] **M8f5a4** Get a Grip c05 (Street) court mod: HST's turned match eye (+z, after a change of ends: 41 m at 17°, eye ≈ (0, −12, 39.2)) stands inside c05's brick building behind the far end, so the whole view is a wall (`context/m8f5a3/run1/c05-turned.png`). Check which court.glb pieces, then decide (`__clear` on court.glb nodes, standard §2, or drop them) in ../HST-MODS `export_getagrip_courts.py`; check the other 15 courts' turned views too | j: 2026-10-14-m8f-courts-umpires
 
 
 ### Shots

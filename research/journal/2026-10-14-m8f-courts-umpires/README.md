@@ -39,3 +39,7 @@ One README per task; iterations below, newest last.
 - `7-GOLF-VENUES-SURVEY-FINAL.md` — M8f10 done (survey): Fore!/Open Tee 2/Out of Bounds height maps and placements
   decoded, court spots per hole (HST-MODS `tools/venues/`, `notes/venues.md`); no umpires in any; Open Tee 2
   Nakagawa h07 has real tennis courts. Exports → M8f10a1 (Nakagawa), M8f10a2 (Fore!), M8f10a3 (Out of Bounds).
+- `8-GAG-C05-TURNED-FINAL.md` — M8f5a4 done: HST's turned eye stood inside c05's street block (court.glb
+  `Outside_Building`); the exporter now splits every court.glb island between either resting eye and the court into
+  a `__clear` child (HST-MODS 52baa54). The survey of all 16 courts also caught c02, c09, c16 and c17: 32 resting
+  views are now clear.
