@@ -1,18 +1,15 @@
-//! B373: the Mods pages' kind tabs (spec `plan/B372.md` § Kinds). A row under the page tabs, between the L2 / R2
-//! glyphs (keyboard 1 / 3, the keys over Q / E): Characters · Courts · Umpires · Texture packs, each with its count,
-//! the current one gold, and on the right how the kind behaves online. Every page (Browse, Installed, Upload, My
-//! uploads) lists only the chosen kind (`modstore::Meta::kind`; an installed mod's from its `mod.json`). The store
+//! B373: the Mods page's kind tabs (spec `plan/B372.md` § Kinds); B383: the page's one tab row, in the title band
+//! between the L2 / R2 buttons (keyboard 1 / 3) in the legend's art: Characters · Courts · Umpires · Texture packs,
+//! each with its count (a kind with none hidden until it has some), the current one gold; how the kind behaves online
+//! is the footer's line. Every Show (Everything, Installed, My uploads, …) and Upload lists only the chosen kind (`modstore::Meta::kind`; an installed mod's from its `mod.json`). The store
 //! carries characters, courts and umpires (M8f9); the Texture packs tab shows what is coming and from which task (M5)
 //! until it lands.
 
-use super::{BROWN, CELL_FILL, Draw, GOLD, INK, WHITE, legend, pointer};
+use super::{BROWN, CELL_FILL, Draw, GOLD, INK, Tex, WHITE, legend, pointer};
 use crate::modstore::Kind;
 
 /// The tabs, in L2 / R2 order.
 pub(super) const KINDS: [Kind; 4] = [Kind::Character, Kind::Court, Kind::Umpire, Kind::Textures];
-
-/// The row's height, under the page tabs and over the page's boxes.
-pub(super) const ROW_H: f32 = 34.0;
 
 pub(super) fn name(k: Kind) -> &'static str {
     match k {
@@ -43,47 +40,51 @@ pub(super) fn coming(k: Kind) -> Option<&'static str> {
     }
 }
 
-/// The tab after `at` (L2 back, R2 on), round.
-pub(super) fn step(at: Kind, back: bool) -> Kind {
-    let i = KINDS.iter().position(|k| *k == at).unwrap_or(0);
-    KINDS[if back { (i + KINDS.len() - 1) % KINDS.len() } else { (i + 1) % KINDS.len() }]
+/// B383: the tabs the row shows: the kinds with mods (`total`, by [`KINDS`]: on the store or installed; one the
+/// store doesn't carry yet has none), and the chosen one.
+pub(super) fn shown(at: Kind, total: [usize; 4]) -> Vec<Kind> {
+    KINDS.iter().zip(total).filter(|(k, n)| **k == at || *n > 0 && coming(**k).is_none()).map(|(k, _)| *k).collect()
 }
 
-/// The row in `[x, y, w, h]`: the glyphs, the tabs with `counts` (by [`KINDS`]; a tap on one is `Act::Kind(i)`)
-/// and the note. The tabs shrink to leave the note room, and the note shrinks to what's left.
-pub(super) fn row(d: &mut Draw, [x, y, w, h]: [f32; 4], at: Kind, counts: [usize; 4]) {
-    let caps = legend::kind_caps();
-    let (size, ch) = (14.0, h - 8.0);
-    let cap_w = |d: &Draw, s: &str| d.width(s, 12.0) + 12.0;
-    let words: Vec<String> = KINDS.iter().zip(counts).map(|(k, n)| format!("{} {n}", name(*k))).collect();
-    let ws: Vec<f32> = words.iter().map(|s| d.width(s, size) + 20.0).collect();
-    let natural = cap_w(d, &caps[0]) + cap_w(d, &caps[1]) + ws.iter().sum::<f32>() + 6.0 * 5.0;
-    let k = (w * 0.68 / natural).min(1.0);
+/// The tab after `at` among `shown` (L2 back, R2 on), round.
+pub(super) fn step(at: Kind, back: bool, shown: &[Kind]) -> Kind {
+    let n = shown.len();
+    let Some(i) = shown.iter().position(|k| *k == at) else { return shown.first().copied().unwrap_or(at) };
+    shown[if back { (i + n - 1) % n } else { (i + 1) % n }]
+}
+
+/// B383: the page's one tab row, in the title band from `x` (`top` its top, `room` wide): the L2 / R2 buttons in the
+/// legend's art (the device last used: a pad's, or the keyboard's 1 / 3 keys) round the `shown` kinds' tabs, each
+/// with its count (`counts`, by [`KINDS`]; a tap on one is `Act::Kind(i)`), the current one gold. The buttons go
+/// while there's only one kind to show. The row shrinks as one where it doesn't fit.
+pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind]) {
+    let style = legend::last_style();
+    let (size, th, gh) = (15.0, 24.0, 21.0);
+    let caps = shown.len() > 1;
+    let gw = |i: u8| if caps { gh * legend::glyph_aspect(style, i) } else { 0.0 };
+    let words: Vec<(usize, String)> =
+        shown.iter().filter_map(|k| KINDS.iter().position(|q| q == k)).map(|i| (i, format!("{} {}", name(KINDS[i]), counts[i]))).collect();
+    let ws: Vec<f32> = words.iter().map(|(_, s)| d.width(s, size) + 22.0).collect();
+    let natural = gw(0) + gw(1) + ws.iter().sum::<f32>() + 6.0 * (ws.len() + 1) as f32;
+    let k = (room / natural).min(1.0);
     let mut cx = x;
-    let cap = |d: &mut Draw, s: &str, cx: &mut f32| {
-        let cw = cap_w(d, s) * k;
-        d.pill_at([*cx, y + 4.0 + ch * 0.15, cw, ch * 0.7], [INK, [90.0; 3], [100.0; 3]], 128.0);
-        d.label(s, *cx + cw / 2.0, y + 4.0 + ch * 0.15 + (ch * 0.7 - 12.0) / 2.0, 12.0, cw - 6.0, INK);
-        *cx += cw + 6.0 * k;
+    let cap = |d: &mut Draw, i: u8, cx: &mut f32| {
+        if caps {
+            let (w, h) = (gw(i) * k, gh * k);
+            d.q(Tex::Glyph(style, i), [0.0; 4], [*cx, top + 3.0 + (th - h) / 2.0, w, h], WHITE, 128.0);
+            *cx += w + 6.0 * k;
+        }
     };
-    cap(d, &caps[0], &mut cx);
-    for (i, (s, tw)) in words.iter().zip(&ws).enumerate() {
-        let on = KINDS[i] == at;
-        let b = [cx, y + 4.0, tw * k, ch];
+    cap(d, 0, &mut cx);
+    for ((i, s), tw) in words.iter().zip(&ws) {
+        let on = KINDS[*i] == at;
+        let b = [cx, top + 3.0, tw * k, th];
         d.pill_at(b, [INK, if on { INK } else { [90.0; 3] }, if on { GOLD } else { CELL_FILL }], 128.0);
-        d.label(s, cx + tw * k / 2.0, y + 4.0 + (ch - size) / 2.0, size, (tw - 14.0) * k, if on { INK } else { BROWN });
-        d.hit(b, pointer::Act::Kind(i));
+        d.label(s, cx + tw * k / 2.0, top + 3.0 + (th - size * k) / 2.0, size * k, (tw - 16.0) * k, if on { INK } else { BROWN });
+        d.hit(b, pointer::Act::Kind(*i));
         cx += (tw + 6.0) * k;
     }
-    cap(d, &caps[1], &mut cx);
-    let room = x + w - cx - 8.0;
-    if room > 40.0 {
-        // smaller rather than squeezed where it doesn't fit (a 4:3 window)
-        let note = online(at);
-        let size = (13.0 * room / d.width(note, 13.0)).min(13.0);
-        let nw = d.width(note, size);
-        d.outlined(|d| d.text(note, x + w - nw, y + 4.0 + (ch - size) / 2.0, size, WHITE));
-    }
+    cap(d, 1, &mut cx);
 }
 
 /// The empty state of a kind the store doesn't carry yet, in the page's list box `[x, y, w, h]`.
@@ -115,12 +116,17 @@ mod tests {
         let mut k = Kind::Character;
         let mut seen = Vec::new();
         for _ in 0..4 {
-            k = step(k, false);
+            k = step(k, false, &KINDS);
             seen.push(k);
         }
         assert_eq!(seen, [Kind::Court, Kind::Umpire, Kind::Textures, Kind::Character]);
-        assert_eq!(step(Kind::Character, true), Kind::Textures);
-        assert_eq!(step(Kind::Other, false), Kind::Court);
+        assert_eq!(step(Kind::Character, true, &KINDS), Kind::Textures);
+        assert_eq!(step(Kind::Other, false, &KINDS), Kind::Character);
+        // B383: a kind with no mods is hidden (the chosen one stays); texture packs wait for M5 whatever the count
+        assert_eq!(shown(Kind::Character, [3, 0, 2, 5]), [Kind::Character, Kind::Umpire]);
+        assert_eq!(shown(Kind::Court, [0, 0, 0, 0]), [Kind::Court]);
+        assert_eq!(step(Kind::Umpire, false, &[Kind::Character, Kind::Umpire]), Kind::Character);
+        assert_eq!(step(Kind::Court, true, &[Kind::Court]), Kind::Court);
         assert!([Kind::Character, Kind::Court, Kind::Umpire].iter().all(|k| coming(*k).is_none()));
         assert!(coming(Kind::Textures).unwrap().contains("M5") && coming(Kind::Textures).unwrap().contains("mods/texture-replacements/"));
         assert!(KINDS.iter().all(|k| online(*k).starts_with("Online: ")));

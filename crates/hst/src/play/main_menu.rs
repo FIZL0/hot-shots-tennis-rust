@@ -1348,7 +1348,11 @@ impl Menu {
                 self.net.pad = matches!(dev, Dev::Pad(_));
                 self.online_step(k, &mut out)
             }
-            Screen::Mods => self.mods_step(k, &mut out),
+            Screen::Mods => {
+                // B383: the search box's ✕ types in place from the keyboard, a pad gets the keyboard on screen
+                self.add.pad = matches!(dev, Dev::Pad(_));
+                self.mods_step(k, &mut out)
+            }
             _ => {}
         }
         out
@@ -1484,6 +1488,8 @@ enum Tex {
     Pill,
     /// B362: a style's ✕ (the keyboard's Enter) in the legend's art (`legend::Buttons`), whole.
     Button(legend::Style),
+    /// B383: a style's kind-switch button `i` (0 back, 1 on: L2 / R2, the keyboard's 1 / 3) in the legend's art, whole.
+    Glyph(legend::Style, u8),
     /// B400: umpire mod `k`'s picture (`umpire_mods::Pics`), in its pixels.
     Umpire(usize),
 }
@@ -3120,6 +3126,13 @@ fn draw(
                     continue;
                 }
             },
+            Tex::Glyph(s, i) => match buttons.as_ref().and_then(|b| b.1.get(&(s, i))) {
+                Some((h, _)) => h.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Umpire(k) => match umpire_pics.as_ref().and_then(|p| p.handles.get(k).cloned().flatten()) {
                 Some(h) => h,
                 None => {
@@ -3129,7 +3142,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Thumb(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Glyph(..) | Tex::Thumb(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         // a face's source is out of 64 whatever the icon's size (a part of it: the Mods tiles' square crop)
         if matches!(quad.tex, Tex::Face(_)) && [u, v, w, h] != [0.0, 0.0, 64.0, 64.0] {
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);

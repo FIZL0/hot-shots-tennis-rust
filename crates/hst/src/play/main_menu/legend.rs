@@ -328,12 +328,14 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.push((Act::Back, "Leave"));
         }
         // B373: a kind the store doesn't carry yet has nothing to move to or choose
-        Screen::Mods if m.add.empty_kind() => v.extend([(Act::Costume, "Tab"), (Act::Kind, "Kind"), (Act::Back, "Back")]),
+        // (B383: the kind switch only while the row shows more than one kind)
+        Screen::Mods if m.add.empty_kind() => v.extend(m.add.kind_switch().into_iter().chain([(Act::Back, "Back")])),
         // B372: Browse's grid says what its tiles' buttons do
         Screen::Mods if let Some(l) = super::mods_screen::browse_legend(m) => v.extend(l),
         Screen::Mods => {
             moves(&mut v, (true, m.add.sideways(m.sel)));
-            v.extend([(Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Kind, "Kind"), (Act::Back, "Back")]);
+            v.push((Act::Ok, "Choose"));
+            v.extend(m.add.kind_switch().into_iter().chain([(Act::Back, "Back")]));
         }
         _ => {}
     }
@@ -441,6 +443,8 @@ pub(super) fn fill(menu: Res<Menu>, last: Res<Last>, bind: Res<Bindings>, mut le
         Last::Pad(e) => Dev::Pad(e),
         _ => Dev::Keys,
     };
+    let style = dev_style(last.dev());
+    LAST_STYLE.store(Style::ALL.iter().position(|s| *s == style).unwrap_or(0) as u8, Ordering::Relaxed);
     legend.0 = groups(&menu, dev, &bind);
 }
 
@@ -512,17 +516,34 @@ pub(super) fn button_names(dev: Option<Entity>, act: Act, bind: &Bindings) -> Ve
         .collect()
 }
 
-/// B373: the names on the kind tabs' buttons beside the Mods pages' kind row: a connected pad's L2 / R2 (ZL / ZR,
-/// LT / RT; `HST_LEGEND`'s style for `--shot`s), else the keyboard's 1 / 3.
-pub(super) fn kind_caps() -> [String; 2] {
-    let style = forced().or_else(|| PADS.lock().ok().and_then(|v| v.first().copied())).unwrap_or(Style::Keys);
-    let it = Item { keys: menu_keys(Act::Kind, &Bindings::default()), ..item(Act::Kind, "", &[]) };
-    let mut names = glyphs(style, &it).into_iter().filter_map(|g| match g {
-        Glyph::Cap(s) => Some(s),
-        Glyph::Shoulder(s) => Some(s.to_string()),
-        _ => None,
-    });
-    [names.next().unwrap_or_default(), names.next().unwrap_or_default()]
+/// B383: the style of the device last used (`fill` keeps it; `HST_LEGEND`'s for `--shot`s): the art the Mods page's
+/// kind switch shows beside its tabs.
+static LAST_STYLE: AtomicU8 = AtomicU8::new(0);
+
+pub(super) fn last_style() -> Style {
+    forced().unwrap_or(Style::ALL[LAST_STYLE.load(Ordering::Relaxed) as usize % Style::ALL.len()])
+}
+
+/// B383: the Mods page's button art, as the legend draws it in `style`: 0 / 1 the kind switch (L2 / R2, ZL / ZR,
+/// LT / RT; the keyboard's 1 / 3), 2 ✕ (Enter), 3 △ and 4 □ (their keys) for the detail panel's buttons.
+fn page_glyphs(style: Style) -> Vec<Glyph> {
+    let it = |a: Act| Item { keys: menu_keys(a, &Bindings::default()), ..item(a, "", &[]) };
+    let mut v = glyphs(style, &it(Act::Kind));
+    v.truncate(2);
+    for a in [Act::Ok, Act::Card, Act::Page] {
+        v.extend(glyphs(style, &it(a)).into_iter().take(1));
+    }
+    v
+}
+
+/// The number of [`page_glyphs`] (`Tex::Glyph(style, i)` for `i` below it).
+pub(crate) const PAGE_GLYPHS: usize = 5;
+
+/// B383: [`page_glyphs`]' `i`th one's width / height (`Tex::Glyph(style, i)`'s art).
+pub(crate) fn glyph_aspect(style: Style, i: u8) -> f32 {
+    static W: std::sync::OnceLock<Vec<Vec<f32>>> = std::sync::OnceLock::new();
+    let w = W.get_or_init(|| Style::ALL.iter().map(|&s| page_glyphs(s).iter().map(|g| draw_glyph(g).width() as f32 / H as f32).collect()).collect());
+    w[Style::ALL.iter().position(|s| *s == style).unwrap_or(0)].get(i as usize).copied().unwrap_or(1.0)
 }
 
 /// B362: the styles a "press ✕ / Enter to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if
@@ -560,7 +581,7 @@ fn note_pads(pads: Query<(Entity, &Gamepad)>, all: Query<&Gamepad>) {
 
 /// B362: each style's ✕ (the keyboard's Enter), for the menus' join hints, and its width / height.
 #[derive(Resource, Default)]
-pub(crate) struct Buttons(pub HashMap<Style, (Handle<Image>, f32)>);
+pub(crate) struct Buttons(pub HashMap<Style, (Handle<Image>, f32)>, pub HashMap<(Style, u8), (Handle<Image>, f32)>);
 
 /// `style`'s ✕ (bottom face button; the keyboard's Enter).
 fn ok_glyph(style: Style) -> Glyph {
@@ -580,6 +601,13 @@ fn bake_buttons(mut images: ResMut<Assets<Image>>, mut buttons: ResMut<Buttons>)
         let (w, h) = (p.width(), p.height());
         let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(p), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
         buttons.0.insert(s, (images.add(img), w as f32 / h as f32));
+        // B383: the Mods page's kind switch and detail buttons
+        for (i, g) in page_glyphs(s).iter().enumerate() {
+            let p = draw_glyph(g);
+            let (w, h) = (p.width(), p.height());
+            let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(p), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+            buttons.1.insert((s, i as u8), (images.add(img), w as f32 / h as f32));
+        }
     }
 }
 
