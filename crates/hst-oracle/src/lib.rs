@@ -535,6 +535,14 @@ impl Ee {
         };
         let lo64 = u64::MAX as u128;
         match (fun, sa) {
+            (0x00, _) | (0x01, _) => {
+                // madd / maddu: {hi, lo} += rs × rt (32-bit), rd = lo
+                let acc = (self.hi as u32 as u64) << 32 | self.lo as u32 as u64;
+                let p = if fun == 0 { (s as i32 as i64 * t as i32 as i64) as u64 } else { (s as u32 as u64) * (t as u32 as u64) };
+                let v = acc.wrapping_add(p);
+                (self.lo, self.hi) = (sx32(v as u32), sx32((v >> 32) as u32));
+                self.set(rd, self.lo);
+            }
             (0x10, _) => self.set(rd, self.hi1),
             (0x11, _) => self.hi1 = s,
             (0x12, _) => self.set(rd, self.lo1),
