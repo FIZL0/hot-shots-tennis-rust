@@ -1,7 +1,7 @@
 //! M91a1: the on-screen pad of the native iPhone app, as the browser's (`web/touch.js`, B247): a virtual gamepad the
 //! game reads like any controller, so menus and matches take it through the same bindings as a real pad (✕ = shot / OK,
 //! ○ = slice / back, △ = lob, □, L1/R1, Select = swap hand, Start = pause; in a match L1/R1 also emote, `emote::touch`
-//! knowing it by its name). Face buttons in a diamond for the right thumb, the shoulders and Select/Start along the top,
+//! knowing it by its name). Beside Select, while online chat is on, a speech bubble opens the chat box (`chat::BUTTON`). Face buttons in a diamond for the right thumb, the shoulders and Select/Start along the top,
 //! clear of the notch and the home indicator (the window's safe area). It shows while no real controller is connected:
 //! one connecting takes it away in the same frame, before any seat or slot sees both (B247).
 //!
@@ -73,6 +73,8 @@ struct Layout {
     zone: Rect,
     /// The menus' fixed stick: its centre.
     corner: Vec2,
+    /// The chat button, left of Select.
+    chat: Rect,
 }
 
 impl Layout {
@@ -97,6 +99,7 @@ impl Layout {
             ],
             zone: Rect::from_corners(Vec2::new(0.0, size.y * 0.18), Vec2::new(size.x * 0.45, size.y)),
             corner: Vec2::new(l + u * 0.4 + u * 1.3, size.y - b - u * 0.4 - u * 1.3),
+            chat: Rect::from_corners(Vec2::new(size.x / 2.0 - u * 3.2, t + u * 0.3), Vec2::new(size.x / 2.0 - u * 2.3, t + u * 1.0)),
         }
     }
 
@@ -232,6 +235,8 @@ struct KeyNode(usize);
 #[derive(Component)]
 struct Glyph(usize);
 #[derive(Component)]
+struct ChatKey;
+#[derive(Component)]
 enum StickNode {
     Base,
     Knob,
@@ -312,6 +317,12 @@ fn drive(
     let mut buzz = false;
     let landed: Vec<_> = touches.iter_just_pressed().map(|t| (t.id(), t.position())).collect();
     for (id, p) in landed {
+        if crate::chat::BUTTON.load(Ordering::Relaxed) && l.chat.inflate(l.u * 0.2).contains(p) {
+            crate::chat::ASK.store(1, Ordering::Relaxed);
+            touches.clear_just_pressed(id);
+            buzz = true;
+            continue;
+        }
         let (took, pressed) = f.land(id, p, &l, menu, frame);
         if took {
             touches.clear_just_pressed(id);
@@ -380,13 +391,15 @@ fn draw(
     mut keys: Query<(&KeyNode, &mut Node, &mut BackgroundColor), (Without<Glyph>, Without<StickNode>)>,
     mut glyphs: Query<(&Glyph, &mut Node), (Without<KeyNode>, Without<StickNode>)>,
     mut stick: Query<(&StickNode, &mut Node, &mut Visibility), (Without<KeyNode>, Without<Glyph>, Without<Root>)>,
+    mut chat: Query<(&mut Node, &mut Visibility), (With<ChatKey>, Without<KeyNode>, Without<Glyph>, Without<StickNode>, Without<Root>)>,
     mut art: Local<Option<[(Handle<Image>, f32); 8]>>,
 ) {
     let Ok(win) = window.single() else { return };
     let Ok(root) = root.single() else {
         if pad.shown {
             let art = art.get_or_insert_with(|| bake(&mut images));
-            spawn(&mut commands, art);
+            let bubble = images.add(bubble());
+            spawn(&mut commands, art, bubble);
         }
         return;
     };
@@ -430,6 +443,14 @@ fn draw(
             }
         }
     }
+    for (mut n, mut v) in &mut chat {
+        v.set_if_neq(if crate::chat::BUTTON.load(Ordering::Relaxed) { Visibility::Inherited } else { Visibility::Hidden });
+        place(&mut n, l.chat);
+        let r = BorderRadius::all(px(l.u * 0.3));
+        if n.border_radius != r {
+            n.border_radius = r;
+        }
+    }
     let f = &pad.fingers;
     let centre = if pad.menu { Some(l.corner) } else { f.stick.map(|(_, c)| c) };
     for (s, mut n, mut v) in &mut stick {
@@ -445,7 +466,7 @@ fn draw(
 }
 
 /// The pad's nodes: the stick's base and knob, then the buttons with their glyphs.
-fn spawn(commands: &mut Commands, art: &[(Handle<Image>, f32); 8]) {
+fn spawn(commands: &mut Commands, art: &[(Handle<Image>, f32); 8], bubble: Handle<Image>) {
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     let abs = || Node { position_type: PositionType::Absolute, border_radius: BorderRadius::MAX, ..default() };
     // over the composited picture, black bars included: its own (HDR) main texture cleared clear, blended on top (a
@@ -472,7 +493,27 @@ fn spawn(commands: &mut Commands, art: &[(Handle<Image>, f32); 8]) {
             let a = if k < FACE { 1.0 } else { 0.7 };
             p.spawn((KeyNode(k), node, BackgroundColor(WASH), BorderColor::all(LINE.with_alpha(LINE.alpha() * a)))).with_child((Glyph(k), Node::default(), ImageNode::new(image.clone()).with_color(Color::WHITE.with_alpha(a))));
         }
+        // as the small buttons
+        let node = Node { border: UiRect::all(Val::Px(2.0)), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..abs() };
+        let glyph = Node { height: Val::Percent(80.0), aspect_ratio: Some(1.0), ..default() };
+        p.spawn((ChatKey, node, BackgroundColor(WASH), BorderColor::all(LINE.with_alpha(LINE.alpha() * 0.7)), Visibility::Hidden)).with_child((glyph, ImageNode::new(bubble).with_color(Color::WHITE.with_alpha(0.7))));
     });
+}
+
+/// The chat button's speech bubble, white on clear.
+fn bubble() -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    use tiny_skia::{PathBuilder, Pixmap, Transform};
+    const S: f32 = 96.0;
+    let mut p = Pixmap::new(S as u32, S as u32).expect("size");
+    let mut pb = PathBuilder::new();
+    pb.push_oval(tiny_skia::Rect::from_xywh(S * 0.1, S * 0.14, S * 0.8, S * 0.58).expect("rect"));
+    pb.move_to(S * 0.3, S * 0.68);
+    pb.line_to(S * 0.2, S * 0.88);
+    pb.line_to(S * 0.46, S * 0.72);
+    super::menu_art::stroke_rgb(&mut p, &pb.finish().expect("path"), [255; 3], S * 0.08, Transform::identity());
+    Image::new(Extent3d { width: S as u32, height: S as u32, depth_or_array_layers: 1 }, TextureDimension::D2, super::menu_art::unpremultiply(p), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)
 }
 
 /// Each button's glyph, white on clear, and its width / height: ✕ ○ □ △ drawn, the small ones' words in the menus'
@@ -557,6 +598,8 @@ mod tests {
             }
             assert_eq!(l.key_at(l.keys[i].center()), Some(i));
         }
+        // the chat button's touch area clear of every button's
+        assert!((0..8).all(|i| l.keys[i].inflate(l.u * 0.2).intersect(l.chat.inflate(l.u * 0.2)).is_empty()));
         // the shoulders sit above the stick's zone; the menus' stick circle inside the window
         assert!(l.keys[4].max.y < l.zone.min.y);
         assert!(l.corner.x - l.reach() >= 59.0 && l.corner.y + l.reach() <= SIZE.y - 21.0);

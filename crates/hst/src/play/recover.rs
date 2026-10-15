@@ -4,7 +4,7 @@
 //! at its window without the peer's pads, lockstep at once). The same peer heard again: the match just goes on. A
 //! new process joining with the lobby's code takes the away player's seats (`net.rs` relay), and the host restarts
 //! the match with it in. After [`WAIT`] the players are asked: a bot takes the seats, or everyone still in goes
-//! back to the lobby together (`Msg::Lobby`; no answer in [`CHOOSE`]: the lobby too).
+//! back to the lobby together (`Msg::Lobby`; no answer in [`CHOOSE`]: the lobby too), or this one leaves alone.
 //!
 //! A restart (`Msg::Restart`) is the host's state before a tick every machine has every seat's pads for (rollback:
 //! ggrs' confirmed tick; lockstep: its next tick) and the new line-up; every machine, the host too, takes the state
@@ -132,28 +132,29 @@ fn score(w: &World) -> String {
     format!("Score (1P's side first): sets {}-{}, games {}-{}.", s.sets[0], s.sets[1], s.games[0], s.games[1])
 }
 
-/// The answer chosen this frame on this machine: ✕ (or Enter, or a tap) on the chosen pill (up/down move between
-/// them; a bot is pill 0, without the pills too), ○ (or Backspace) the lobby.
-fn pressed(w: &mut World) -> Option<bool> {
+/// The answer chosen this frame on this machine, a `CHOICES` index: ✕ (or Enter, or a tap) on the chosen pill (up/down
+/// move between them; a bot is pill 0, without the pills too), ○ (or Backspace) the lobby.
+fn pressed(w: &mut World) -> Option<usize> {
     let keys = w.get_resource::<ButtonInput<KeyCode>>()?;
     let mut yes = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]);
     let mut no = keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyK]);
-    let mut moved = keys.any_just_pressed([KeyCode::KeyW, KeyCode::ArrowUp, KeyCode::KeyS, KeyCode::ArrowDown]);
+    let mut up = keys.any_just_pressed([KeyCode::KeyW, KeyCode::ArrowUp]);
+    let mut down = keys.any_just_pressed([KeyCode::KeyS, KeyCode::ArrowDown]);
     let mut q = w.query::<&Gamepad>();
     for g in q.iter(w).filter(|g| super::controls::readable(g)) {
         yes |= g.just_pressed(GamepadButton::South);
         no |= g.just_pressed(GamepadButton::East);
-        moved |= g.just_pressed(GamepadButton::DPadUp) || g.just_pressed(GamepadButton::DPadDown);
+        up |= g.just_pressed(GamepadButton::DPadUp);
+        down |= g.just_pressed(GamepadButton::DPadDown);
     }
     let mut sel = 0;
     if let Some(mut n) = w.get_resource_mut::<super::main_menu::pause::OnlineNotice>().filter(|n| n.ask) {
-        if moved {
-            n.sel ^= 1;
-        }
+        let k = super::main_menu::pause::CHOICES.len();
+        n.sel = (n.sel + usize::from(down) + (k - 1) * usize::from(up)) % k;
         yes |= std::mem::take(&mut n.tapped);
         sel = n.sel;
     }
-    if yes { Some(sel == 0) } else if no { Some(false) } else { None }
+    if yes { Some(sel) } else if no { Some(1) } else { None }
 }
 
 /// Each frame (`dt` real seconds): the keep-alive out, who's silent, the countdowns and answers; the notice to show
@@ -176,6 +177,15 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     if np.end.is_some() || over {
         return String::new();
     }
+    // Leave: this machine alone goes to the main menu; the host's leaving ends the match for everyone (no host)
+    if press == Some(2) {
+        if np.me == "host" {
+            np.out.push(Msg::Bye(format!("{} left.", name(&np.room, "host"))));
+        }
+        np.finish("You left the match.".into(), false);
+        return String::new();
+    }
+    let press = press.map(|c| c == 0);
     for q in r.quiet.values_mut() {
         q.0 += dt;
     }

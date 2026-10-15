@@ -355,14 +355,14 @@ fn after(
 #[derive(Resource, Default)]
 pub(in crate::play) struct OnlineNotice {
     pub text: String,
-    /// The question is up: pill 0 "A bot plays for them", 1 "Everyone to the lobby".
+    /// The question is up: pill 0 "A bot plays for them", 1 "Everyone to the lobby", 2 "Leave".
     pub ask: bool,
     pub sel: usize,
     pub tapped: bool,
 }
 
 /// The choices' pills.
-pub(in crate::play) const CHOICES: [&str; 2] = ["A bot plays for them", "Everyone to the lobby"];
+pub(in crate::play) const CHOICES: [&str; 3] = ["A bot plays for them", "Everyone to the lobby", "Leave"];
 
 #[derive(Component)]
 struct NoticeSlot(usize);
@@ -381,7 +381,7 @@ fn notice_layout(text: &Text, n: &OnlineNotice) -> (Vec<super::Quad>, Vec<[f32; 
     }
     let lines: Vec<&str> = n.text.lines().collect();
     let (x, w, max) = (120.0, 400.0, 368.0);
-    let h = 18.0 + 26.0 * lines.len() as f32 + if n.ask { 80.0 } else { 0.0 } + 14.0;
+    let h = 18.0 + 26.0 * lines.len() as f32 + if n.ask { 40.0 * CHOICES.len() as f32 } else { 0.0 } + 14.0;
     let top = (224.0 - h / 2.0).round();
     d.anchor = widescreen::Anchor::Span;
     d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 64.0);
@@ -400,12 +400,8 @@ fn notice_layout(text: &Text, n: &OnlineNotice) -> (Vec<super::Quad>, Vec<[f32; 
             let r = [176.0, y0 + 40.0 * k as f32, 288.0, 32.0];
             let on = k == n.sel;
             d.pill_at(r, [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
-            // as the pause dialog's rows: outlined, the other one dimmed
-            let start = d.out.len();
-            d.outlined(|d| d.label(word, 320.0, r[1] + 6.0, 20.0, 230.0, if on { WHITE } else { UNCHOSEN }));
-            if !on {
-                d.out[start..].iter_mut().for_each(|q| q.alpha = 64.0);
-            }
+            // outlined, every one in full: a dimmed pill read as one that can't be chosen
+            d.outlined(|d| d.label(word, 320.0, r[1] + 6.0, 20.0, 230.0, WHITE));
             pills.push(r);
         }
         // where the pause dialog's hand points (`menu.rs`: pill x − 60)

@@ -4,10 +4,11 @@
 //!
 //! The box: T opens it on the keyboard (typed keys go to it, not to the menu or the match), Enter sends, Esc
 //! closes; a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
-//! themselves after a few seconds); the menus' legend strip shows T / R2 L2 as Chat (B320). On a touch page (the
-//! legend hidden there) a small Chat label shows instead, and a tap on it opens the box (the phone's keyboard); in the
-//! browser that's a speech-bubble button beside Start on the page's on-screen pad (`web/touch.js`, B312). The last
-//! few lines show at the bottom left, fading out, over the menus and the HUD alike, taking no presses from the match.
+//! themselves after a few seconds); the menus' legend strip shows T / R2 L2 as Chat (B320). On a touch screen a
+//! speech-bubble button on the on-screen pad opens the box (the phone's keyboard): beside Start in the browser
+//! (`web/touch.js`, B312), beside Select in the phone apps (`play/touch_pad.rs`, [`BUTTON`]). The chat itself takes no
+//! clicks or taps: nothing of it shows until a line is said, then the last few show at the bottom left, fading out,
+//! over the menus and the HUD alike.
 //! `/mute NAME` and `/unmute NAME` (or the phrases' Mute/Unmute rows) hide a player's lines on this machine. Settings
 //! → Online & Mods → Chat off hides all of it.
 //!
@@ -40,6 +41,9 @@ pub static HIDDEN: AtomicBool = AtomicBool::new(false);
 
 /// B396: the lobby's Chat button asks for the box (1: the typed line) or the pads' phrases (2).
 pub static ASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The on-screen pad's chat button is up (chat on, the box and phrases closed); a tap on it stores 1 in [`ASK`].
+pub static BUTTON: AtomicBool = AtomicBool::new(false);
 
 /// `text` as a chat line: control and bidi-override characters out, spaces trimmed, at most [`MAX`] characters;
 /// `None` if nothing is left.
@@ -123,8 +127,6 @@ impl Chat {
 struct Root;
 #[derive(Component)]
 struct Row(usize);
-#[derive(Component)]
-struct Tap;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Chat>()
@@ -162,7 +164,6 @@ fn input(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut typed: MessageReader<KeyboardInput>,
     pads: Query<&Gamepad>,
-    (mut mouse, mut touches, window, tap): (ResMut<ButtonInput<MouseButton>>, ResMut<Touches>, Query<&Window, With<bevy::window::PrimaryWindow>>, Query<TapNode, With<Tap>>),
     time: Res<Time<Real>>,
     mut was: Local<bool>,
 ) {
@@ -189,9 +190,10 @@ fn input(
         }
     }
     let ask = ASK.swap(0, Ordering::Relaxed);
-    let tapped = !chat.open && tapped(&mut mouse, &mut touches, window.single().ok(), tap.single().ok().filter(|t| t.3.get()).map(|(n, at, t, _)| (n, at, t.physical_size().as_vec2())));
     #[cfg(target_arch = "wasm32")]
-    let tapped = crate::web::chat_tapped() && !chat.open || tapped;
+    let tapped = crate::web::chat_tapped() && !chat.open;
+    #[cfg(not(target_arch = "wasm32"))]
+    let tapped = false;
     if !chat.open && (keys.just_pressed(KeyCode::KeyT) || tapped || ask == 1) {
         chat.open = true;
         typed.clear();
@@ -250,31 +252,6 @@ fn input(
     };
 }
 
-type TapNode = (&'static ComputedNode, &'static UiGlobalTransform, &'static ComputedUiRenderTargetInfo, &'static InheritedVisibility);
-
-/// Whether a click or a touch went down on Chat; it's taken, so the menu under it doesn't get it too. Hit-tested
-/// here: Bevy's `Interaction` only works for a UI camera drawing to the window, and ours draws into `hud_gamma`'s
-/// image (the view's rect of the window, B117).
-fn tapped(mouse: &mut ButtonInput<MouseButton>, touches: &mut Touches, win: Option<&Window>, tap: Option<(&ComputedNode, &UiGlobalTransform, Vec2)>) -> bool {
-    let (Some(win), Some((node, at, target))) = (win, tap) else { return false };
-    #[allow(unused_mut)]
-    let mut size = Vec2::new(win.width(), win.height());
-    // the browser's touches and mouse are in the page's CSS px (as the menus' `pointer`)
-    #[cfg(target_arch = "wasm32")]
-    if let Some(css) = crate::web::page_size() {
-        size = css;
-    }
-    let view = crate::play::widescreen::view(size);
-    let on = |p: Vec2| view.size().min_element() > 0.0 && node.contains_point(*at, (p - view.min) / view.size() * target);
-    if mouse.just_pressed(MouseButton::Left) && win.cursor_position().is_some_and(on) {
-        mouse.clear_just_pressed(MouseButton::Left);
-        return true;
-    }
-    let ids: Vec<_> = touches.iter_just_pressed().filter(|t| on(t.position())).map(|t| t.id()).collect();
-    ids.iter().for_each(|&id| _ = touches.clear_just_pressed(id));
-    !ids.is_empty()
-}
-
 /// The phone's keyboard (the browser's code-entry input) up while the box is open on a touch page.
 fn phone(was: &mut bool, on: bool) {
     if std::mem::replace(was, on) != on {
@@ -283,7 +260,7 @@ fn phone(was: &mut bool, on: bool) {
     }
 }
 
-/// The lines (fading), the box or the phrase, and Chat to tap; sized on the 4:3 screen's height as the FPS counter
+/// The lines (fading), and the box or the phrase; sized on the 4:3 screen's height as the FPS counter
 /// (`graphics::fps_counter`), so they scale uniformly at any window shape.
 fn draw(
     mut commands: Commands,
@@ -291,8 +268,6 @@ fn draw(
     chat: Res<Chat>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     root: Query<(Entity, &mut Visibility), With<Root>>,
-    mut tap: Query<&mut Visibility, (With<Tap>, Without<Root>)>,
-    last: Option<Res<crate::play::main_menu::legend::Last>>,
     mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut BackgroundColor)>,
 ) {
     let on = !HIDDEN.load(Ordering::Relaxed) && (net.is_some_and(|n| n.in_room()) || sampled());
@@ -308,19 +283,12 @@ fn draw(
         *vis = v;
     }
     // B312: in the browser the on-screen pad's own chat button stands in for the label
+    let button = on && !chat.open && chat.phrase.is_none();
+    BUTTON.store(button, Ordering::Relaxed);
     #[cfg(target_arch = "wasm32")]
-    crate::web::touch_chat(on && !chat.open && chat.phrase.is_none());
+    crate::web::touch_chat(button);
     if !on {
         return;
-    }
-    // B320: the Chat label only on a touch page (no keys to press, and no legend strip there); elsewhere the
-    // legend's T / R2 L2 say it
-    let touch = !cfg!(target_arch = "wasm32") && last.is_some_and(|l| *l == crate::play::main_menu::legend::Last::Touch);
-    for mut v in &mut tap {
-        let want = if touch { Visibility::Inherited } else { Visibility::Hidden };
-        if *v != want {
-            *v = want;
-        }
     }
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
     let px = |n: f32| if tall { bevy::text::FontSize::Vw(n / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(n / 448.0 * 100.0) };
@@ -339,13 +307,11 @@ fn draw(
                 None => (String::new(), 0.0, Color::WHITE),
             },
             // the box, or the pads' phrase
-            SHOWN => match (chat.open, chat.phrase) {
+            _ => match (chat.open, chat.phrase) {
                 (true, _) => (format!("Say: {}_", chat.draft), 1.0, Color::srgb(0.6, 1.0, 0.6)),
                 (_, Some((i, _))) => (format!("R2 next, L2 say: {}", chat.phrases()[i]), 1.0, Color::srgb(0.6, 1.0, 0.6)),
                 _ => (String::new(), 0.0, Color::WHITE),
             },
-            // Chat to tap or click
-            _ => ("Chat".into(), if busy { 0.0 } else { 0.6 }, Color::WHITE),
         };
         if text.0 != s {
             text.0 = s;
@@ -358,7 +324,7 @@ fn draw(
         if colour.0 != c {
             colour.0 = c;
         }
-        // the shadow fades with its line: a hidden Chat or an old line leaves no dark copy behind
+        // the shadow fades with its line: an old line leaves no dark copy behind
         let sc = TextShadow::default().color.with_alpha(TextShadow::default().color.alpha() * alpha);
         if shadow.color != sc {
             shadow.color = sc;
@@ -394,9 +360,6 @@ fn spawn(commands: &mut Commands) {
         for i in 0..=SHOWN {
             p.spawn(row(i));
         }
-        p.spawn((Tap, Node { align_self: AlignSelf::FlexStart, ..default() }, Visibility::Hidden)).with_children(|b| {
-            b.spawn(row(SHOWN + 1));
-        });
     });
 }
 
@@ -410,25 +373,6 @@ mod tests {
         assert_eq!(clean("a\u{7}b\u{202e}c\u{0}"), Some("abc".into()));
         assert_eq!(clean(" \u{1b} "), None);
         assert_eq!(clean(&"x".repeat(200)).map(|s| s.len()), Some(MAX));
-    }
-
-    /// A click on Chat opens the box and is taken from the menus; one beside it isn't. The UI's image is half the
-    /// window's size (as `hud_gamma`'s at a low scale), so the point is mapped into it.
-    #[test]
-    fn click_on_chat_is_taken() {
-        let mut win = Window::default();
-        win.resolution.set(800.0, 600.0);
-        // Chat: 40×20 image px centred at (30, 250) of a 400×300 image = window (40..80, 480..520)
-        let node = ComputedNode { size: Vec2::new(40.0, 20.0), ..default() };
-        let at = UiGlobalTransform::from_translation(Vec2::new(30.0, 250.0));
-        let mut touches = Touches::default();
-        for (p, hit) in [(Vec2::new(60.0, 500.0), true), (Vec2::new(200.0, 500.0), false)] {
-            win.set_cursor_position(Some(p));
-            let mut mouse = ButtonInput::<MouseButton>::default();
-            mouse.press(MouseButton::Left);
-            assert_eq!(tapped(&mut mouse, &mut touches, Some(&win), Some((&node, &at, Vec2::new(400.0, 300.0)))), hit);
-            assert_eq!(mouse.just_pressed(MouseButton::Left), !hit, "{p}");
-        }
     }
 
     /// In a lobby, T opens the box, typed keys go into it (not to the menus' keys), Enter sends the line.
