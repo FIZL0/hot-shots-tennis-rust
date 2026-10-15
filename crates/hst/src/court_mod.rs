@@ -349,12 +349,12 @@ fn primitive(p: &gltf::Primitive, blob: &[u8], light: Option<&Light>, rest: &[Ma
 
 /// After each weather change (`weather::apply` relights every material): the court mod's own light and fog back,
 /// and the ground shadow's strength the layout court's ground has now.
-fn keep(look: Option<Res<crate::weather::CourtLook>>, kept: Res<Kept>, mut materials: ResMut<Assets<GsMaterial>>, mut last: Local<Option<Option<u8>>>) {
+fn keep(look: Option<Res<crate::weather::CourtLook>>, kept: Res<Kept>, mut materials: ResMut<Assets<GsMaterial>>, mut last: Local<Option<(Option<u8>, Option<(u8, f32)>)>>) {
     let Some(look) = look else { return };
-    if *last == Some(look.last) {
+    if *last == Some((look.last, look.mix)) {
         return;
     }
-    *last = Some(look.last);
+    *last = Some((look.last, look.mix));
     let darken = look.holes.iter().find_map(|id| materials.get(*id)).map_or(0.0, |m| m.uniform.shadow);
     for &(id, role) in &kept.materials {
         if let Some(mut m) = materials.get_mut(id) {

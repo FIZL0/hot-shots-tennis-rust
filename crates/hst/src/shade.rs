@@ -42,7 +42,7 @@ pub struct FixedLight(pub [Vec4; 5]);
 
 /// A rig's or the ball's own GS draws, and the (light scale, weather, player on the +z half, mirrored) last applied.
 #[derive(Component)]
-struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool, bool)>);
+struct Lit(Vec<Handle<GsMaterial>>, Option<(f32, Option<u8>, bool, bool, Option<(u8, f32)>)>);
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<SharedDraws>().add_systems(Update, (own_materials.after(crate::noise::attach), light.after(crate::weather::apply)).chain());
@@ -173,6 +173,8 @@ fn light(
 ) {
     let rain = crate::weather::now() >= 2;
     let w = look.as_ref().and_then(|l| l.last);
+    // B360: fading towards the next game's weather as the court is (`weather::apply`)
+    let mix = look.as_ref().and_then(|l| l.mix);
     for (root, t, mut lit, ball, player, fixed, shared) in &mut rigs {
         if let Some(FixedLight([dir, colour, ambient, dir2, second])) = fixed {
             // a left-hander's inspect rig is mirrored too: cull as the match does (checked each frame, as its
@@ -184,7 +186,7 @@ fn light(
                 }
             }
             if lit.1.is_none() {
-                lit.1 = Some((1.0, None, false, false));
+                lit.1 = Some((1.0, None, false, false, None));
                 for h in &lit.0 {
                     let Some(mut m) = materials.get_mut(h) else { continue };
                     let u = &mut m.uniform;
@@ -211,15 +213,22 @@ fn light(
         // a left-hander is drawn mirrored (x scale −1): its one-sided parts keep the faces towards the camera, as
         // the game's (Will's eyes are one-sided)
         let mirror = t.affine().matrix3.determinant() < 0.0;
-        let key = (s, w, player && p.z < 0.0, mirror);
+        let key = (s, w, player && p.z < 0.0, mirror, mix);
         if lit.1 == Some(key) {
             continue;
         }
         lit.1 = Some(key);
-        let court = look.as_deref().zip(w).map(|(look, w)| {
+        let of = |look: &crate::weather::CourtLook, w: u8| {
             let l = look.looks.get(w as usize).map_or(hst_sim::weather::Look::CLEAR, |r| hst_sim::weather::look(w, *r));
             let light = if player { gs::player_light(&look.envir, &l, look.players) } else { gs::model_light(&look.envir, &l) };
             (light, gs::court_fog(&look.envir, &l))
+        };
+        let court = look.as_deref().zip(w).map(|(look, w)| {
+            let (light, fog) = of(look, w);
+            let Some((to, t)) = mix else { return (light, fog) };
+            let (light2, fog2) = of(look, to);
+            let v = |a: Vec4, b: Vec4| a.lerp(b, t);
+            (light.zip(light2).map(|(a, b)| (v(a.0, b.0), v(a.1, b.1), v(a.2, b.2))).or(light), fog.zip(fog2).map(|(a, b)| (v(a.0, b.0), v(a.1, b.1), v(a.2, b.2), v(a.3, b.3))).or(fog))
         });
         let (mut dir, mut colour, mut ambient) = gs::DEFAULT_LIGHT;
         let (mut dir2, mut second) = (Vec4::ZERO, Vec4::ZERO);
