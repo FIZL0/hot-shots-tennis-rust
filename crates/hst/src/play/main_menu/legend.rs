@@ -57,6 +57,8 @@ pub(crate) enum Act {
     Key,
     /// B320: text chat in an online lobby (`chat.rs`): T, a pad's R2 (phrases) and L2 (say it).
     Chat,
+    /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab.
+    Kind,
 }
 
 /// A device's button art.
@@ -146,6 +148,7 @@ fn menu_keys(act: Act, bind: &Bindings) -> Vec<String> {
         Act::Start | Act::Cancel => vec!["Esc".into()],
         Act::Type => vec!["A-Z".into()],
         Act::Chat => vec!["T".into()],
+        Act::Kind => vec!["1".into(), "3".into()],
         Act::Key => vec![],
     }
     .into_iter()
@@ -294,13 +297,15 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             v.push((Act::Back, "Leave"));
         }
+        // B373: a kind the store doesn't carry yet has nothing to move to or choose
+        Screen::Mods if m.add.empty_kind() => v.extend([(Act::Costume, "Tab"), (Act::Kind, "Kind"), (Act::Back, "Back")]),
         Screen::Mods => {
             moves(&mut v, (true, m.add.sideways(m.sel)));
             // B335: an uploader's mods fold away under their heading on Browse
             if let Some((_, folded)) = m.add.fold_at(m.sel) {
                 v.push((Act::LeftRight, if folded { "Show" } else { "Fold" }));
             }
-            v.extend([(Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Back, "Back")]);
+            v.extend([(Act::Ok, "Choose"), (Act::Costume, "Tab"), (Act::Kind, "Kind"), (Act::Back, "Back")]);
         }
         _ => {}
     }
@@ -479,6 +484,19 @@ pub(super) fn button_names(dev: Option<Entity>, act: Act, bind: &Bindings) -> Ve
         .collect()
 }
 
+/// B373: the names on the kind tabs' buttons beside the Mods pages' kind row: a connected pad's L2 / R2 (ZL / ZR,
+/// LT / RT; `HST_LEGEND`'s style for `--shot`s), else the keyboard's 1 / 3.
+pub(super) fn kind_caps() -> [String; 2] {
+    let style = forced().or_else(|| PADS.lock().ok().and_then(|v| v.first().copied())).unwrap_or(Style::Keys);
+    let it = Item { keys: menu_keys(Act::Kind, &Bindings::default()), ..item(Act::Kind, "", &[]) };
+    let mut names = glyphs(style, &it).into_iter().filter_map(|g| match g {
+        Glyph::Cap(s) => Some(s),
+        Glyph::Shoulder(s) => Some(s.to_string()),
+        _ => None,
+    });
+    [names.next().unwrap_or_default(), names.next().unwrap_or_default()]
+}
+
 /// B362: the styles a "press ✕ / Enter to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if
 /// it names one, for `--shot`s without the pad), then the keyboard's Enter.
 pub(crate) fn join_styles() -> Vec<Style> {
@@ -596,6 +614,9 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Chat if sw => vec![Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")],
         Act::Chat if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("R2"), Glyph::Shoulder("L2")],
         Act::Chat => vec![Glyph::Shoulder("RT"), Glyph::Shoulder("LT")],
+        Act::Kind if sw => vec![Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")],
+        Act::Kind if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("L2"), Glyph::Shoulder("R2")],
+        Act::Kind => vec![Glyph::Shoulder("LT"), Glyph::Shoulder("RT")],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
@@ -951,6 +972,8 @@ mod tests {
         let it = |act| Item { act, label: String::new(), keys: vec![] };
         assert_eq!(glyphs(Style::Switch, &it(Act::Costume)), [Glyph::Shoulder("L"), Glyph::Shoulder("R")]);
         assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")]);
+        assert_eq!(glyphs(Style::Switch, &it(Act::Kind)), [Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")]);
+        assert_eq!(glyphs(Style::Ps, &it(Act::Kind)), [Glyph::Shoulder("L2"), Glyph::Shoulder("R2")]);
         assert_eq!(glyphs(Style::Switch, &it(Act::Hand)), [Glyph::Small("-")]);
         assert_eq!(glyphs(Style::Generic, &it(Act::Start)), [Glyph::Small("Start")]);
         // the font draws Switch's - and +
@@ -981,6 +1004,10 @@ mod tests {
         }
         let mut m = base(Screen::Main);
         m.add.ask = Some(0);
+        starts.push((m, Dev::Keys));
+        // B373: a Mods kind tab the store doesn't carry yet
+        let mut m = base(Screen::Mods);
+        m.add.kind = crate::modstore::Kind::Umpire;
         starts.push((m, Dev::Keys));
         // B326: a Settings row picked, on every row of every page
         for s in [Screen::Display, Screen::Graphics, Screen::Sound, Screen::ModSettings] {
@@ -1046,7 +1073,7 @@ mod tests {
                     let has = |a: &[Act]| acts.iter().any(|(x, _)| a.contains(x));
                     let h = |f| handled(&m, dev, f);
                     // ✕ there reloads the game, opens a file picker or reaches the store: taken as handled
-                    let ok = matches!(m.screen, Screen::Mods) || m.screen == Screen::Main && m.add.ask.is_some() || h(|p| &mut p.ok);
+                    let ok = matches!(m.screen, Screen::Mods) && !m.add.empty_kind() || m.screen == Screen::Main && m.add.ask.is_some() || h(|p| &mut p.ok);
                     let got = [
                         h(|p| &mut p.up) || h(|p| &mut p.down),
                         h(|p| &mut p.left) || h(|p| &mut p.right),
@@ -1056,6 +1083,7 @@ mod tests {
                         h(|p| &mut p.prev) || h(|p| &mut p.next),
                         h(|p| &mut p.page),
                         h(|p| &mut p.hand),
+                        h(|p| &mut p.kind_prev) || h(|p| &mut p.kind_next),
                     ];
                     let want = [
                         has(&[Act::Move, Act::UpDown]),
@@ -1066,8 +1094,9 @@ mod tests {
                         has(&[Act::Costume]),
                         has(&[Act::Page]),
                         has(&[Act::Hand]),
+                        has(&[Act::Kind]),
                     ];
-                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select] handled vs legend {acts:?}", m.screen, m.sel);
+                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select L2R2] handled vs legend {acts:?}", m.screen, m.sel);
                     checked += 1;
                 }
             }

@@ -35,10 +35,12 @@ pub(super) enum Act {
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
     Tab(usize),
+    /// B373: the Mods pages' kind tab `i` (`mods_kind::KINDS`): a tap opens it.
+    Kind(usize),
 }
 
 /// ✕.
-pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false };
+pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false, kind_prev: false, kind_next: false };
 
 pub(super) fn press(f: impl FnOnce(&mut Press)) -> Act {
     let mut k = Press::default();
@@ -177,6 +179,8 @@ impl Menu {
             }
             Act::Tab(i) if tap && super::options::TABS[i].1 != self.screen => self.go(super::options::TABS[i].1, &mut out),
             Act::Tab(_) => {}
+            Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
+            Act::Kind(_) => {}
         }
         out
     }
