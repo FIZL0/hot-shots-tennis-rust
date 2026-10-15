@@ -69,3 +69,8 @@ the menu, one mesh at 60 fps, shows prep 10.5 ms too. CPU work is ~11 ms a frame
 scale (2556×1179, 2x MSAA, HDR scene image). Metal gave no GPU timestamps through RenderDiagnosticsPlugin (CPU-only
 pass times, all <0.1 ms): removed again. The 20.8 s "frame" was the app suspended (lifecycle Suspended/Running).
 Next: A/B on the palace at Scale 50–70% and MSAA off to size the GPU levers.
+
+## P28 (2026-10-15): acquire split out of prep, GPU time from Metal
+The `HST_FPS` log now has a `frame split ms` line every 5 s with `acquire` (the swapchain wait, no longer in
+`prep`) and `gpu` (Metal GPUStartTime→GPUEndTime over the frame's command buffers). Untested on a device:
+journal 2026-10-15-p28-ios-gpu-time.
