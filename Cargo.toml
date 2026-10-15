@@ -31,6 +31,8 @@ wgpu = { path = "third_party/wgpu" }
 # shifting the dynamic offsets and indexing past their end (render_phase/mod.rs, batching/no_gpu_preprocessing.rs)
 # P36: a retained bin's GPU buffers are uploaded only when they changed, not per view × batch set every frame
 # (render_phase/mod.rs `dirty`, batching/gpu_preprocessing.rs write_binned_instance_buffers)
+# P47: where pipelines compile on the render thread (browser, macOS), a queue pass stops after a time budget
+# (render_resource/pipeline_cache.rs `compile_budget`, set by hst's mode.rs)
 bevy_render = { path = "third_party/bevy_render" }
 # P37: the mesh-preprocess bind groups kept while their buffers stay the same, instead of rebuilt for every view and
 # phase each frame (src/render/gpu_preprocess.rs)

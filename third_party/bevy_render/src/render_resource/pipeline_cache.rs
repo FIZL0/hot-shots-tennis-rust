@@ -214,6 +214,10 @@ pub struct PipelineCache {
     pub(crate) synchronous_pipeline_compilation: bool,
     /// If `true`, the shader cache needs to be repopulated from the main world's `Assets<Shader>`.
     needs_shader_reload: bool,
+    /// opentennis P47: when pipelines compile on this thread (macOS, the browser, or `synchronous_pipeline_compilation`),
+    /// a queue pass stops starting new ones once this much time went by; the rest stay queued for the next frame. At
+    /// least one is started each pass. `None`: Bevy's own behaviour, the whole queue at once.
+    compile_budget: Option<core::time::Duration>,
 }
 
 impl PipelineCache {
@@ -266,6 +270,7 @@ impl PipelineCache {
             global_shader_defs,
             synchronous_pipeline_compilation,
             needs_shader_reload: true,
+            compile_budget: None,
         }
     }
 
@@ -343,11 +348,29 @@ impl PipelineCache {
         }
     }
 
+    /// opentennis P47: sets [`Self::compile_budget`]'s time for one queue pass of on-thread compiles.
+    pub fn set_compile_budget(&mut self, budget: Option<core::time::Duration>) {
+        self.compile_budget = budget;
+    }
+
+    /// Whether pipelines compile on the thread that processes the queue (no async compile task).
+    fn compiles_in_place(&self) -> bool {
+        cfg!(any(target_arch = "wasm32", target_os = "macos", not(feature = "multi_threaded"))) || self.synchronous_pipeline_compilation
+    }
+
     /// Wait for a render pipeline to finish compiling.
     #[inline]
     pub fn block_on_render_pipeline(&mut self, id: CachedRenderPipelineId) {
         if self.pipelines.len() <= id.id() {
             self.process_queue();
+        }
+
+        // opentennis P47: the queue pass may have left it queued for a later frame (its compile budget)
+        if matches!(self.pipelines[id.id()].state, CachedPipelineState::Queued) {
+            if let PipelineDescriptor::RenderPipelineDescriptor(descriptor) = &self.pipelines[id.id()].descriptor {
+                let descriptor = *descriptor.clone();
+                self.pipelines[id.id()].state = self.start_create_render_pipeline(id.id(), descriptor);
+            }
         }
 
         let state = &mut self.pipelines[id.id()].state;
@@ -653,7 +676,20 @@ impl PipelineCache {
             }
         }
 
+        // opentennis P47: on-thread compiles stop starting once the pass's budget is spent (see `compile_budget`)
+        let budget = self.compile_budget.filter(|_| self.compiles_in_place());
+        let start = bevy_platform::time::Instant::now();
+        let mut started = false;
         for id in waiting_pipelines {
+            if let Some(budget) = budget
+                && started
+                && matches!(pipelines[id].state, CachedPipelineState::Queued)
+                && start.elapsed() >= budget
+            {
+                self.waiting_pipelines.insert(id);
+                continue;
+            }
+            started |= matches!(pipelines[id].state, CachedPipelineState::Queued);
             self.process_pipeline(&mut pipelines[id], id);
         }
 
