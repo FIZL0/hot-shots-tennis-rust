@@ -52,25 +52,31 @@ fn powf() {
     check("powf", 20_000, |s| vec![input(s).abs().clamp(1e-6, 1e6), input(s).clamp(-4.0, 4.0)], |a| libm::powf(a[0], a[1]));
 }
 
-/// Inside the ported argument reduction (|x| ≤ 2^7·π/2): half any bit pattern in range, half [-8, 8].
-fn reduced(seed: &mut u64) -> f32 {
-    let x = input(seed);
-    if x.abs() <= 201.0 { x } else { x % 201.0 }
+/// Any argument: past 2^7·π/2 ≈ 201 (nearly half the bit patterns) the reduction is `__kernel_rem_pio2f`, which
+/// reads only the bits, so an Inf/NaN pattern is a number to it. Draws: a quarter any 32 bits, a quarter any finite
+/// pattern, a quarter [-8, 8], a quarter up to ±2^24 where the reduction cancels most.
+fn trig(seed: &mut u64) -> f32 {
+    match rng(seed) & 3 {
+        0 => f32::from_bits(rng(seed)),
+        1 => Some(f32::from_bits(rng(seed))).filter(|f| f.is_finite()).unwrap_or(0.5),
+        2 => (rng(seed) as f32 / u32::MAX as f32 - 0.5) * 16.0,
+        _ => (rng(seed) as f32 / u32::MAX as f32 - 0.5) * 33554432.0,
+    }
 }
 
 #[test]
 fn sinf() {
-    check("sinf", 20_000, |s| vec![reduced(s)], |a| libm::sinf(a[0]));
+    check("sinf", 20_000, |s| vec![trig(s)], |a| libm::sinf(a[0]));
 }
 
 #[test]
 fn cosf() {
-    check("cosf", 20_000, |s| vec![reduced(s)], |a| libm::cosf(a[0]));
+    check("cosf", 20_000, |s| vec![trig(s)], |a| libm::cosf(a[0]));
 }
 
 #[test]
 fn tanf() {
-    check("tanf", 20_000, |s| vec![reduced(s)], |a| libm::tanf(a[0]));
+    check("tanf", 20_000, |s| vec![trig(s)], |a| libm::tanf(a[0]));
 }
 
 /// Inside [-1, 1] (outside it the port answers the host's NaN; the EE has none).
