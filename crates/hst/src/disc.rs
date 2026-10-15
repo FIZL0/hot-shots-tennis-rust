@@ -9,9 +9,13 @@ use hst_data::iso::Iso;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// `$XDG_DATA_HOME/hst` (else `~/.local/share/hst`); `%APPDATA%\hst` on Windows.
-fn data_dir() -> PathBuf {
+/// `$XDG_DATA_HOME/hst` (else `~/.local/share/hst`); `%APPDATA%\hst` on Windows; the app's Documents on iOS (the
+/// folder the Files app shows, so the ISO, settings.txt and mods/ go in and out there).
+pub(crate) fn data_dir() -> PathBuf {
     let env = |k| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if cfg!(target_os = "ios") {
+        return env("HOME").unwrap_or_default().join("Documents");
+    }
     if cfg!(windows) {
         return env("APPDATA").unwrap_or_default().join("hst");
     }
@@ -24,6 +28,15 @@ pub fn pack_path() -> PathBuf {
 
 /// Puts the disc to run from in front of `argv` (see the module doc).
 pub fn resolve(argv: &mut Vec<String>) {
+    // iOS (M91): no dialogs, and a launch that takes too long gets killed, so no import before the window: the pack if
+    // there is one, else straight from the first ISO in the app's folder
+    #[cfg(target_os = "ios")]
+    if argv.is_empty() {
+        let iso = std::fs::read_dir(data_dir()).into_iter().flatten().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")));
+        let disc = Some(pack_path()).filter(|p| p.exists()).or(iso).unwrap_or_else(|| crate::ios::no_disc());
+        argv.push(disc.to_string_lossy().into_owned());
+        return;
+    }
     let import = argv.first().is_some_and(|a| a == "--import");
     if import {
         argv.remove(0);

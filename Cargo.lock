@@ -3267,6 +3267,7 @@ dependencies = [
  "libudev-sys",
  "log",
  "nix",
+ "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-io-kit",
  "uuid",
@@ -3603,6 +3604,7 @@ dependencies = [
  "iroh-mdns-address-lookup",
  "iroh-tickets",
  "js-sys",
+ "libc",
  "minisign-verify",
  "miniz_oxide 0.8.9",
  "n0-future",
@@ -4443,9 +4445,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libloading"
@@ -8436,8 +8438,6 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d"
 dependencies = [
  "ahash",
  "android-activity",

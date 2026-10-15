@@ -22,6 +22,8 @@ mod court_anim;
 mod cull;
 #[cfg(not(target_arch = "wasm32"))]
 mod disc;
+#[cfg(target_os = "ios")]
+mod ios;
 mod effects;
 mod graphics;
 mod handshake;
@@ -184,7 +186,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--show-fps-detailed" => gfx.show_fps = 2,
             // B344: Sway LOD for the run (the browser's `?sway_lod=on`)
             "--sway-lod" | "--sway_lod" => noise::set_lod(a.next().is_none_or(|v| v != "off"), true),
-            "--fps" | "--scale" | "--shadows" | "--msaa" | "--ao" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
+            "--fps" | "--scale" | "--shadows" | "--msaa" | "--ao" | "--bloom" | "--fewer-shadows" | "--batch-crowd" | "--merge-meshes" | "--mesh" => _ = gfx.set(&x[2..], &a.next().unwrap_or_default()),
             "--cull" => {
                 let v = a.next().unwrap_or_default();
                 gfx.set("cull", &v);
@@ -268,6 +270,8 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    #[cfg(target_os = "ios")]
+    ios::log_to_documents(&disc::data_dir());
     // `hst net …`: the lobby flow in a terminal (`net::cli`)
     // `hst net … --play [disc] [flags]`: the online match once everyone's in
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
@@ -340,7 +344,13 @@ fn start(argv: Vec<String>) {
         render.priority = bevy::render::settings::WgpuSettingsPriority::WebGL2;
         render.limits = bevy::render::settings::WgpuLimits { max_texture_dimension_2d: 8192, max_texture_dimension_3d: 2048, ..bevy::render::settings::WgpuLimits::downlevel_webgl2_defaults() };
     }
-    app.add_plugins(DefaultPlugins.set(bevy::render::RenderPlugin { render_creation: render.into(), ..default() }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() }));
+    let plugins = DefaultPlugins.set(bevy::render::RenderPlugin { render_creation: render.into(), ..default() }).set(WindowPlugin { primary_window: Some(Window { title: title.into(), name: Some("hst".into()), present_mode, mode, resolution, ..default() }), ..default() });
+    // iOS: the log goes to Documents/hst-log.txt too (`ios.rs`); winit logs every redraw at info there, a line a frame
+    #[cfg(target_os = "ios")]
+    let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn", bevy::log::DEFAULT_FILTER), ..default() });
+    app.add_plugins(plugins);
+    #[cfg(target_os = "ios")]
+    app.add_systems(Last, ios::heartbeat);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]
@@ -1318,6 +1328,10 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>) {
             let f: Vec<u64> = s.rsplit_once(')')?.1.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
             Some(f.iter().sum::<u64>() as f32 * 10.0)
         });
+        #[cfg(target_os = "ios")]
+        let cpu = Some(ios::cpu_ms());
+        #[cfg(target_os = "ios")]
+        eprintln!("thermal {}", ios::thermal());
         if let Some(cpu) = cpu {
             eprintln!("cpu {:.2} ms/frame", (cpu - acc.3) / acc.0 as f32);
             acc.3 = cpu;

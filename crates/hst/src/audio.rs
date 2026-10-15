@@ -817,6 +817,62 @@ mod tests {
         assert!(frames > 30 && frames < 3600);
     }
 
+    /// B386: the match-end sounds of a win, a loss and an annihilation (the banner differs, the sounds don't): the
+    /// result music `bgmm_10`, the win and loss jingles (keys 3, 4), every character's prize voice (program 0 won,
+    /// 1 lost, either line, the B court's set too) and each court's gallery ovation and groan (programs 3/7, 4/8)
+    /// load and are heard.
+    #[test]
+    fn match_end_sounds_are_heard() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let base = mix(&mut iso);
+        // the loudest sample of one play over 2 s
+        let peak = |bank: &Arc<SoundBank>, p: sound::Play| {
+            let sound = Sound(Arc::new(Mutex::new(mix_clone(&base))));
+            sound.play_centre(bank, p);
+            let mut out = Vec::new();
+            for _ in 0..120 {
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            out.iter().fold(0f32, |a, x| a.max(x.abs()))
+        };
+        let (bgm, mid) = SoundBank::music(&mut iso, "Menu", "bgmm_10").expect("result music");
+        let sound = Sound(Arc::new(Mutex::new(mix_clone(&base))));
+        sound.music(&Arc::new(bgm), &mid, 55);
+        let mut out = Vec::new();
+        for _ in 0..600 {
+            sound.0.lock().unwrap().render(&mut out);
+        }
+        let music = out.iter().fold(0f32, |a, x| a.max(x.abs()));
+        assert!(music > 0.01, "result music peak {music}");
+        let jingles = Arc::new(SoundBank::load(&mut iso, "SND/JGL/JIG_00.XB", "data/sound/JINGLE/jig_00.hd").unwrap());
+        for key in [3, 4] {
+            let p = peak(&jingles, sound::Play { slot: 8, program: 0, key, volume: 0x80, speed: 1.0 });
+            assert!(p > 0.01, "jingle {key} peak {p}");
+        }
+        for c in 0..14 {
+            for b in ["", "B"] {
+                let voice = SoundBank::load(&mut iso, &format!("SND/VOICE/PRIZE/PC_HV{c:02}{b}.XB0"), &format!("data/sound/VOICE/PRIZE/sgv_vc{c:02}f{}.hd", b.to_lowercase()));
+                let voice = Arc::new(voice.unwrap_or_else(|| panic!("prize voice {c:02}{b}")));
+                for (program, key) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                    let p = peak(&voice, sound::Play { slot: 1, program, key, volume: 0x80, speed: 1.0 });
+                    assert!(p > 0.01, "character {c}{b} program {program} key {key} peak {p}");
+                }
+            }
+        }
+        for n in 1..=11 {
+            for pick in 0..4 {
+                let Some(gallery) = gallery_bank(&mut iso, n, pick) else { continue };
+                let gallery = Arc::new(gallery);
+                for (program, key) in [(3, 0), (7, 0), (7, 1), (4, 0), (8, 0)] {
+                    let p = peak(&gallery, sound::Play { slot: 6, program, key, volume: 0x80, speed: 1.0 });
+                    assert!(p > 0.01, "court {n} gallery {pick} program {program} key {key} peak {p}");
+                }
+            }
+        }
+    }
+
     /// B235: each volume slider at 0 silences only its group — the BGM (music), a system sound (SFX), the umpire
     /// (voices) — and master silences all; at full the output is as before (no gain applied).
     #[test]
