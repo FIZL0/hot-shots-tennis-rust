@@ -3,7 +3,8 @@
 //! [`DiscCourt`]; here the mod's `court.glb`, `sky.glb` (standing at the eye like the disc skies) and `gimmick.glb`
 //! (each animation looping on its own clock) are drawn in the layout court's game space, its manifest light is baked
 //! into their vertex colours, its sun casts the shadows, and its BGM and ambience loops play in place of the layout
-//! court's music and creature sounds. Nothing here reads or writes the match: replays stay bit-exact.
+//! court's music and creature sounds. A `__clear` node isn't drawn while it stands between the eye and the court
+//! (M8f5a3, `clear_view`). Nothing here reads or writes the match: replays stay bit-exact.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -41,7 +42,8 @@ pub fn add(app: &mut App, court: Option<Court>) {
         .init_resource::<Kept>()
         .add_systems(PostStartup, setup)
         .add_systems(PreUpdate, sounds)
-        .add_systems(Update, (keep.after(crate::weather::apply), animate));
+        .add_systems(Update, (keep.after(crate::weather::apply), animate))
+        .add_systems(PostUpdate, clear_view.before(bevy::transform::TransformSystems::Propagate));
 }
 
 /// The pause menu turned the match music back on: the court mod's BGM in place of the layout court's.
@@ -72,6 +74,15 @@ pub(crate) struct Kept {
 pub(crate) struct Looped {
     pub(crate) length: f32,
     channels: Vec<Channel>,
+}
+
+/// M8f5a3: a `__clear` set piece (standard §2): its box in game space at rest and what to hide while it stands
+/// between the eye and the court (its node, and its skinned meshes, which hang elsewhere).
+#[derive(Component)]
+pub(crate) struct ClearView {
+    lo: Vec3,
+    hi: Vec3,
+    hide: Vec<Entity>,
 }
 
 /// M8f7: what `scene` spawned for its caller to drive: the animations by name (not left looping) and the named nodes.
@@ -163,10 +174,17 @@ pub(crate) fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document
     let skip = |n: &gltf::Node| n.name().is_some_and(|m| m.ends_with(if singles { "__doubles" } else { "__singles" }));
     // the node tree as entities (an animation or a skin moves them)
     let mut nodes = HashMap::new();
-    let mut stack: Vec<(gltf::Node, Entity)> = doc.default_scene().or_else(|| doc.scenes().next()).ok_or("no scene")?.nodes().map(|n| (n, anchor)).collect();
-    while let Some((n, up)) = stack.pop() {
+    // each `__clear` node's subtree: the node it's under (M8f5a3)
+    let clear_node = |n: &gltf::Node| n.name().is_some_and(|m| m.trim_end_matches("__singles").trim_end_matches("__doubles").ends_with("__clear"));
+    let mut clear_of = HashMap::new();
+    let mut stack: Vec<(gltf::Node, Entity, Option<usize>)> = doc.default_scene().or_else(|| doc.scenes().next()).ok_or("no scene")?.nodes().map(|n| (n, anchor, None)).collect();
+    while let Some((n, up, clear)) = stack.pop() {
         if skip(&n) {
             continue;
+        }
+        let clear = clear.or(clear_node(&n).then_some(n.index()));
+        if let Some(c) = clear {
+            clear_of.insert(n.index(), c);
         }
         let (t, r, sc) = n.transform().decomposed();
         let e = commands.spawn((Transform { translation: Vec3::from(t), rotation: Quat::from_array(r), scale: Vec3::from(sc) }, Visibility::default(), ChildOf(up))).id();
@@ -174,8 +192,9 @@ pub(crate) fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document
         if let (Some(sp), Some(name)) = (spawned.as_deref_mut(), n.name()) {
             sp.nodes.push((name.to_string(), e));
         }
-        stack.extend(n.children().map(|c| (c, e)));
+        stack.extend(n.children().map(|c| (c, e, clear)));
     }
+    let mut clears: HashMap<usize, ClearView> = HashMap::new();
     let mut draws = 0;
     for n in doc.nodes().filter(|n| nodes.contains_key(&n.index())) {
         let Some(mesh) = n.mesh() else { continue };
@@ -190,17 +209,32 @@ pub(crate) fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document
             }
             None => (vec![to_game * worlds[n.index()]], None),
         };
+        // the `__clear` piece it belongs to: a rigid mesh's node, or all of a skin's joints, under it
+        let clear = match &skin {
+            Some(sk) => sk.joints().map(|j| clear_of.get(&j.index()).copied()).reduce(|a, b| a.filter(|&a| Some(a) == b)).flatten(),
+            None => clear_of.get(&n.index()).copied(),
+        };
         for p in mesh.primitives() {
             let Some(m) = primitive(&p, blob, light, &rest, skinned.is_some()) else { continue };
+            if let (Some(c), Some(b)) = (clear, bounds(&m, &rest)) {
+                let cv = clears.entry(c).or_insert(ClearView { lo: Vec3::INFINITY, hi: Vec3::NEG_INFINITY, hide: vec![nodes[&c]] });
+                (cv.lo, cv.hi) = (cv.lo.min(b.0), cv.hi.max(b.1));
+            }
             let m = s.meshes.add(m);
             for mat in &mats[p.material().index().unwrap_or(mats.len() - 1)] {
                 let mut e = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(mat.clone()), Transform::default(), ChildOf(nodes[&n.index()])));
                 if let Some(sk) = &skinned {
                     e.insert((sk.clone(), crate::cull::Cullable));
+                    if let Some(cv) = clear.and_then(|c| clears.get_mut(&c)) {
+                        cv.hide.push(e.id());
+                    }
                 }
                 draws += 1;
             }
         }
+    }
+    for cv in clears.into_values() {
+        commands.spawn(cv);
     }
     for a in doc.animations() {
         let mut channels = Vec::new();
@@ -361,6 +395,68 @@ fn primitive(p: &gltf::Primitive, blob: &[u8], light: Option<&Light>, rest: &[Ma
     Some(mesh)
 }
 
+/// A mesh's box in game space at rest (`rest`: its node's matrix, or its skin's joints at bind, each vertex by its
+/// heaviest joint).
+fn bounds(m: &Mesh, rest: &[Mat4]) -> Option<(Vec3, Vec3)> {
+    let Some(VertexAttributeValues::Float32x3(pos)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else { return None };
+    let joints = match (m.attribute(Mesh::ATTRIBUTE_JOINT_INDEX), m.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)) {
+        (Some(VertexAttributeValues::Uint16x4(j)), Some(VertexAttributeValues::Float32x4(w))) => Some((j, w)),
+        _ => None,
+    };
+    let mut b = (Vec3::INFINITY, Vec3::NEG_INFINITY);
+    for (k, p) in pos.iter().enumerate() {
+        let j = joints.map_or(0, |(j, w)| j[k][(0..4).max_by(|&a, &c| w[k][a].total_cmp(&w[k][c])).unwrap_or(0)] as usize);
+        let q = rest.get(j).unwrap_or(&Mat4::IDENTITY).transform_point3(Vec3::from(*p));
+        b = (b.0.min(q), b.1.max(q));
+    }
+    (b.0.x <= b.1.x).then_some(b)
+}
+
+/// Whether the box `lo..hi` (game space, y down) stands between `eye` and the court: a line from the eye to a point
+/// of the playing area (the doubles court and 2 m behind each baseline, where the players stand, on the ground and
+/// 2 m up) passes through it, or the eye is inside it.
+/// ponytail: sampled (9 across, 9 along, 2 high), so a piece thinner than the gap between two lines can slip through.
+pub(crate) fn blocks(eye: Vec3, lo: Vec3, hi: Vec3) -> bool {
+    // the doubles sideline and the baseline (m from the centre), 2 m further back
+    let (w, l) = (5.485, 11.885 + 2.0);
+    (0..9).any(|i| {
+        (0..9).any(|k| {
+            [0.0, -2.0].iter().any(|&y| {
+                let p = Vec3::new(w * (i as f32 / 4.0 - 1.0), y, l * (k as f32 / 4.0 - 1.0));
+                // the segment eye..p against the box's slabs
+                let d = p - eye;
+                let (mut t0, mut t1) = (0f32, 1f32);
+                for a in 0..3 {
+                    if d[a].abs() < 1e-6 {
+                        if eye[a] < lo[a] || eye[a] > hi[a] {
+                            return false;
+                        }
+                    } else {
+                        let (u, v) = ((lo[a] - eye[a]) / d[a], (hi[a] - eye[a]) / d[a]);
+                        (t0, t1) = (t0.max(u.min(v)), t1.min(u.max(v)));
+                    }
+                }
+                t0 <= t1
+            })
+        })
+    })
+}
+
+/// M8f5a3: a `__clear` set piece isn't drawn while it stands between the drawn camera (any mode) and the court.
+fn clear_view(camera: Query<&Transform, With<crate::Orbit>>, pieces: Query<&ClearView>, mut vis: Query<&mut Visibility>) {
+    let Ok(t) = camera.single() else { return };
+    // game space is Bevy's turned a half-turn about X
+    let eye = t.translation * Vec3::new(1.0, -1.0, -1.0);
+    for cv in &pieces {
+        let v = if blocks(eye, cv.lo, cv.hi) { Visibility::Hidden } else { Visibility::Inherited };
+        for &e in &cv.hide {
+            if let Ok(mut x) = vis.get_mut(e) {
+                x.set_if_neq(v);
+            }
+        }
+    }
+}
+
 /// After each weather change (`weather::apply` relights every material): the court mod's own light and fog back,
 /// and the ground shadow's strength the layout court's ground has now.
 fn keep(look: Option<Res<crate::weather::CourtLook>>, kept: Res<Kept>, mut materials: ResMut<Assets<GsMaterial>>, mut last: Local<Option<(Option<u8>, Option<(u8, f32)>)>>) {
@@ -430,5 +526,24 @@ fn sounds(court: Res<MatchCourt>, args: Res<crate::Args>, music: Option<ResMut<M
     let level = 0.7 / (layers.len() as f32).sqrt();
     for t in &layers {
         sound.play_loop(t, Group::Sfx, level);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_piece_between_the_eye_and_the_court_blocks_it() {
+        // HST's resting match eye (41 m at 17°, game space y down) and c05's basket goals 7.2 m behind each baseline
+        let eye = Vec3::new(0.0, -12.0, -39.2);
+        let goal = |z: f32| (Vec3::new(-0.9, -4.8, z - 0.6), Vec3::new(0.9, 0.0, z + 0.6));
+        let (lo, hi) = goal(-19.1);
+        assert!(blocks(eye, lo, hi), "the near goal");
+        let (lo, hi) = goal(19.1);
+        assert!(!blocks(eye, lo, hi), "the far goal stands behind the court");
+        assert!(blocks(Vec3::new(0.0, -2.0, -19.1), lo - Vec3::Z * 38.2, hi - Vec3::Z * 38.2), "the eye inside it");
+        assert!(!blocks(eye, Vec3::new(14.0, -3.0, -20.0), Vec3::new(16.0, 0.0, -18.0)), "off to the side");
+        assert!(!blocks(eye, Vec3::new(-1.0, -0.2, -20.0), Vec3::new(1.0, 0.0, -18.0)), "low on the ground");
     }
 }
