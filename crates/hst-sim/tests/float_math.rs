@@ -8,14 +8,13 @@ use std::path::Path;
 
 /// Modules with plain `f32` arithmetic left (no deny attribute yet).
 const PLAIN: &[&str] = &[
-    "aim", "camera", "cutaway", "effect", "flow", "foot", "instant", "judge", "motion", "npc", "params",
-    "pose", "position", "rally", "serve", "shade", "sound", "stats", "swing", "umpire",
+    "aim", "camera", "cutaway", "effect", "flow", "instant", "judge", "params", "rally", "serve", "shade",
+    "sound", "swing",
 ];
 
 /// Modules still calling `ps2::add(…)`, `vu0::mul(…)` … instead of the operators.
 const CALLS: &[&str] = &[
-    "aim", "effect", "face", "foot", "instant", "judge", "motion", "npc", "params", "pose", "position",
-    "rally", "serve", "shade", "sound", "swing",
+    "aim", "effect", "instant", "judge", "params", "rally", "serve", "shade", "sound", "swing",
 ];
 
 const OPS: [&str; 8] = ["add", "sub", "mul", "div", "madd", "msub", "sqrt", "lerp"];
