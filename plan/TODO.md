@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **R2** Dedupe PS2 arithmetic: `daz`/`chop` are copied in `crates/hst-sim/src/ps2.rs` and `vu0.rs`; keep one (ps2.rs, pub(crate)), vu0 uses it. Done when tools/check.sh passes and the replay tests stay bit-exact.
 - [ ] **R3** Make the fdlibm port generic: `crates/hst-sim/src/libm.rs` keeps no game-specific code (table_sin moves out to its caller's module) and its doc says it is the SDK/newlib fdlibm float build, with fdlibm's Sun notice kept. Shape it like the kit's `crates/ps2-float/src/libm.rs` (FIZL0/ps2-decomp-kit-linux) so the two can merge; oracle-check any function whose code changes (≥10k inputs). After the dedupe task.
 - [ ] **R4** Split newlib `rand()` and MT19937 (`Rand`, `Mt` in `crates/hst-sim/src/rng.rs`) into a standalone module with no game imports (`ps2_rand` or similar in hst-sim); rng.rs keeps the game's four generators on top. Oracle-check both against the game's code. After the dedupe task.
 - [ ] **R5** Make `crates/hst-oracle` game-agnostic: `Ee` takes ELF/overlay bytes + load addresses instead of calling `hst_data::exe::Game` itself; the disc check moves to an hst-side helper (`Ee::game()` stays as a thin wrapper). Line it up with the kit's `crates/ps2-oracle` (ee.rs/disc.rs split). All oracle tests pass. After the dedupe task.
