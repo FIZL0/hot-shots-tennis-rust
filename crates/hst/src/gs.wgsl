@@ -151,14 +151,10 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     out.spec = gs.highlight * h / (gs.shininess - (gs.shininess - 1.0) * h);
     let x = gs.glare * max((-dot(forward, gs.light_dir.xyz) - 0.8) / 0.2, 0.0);
     let diffuse2 = lit * max(-dot(n, gs.light2_dir.xyz), 0.0);
-    // B343: a court creature sharing its draws with others of its model carries its own light scale in its tag (the
-    // scale's bits, top bit set; `shade::shade_tag`), the others have it in `light_color` already
-    let tag = mesh_functions::get_tag(instance);
-    let scale = select(1.0, bitcast<f32>(tag & 0x7fffffffu), (tag & 0x80000000u) != 0u);
-    c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * scale * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
+    c = vec4(c.rgb * (gs.ambient.rgb * (1.0 - x * 0.5) + gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse + gs.light2_color.rgb * diffuse2), c.a);
 #ifdef GS_AO
     let fill = dot(gs.ambient.rgb * (1.0 - x * 0.5) + gs.light2_color.rgb * diffuse2, vec3(1.0));
-    let sun = dot(gs.light_color.rgb * scale * (1.0 - 0.6 * x) * diffuse, vec3(1.0));
+    let sun = dot(gs.light_color.rgb * (1.0 - 0.6 * x) * diffuse, vec3(1.0));
     out.ambient = select(1.0, fill / (fill + sun), fill + sun > 0.0);
 #endif
 #else
