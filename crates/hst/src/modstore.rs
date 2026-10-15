@@ -183,9 +183,7 @@ fn file_url(rev: &str, path: &str) -> String {
 /// GET `url` (the store's only): its answer, unless it says it's more than `cap` bytes.
 async fn answer(url: &str, cap: u64) -> Result<reqwest::Response, String> {
     debug_assert!(url.starts_with(HF));
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let r = reqwest::get(url).await.map_err(|e| format!("can't reach the store: {e}"))?;
+    let r = client().get(url).send().await.map_err(|e| format!("can't reach the store: {e}"))?;
     let r = r.error_for_status().map_err(|e| format!("the store said {}", e.status().map_or("no".into(), |s| s.to_string())))?;
     if r.content_length().is_some_and(|n| n > cap) {
         return Err("too big".into());
@@ -665,9 +663,7 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
 
 /// Bytes `at..at + n` of `url` (the store's file, or where it redirected), asked for; `partial` checks they came.
 async fn ask(url: &str, at: u64, n: usize) -> Result<reqwest::Response, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let q = reqwest::Client::new().get(url).header("Range", format!("bytes={at}-{}", at + n as u64 - 1));
+    let q = client().get(url).header("Range", format!("bytes={at}-{}", at + n as u64 - 1));
     // B242: never the browser's HTTP cache, which may answer a range with a whole zip it kept
     #[cfg(target_arch = "wasm32")]
     let q = q.fetch_cache_no_store();
@@ -948,10 +944,14 @@ async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>,
     }))
 }
 
-/// An HTTP client; natively the TLS provider goes in first (building one without it panics).
-fn client() -> reqwest::Client {
+/// An HTTP client; natively the TLS provider goes in first (building one without it panics), and on Android its own
+/// certificate check (B454, `android::tls`).
+pub(crate) fn client() -> reqwest::Client {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(target_os = "android")]
+    return reqwest::Client::builder().tls_backend_preconfigured(crate::android::tls()).build().expect("the HTTP client");
+    #[cfg(not(target_os = "android"))]
     reqwest::Client::new()
 }
 

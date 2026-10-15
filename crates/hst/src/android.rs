@@ -435,3 +435,22 @@ pub fn haptic() {
         env.call_method(&decor, "performHapticFeedback", "(I)Z", &[JValue::Int(1)]).map(drop)
     });
 }
+
+/// B454: the TLS settings of the app's HTTPS (mod store, short codes, update check). reqwest checks certificates with
+/// the platform's verifier, which on Android has to be set up from Java (`rustls-platform-verifier`'s JNI init and its
+/// Kotlin classes, neither in this NativeActivity app) and panics in the request's task otherwise: the store list never
+/// came. Here certificates are checked against Mozilla's root list (`webpki-roots`, the one iroh's relays use) instead.
+pub fn tls() -> rustls::ClientConfig {
+    static TLS: OnceLock<rustls::ClientConfig> = OnceLock::new();
+    TLS.get_or_init(|| {
+        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+        let mut c = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("ring's protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        c.alpn_protocols = vec![b"http/1.1".to_vec()];
+        c
+    })
+    .clone()
+}

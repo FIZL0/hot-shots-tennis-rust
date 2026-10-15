@@ -652,6 +652,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B421** Mobile stretch aspect ratio: add a "stretch" aspect ratio option on mobile (iOS and Android) that fills the whole screen, ignoring the island and notch safe-area rule we made (user 2026-10-15) → crates/hst/src/play/widescreen.rs · crates/hst/src/graphics.rs · crates/hst/src/play/touch_pad.rs
 - [x] **B439** Web app froze after loading mods, the first 5–7 opens (user 2026-10-15): the browser build hung right after the mod load on several fresh launches, then started working; reproduce with a cold cache / fresh profile and mods installed, find what blocks (mod reads, previews, B409's between-frame jobs) → crates/hst/src/web.rs · crates/hst/src/modfs.rs · crates/hst/src/jobs.rs · crates/hst/src/play/main_menu/previews.rs
 - [x] **T2** Direct tests for untested sim modules: oracle tests (>=10k inputs, to_bits) for `hst-sim/src/contact.rs` plane sweep and `quat.rs` matrix<->quat/slerp (t=0/1, opposite quats); a per-tick rally-state replay test for `hst-sim/src/rally.rs` against match_s05.bin (only reached through ai_rally.rs today)
+- [x] **B454** Android app: the mod store can't be read (user 2026-10-15, APK built 19:00); find why the store listing fails natively on Android (network/TLS/storage path) and fix it → modstore.rs · android.rs
 
 
 ### Shots

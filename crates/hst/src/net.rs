@@ -2519,7 +2519,7 @@ async fn relay_get(code: &str) -> Option<(String, i64)> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     // B275: the relay answers with max-age=300, so a browser's second lookup (a rejoin) got its cached copy, by then
     // older than STALE: "No open lobby has the code"; the query makes each lookup a fresh request
-    let r = reqwest::get(format!("{PKARR}/{}?t={}", code_key(code).public().to_z32(), unix_micros())).await.ok()?;
+    let r = crate::modstore::client().get(format!("{PKARR}/{}?t={}", code_key(code).public().to_z32(), unix_micros())).send().await.ok()?;
     let b = r.error_for_status().ok()?.bytes().await.ok()?;
     // the relay's payload: signature, seq (big-endian), the packet
     Some((txt_of(b.get(72..)?)?, i64::from_be_bytes(b.get(64..72)?.try_into().ok()?)))
@@ -2555,7 +2555,7 @@ async fn relay_put(code: &str, ticket: &str) -> bool {
     // BEP 44's signed form: bencoded seq and v
     let sig = key.sign(&[format!("3:seqi{seq}e1:v{}:", v.len()).into_bytes(), v.clone()].concat());
     let body = [sig.to_bytes().to_vec(), seq.to_be_bytes().to_vec(), v].concat();
-    let r = reqwest::Client::new().put(format!("{PKARR}/{}", key.public().to_z32())).body(body).send().await;
+    let r = crate::modstore::client().put(format!("{PKARR}/{}", key.public().to_z32())).body(body).send().await;
     r.and_then(|r| r.error_for_status()).map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok()
 }
 
