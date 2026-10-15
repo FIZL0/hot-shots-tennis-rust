@@ -1494,6 +1494,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
     let t0 = n0_future::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
+    // the lobby cards' last 5 round trips a guest (ms): the cards show the lowest, steady through a slow probe
+    let mut recent: std::collections::HashMap<String, std::collections::VecDeque<u32>> = Default::default();
     // a host with every seat (`HST_NET_SYNCTEST`) starts at once
     let mut starting: Option<(Vec<String>, n0_future::time::Instant)> = room.seats.iter().all(Option::is_some).then(|| (Vec::new(), t0));
     // B215: the countdown's end (Start, or everyone ready), then the match starts once (with mods) everyone's settled;
@@ -1714,12 +1716,18 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 Guest::Said(peer, Msg::Chat { text, .. }) => chat(cx, &peer, &text, &room.names, &joined, &mut rates),
                 Guest::Said(peer, Msg::Pong(sent)) => {
                     rtt.insert(peer.clone(), Duration::from_micros(micros(t0).saturating_sub(sent)));
+                    let r = recent.entry(peer.clone()).or_default();
+                    r.push_back(rtt[&peer].as_millis() as u32);
+                    if r.len() > 5 {
+                        r.pop_front();
+                    }
                     if let Some((waiting, _)) = &mut starting {
                         waiting.retain(|p| *p != peer);
                     }
                 }
                 Guest::Said(..) | Guest::Datagram(..) | Guest::Pack(..) => {}
                 Guest::Gone(peer) => {
+                    recent.remove(&peer);
                     if !joined.iter().any(|(p, ..)| *p == peer) {
                         continue;
                     }
@@ -1736,9 +1744,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             _ = ping.tick() => {
                 broadcast(&joined, &Msg::Ping(micros(t0)));
-                // B370: the round trips the lobby's cards show, to everyone when one moves (5 ms steps)
-                let ms: std::collections::BTreeMap<String, u32> = joined.iter().filter_map(|(p, ..)| Some((p.clone(), (rtt.get(p)?.as_millis() as u32).div_ceil(5) * 5))).collect();
-                if starting.is_none() && ms != room.ping {
+                // B370: the round trips the lobby's cards show (each guest's lowest of its last 5), to everyone when one
+                // moves 10 ms or a guest comes or goes: a Room sent each small wobble queued the next probe behind it
+                let ms: std::collections::BTreeMap<String, u32> = joined.iter().filter_map(|(p, ..)| Some((p.clone(), recent.get(p)?.iter().min()?.div_ceil(5) * 5))).collect();
+                let moved = ms.len() != room.ping.len() || ms.iter().any(|(p, v)| room.ping.get(p).is_none_or(|o| v.abs_diff(*o) >= 10));
+                if starting.is_none() && moved {
                     room.ping = ms;
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
