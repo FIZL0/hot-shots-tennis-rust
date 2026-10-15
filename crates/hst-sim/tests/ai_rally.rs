@@ -216,6 +216,41 @@ fn bytes(e: &[u8], r: &Rally, singles: bool) -> Vec<u8> {
     a
 }
 
+/// The AI's bytes with every field `rally` reads written back from `r` (`bytes` writes only the ones the
+/// routines were first checked on): a port write the game doesn't make, or a game write the port misses, shows.
+fn bytes_all(e: &[u8], r: &Rally, singles: bool) -> Vec<u8> {
+    let at = |o| shift(o, singles);
+    let mut a = bytes(e, r, singles);
+    let mut w = |o: usize, v: u32| a[o..o + 4].copy_from_slice(&v.to_le_bytes());
+    w(0x28, r.mate as u32);
+    w(0x30, r.first as u32);
+    w(0x34, r.window as u32);
+    for (k, v) in r.leads.iter().enumerate() {
+        w(at(0x234 + 4 * k), *v as u32);
+    }
+    w(at(0x250), r.from[0].to_bits());
+    w(at(0x258), r.from[1].to_bits());
+    w(0x18, r.rate as u32);
+    w(0x1c, r.radius.to_bits());
+    w(0xe0, r.lean as u32);
+    w(back_mind(singles).1 + 4, r.mind.net_rate as u32);
+    w(0x14, r.reach.to_bits());
+    for k in 0..4 {
+        w(0x130 + 4 * k, r.last[k].to_bits());
+    }
+    w(0x124, r.opp_kind as u32);
+    a[0x10] = r.level;
+    a[0x5d] = r.volley_level;
+    a[0x5e] = r.return_level;
+    a[0x5f] = r.high_level;
+    flag(&mut a, 0x38, r.singles);
+    flag(&mut a, 0xb0, r.hold);
+    flag(&mut a, at(0x245), r.dive);
+    flag(&mut a, at(0x24c), r.body);
+    flag(&mut a, at(0x24d), r.low);
+    a
+}
+
 /// The shot records (0x580..0x640) with the port's written over the entry's.
 fn records(e: &[u8], w: &World) -> Vec<u8> {
     let mut a = e[0x580..0x640].to_vec();
@@ -300,6 +335,107 @@ fn world(e: &[u8]) -> World {
     }
 }
 
+/// One recorded call (entry `e`, exit `x`) through the port: the AI state it leaves, and what differs from the
+/// game's exit (the AI bytes `bytes` writes back, the stick, button, shot records, return, path copy, seen flags,
+/// ball-lost log, draw count).
+fn call(name: &str, e: &[u8], x: &[u8], mt0: &Mt, row: &AiParams, tag: u32, singles: bool) -> (Rally, Vec<String>) {
+    let before = u32_at(e, 0xc);
+    let mut r = rally(e, singles);
+    if name == "ai_human_vpad_b.bin" && tag == 2 && (9760..=9764).contains(&u32_at(e, 8)) {
+        // recorded before the recorder took the stand scratch last in its entry stub: a vsync during the stub
+        // zeroed it after it was taken (as on m3c v6843 / m3d v7900, P11k8), so the game read 0 here
+        r.stash = [0.0; 4];
+    }
+    let mut b = body(e);
+    let mut w = world(e);
+    // The copy's entries aren't recorded on entry: taken this frame they are the path's first `count`; an older
+    // copy is only ever replaced, so its count is all that shows.
+    let count = i32_at(e, 0x74).max(0) as usize;
+    let mut copy = w.path[..count.min(w.path.len())].to_vec();
+    copy.resize(count, Ball::default());
+    let mut c = PathCopy { stamp: i32_at(e, 0x70), balls: copy };
+    let mut seen: Vec<bool> = e[0x640..0x640 + SEEN].iter().map(|&v| v != 0).collect();
+    let mut out = Out { stick: quad(e, 0x20), button: None };
+    let mut mt = mt0.clone();
+    (0..before).for_each(|_| _ = mt.next());
+    let mut used = 0;
+    let mut roll = || {
+        used += 1;
+        mt.next()
+    };
+    let a = &e[A..];
+    let mut h = Human { found: a[0x40] != 0, next: i32_at(a, 0x44), kind: a[0x48], min: i32_at(a, 0x4c), volley: a[0x50] != 0 };
+    let ret = if tag == 1 {
+        r.receive(row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll)
+    } else if tag == 4 {
+        let claimed = i32_at(e, 0x74c) == b.team;
+        r.human_record(&mut h, row, &b, &mut w, &mut c, &mut seen, claimed, &mut roll);
+        false
+    } else {
+        if singles {
+            r.singles_rally(tag == 2, row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll);
+        } else {
+            r.rally(tag == 2, row, &mut b, &mut w, &mut c, &mut seen, &mut out, &mut roll);
+        }
+        false
+    };
+    drop(roll);
+    let mut errs = Vec::new();
+    if used != u32_at(x, 0xc) - before {
+        errs.push(format!("draws {used} vs {}", u32_at(x, 0xc) - before));
+    }
+    let mut got = bytes(e, &r, singles);
+    if tag == 4 {
+        got[0x44..0x48].copy_from_slice(&h.next.to_le_bytes());
+        got[0x4c..0x50].copy_from_slice(&h.min.to_le_bytes());
+        flag(&mut got, 0x40, h.found);
+        got[0x48] = h.kind;
+    }
+    let want = &x[A..A + 0x280];
+    let diff: Vec<String> = (0..0x280 / 4)
+        .filter(|k| got[4 * k..4 * k + 4] != want[4 * k..4 * k + 4])
+        .map(|k| format!("+{:#x} {:08x} vs {:08x}", 4 * k, u32_at(&got, 4 * k), u32_at(want, 4 * k)))
+        .collect();
+    if !diff.is_empty() {
+        errs.push(format!("ai {}", diff.join(", ")));
+    }
+    // the human record takes no stick or button (their record slots hold whatever was there)
+    if tag != 4 && out.stick.map(f32::to_bits) != quad(x, 0x20).map(f32::to_bits) {
+        errs.push(format!("stick {:?} vs {:?}", out.stick, quad(x, 0x20)));
+    }
+    let button = out.button.unwrap_or(u32_at(e, 0x30));
+    if tag != 4 && button != u32_at(x, 0x30) {
+        errs.push(format!("button {button} vs {}", u32_at(x, 0x30)));
+    }
+    if tag != 1 && records(e, &w) != x[0x580..0x640] {
+        let (got, want) = (records(e, &w), &x[0x580..0x640]);
+        let diff: Vec<String> = (0..0xc0 / 4)
+            .filter(|k| got[4 * k..4 * k + 4] != want[4 * k..4 * k + 4])
+            .map(|k| format!("+{:#x} {:08x} vs {:08x}", 4 * k, u32_at(&got, 4 * k), u32_at(want, 4 * k)))
+            .collect();
+        errs.push(format!("records {}", diff.join(", ")));
+    }
+    // NET and BASE leave v0 as whatever their last call returned
+    if tag == 1 && ret as u32 != u32_at(x, 0x1c) {
+        errs.push(format!("return {ret} vs {}", u32_at(x, 0x1c)));
+    }
+    if (c.stamp, c.balls.len() as i32) != (i32_at(x, 0x70), i32_at(x, 0x74)) {
+        errs.push(format!("copy {} {} vs {} {}", c.stamp, c.balls.len(), i32_at(x, 0x70), i32_at(x, 0x74)));
+    }
+    let len = (r.len.max(0) as usize).min(c.balls.len());
+    if i32_at(e, 0x70) != w.frame && c.stamp == w.frame && c.balls[..len] != balls(x, (u32_at(x, 4) as usize - REC) / 0x30)[..] {
+        errs.push("path copy".into());
+    }
+    if seen != x[0x640..0x640 + SEEN].iter().map(|&v| v != 0).collect::<Vec<_>>() {
+        errs.push("seen".into());
+    }
+    let lost = body(x);
+    if (b.lost, &b.lost_log) != (lost.lost, &lost.lost_log) {
+        errs.push(format!("lost {} {:?} vs {} {:?}", b.lost, b.lost_log, lost.lost, lost.lost_log));
+    }
+    (r, errs)
+}
+
 /// Replays every call with `tag` (1 receive, 2 NET, 3 BASE) of a fixture; returns (calls, per substate on entry).
 fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
     let singles = name.contains("singles");
@@ -319,7 +455,6 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
         o += e.len();
         let x = &d[o..o + u32_at(&d, o + 4) as usize];
         o += x.len();
-        let before = u32_at(e, 0xc);
         assert_eq!(u32_at(x, 0), u32_at(e, 0) | 0x100);
         if u32_at(e, 0) != tag {
             continue;
@@ -338,103 +473,12 @@ fn replay(name: &str, tag: u32) -> Option<(usize, [usize; 4])> {
             s => panic!("{name}: routine {} called in state {s}", u32_at(e, 0)),
         };
         assert_eq!(u32_at(e, 0), want, "{name}: dispatch");
-        let mut r = rally(e, singles);
-        if name == "ai_human_vpad_b.bin" && tag == 2 && (9760..=9764).contains(&u32_at(e, 8)) {
-            // recorded before the recorder took the stand scratch last in its entry stub: a vsync during the stub
-            // zeroed it after it was taken (as on m3c v6843 / m3d v7900, P11k8), so the game read 0 here
-            r.stash = [0.0; 4];
-        }
+        let r = rally(e, singles);
         let state = if tag == 1 { r.state } else { r.sub };
         if let Some(s) = states.get_mut(state as usize) {
             *s += 1;
         }
-        let mut b = body(e);
-        let mut w = world(e);
-        // The copy's entries aren't recorded on entry: taken this frame they are the path's first `count`; an older
-        // copy is only ever replaced, so its count is all that shows.
-        let count = i32_at(e, 0x74).max(0) as usize;
-        let mut copy = w.path[..count.min(w.path.len())].to_vec();
-        copy.resize(count, Ball::default());
-        let mut c = PathCopy { stamp: i32_at(e, 0x70), balls: copy };
-        let mut seen: Vec<bool> = e[0x640..0x640 + SEEN].iter().map(|&v| v != 0).collect();
-        let mut out = Out { stick: quad(e, 0x20), button: None };
-        let mut mt = mt0.clone();
-        (0..before).for_each(|_| _ = mt.next());
-        let mut used = 0;
-        let mut roll = || {
-            used += 1;
-            mt.next()
-        };
-        let a = &e[A..];
-        let mut h = Human { found: a[0x40] != 0, next: i32_at(a, 0x44), kind: a[0x48], min: i32_at(a, 0x4c), volley: a[0x50] != 0 };
-        let ret = if tag == 1 {
-            r.receive(row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll)
-        } else if tag == 4 {
-            let claimed = i32_at(e, 0x74c) == b.team;
-            r.human_record(&mut h, row, &b, &mut w, &mut c, &mut seen, claimed, &mut roll);
-            false
-        } else {
-            if singles {
-                r.singles_rally(tag == 2, row, &mut b, &w, &mut c, &mut seen, &mut out, &mut roll);
-            } else {
-                r.rally(tag == 2, row, &mut b, &mut w, &mut c, &mut seen, &mut out, &mut roll);
-            }
-            false
-        };
-        drop(roll);
-        let mut errs = Vec::new();
-        if used != u32_at(x, 0xc) - before {
-            errs.push(format!("draws {used} vs {}", u32_at(x, 0xc) - before));
-        }
-        let mut got = bytes(e, &r, singles);
-        if tag == 4 {
-            got[0x44..0x48].copy_from_slice(&h.next.to_le_bytes());
-            got[0x4c..0x50].copy_from_slice(&h.min.to_le_bytes());
-            flag(&mut got, 0x40, h.found);
-            got[0x48] = h.kind;
-        }
-        let want = &x[A..A + 0x280];
-        let diff: Vec<String> = (0..0x280 / 4)
-            .filter(|k| got[4 * k..4 * k + 4] != want[4 * k..4 * k + 4])
-            .map(|k| format!("+{:#x} {:08x} vs {:08x}", 4 * k, u32_at(&got, 4 * k), u32_at(want, 4 * k)))
-            .collect();
-        if !diff.is_empty() {
-            errs.push(format!("ai {}", diff.join(", ")));
-        }
-        // the human record takes no stick or button (their record slots hold whatever was there)
-        if tag != 4 && out.stick.map(f32::to_bits) != quad(x, 0x20).map(f32::to_bits) {
-            errs.push(format!("stick {:?} vs {:?}", out.stick, quad(x, 0x20)));
-        }
-        let button = out.button.unwrap_or(u32_at(e, 0x30));
-        if tag != 4 && button != u32_at(x, 0x30) {
-            errs.push(format!("button {button} vs {}", u32_at(x, 0x30)));
-        }
-        if tag != 1 && records(e, &w) != x[0x580..0x640] {
-            let (got, want) = (records(e, &w), &x[0x580..0x640]);
-            let diff: Vec<String> = (0..0xc0 / 4)
-                .filter(|k| got[4 * k..4 * k + 4] != want[4 * k..4 * k + 4])
-                .map(|k| format!("+{:#x} {:08x} vs {:08x}", 4 * k, u32_at(&got, 4 * k), u32_at(want, 4 * k)))
-                .collect();
-            errs.push(format!("records {}", diff.join(", ")));
-        }
-        // NET and BASE leave v0 as whatever their last call returned
-        if tag == 1 && ret as u32 != u32_at(x, 0x1c) {
-            errs.push(format!("return {ret} vs {}", u32_at(x, 0x1c)));
-        }
-        if (c.stamp, c.balls.len() as i32) != (i32_at(x, 0x70), i32_at(x, 0x74)) {
-            errs.push(format!("copy {} {} vs {} {}", c.stamp, c.balls.len(), i32_at(x, 0x70), i32_at(x, 0x74)));
-        }
-        let len = (r.len.max(0) as usize).min(c.balls.len());
-        if i32_at(e, 0x70) != w.frame && c.stamp == w.frame && c.balls[..len] != balls(x, (u32_at(x, 4) as usize - REC) / 0x30)[..] {
-            errs.push("path copy".into());
-        }
-        if seen != x[0x640..0x640 + SEEN].iter().map(|&v| v != 0).collect::<Vec<_>>() {
-            errs.push("seen".into());
-        }
-        let lost = body(x);
-        if (b.lost, &b.lost_log) != (lost.lost, &lost.lost_log) {
-            errs.push(format!("lost {} {:?} vs {} {:?}", b.lost, b.lost_log, lost.lost, lost.lost_log));
-        }
+        let (_, errs) = call(name, e, x, &mt0, row, tag, singles);
         if !errs.is_empty() {
             fails += 1;
             if fails <= 15 {
@@ -523,4 +567,125 @@ fn cpus_let_out_balls_go() {
         holds += (u32_at(e, 0) != 1 && e[A + 0xbc] == 0 && x[A + 0xbc] == 1 && e[0x56d] == 2) as usize;
     }
     assert!(holds >= 2, "{holds} let-go holds");
+}
+
+/// The match sample(s) a call's tick lies in: every `match_s05.bin` sample showing the call's game frame, with the
+/// one before and the one after (a sample is a vsync snapshot; a frame can span two, and players earlier in the
+/// update order have already moved when a later one's AI runs).
+fn tick_window<'a>(m: &[hst_sim::replay::Frame<'a>], e: &[u8]) -> &'a [u8] {
+    let (v, frame) = (u32_at(e, 8) as usize, i32_at(e, 0x34));
+    let first = m[0].vsync() as usize;
+    let near = v.saturating_sub(first + 6)..(v + 6 - first).min(m.len());
+    let shows: Vec<usize> = near.filter(|&i| i32_at(m[i].gm(), 0x58) == frame).collect();
+    assert!(!shows.is_empty(), "v{v}: game frame {frame} not in match_s05.bin near its vsync");
+    let (lo, hi) = (shows[0] - 1, shows[shows.len() - 1] + 1);
+    // the samples are contiguous in the file
+    let s = m[lo].0.as_ptr_range().start;
+    let len = m[hi].0.as_ptr_range().end as usize - s as usize;
+    // SAFETY: m's frames are consecutive slices of one buffer
+    unsafe { std::slice::from_raw_parts(s, len) }
+}
+
+/// The calls of a fixture with one of `tags`: (vsync, file order, tag, entry, exit).
+fn calls<'a>(d: &'a [u8], tags: &[u32]) -> Vec<(u32, usize, &'a [u8], &'a [u8])> {
+    let (mut o, mut v) = (8 + MT_SIZE, Vec::new());
+    while o < d.len() {
+        let e = &d[o..o + u32_at(d, o + 4) as usize];
+        o += e.len();
+        let x = &d[o..o + u32_at(d, o + 4) as usize];
+        o += x.len();
+        if tags.contains(&u32_at(e, 0)) {
+            v.push((u32_at(e, 8), v.len(), e, x));
+        }
+    }
+    v
+}
+
+/// T2: the rally AI's state replayed tick by tick through a stretch of the slot-5 doubles match (vsync 7592..10612),
+/// every receive, NET and BASE call of all four CPUs, each tick tied to `match_s05.bin`. The receive calls come from
+/// `ai_rally_s05_all.bin`, NET and BASE from `ai_net_s05.bin`: the same match (slot 5 is bot-only), recorded twice
+/// because `_all` predates the recorder's NET/BASE regions (P11k2) and is only good for the receive.
+///
+/// Unlike `replay`, which seeds every call afresh from the recording and compares the fields it was written for, each
+/// CPU's AI block here is the port's own from its previous call; only bytes the game changed between the two calls
+/// (outside the routines: the dispatcher, the point flow) are taken from the recording. After every call the whole
+/// 0x280-byte block, as far as `Rally` models it (`bytes_all`), must be the game's. Each call's world is checked to be
+/// the match's at that tick: its game frame is in `match_s05.bin`, and the score/rotation globals, the phase and all
+/// four players' positions it read equal a sample of that tick bit for bit.
+#[test]
+fn rally_state_tick_by_tick_on_match_s05() {
+    let dir = format!("{}/context/fixtures", root());
+    let read = |f: &str| std::fs::read(format!("{dir}/{f}")).ok();
+    let (Some(rd), Some(nd), Some(md), Some(table)) = (read("ai_rally_s05_all.bin"), read("ai_net_s05.bin"), read("match_s05.bin"), table()) else {
+        return eprintln!("skip: ai_rally_s05_all.bin, ai_net_s05.bin, match_s05.bin or the disc missing");
+    };
+    let m = hst_sim::replay::frames_live(&md);
+    let sample = hst_sim::replay::SAMPLE_LIVE;
+    let mts = [Mt::of(&rd[8..8 + MT_SIZE]), Mt::of(&nd[8..8 + MT_SIZE])];
+    let (rc, nc) = (calls(&rd, &[1]), calls(&nd, &[2, 3]));
+    let end = nc.last().unwrap().0;
+    let mut ticks: Vec<(u32, usize, usize, &[u8], &[u8])> = rc.into_iter().filter(|c| c.0 <= end).map(|(v, k, e, x)| (v, 0, k, e, x)).collect();
+    ticks.extend(nc.into_iter().map(|(v, k, e, x)| (v, 1, k, e, x)));
+    ticks.sort_by_key(|t| (t.0, t.1, t.2));
+    // per AI object: the game's exit block of its last call, and the port's
+    let mut last: std::collections::HashMap<u32, (Vec<u8>, Vec<u8>)> = Default::default();
+    let (mut n, mut carried, mut outside, mut fails, mut tags) = (0, 0, 0, 0, [0usize; 4]);
+    for (_, src, _, e, x) in ticks {
+        let (tag, ai) = (u32_at(e, 0), u32_at(e, 0x10));
+        n += 1;
+        tags[tag as usize] += 1;
+        let at = format!("v{} #{n} ai {ai:#x} tag {tag}", u32_at(e, 8));
+        let mut errs = Vec::new();
+
+        // the tick is the match's
+        let win = tick_window(&m, e);
+        let samples: Vec<hst_sim::replay::Frame> = win.chunks_exact(sample).map(hst_sim::replay::Frame).collect();
+        let globals: Vec<i32> = (0..12).map(|k| i32_at(e, 0x40 + 4 * k)).collect();
+        if !samples.iter().any(|f| f.gm()[0x55] == e[0x38] && (0..12).all(|k| f.global(0x423040 + 4 * k) == globals[k])) {
+            errs.push(format!("globals {globals:?} / phase {} in no sample of the tick", e[0x38]));
+        }
+        for (who, q) in [("own", 0x490), ("partner", 0x4f0), ("opponent", 0x500), ("opponent", 0x510)] {
+            let p: [u32; 3] = std::array::from_fn(|k| u32_at(e, q + 4 * k));
+            let seen = samples.iter().any(|f| (0..4).any(|i| (0..3).all(|k| f.player_f32(i, 0x3d70 + 4 * k).to_bits() == p[k])));
+            if !seen {
+                errs.push(format!("{who} position {:?} in no sample of the tick", p.map(f32::from_bits)));
+            }
+        }
+
+        // the AI block: the port's own, with what the game changed between calls
+        let mut entry = e.to_vec();
+        if let Some((game, port)) = last.get(&ai) {
+            carried += 1;
+            for k in 0..0x280 {
+                if e[A + k] == game[k] {
+                    entry[A + k] = port[k];
+                } else {
+                    outside += 1;
+                }
+            }
+        }
+        let row = &table[((u32_at(e, A + 0xc) - TABLE) / RECORD) as usize];
+        let (r, call_errs) = call("", &entry, x, &mts[src], row, tag, false);
+        errs.extend(call_errs);
+        let got = bytes_all(&entry, &r, false);
+        let want = &x[A..A + 0x280];
+        let diff: Vec<String> = (0..0x280 / 4)
+            .filter(|k| got[4 * k..4 * k + 4] != want[4 * k..4 * k + 4])
+            .map(|k| format!("+{:#x} {:08x} vs {:08x}", 4 * k, u32_at(&got, 4 * k), u32_at(want, 4 * k)))
+            .collect();
+        if !diff.is_empty() {
+            errs.push(format!("block {}", diff.join(", ")));
+        }
+        last.insert(ai, (want.to_vec(), got));
+        if !errs.is_empty() {
+            fails += 1;
+            if fails <= 15 {
+                eprintln!("{at}: {}", errs.join("; "));
+            }
+        }
+    }
+    eprintln!("{n} calls (receive / NET / BASE {:?}), {carried} on carried state, {outside} bytes changed between calls", &tags[1..]);
+    assert_eq!(last.len(), 4, "every CPU's calls");
+    assert!(tags[1..].iter().all(|&k| k > 500), "{tags:?}");
+    assert_eq!(fails, 0, "{fails} of {n} ticks differ");
 }
