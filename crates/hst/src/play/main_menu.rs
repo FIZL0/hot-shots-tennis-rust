@@ -3502,6 +3502,24 @@ mod tests {
         assert_eq!(m.screen, Screen::Main);
     }
 
+    /// B385: the same with a pad (○) that chose Local: its pick undone, still on the roster with 1P picking; a
+    /// second ○ leaves for the main menu.
+    #[test]
+    fn pad_back_after_1p_picks_undoes_it() {
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu::default();
+        m.step(pad, press(|p| &mut p.ok));
+        assert_eq!((m.screen, m.seats), (Screen::Chars, [Some(pad), None, None, None]));
+        m.step(pad, press(|p| &mut p.right));
+        m.step(pad, press(|p| &mut p.ok));
+        assert!(m.players[0].ready && m.driven(pad) == Some(1));
+        m.step(pad, press(|p| &mut p.back));
+        assert_eq!((m.screen, m.driven(pad)), (Screen::Chars, Some(0)));
+        assert!(!m.players[0].ready && !m.players[1].ready);
+        m.step(pad, press(|p| &mut p.back));
+        assert_eq!(m.screen, Screen::Main);
+    }
+
     #[test]
     fn locked_costumes_and_match_order() {
         let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
