@@ -10,6 +10,12 @@
 //!
 //! B314: in the browser the window is the canvas, which starts below the screen's top safe area (an iPhone's Dynamic
 //! Island, `web/index.html`), so the view here is already the shorter rect under it: HUD and menus never reach it.
+//!
+//! M106: the native phone apps (iOS, Android) draw edge to edge, so there the view is fitted inside the window's safe
+//! area (`SAFE`, read by `follow_safe_area`): at Auto it is the whole safe rect, a fixed ratio is the largest rect of it
+//! centred in the safe rect; the notch, cutout and home-indicator strips stay black like the bars. The touch pad keeps
+//! to the whole window (`touch_pad`), so neither the safe area nor the Aspect Ratio moves it. `HST_SAFE=l,t,r,b`
+//! (logical px) fakes the insets anywhere, for `--shot`s.
 
 use bevy::prelude::*;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
@@ -27,12 +33,71 @@ pub fn view(size: Vec2) -> Rect {
 }
 
 fn view_at(size: Vec2, aspect: u8) -> Rect {
-    let r = RATIOS.get(aspect as usize).copied().unwrap_or(0.0);
-    if r == 0.0 || size.x < size.y {
-        return Rect::from_corners(Vec2::ZERO, size);
+    view_in(size, aspect, SAFE.each_ref().map(|a| f32::from_bits(a.load(Ordering::Relaxed))))
+}
+
+/// `view_at` with the safe-area insets `safe` (left, top, right, bottom, as shares of the window's width and height).
+fn view_in(size: Vec2, aspect: u8, [l, t, r, b]: [f32; 4]) -> Rect {
+    let safe = Rect::from_corners(Vec2::new(l * size.x, t * size.y), Vec2::new(size.x * (1.0 - r), size.y * (1.0 - b)));
+    let ratio = RATIOS.get(aspect as usize).copied().unwrap_or(0.0);
+    let s = safe.size();
+    if ratio == 0.0 || size.x < size.y || s.x <= 0.0 || s.y <= 0.0 {
+        return if s.x > 0.0 && s.y > 0.0 { safe } else { Rect::from_corners(Vec2::ZERO, size) };
     }
-    let v = if size.x > size.y * r { Vec2::new(size.y * r, size.y) } else { Vec2::new(size.x, size.x / r) };
-    Rect::from_center_size(size / 2.0, v)
+    let v = if s.x > s.y * ratio { Vec2::new(s.y * ratio, s.y) } else { Vec2::new(s.x, s.x / ratio) };
+    Rect::from_center_size(safe.center(), v)
+}
+
+/// M106: the window's safe-area insets (left, top, right, bottom) as shares of its width and height, f32 bits: zero
+/// but in the native phone apps (or with `HST_SAFE`), whose windows reach under the notch and the home indicator.
+static SAFE: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+
+/// The safe-area insets in logical px of a `size` window (the touch pad's layout keeps clear of them too).
+pub(crate) fn safe_insets(size: Vec2) -> [f32; 4] {
+    let s = SAFE.each_ref().map(|a| f32::from_bits(a.load(Ordering::Relaxed)));
+    [s[0] * size.x, s[1] * size.y, s[2] * size.x, s[3] * size.y]
+}
+
+/// `HST_SAFE=l,t,r,b`: fixed insets in logical px, instead of the phone's.
+fn fake_safe() -> Option<[f32; 4]> {
+    static FAKE: std::sync::OnceLock<Option<[f32; 4]>> = std::sync::OnceLock::new();
+    *FAKE.get_or_init(|| {
+        let v: Vec<f32> = std::env::var("HST_SAFE").ok()?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        <[f32; 4]>::try_from(v).ok()
+    })
+}
+
+/// Keeps `SAFE` to the window's safe area: the phone's own (twice a second, it changes as the phone turns), or
+/// `HST_SAFE`'s.
+fn follow_safe_area(window: Query<(&Window, Option<&bevy::window::RawHandleWrapper>), With<bevy::window::PrimaryWindow>>, mut frame: Local<u32>) {
+    let Ok((w, handle)) = window.single() else { return };
+    *frame += 1;
+    if *frame % 30 != 1 {
+        return;
+    }
+    let _ = handle;
+    #[allow(unused_mut)]
+    let mut px = fake_safe();
+    #[cfg(target_os = "ios")]
+    if px.is_none()
+        && let Some(h) = handle
+    {
+        px = Some(crate::ios::safe_area(h));
+    }
+    #[cfg(target_os = "android")]
+    if px.is_none() {
+        px = crate::android::safe_area().map(|p| p.map(|v| v / w.scale_factor()));
+    }
+    let Some([l, t, r, b]) = px else { return };
+    let (ww, wh) = (w.width().max(1.0), w.height().max(1.0));
+    let shares = [l / ww, t / wh, r / ww, b / wh].map(|v| v.clamp(0.0, 0.45));
+    let mut changed = false;
+    for (a, v) in SAFE.iter().zip(shares) {
+        changed |= a.swap(v.to_bits(), Ordering::Relaxed) != v.to_bits();
+    }
+    if changed {
+        info!("safe area {:?} in a {}×{} window", [l, t, r, b], w.width(), w.height());
+    }
 }
 
 /// The HUD's view size (logical px) in `w`.
@@ -187,6 +252,9 @@ fn fit(window: Query<&Window>, mut q: Query<&mut Node, With<Screen43>>) {
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostUpdate, fit.before(bevy::ui::UiSystems::Layout));
+    if cfg!(any(target_os = "ios", target_os = "android")) || fake_safe().is_some() {
+        app.add_systems(First, follow_safe_area);
+    }
 }
 
 #[test]
@@ -222,6 +290,26 @@ fn fixed_ratio_views() {
     // 4:3 and 16:10 on 16:9
     assert_eq!(v(1920.0, 1080.0, 1), Rect::new(240.0, 0.0, 1680.0, 1080.0));
     assert_eq!(v(1920.0, 1080.0, 3), Rect::new(96.0, 0.0, 1824.0, 1080.0));
+}
+
+#[test]
+fn views_in_the_safe_area() {
+    // M106: an iPhone 15 Pro on its side, Dynamic Island left, home indicator below (852×393 pt, 59/0/59/21)
+    let (size, safe) = (Vec2::new(852.0, 393.0), [59.0 / 852.0, 0.0, 59.0 / 852.0, 21.0 / 393.0]);
+    let close = |a: Rect, b: Rect| (a.min - b.min).abs().max_element() < 1e-3 && (a.max - b.max).abs().max_element() < 1e-3;
+    // Auto: the whole safe rect
+    assert!(close(view_in(size, 0, safe), Rect::new(59.0, 0.0, 793.0, 372.0)));
+    // 16:9 and 4:3: the largest rect of the ratio, centred in the safe rect, never past it
+    for a in [1, 2, 3, 4] {
+        let v = view_in(size, a, safe);
+        assert!(v.min.x >= 59.0 - 1e-3 && v.max.x <= 793.0 + 1e-3 && v.min.y >= -1e-3 && v.max.y <= 372.0 + 1e-3, "{a}");
+        assert!((v.width() / v.height() - RATIOS[a as usize]).abs() < 1e-3 && (v.center() - Vec2::new(426.0, 186.0)).length() < 1e-3, "{a}");
+    }
+    // an Android phone's cutout on one side only: the view starts past it
+    let v = view_in(Vec2::new(2400.0, 1080.0), 0, [0.04, 0.0, 0.0, 0.0]);
+    assert_eq!(v, Rect::new(96.0, 0.0, 2400.0, 1080.0));
+    // no insets: as before
+    assert_eq!(view_in(size, 0, [0.0; 4]), Rect::new(0.0, 0.0, 852.0, 393.0));
 }
 
 #[test]

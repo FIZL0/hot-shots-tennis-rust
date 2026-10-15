@@ -1,4 +1,4 @@
-//! The main menu (remaster-only flow in the original menus' art): Local, Online, Settings and Quit (not on web). Local goes through
+//! The main menu (remaster-only flow in the original menus' art): Local, Online, Settings and Quit (not on web or the phone apps). Local goes through
 //! singles/doubles, controller assignment, the character select (a cursor per player, at once) and the match
 //! confirmation (court, sets, games, umpire), then starts the match as a child process of this executable with the
 //! choices as flags (`--chars`, `--outfits`, `--umpire`, `--pads`, …) and comes back here when it ends.
@@ -254,9 +254,9 @@ fn max_downloads() -> usize {
     }
 }
 
-/// Auto, but 16:9 on a phone (B117: the browser played by touch).
+/// Auto, but 16:9 on a phone's browser (B117: played by touch). The phone apps fit Auto into the safe area (M106).
 fn default_aspect() -> u8 {
-    if touch_page() { 2 } else { 0 }
+    if touch_page() && !cfg!(any(target_os = "ios", target_os = "android")) { 2 } else { 0 }
 }
 
 impl Default for Settings {
