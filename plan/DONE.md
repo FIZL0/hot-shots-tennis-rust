@@ -638,6 +638,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B444** Mod titles sidescroll when too long: on the mods screen, a mod's game title that is too big to fit should scroll sideways (marquee) so the whole title can be read, instead of being cut off (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_kind.rs
 - [x] **B446** Rework confusing menu wording: the mod menu's wording is bad, and the sign-in prompt reads "sign in: sign in first: sign in, top left", so fix it and review the wording on the other menus too. Rethink the text on most if not all menus, but leave any wording that is already clear or doesn't need changing (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/home.rs · crates/hst/src/play/main_menu/online.rs
 - [x] **B445** Remove all uploads option on mods page: the mods page needs a "remove all uploads" option that, before removing anything, shows a warning popup asking the user to confirm (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/confirm.rs · crates/hst/src/play/main_menu/mods_screen/grid.rs
+- [x] **B427** Singles / Doubles pill button hint (user 2026-10-15): the top-right mode pill shows its button glyph (□ / X / Tab per device) like the Costume LB/RB and Hand chips do → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu/legend.rs
 
 
 ### Shots

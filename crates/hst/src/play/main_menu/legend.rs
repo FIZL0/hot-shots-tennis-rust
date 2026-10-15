@@ -497,7 +497,7 @@ static PADS: Mutex<Vec<Style>> = Mutex::new(Vec::new());
 static PAD_STYLES: Mutex<Vec<(Entity, Style)>> = Mutex::new(Vec::new());
 
 /// B368: the button art device `dev` (None: the keyboard) shows, as its legend's.
-fn dev_style(dev: Option<Entity>) -> Style {
+pub(super) fn dev_style(dev: Option<Entity>) -> Style {
     if let Some(s) = forced() {
         return s;
     }
