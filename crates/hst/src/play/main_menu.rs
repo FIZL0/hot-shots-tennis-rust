@@ -1240,6 +1240,8 @@ impl Menu {
                     } else if self.seats[p] == Some(dev) && self.drop_seat(p) {
                         // B238: a joined device's ○ takes it off its seat
                         out.push(Sound(1));
+                    } else if p == 0 && self.online() && self.net.first {
+                        self.chars_back(&mut out);
                     } else if p == 0 && self.online() {
                         // online: back to the lobby, the seats still held
                         self.screen = Screen::Lobby;

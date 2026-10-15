@@ -69,6 +69,9 @@ pub struct View {
     pub fit: usize,
     /// Joining or opening a lobby: its first line-up opens the character select (B195).
     pub pick_next: bool,
+    /// B393: the select is the one joining or opening the lobby opened (no lobby screen seen yet): its Back leaves the
+    /// lobby for the controllers it came from, not on to a lobby screen never shown.
+    pub first: bool,
     /// B201: this machine's peer name in the seats ("host", or a guest's endpoint ID; empty until known), and the
     /// select's places last sent.
     pub me: String,
@@ -649,6 +652,10 @@ impl Menu {
     /// One device's presses on the Online screens.
     pub(super) fn online_step(&mut self, k: Press, out: &mut Vec<Effect>) {
         use Effect::Sound;
+        // B393: the lobby screen seen, the select is its again
+        if self.screen == Screen::Lobby {
+            self.net.first = false;
+        }
         let rows = |n: usize, sel: &mut usize, out: &mut Vec<Effect>| {
             if k.up || k.down {
                 *sel = if k.down { (*sel + 1) % n } else { (*sel + n - 1) % n };
@@ -950,13 +957,25 @@ impl Menu {
         }
     }
 
+    /// B393: Back on the select joining or opening the lobby opened: out of the lobby (as its Leave) and back to the
+    /// Online menu it was opened from (B392: no controllers screen in between), on the row that opened it.
+    pub(super) fn chars_back(&mut self, out: &mut Vec<Effect>) {
+        out.push(Effect::Online(Fx::Net(Cmd::Leave)));
+        for p in 0..4 {
+            self.unready(p);
+        }
+        self.net.status.clear();
+        self.net.started = false;
+        self.back_to_online(out);
+    }
+
     pub(super) fn back_to_online(&mut self, out: &mut Vec<Effect>) {
         self.sel = [Go::Quick, Go::Host, Go::Find, Go::Code].iter().position(|g| Some(*g) == self.net.go).unwrap_or(0);
         self.net.go = None;
         self.net.code.clear();
         self.net.short.clear();
         self.net.room = None;
-        (self.net.hosting, self.net.prepared, self.net.pick_next, self.net.fit) = (false, false, false, 0);
+        (self.net.hosting, self.net.prepared, self.net.pick_next, self.net.fit, self.net.first) = (false, false, false, 0, false);
         (self.net.me, self.net.sent, self.net.edit, self.net.qr_big) = (String::new(), None, None, false);
         self.screen = Screen::Online;
         out.push(Effect::Sound(1));
@@ -1075,6 +1094,8 @@ impl Menu {
                 }
                 v.list = l;
             }
+            // B393: one still on its way from a lobby left for the Online menu (none is open from there)
+            Event::Room(_) if self.screen == Screen::Online => {}
             Event::Room(r) => {
                 // the lobby's singles or doubles is everyone's (a code join didn't choose)
                 self.doubles = r.doubles;
@@ -1085,7 +1106,7 @@ impl Menu {
                 v.room = Some(r);
                 // seated (or the lobby open): on to its character select, the seats held meanwhile
                 if v.pick_next && self.screen == Screen::Lobby {
-                    v.pick_next = false;
+                    (v.pick_next, v.first) = (false, true);
                     (self.screen, self.sel) = (Screen::Chars, 0);
                 }
                 self.align();
@@ -2032,6 +2053,34 @@ mod tests {
         m.last = Some(Some(super::super::Who::Disc(4)));
         m.edit_bot(3, Some(&Pick::disc(6, 0)), &mut vec![]);
         assert_eq!((m.players[3].char(), m.players[3].random), (4, false));
+    }
+
+    #[test]
+    fn back_on_the_select_goes_where_it_came_from() {
+        // B393: the select joining or opening the lobby opened: Back leaves the lobby for the Online menu
+        let dev = super::super::Dev::Keys;
+        let (ok, back) = (Press { ok: true, ..default() }, Press { back: true, ..default() });
+        let mut m = Menu { screen: Screen::Online, sel: 1, seats: [Some(dev), None, None, None], net: View { cfg: Some(Online::default()), ..default() }, ..default() };
+        let room = |fx: Vec<Effect>| fx.into_iter().find_map(|e| if let Effect::Online(Fx::Net(Cmd::Host(r))) = e { Some(r) } else { None }).unwrap();
+        let r = room(m.step(dev, ok));
+        m.heard(Event::Room(r.clone()));
+        assert_eq!(m.screen, Screen::Chars);
+        let fx = m.step(dev, back);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Leave))), "{fx:?}");
+        assert_eq!((m.screen, m.sel, m.net.room.is_some(), m.net.hosting), (Screen::Online, 1, false, false));
+        m.heard(Event::Room(r));
+        assert_eq!((m.screen, m.net.room.is_some()), (Screen::Online, false), "a late line-up from the lobby left");
+        // OK opens it again; seen once, the lobby is where the select goes back to
+        let r = room(m.step(dev, ok));
+        m.heard(Event::Room(r));
+        assert_eq!(m.screen, Screen::Chars);
+        m.step(dev, ok);
+        assert_eq!(m.screen, Screen::Lobby);
+        m.sel = m.items().iter().position(|i| *i == Item::Button("Characters")).unwrap();
+        m.step(dev, ok);
+        assert_eq!(m.screen, Screen::Chars);
+        m.step(dev, back);
+        assert_eq!(m.screen, Screen::Lobby);
     }
 
     #[test]
