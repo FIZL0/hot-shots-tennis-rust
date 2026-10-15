@@ -3649,6 +3649,7 @@ mod tests {
             m.cell(0)
         };
         // B369: the mods' own tab (8 a row here), ← past its first tile to Hot Shots' row 0, its last tile
+        m.players[0].tab = m.tabs().last().unwrap().id;
         m.grid = Grid::fit(4.0 / 3.0);
         while m.columns().cols < 8 {
             m.grid.view[2] += 1.0;
@@ -4220,6 +4221,8 @@ mod tests {
         m.put(0, Some(Who::Mod(0)));
         m.put(1, Some(Who::Mod(0)));
         assert!(m.players[0].modded && m.players[1].modded);
+        // B390: on the mods' own tab (the select opens on All)
+        m.players[1].tab = m.tabs().last().unwrap().id;
         m.step(Dev::Keys, press(|p| &mut p.next));
         m.step(Dev::Keys, press(|p| &mut p.next));
         assert_eq!(m.players[0].costume, 0, "mod a has 2 costumes");

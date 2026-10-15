@@ -1,17 +1,19 @@
-//! B369: the character select's category tabs, each player's own (plan/B368.md § Tabs and overflow): Favourites (only
-//! while there are any), Hot Shots (the disc cast, Random first), then one per mod game (`Mod::game`, "Mods" for an
-//! untagged mod) in name order, "Mods" last. No bumpers (L1 / R1 are the costume): → past a row's last tile goes on
+//! B369: the character select's category tabs, each player's own (plan/B368.md § Tabs and overflow): All (B390: every
+//! character, Random first; where the select opens), Favourites (only while there are any), Hot Shots (the disc cast,
+//! Random first; only beside a mod game's tab, else it would be All again), then one per mod game (`Mod::game`, "Mods"
+//! for an untagged mod) in name order, "Mods" last. No bumpers (L1 / R1 are the costume): → past a row's last tile goes on
 //! to the next tab, ← past its first back to the previous one, wrapping, on the same row (clamped to the new tab's
 //! last) at its first or last tile; ↑↓ stay in the tab. A tap on a tab switches to it. □ marks the highlighted
 //! character a favourite (or not): saved in `favourites.txt` beside `settings.txt`, a star on its tile.
 
 use super::{COLOURS, Draw, Effect, GOLD, INK, Menu, Press, WHITE, Who, pointer};
 
-/// A player's tab (`Player::tab`): Hot Shots is the default (0), so a fresh select (B346's Random) opens on it.
-pub(super) const HOT_SHOTS: u8 = 0;
+/// A player's tab (`Player::tab`): All is the default (0), so a fresh select (B346's Random) opens on it (B390).
+pub(super) const ALL: u8 = 0;
 pub(super) const FAVOURITES: u8 = 1;
+pub(super) const HOT_SHOTS: u8 = 2;
 /// Mod game `k` (in [`Menu::games`]' order) is tab id `GAMES + k`.
-const GAMES: u8 = 2;
+const GAMES: u8 = 3;
 
 /// One tab: its id (`Player::tab`), its name, and its tiles (`None` the Random card).
 #[derive(Clone, Debug, PartialEq)]
@@ -66,23 +68,26 @@ impl Menu {
     /// Every tab, in order.
     pub(super) fn tabs(&self) -> Vec<Tab> {
         let all = self.roster();
-        let mut out = Vec::new();
+        let mut out = vec![Tab { id: ALL, name: "All".into(), cells: all.clone() }];
         let favs: Vec<Option<Who>> = all.iter().copied().filter(|c| c.is_some_and(|w| self.favourite(w))).collect();
         if !favs.is_empty() {
             out.push(Tab { id: FAVOURITES, name: "Favourites".into(), cells: favs });
         }
-        out.push(Tab { id: HOT_SHOTS, name: "Hot Shots".into(), cells: all.iter().copied().filter(|c| !matches!(c, Some(Who::Mod(_)))).collect() });
-        for (k, g) in self.games().into_iter().enumerate() {
+        let games = self.games();
+        if !games.is_empty() {
+            out.push(Tab { id: HOT_SHOTS, name: "Hot Shots".into(), cells: all.iter().copied().filter(|c| !matches!(c, Some(Who::Mod(_)))).collect() });
+        }
+        for (k, g) in games.into_iter().enumerate() {
             let cells = all.iter().copied().filter(|c| matches!(c, Some(Who::Mod(i)) if self.mods[*i].game() == g)).collect();
             out.push(Tab { id: GAMES + k as u8, name: g.to_string(), cells });
         }
         out
     }
 
-    /// Player `p`'s tab in `tabs`: theirs, else (Favourites emptied, a game gone) Hot Shots.
+    /// Player `p`'s tab in `tabs`: theirs, else (Favourites emptied, a game gone) All.
     pub(super) fn tab_at(&self, p: usize, tabs: &[Tab]) -> usize {
         let id = self.players[p].tab;
-        tabs.iter().position(|t| t.id == id).or_else(|| tabs.iter().position(|t| t.id == HOT_SHOTS)).unwrap_or(0)
+        tabs.iter().position(|t| t.id == id).or_else(|| tabs.iter().position(|t| t.id == ALL)).unwrap_or(0)
     }
 
     /// Player `p`'s tab's tiles.
@@ -122,7 +127,7 @@ impl Menu {
         let mut t = self.tab_at(p, &tabs);
         if !tabs[t].cells.contains(&self.cell(p)) {
             // put off its tab (a pick carried over, a random draw): onto the tab it lives in
-            self.players[p].tab = self.cell(p).map_or(HOT_SHOTS, |w| self.home_tab(w));
+            self.players[p].tab = self.cell(p).map_or(ALL, |w| self.home_tab(w));
             t = self.tab_at(p, &tabs);
         }
         let cells = &tabs[t].cells;
@@ -186,7 +191,7 @@ impl Menu {
     }
 
     /// B369: □: the highlighted character in or out of the favourites (saved). Taken off while on Favourites, the
-    /// cursor stays at that place in the tab (or back on Hot Shots once it's empty).
+    /// cursor stays at that place in the tab (or back on All once it's empty).
     pub(super) fn toggle_favourite(&mut self, p: usize, out: &mut Vec<Effect>) {
         let Some(w) = self.cell(p) else { return };
         let key = self.fav_key(w);
@@ -206,16 +211,13 @@ impl Menu {
                     self.put(p, c);
                 }
             } else {
-                self.players[p].tab = HOT_SHOTS;
-                if !tabs[t].cells.contains(&Some(w)) {
-                    self.players[p].tab = self.home_tab(w);
-                }
+                self.players[p].tab = ALL;
             }
         }
         out.extend([Effect::Sound(0), Effect::SaveFavourites]);
     }
 
-    /// The tab a character lives in (not Favourites).
+    /// The tab a character lives in (not All or Favourites).
     fn home_tab(&self, w: Who) -> u8 {
         match w {
             Who::Disc(_) => HOT_SHOTS,
@@ -319,15 +321,18 @@ mod tests {
     #[test]
     fn tabs_in_order_with_counts() {
         let mut m = menu();
-        assert_eq!(names(&m), [("Hot Shots".into(), 1 + CHARS), ("Get a Grip".into(), 2), ("Golf".into(), 7), ("Mods".into(), 3)]);
+        assert_eq!(names(&m), [("All".into(), 1 + CHARS + 12), ("Hot Shots".into(), 1 + CHARS), ("Get a Grip".into(), 2), ("Golf".into(), 7), ("Mods".into(), 3)]);
+        // B390: the select opens on All, Random first
+        assert_eq!(m.players[0].tab, ALL);
         assert_eq!(m.tab_cells(0)[..2], [None, Some(Who::Disc(GRID[0].0))]);
-        // a favourite puts Favourites first
+        assert_eq!(m.tab_cells(0).last(), Some(&Some(Who::Mod(11))));
+        // a favourite puts Favourites after All
         m.put(0, Some(Who::Mod(4)));
         let mut out = Vec::new();
         m.toggle_favourite(0, &mut out);
         assert_eq!(out, [Effect::Sound(0), Effect::SaveFavourites]);
-        assert_eq!(names(&m)[0], ("Favourites".into(), 1));
-        assert_eq!(m.tabs()[0].cells, [Some(Who::Mod(4))]);
+        assert_eq!(names(&m)[1], ("Favourites".into(), 1));
+        assert_eq!(m.tabs()[1].cells, [Some(Who::Mod(4))]);
     }
 
     /// → past the row's end: the next tab's same row at its first tile; ← back: the previous tab's row at its last;
@@ -342,6 +347,7 @@ mod tests {
             (tabs[t].name.clone(), tabs[t].cells.iter().position(|&c| c == m.cell(0)).unwrap())
         };
         // Hot Shots row 1 (tiles 5..10): to its last tile, then on to Get a Grip, whose only row is 0
+        m.players[0].tab = HOT_SHOTS;
         m.put(0, m.tab_cells(0)[9]);
         assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), 0));
         assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), 1));
@@ -350,20 +356,24 @@ mod tests {
         assert_eq!(k(&mut m, |p| &mut p.down), ("Golf".into(), 5));
         assert_eq!(k(&mut m, |p| &mut p.right), ("Golf".into(), 6));
         assert_eq!(k(&mut m, |p| &mut p.right), ("Mods".into(), 0));
-        // wraps: Mods → Hot Shots, row 0 at its first tile (Random)
+        // wraps: Mods → All, row 0 at its first tile (Random)
         assert_eq!(k(&mut m, |p| &mut p.right), ("Mods".into(), 1));
         assert_eq!(k(&mut m, |p| &mut p.right), ("Mods".into(), 2));
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Hot Shots".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.right), ("All".into(), 0));
         assert_eq!(m.cell(0), None);
         // ← past the first: the previous tab (wrapping), its row's last tile
         assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), 2));
         // ↓ stays in the tab (Mods has one row), ↑ too
         assert_eq!(k(&mut m, |p| &mut p.down), ("Mods".into(), 2));
         assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), 1));
-        // Hot Shots' last row (tiles 10..15) → ← from its first goes to the previous tab's (Mods') row 0, at its last
-        m.players[0].tab = HOT_SHOTS;
+        // All's row 2 (tiles 10..15) → ← from its first goes to the previous tab's (Mods') row 0, at its last
+        m.players[0].tab = ALL;
         m.put(0, m.tab_cells(0)[10]);
         assert_eq!(k(&mut m, |p| &mut p.left), ("Mods".into(), 2));
+        // Hot Shots' row 2 → ← to All's row 2, at its last
+        m.players[0].tab = HOT_SHOTS;
+        m.put(0, m.tab_cells(0)[10]);
+        assert_eq!(k(&mut m, |p| &mut p.left), ("All".into(), 14));
     }
 
     /// B66: a tile with nothing open is passed over, a tab with nothing open on that row too.
@@ -374,6 +384,7 @@ mod tests {
         // 2P ready on Get a Grip's first mod: its only costume is closed to 1P
         m.put(1, Some(Who::Mod(10)));
         m.players[1].ready = true;
+        m.players[0].tab = HOT_SHOTS;
         m.put(0, m.tab_cells(0)[4]);
         m.step(Dev::Keys, press(|p| &mut p.right));
         assert_eq!(m.cell(0), Some(Who::Mod(11)));
@@ -392,15 +403,15 @@ mod tests {
         assert_eq!(saved, "hst 3\nmod m7\n");
         let mut n = menu();
         n.favs = parse(&saved);
-        assert_eq!(n.tabs()[0].cells, [Some(Who::Disc(3)), Some(Who::Mod(7))]);
-        // off again, from the Favourites tab: the cursor stays on the tab, then Hot Shots once it's empty
+        assert_eq!(n.tabs()[1].cells, [Some(Who::Disc(3)), Some(Who::Mod(7))]);
+        // off again, from the Favourites tab: the cursor stays on the tab, then All once it's empty
         n.players[0].tab = FAVOURITES;
         n.put(0, Some(Who::Disc(3)));
         n.step(Dev::Keys, press(|p| &mut p.card));
-        assert_eq!((n.cell(0), n.tabs()[0].name.as_str()), (Some(Who::Mod(7)), "Favourites"));
+        assert_eq!((n.cell(0), n.tabs()[n.tab_at(0, &n.tabs())].name.as_str()), (Some(Who::Mod(7)), "Favourites"));
         n.step(Dev::Keys, press(|p| &mut p.card));
         assert!(n.favs.is_empty());
-        assert_eq!((n.players[0].tab, n.cell(0)), (GAMES + 1, Some(Who::Mod(7))), "Golf, where it lives");
+        assert_eq!((n.players[0].tab, n.cell(0)), (ALL, Some(Who::Mod(7))), "All, on the same tile");
         // Random has no favourite; a ready player's △ does nothing
         n.put(0, None);
         assert!(n.step(Dev::Keys, press(|p| &mut p.card)).is_empty());
@@ -408,9 +419,10 @@ mod tests {
 
     #[test]
     fn tap_a_tab() {
+        // All, Hot Shots, Get a Grip, Golf: Golf's first
         let mut m = menu();
         let tabs = m.tabs();
-        assert!(m.set_tab(0, &tabs, 2));
+        assert!(m.set_tab(0, &tabs, 3));
         assert_eq!((m.players[0].tab, m.cell(0)), (GAMES + 1, Some(Who::Mod(3))));
     }
 }
