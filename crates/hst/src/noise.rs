@@ -101,6 +101,11 @@ pub struct Sway {
     distinct: Vec<(usize, [f32; 3], f32)>,
     offsets: Vec<Vec3>,
     offsets_at: Vec<Noise>,
+    /// P40: the motion moved (a tick, or a driver set it) since the sway was last drawn. The noise only steps a
+    /// tick, so between ticks (frames drawn above 60 Hz) the drawn vertices stay put: their bind-space offsets
+    /// only move with the pose through the blend of a vertex's skin, under a millimetre over one tick's
+    /// interpolation.
+    stale: bool,
 }
 
 /// The costume's distinct entries, and per swaying part its moved vertices' entries' indices into them.
@@ -145,7 +150,7 @@ pub(crate) fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Childre
         let noise = c.deformers.iter().map(|d| Noise::new(d.period)).collect();
         // the select may have despawned a preview rig in the same frame (B84)
         let (slots, distinct) = distinct(c);
-        commands.entity(root).try_insert(Sway { noise, meshes: own, sets: None, slots, distinct, offsets: Vec::new(), offsets_at: Vec::new() });
+        commands.entity(root).try_insert(Sway { noise, meshes: own, sets: None, slots, distinct, offsets: Vec::new(), offsets_at: Vec::new(), stale: true });
     }
 }
 
@@ -208,11 +213,17 @@ type Cams<'w, 's> = Query<'w, 's, (&'static Camera, &'static GlobalTransform, &'
 
 /// Every drawn frame, after the pose: each moved vertex from the previous phase, its entries' offsets carried
 /// through their bones as posed.
-pub(crate) fn draw(mut rigs: Query<(Entity, &Rig, &mut Sway, &GlobalTransform, Option<&RenderLayers>)>, joints: Query<&Transform>, mut queued: ResMut<Queued>, cams: Cams, frame: Res<FrameCount>) {
+pub(crate) fn draw(mut rigs: Query<(Entity, &Rig, Ref<Motion>, &mut Sway, &GlobalTransform, Option<&RenderLayers>)>, joints: Query<&Transform>, mut queued: ResMut<Queued>, cams: Cams, frame: Res<FrameCount>) {
     let lod = LOD.load(Ordering::Relaxed);
     let mut changed = Vec::new();
-    for (e, rig, mut s, at, layers) in &mut rigs {
+    for (e, rig, motion, mut s, at, layers) in &mut rigs {
         let Some(c) = &rig.data.noise else { continue };
+        if motion.is_changed() {
+            s.stale = true;
+        }
+        if !s.stale && s.offsets_at == s.noise {
+            continue;
+        }
         if lod && !due(e, at.translation(), layers.unwrap_or_default(), &cams, frame.0) {
             continue;
         }
@@ -225,6 +236,7 @@ pub(crate) fn draw(mut rigs: Query<(Entity, &Rig, &mut Sway, &GlobalTransform, O
             }).collect();
             s.offsets_at.clone_from(&s.noise);
         }
+        s.stale = false;
         // each joint's posed model matrix (its parents' first)
         let mut pose: Vec<Option<Mat4>> = vec![None; rig.joints.len()];
         fn posed(j: usize, rig: &Rig, joints: &Query<&Transform>, pose: &mut [Option<Mat4>]) -> Mat4 {
@@ -236,7 +248,14 @@ pub(crate) fn draw(mut rigs: Query<(Entity, &Rig, &mut Sway, &GlobalTransform, O
             pose[j] = Some(m);
             m
         }
-        let mut rot = |j: usize| Mat3::from_mat4(posed(j, rig, &joints, &mut pose));
+        // each joint's posed rotation, and that times its inverse bind's (a skin's term), once per joint
+        let mut rots: Vec<Option<(Mat3, Mat3)>> = vec![None; rig.joints.len()];
+        let mut rot = |j: usize| {
+            *rots[j].get_or_insert_with(|| {
+                let r = Mat3::from_mat4(posed(j, rig, &joints, &mut pose));
+                (r, r * Mat3::from_mat4(rig.data.joints[j].inverse_bind))
+            })
+        };
         let s = &mut *s;
         for (((_, moved), (_, patched)), slots) in c.parts.iter().zip(&mut s.meshes).zip(&s.slots) {
             // only the moved vertices go to the GPU, written over the mesh's place in the vertex buffer: `get_mut`
@@ -244,13 +263,25 @@ pub(crate) fn draw(mut rigs: Query<(Entity, &Rig, &mut Sway, &GlobalTransform, O
             let Some(patched) = patched else { continue };
             changed.clear();
             let mut slots = slots.iter();
+            // the last skin's inverse (a strip's neighbours mostly share their skin), None if singular
+            let mut last: Option<([(usize, f32); 4], Option<Mat3>)> = None;
             for m in moved {
                 let mut off = Vec3::ZERO;
                 for (e, &k) in m.entries.iter().zip(&mut slots) {
-                    off += rot(e.node) * s.offsets[k as usize];
+                    off += rot(e.node).0 * s.offsets[k as usize];
                 }
-                let skin: Mat3 = m.skin.iter().map(|&(j, w)| rot(j) * Mat3::from_mat4(rig.data.joints[j].inverse_bind) * w).sum();
-                if skin.determinant() != 0.0 && patched.set(m.v, (Vec3::from(m.base) + skin.inverse() * off).into()) {
+                let inverse = match last {
+                    Some((skin, inverse)) if skin == m.skin => inverse,
+                    _ => {
+                        let skin: Mat3 = m.skin.iter().map(|&(j, w)| rot(j).1 * w).sum();
+                        let inverse = (skin.determinant() != 0.0).then(|| skin.inverse());
+                        last = Some((m.skin, inverse));
+                        inverse
+                    }
+                };
+                if let Some(inverse) = inverse
+                    && patched.set(m.v, (Vec3::from(m.base) + inverse * off).into())
+                {
                     changed.push(m.v);
                 }
             }
