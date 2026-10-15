@@ -541,6 +541,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B385** Back doesn't unselect P1's character in Local: after choosing Local and picking a character, pressing back (circle/B) still continues instead of unselecting the P1 character; it should deselect P1's character and stay on the roster (user 2026-10-14) → crates/hst/src/play/main_menu/roster.rs · crates/hst/src/play/main_menu.rs · crates/hst/src/play/controls.rs
 - [x] **C4** C2 follow-up, ball and world: convert these modules the same way as C2 (plan/C2.md: F/Vf operators, deny attr, drop from tests/float_math.rs lists, hash_trace unchanged) → hst-sim/src/contact.rs · mesh.rs · world.rs · quat.rs · bodyhit.rs · tornado.rs · clouds.rs · weather.rs · noise.rs · court_anim.rs
 - [x] **M92** Get a Grip pc14 (Helghast) voices: its sgv/dgv_PC14 banks got cue names only from M8f2's SEQD decode; rerun ../HST-MODS tools/voices.py + tools/rerig/package.py getagrip so getagrip_pc14_helghast ships voice/ like the other 14 → ../HST-MODS tools/rerig/package.py notes/audio.md
+- [x] **B386** Match celebration music not playing: the music that should play during a match celebration is silent; it should play even when in-game music is set to off. Also check that the loss and annihilation sounds play (user 2026-10-15) → crates/hst/src/audio.rs · crates/hst/src/play/match_stats/ceremony.rs · crates/hst/src/play/match_stats.rs
 
 
 ### Shots
