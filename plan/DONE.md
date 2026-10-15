@@ -532,6 +532,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B309** 1v1 on this phone: the loading screen shows upside down, and the score HUD shows sideways — files: crates/hst/src/loading.rs, crates/hst/src/play/widescreen.rs (SIDEWAYS)
 - [x] **B377** Check B360 against the original: on court 4 (cloudy → clear) and court 10 (clear → cloudy), does the real game's weather change at a change of ends step instantly or have a transition period (fade over frames, during the cut-away/black, etc.)? Record it in PCSX2 (screenshots/RAM over the switch), compare with ours, note in journal 2026-10-14-b360-ends-brightness; if the original fades, port it → play/change_ends.rs · shade.rs · graphics.rs
 - [x] **M8f2** (in M8f) Get a Grip umpire voices as umpire mods: decode `gag_vcNN[ab]` cue→wave, map each cue to the HST call (program, key) it fills by transcript (whisper, as B209), package `out/mods/gag_umpNN/` with the calls covered → ../HST-MODS `tools/audio.py` `tools/rerig/package.py` `notes/audio.md` · `hst-sim/src/umpire.rs` (call keys) | j: 2026-10-14-m8f-courts-umpires
+- [x] **C6** C2 follow-up, bodies: convert these modules the same way as C2 (plan/C2.md: F/Vf operators, deny attr, drop from tests/float_math.rs lists, hash_trace unchanged) → hst-sim/src/motion.rs · pose.rs · foot.rs · face.rs · position.rs · stats.rs · npc.rs · umpire.rs
 
 
 ### Shots

@@ -1,9 +1,11 @@
 //! Background figures: which of a court's creature records (layout category 23) come to life at court load, as
 //! what, and where they stand. A creature linked to an anchor record (category 14) stands at the anchor's position
 //! minus its own (FPU subtractions); every figure's matrix is a turn by its yaw at that position.
+#![deny(clippy::float_arithmetic)]
 
+use crate::ps2::{self, F};
 use crate::vu0::V4;
-use crate::{contact, libm, mesh, ps2, sound};
+use crate::{contact, libm, mesh, sound};
 use crate::world::{self, M4};
 use hst_data::exe::{EmitterRow, NpcEntry, TriggerRow};
 use hst_data::layout::{self, Entry, Placement};
@@ -51,7 +53,7 @@ pub fn positions(plants: &[Placement]) -> Vec<[f32; 3]> {
         .iter()
         .filter(|p| p.category == 23)
         .map(|p| match p.link.and_then(|(c, i)| of(c, i)) {
-            Some(a) => std::array::from_fn(|k| ps2::sub(a[k], p.pos[k])),
+            Some(a) => std::array::from_fn(|k| (F(a[k]) - p.pos[k]).0),
             None => p.pos,
         })
         .collect()
@@ -113,10 +115,10 @@ impl Walker {
         let mut t = t;
         if self.looping && len != 0.0 {
             while len <= t {
-                t = ps2::sub(t, len);
+                t = (F(t) - len).0;
             }
             while t < 0.0 {
-                t = ps2::add(t, len);
+                t = (F(t) + len).0;
             }
         } else if len < t {
             t = len;
@@ -128,7 +130,7 @@ impl Walker {
 
     fn advance(&mut self) {
         self.set_frame(self.next);
-        self.next = ps2::add(self.next, self.speed);
+        self.next = (F(self.next) + self.speed).0;
     }
 
     fn set_anim(&mut self, anim: u32, players: u32) {
@@ -146,8 +148,8 @@ impl Walker {
     /// A random frame in the `k`th of `n` equal parts of `[0, span)`.
     fn random_frame(&mut self, part: f32, roll: &mut impl FnMut() -> u32) {
         let k = self.slot as f32;
-        let r = ps2::mul(2.3283064e-10, ps2::utof(roll()));
-        self.set_frame(ps2::lerp(ps2::mul(k, part), ps2::mul(k + 1.0, part), r));
+        let r = (F(2.3283064e-10) * ps2::utof(roll())).0;
+        self.set_frame((F(k) * part).lerp((F(k) + 1.0) * part, r).0);
     }
 
     /// The match's start: with more than one player the cheer (animation 5) from a random frame in this walker's
@@ -156,7 +158,7 @@ impl Walker {
         self.counter = 0;
         if players > 1 {
             self.set_anim(5, players);
-            self.random_frame(ps2::div(self.lens[5], 6.0), roll);
+            self.random_frame((F(self.lens[5]) / 6.0).0, roll);
             self.counter = -1;
         }
     }
@@ -196,7 +198,7 @@ impl Walker {
         if self.counter >= 0 {
             if self.counter == self.slot as i32 {
                 self.set_anim(0, players);
-                self.random_frame(ps2::div(self.lens[0], 6.0), roll);
+                self.random_frame((F(self.lens[0]) / 6.0).0, roll);
             }
             self.counter += 1;
             if (self.slot as i32) < self.counter {
@@ -239,11 +241,11 @@ impl Walker {
 /// winners' half, `z` = 6.4 when the winning team's first player stands at z ≥ 0, else −6.4. Rows (up × forward,
 /// up, forward, home); the layout's yaw only lasts until the first serve.
 pub fn walker_facing(home: [f32; 4], z: f32) -> M4 {
-    let (dx, dz) = (ps2::sub(0.0, home[0]), ps2::sub(z, home[2]));
-    let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(dx, dx), dz, dz)));
-    let f = [ps2::mul(dx, inv), 0.0, ps2::mul(dz, inv)];
+    let (dx, dz) = ((F::ZERO - home[0]).0, (F(z) - home[2]).0);
+    let inv = (F(1.0) / (F(dx) * dx).madd(dz, dz).sqrt()).0;
+    let f = [(F(dx) * inv).0, 0.0, (F(dz) * inv).0];
     let up = [0.0, 1.0, 0.0];
-    let cross = |a: usize, b: usize| ps2::msub(ps2::mul(up[a], f[b]), up[b], f[a]);
+    let cross = |a: usize, b: usize| (F(up[a]) * f[b]).msub(up[b], f[a]).0;
     [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], 0.0, f[2], 0.0], home]
 }
 
@@ -290,6 +292,7 @@ pub struct Wander {
 /// Walker radius.
 const WALKER_R: f32 = f32::from_bits(0x3e99_999a);
 const PI: f32 = f32::from_bits(0x4049_0fdb);
+const NEG_PI: f32 = -PI;
 /// The court rectangle the walkers keep out of: its sides' planes (normal, point) and corners (normal, point).
 const HALF_W: f32 = f32::from_bits(0x40af_851f); // 5.485
 const HALF_L: f32 = f32::from_bits(0x413e_28f6); // 11.885
@@ -308,34 +311,33 @@ const CORNERS: [(V4, V4); 4] = [
 
 /// (x, 0, z, 0) scaled to unit length (`len` the squared length the caller's op order gives).
 fn unit_xz(v: V4, len: f32) -> V4 {
-    let inv = ps2::div(1.0, ps2::sqrt(len));
-    [ps2::mul(v[0], inv), 0.0, ps2::mul(v[2], inv), 0.0]
+    let inv = (F(1.0) / F(len).sqrt()).0;
+    [(F(v[0]) * inv).0, 0.0, (F(v[2]) * inv).0, 0.0]
 }
 
 /// Rows of a matrix facing `f` (unit, xz): (up × f, up, f, identity's last).
 fn facing_rows(f: V4) -> M4 {
     let up = [0.0, 1.0, 0.0];
-    let cross = |a: usize, b: usize| ps2::msub(ps2::mul(up[a], f[b]), up[b], f[a]);
+    let cross = |a: usize, b: usize| (F(up[a]) * f[b]).msub(up[b], f[a]).0;
     [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], [0.0, 1.0, 0.0, 0.0], f, [0.0, 0.0, 0.0, 1.0]]
 }
 
 /// `n` turned by `a` about Y.
 fn turn_xz(a: f32, n: V4) -> V4 {
     let (c, s) = (libm::cosf(a), libm::sinf(a));
-    [ps2::madd(ps2::mul(n[2], s), n[0], c), n[1], ps2::madd(ps2::mul(n[2], c), -n[0], s), n[3]]
+    [(F(n[2]) * s).madd(n[0], c).0, n[1], (F(n[2]) * c).madd(-F(n[0]), s).0, n[3]]
 }
 
 /// Where a line from `a` through `b` passes `c`: the signed distance of `c` from it, in the plane through it
 /// perpendicular to (b − a) × (c − a).
 fn line_side(a: V4, b: V4, c: V4) -> f32 {
-    use ps2::{msub, mul, sub};
-    let u: [f32; 3] = std::array::from_fn(|k| sub(b[k], a[k]));
-    let w: [f32; 3] = std::array::from_fn(|k| sub(c[k], a[k]));
-    let n = [msub(mul(u[1], w[2]), u[2], w[1]), msub(mul(u[2], w[0]), u[0], w[2]), msub(mul(u[0], w[1]), u[1], w[0])];
-    let q = [msub(mul(u[1], n[2]), u[2], n[1]), msub(mul(u[2], n[0]), u[0], n[2]), msub(mul(u[0], n[1]), u[1], n[0])];
-    let inv = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(mul(q[1], q[1]), q[0], q[0]), q[2], q[2])));
-    let d: [f32; 3] = std::array::from_fn(|k| sub(a[k], c[k]));
-    ps2::madd(ps2::madd(mul(mul(q[1], inv), d[1]), mul(q[0], inv), d[0]), mul(q[2], inv), d[2])
+    let u: [f32; 3] = std::array::from_fn(|k| (F(b[k]) - a[k]).0);
+    let w: [f32; 3] = std::array::from_fn(|k| (F(c[k]) - a[k]).0);
+    let n = [(F(u[1]) * w[2]).msub(u[2], w[1]).0, (F(u[2]) * w[0]).msub(u[0], w[2]).0, (F(u[0]) * w[1]).msub(u[1], w[0]).0];
+    let q = [(F(u[1]) * n[2]).msub(u[2], n[1]).0, (F(u[2]) * n[0]).msub(u[0], n[2]).0, (F(u[0]) * n[1]).msub(u[1], n[0]).0];
+    let inv = (F(1.0) / (F(q[1]) * q[1]).madd(q[0], q[0]).madd(q[2], q[2]).sqrt()).0;
+    let d: [f32; 3] = std::array::from_fn(|k| (F(a[k]) - c[k]).0);
+    (F(q[1]) * inv * d[1]).madd(F(q[0]) * inv, d[0]).madd(F(q[2]) * inv, d[2]).0
 }
 
 impl Wander {
@@ -350,32 +352,31 @@ impl Wander {
 
     /// Turn back toward the court centre: the yaw to turn by, split into 10 steps on the first tick, then one step.
     fn turn_back(&mut self, m: &M4) -> Option<M4> {
-        use ps2::{add, div, sub};
         if self.turn_count == 0 {
-            let p = ps2::mul(m[1][2], m[2][1]);
+            let p = (F(m[1][2]) * m[2][1]).0;
             let yaw = if p == 1.0 || p == -1.0 { 0.0 } else { libm::atan2f(m[2][0], m[2][2]) };
-            self.angle = add(yaw, PI);
-            let target = add(libm::atan2f(sub(0.0, m[3][0]), sub(0.0, m[3][2])), PI);
-            let mut diff = if self.angle <= target { sub(target, self.angle) } else { sub(self.angle, target) };
-            let mut alt = add(f32::from_bits(0x40c9_0fdb), if diff <= 0.0 { diff } else { -diff });
+            self.angle = (F(yaw) + PI).0;
+            let target = (F(libm::atan2f((F::ZERO - m[3][0]).0, (F::ZERO - m[3][2]).0)) + PI).0;
+            let mut diff = if self.angle <= target { (F(target) - self.angle).0 } else { (F(self.angle) - target).0 };
+            let mut alt = (F(f32::from_bits(0x40c9_0fdb)) + if diff <= 0.0 { F(diff) } else { -F(diff) }).0;
             if !(diff <= 0.0) {
-                alt = -alt;
+                alt = (-F(alt)).0;
             }
             if alt.abs() <= diff.abs() {
                 diff = alt;
             }
-            self.turn_step = div(diff, 10.0);
-            if !(add(self.angle, self.turn_step) < target) {
-                self.turn_step = -self.turn_step;
+            self.turn_step = (F(diff) / 10.0).0;
+            if !((F(self.angle) + self.turn_step).0 < target) {
+                self.turn_step = (-F(self.turn_step)).0;
             }
-            self.angle = sub(self.angle, PI);
+            self.angle = (F(self.angle) - PI).0;
         }
         let mut rows = None;
         if self.turn_count < 10 {
-            let mut a = add(self.angle, self.turn_step);
+            let mut a = (F(self.angle) + self.turn_step).0;
             self.angle = a;
-            if !(a < PI) || a <= -PI {
-                a = if a < PI { add(add(a, PI), PI) } else { sub(-PI, sub(a, PI)) };
+            if !(a < PI) || a <= NEG_PI {
+                a = if a < PI { (F(a) + PI + PI).0 } else { (F(NEG_PI) - (F(a) - PI)).0 };
             }
             rows = Some(world::mat_mul(&world::IDENTITY, &world::rot_y(a)));
         }
@@ -386,18 +387,17 @@ impl Wander {
     /// The court rectangle ahead of a step `v` from `pos`: the plane (`push` = a point on it, the returned normal)
     /// to slide along, or none (normal 0) when the step ends clear of it.
     fn edge(&mut self, pos: V4, v: V4, r: f32) -> V4 {
-        use ps2::{add, madd, mul, sub};
-        let inv = ps2::div(1.0, ps2::sqrt(madd(madd(0.0, v[0], v[0]), v[2], v[2])));
-        let (fz, fy, fx) = (mul(v[2], inv), mul(0.0, inv), mul(v[0], inv));
-        let end = [add(pos[0], v[0]), add(pos[1], 0.0), add(pos[2], v[2]), add(pos[3], 0.0)];
-        if !(end[0].abs() <= add(HALF_W, r)) || !(end[2].abs() <= add(HALF_L, r)) {
+        let inv = (F(1.0) / F::ZERO.madd(v[0], v[0]).madd(v[2], v[2]).sqrt()).0;
+        let (fz, fy, fx) = ((F(v[2]) * inv).0, (F::ZERO * inv).0, (F(v[0]) * inv).0);
+        let end = [(F(pos[0]) + v[0]).0, (F(pos[1]) + 0.0).0, (F(pos[2]) + v[2]).0, (F(pos[3]) + 0.0).0];
+        if !(end[0].abs() <= (F(HALF_W) + r).0) || !(end[2].abs() <= (F(HALF_L) + r).0) {
             self.push = [0.0; 4];
             return [0.0, 0.0, 0.0, 1.0];
         }
         let inside: [bool; 4] = std::array::from_fn(|i| {
             let (n, p) = SIDES[i];
-            let d: [f32; 3] = std::array::from_fn(|k| sub(p[k], pos[k]));
-            madd(madd(mul(d[1], n[1]), d[0], n[0]), d[2], n[2]) < 0.0
+            let d: [f32; 3] = std::array::from_fn(|k| (F(p[k]) - pos[k]).0);
+            (F(d[1]) * n[1]).madd(d[0], n[0]).madd(d[2], n[2]).0 < 0.0
         });
         if inside.iter().filter(|&&b| b).count() < 2 {
             let (n, p) = match inside.iter().position(|&b| b) {
@@ -411,16 +411,16 @@ impl Wander {
         let u = (!inside[2]) as usize + 2 * inside[1] as usize;
         let (n, p) = CORNERS[u];
         self.push = p;
-        let mut out = unit_xz(n, madd(mul(n[2], n[2]), n[0], n[0]));
-        let ahead = [add(end[0], mul(fx, r)), add(end[1], mul(fy, r)), add(end[2], mul(fz, r)), add(end[3], mul(fy, r))];
+        let mut out = unit_xz(n, (F(n[2]) * n[2]).madd(n[0], n[0]).0);
+        let ahead = [(F(end[0]) + F(fx) * r).0, (F(end[1]) + F(fy) * r).0, (F(end[2]) + F(fz) * r).0, (F(end[3]) + F(fy) * r).0];
         for (_, c) in CORNERS {
-            let d = [sub(c[0], pos[0]), sub(c[1], pos[1]), sub(c[2], pos[2])];
-            let (ex, ez) = (sub(ahead[0], pos[0]), sub(ahead[2], pos[2]));
-            let reach = ps2::sqrt(madd(mul(ez, ez), ex, ex));
-            if ps2::sqrt(madd(mul(d[2], d[2]), d[0], d[0])) < reach && line_side(pos, ahead, c) < r {
+            let d = [(F(c[0]) - pos[0]).0, (F(c[1]) - pos[1]).0, (F(c[2]) - pos[2]).0];
+            let (ex, ez) = ((F(ahead[0]) - pos[0]).0, (F(ahead[2]) - pos[2]).0);
+            let reach = (F(ez) * ez).madd(ex, ex).sqrt().0;
+            if (F(d[2]) * d[2]).madd(d[0], d[0]).sqrt().0 < reach && line_side(pos, ahead, c) < r {
                 self.push = c;
-                let v: V4 = std::array::from_fn(|k| sub(pos[k], c[k]));
-                out = unit_xz(v, madd(mul(v[2], v[2]), v[0], v[0]));
+                let v: V4 = std::array::from_fn(|k| (F(pos[k]) - c[k]).0);
+                out = unit_xz(v, (F(v[2]) * v[2]).madd(v[0], v[0]).0);
                 break;
             }
         }
@@ -431,17 +431,19 @@ impl Wander {
     /// hit stops the sphere at the contact and takes the velocity's part into the surface off (at most 30, until
     /// a tenth of the step is left). Ends on the ground, outside |z| ≤ 1. Returns whether nothing was hit.
     fn slide(&mut self, pos: &mut V4, v: V4, n: V4, r: f32, world: &mesh::World) -> bool {
-        use ps2::{add, madd, mul, sub};
-        let plane = ps2::sqrt(madd(mul(n[2], n[2]), n[0], n[0])) != 0.0;
+        let plane = (F(n[2]) * n[2]).madd(n[0], n[0]).sqrt().0 != 0.0;
         let mut v = v;
-        if madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2]) == 0.0 {
+        if (F(v[1]) * v[1]).madd(v[0], v[0]).madd(v[2], v[2]).0 == 0.0 {
             return true;
         }
         let mut start = *pos;
-        start[1] = (-(r as f64) - 0.1) as f32;
+        // a double subtract (soft float), rounded to nearest on the way back
+        #[allow(clippy::float_arithmetic)]
+        let y = (-(r as f64) - 0.1) as f32;
+        start[1] = y;
         let (mut k, mut hits) = (1.0f32, 0);
         loop {
-            let end: V4 = std::array::from_fn(|i| madd(add(0.0, start[i]), v[i], k));
+            let end: V4 = std::array::from_fn(|i| (F::ZERO + start[i]).madd(v[i], k).0);
             let hit = if plane {
                 contact::sweep(start, end, r, self.push, n, f32::MAX)
             } else {
@@ -454,10 +456,10 @@ impl Wander {
             hits += 1;
             start = contact::contact_point(Some(&hit), start, end, r);
             let t = if hit.t <= f32::from_bits(0x3c23_d70a) { f32::from_bits(0x3c23_d70a) } else { hit.t };
-            k = mul(k, sub(1.0, t));
+            k = (F(k) * (F(1.0) - t)).0;
             let m = hit.normal;
-            let dot = madd(madd(mul(v[1], m[1]), v[0], m[0]), v[2], m[2]);
-            v = std::array::from_fn(|i| sub(v[i], mul(m[i], dot)));
+            let dot = (F(v[1]) * m[1]).madd(v[0], m[0]).madd(v[2], m[2]).0;
+            v = std::array::from_fn(|i| (F(v[i]) - F(m[i]) * dot).0);
             if k <= f32::from_bits(0x3dcc_cccd) || hits >= 30 {
                 break;
             }
@@ -477,14 +479,13 @@ impl Wander {
 impl Walker {
     /// Look for what comes at it: players and the ball, then the other walkers. Returns whether any is near.
     fn detect(&mut self, at: &Around, pos: V4) -> bool {
-        use ps2::{add, madd, mul, sqrt, sub};
         let mut best = 100.0;
         let mut near = false;
         let ball = at.players.len();
         let mut look = |w: &mut Wander, p: V4, dir: Option<V4>, thr: f32| {
             let dist = |p: V4, q: [f32; 3]| {
-                let (dy, dx, dz) = (sub(p[1], q[1]), sub(p[0], q[0]), sub(p[2], q[2]));
-                sqrt(madd(madd(mul(dy, dy), dx, dx), dz, dz))
+                let (dy, dx, dz) = ((F(p[1]) - q[1]).0, (F(p[0]) - q[0]).0, (F(p[2]) - q[2]).0);
+                (F(dy) * dy).madd(dx, dx).madd(dz, dz).sqrt().0
             };
             let d = dist(p, [pos[0], pos[1], pos[2]]);
             if !(d <= 3.0) || best <= d {
@@ -496,16 +497,16 @@ impl Walker {
             }
             near = true;
             let Some(v) = dir else { return };
-            let n = unit_xz(v, madd(add(0.0, mul(v[2], v[2])), v[0], v[0]));
+            let n = unit_xz(v, (F::ZERO + F(v[2]) * v[2]).madd(v[0], v[0]).0);
             w.dodging = !w.frozen;
             w.ticks = 0;
-            let t = sub(thr, d);
+            let t = (F(thr) - d).0;
             // step aside, to whichever side (90° or 270° from its way) takes it further from it
             // ponytail: the walkers' "step straight away" setting (+0xc4) is never set, so its branch isn't ported
             for i in 0..2 {
-                let a = mul(f32::from_bits(0x3c8e_fa35), (90 + 180 * i) as f32);
-                let s = turn_xz(a, n).map(|c| mul(c, t));
-                let q = [add(pos[0], s[0]), add(pos[1], s[1]), add(pos[2], s[2])];
+                let a = (F(f32::from_bits(0x3c8e_fa35)) * (90 + 180 * i) as f32).0;
+                let s = turn_xz(a, n).map(|c| (F(c) * t).0);
+                let q = [(F(pos[0]) + s[0]).0, (F(pos[1]) + s[1]).0, (F(pos[2]) + s[2]).0];
                 if d < dist(p, q) {
                     w.dir = turn_xz(a, n);
                     break;
@@ -517,11 +518,11 @@ impl Walker {
             if i < ball {
                 let (p, prev) = (at.players[i], w.players[i]);
                 let still = p.map(f32::to_bits) == prev.map(f32::to_bits);
-                let dir = (!still).then(|| std::array::from_fn(|k| sub(p[k], prev[k])));
+                let dir = (!still).then(|| std::array::from_fn(|k| (F(p[k]) - prev[k]).0));
                 look(w, p, dir, if w.dodging { 0.5 } else { 1.0 });
             } else {
                 let v = at.ball_vel;
-                let dir = (sqrt(madd(madd(mul(v[1], v[1]), v[0], v[0]), v[2], v[2])) != 0.0).then_some(v);
+                let dir = ((F(v[1]) * v[1]).madd(v[0], v[0]).madd(v[2], v[2]).sqrt().0 != 0.0).then_some(v);
                 look(w, at.ball, dir, if w.dodging { 1.5 } else { 2.5 });
             }
         }
@@ -531,7 +532,7 @@ impl Walker {
             }
             let (p, prev) = (at.walkers[k], w.walkers[k]);
             let still = p.map(f32::to_bits) == prev.map(f32::to_bits);
-            let dir = (!still).then(|| std::array::from_fn(|k| sub(p[k], prev[k])));
+            let dir = (!still).then(|| std::array::from_fn(|k| (F(p[k]) - prev[k]).0));
             look(w, p, dir, if w.dodging { 0.5 } else { 1.0 });
         }
         near
@@ -540,7 +541,6 @@ impl Walker {
     /// The walker's wander tick (before its animation's): what's near, the dodge, the turn back, the step and its
     /// collisions; then its drawn matrix goes to `at.walkers` and it notes where everything stood.
     pub fn wander(&mut self, players: u32, at: &mut Around) {
-        use ps2::{madd, mul, sqrt};
         let mut rows = self.wander.world;
         let mut p = self.wander.world;
         let mut vel = [0.0; 4];
@@ -583,14 +583,14 @@ impl Walker {
                     w.hits += 1;
                 }
                 let d = w.dir;
-                rows = facing_rows(unit_xz(d, madd(mul(d[2], d[2]), d[0], d[0])));
+                rows = facing_rows(unit_xz(d, (F(d[2]) * d[2]).madd(d[0], d[0]).0));
                 w.turn_count = 0;
                 w.turning = true;
             }
             let w = &mut self.wander;
             if w.dodging {
                 w.ticks += 1;
-                vel = w.dir.map(|c| mul(c, f32::from_bits(0x3dcc_cccd)));
+                vel = w.dir.map(|c| (F(c) * f32::from_bits(0x3dcc_cccd)).0);
                 if w.ticks >= 30 {
                     (w.window, w.ticks, w.dodging, w.hits) = (0, 0, false, 0);
                     self.set_anim(0, players);
@@ -611,11 +611,11 @@ impl Walker {
             rows = walker_facing(self.wander.home, at.side);
         }
         let w = &mut self.wander;
-        if sqrt(madd(mul(vel[2], vel[2]), vel[0], vel[0])) != 0.0 {
+        if (F(vel[2]) * vel[2]).madd(vel[0], vel[0]).sqrt().0 != 0.0 {
             let n = w.edge(p[3], vel, WALKER_R);
             if !w.slide(&mut p[3], vel, n, WALKER_R, at.world) {
                 let u = w.push;
-                let f = unit_xz(u, madd(mul(u[2], u[2]), u[0], u[0]));
+                let f = unit_xz(u, (F(u[2]) * u[2]).madd(u[0], u[0]).0);
                 (w.push, w.dir) = (f, f);
                 rows = facing_rows(f);
             }
@@ -751,7 +751,7 @@ impl Cheers {
         for c in &mut self.slots[at..at + self.count] {
             if c.delay < 1 {
                 if c.n % 5 == 0 && c.n != 0 {
-                    c.pos = std::array::from_fn(|i| ps2::add(c.base[i], CHEER_JUMP[(roll() >> 16 & 0x7fff) as usize % 6]));
+                    c.pos = std::array::from_fn(|i| (F(c.base[i]) + CHEER_JUMP[(roll() >> 16 & 0x7fff) as usize % 6]).0);
                 }
                 c.n += 1;
             }
@@ -860,8 +860,8 @@ impl Emitter {
     }
 
     fn arm(&mut self, roll: &mut impl FnMut() -> u32) {
-        let r = ps2::mul(2.3283064e-10, ps2::utof(roll()));
-        self.timer = ps2::mul(self.row.base as f32, ps2::msub(1.0, self.row.jitter, r)) as i32;
+        let r = (F(2.3283064e-10) * ps2::utof(roll())).0;
+        self.timer = (F(self.row.base as f32) * F(1.0).msub(self.row.jitter, r)).0 as i32;
     }
 
     /// One tick; true when the sound starts (program 7, positional at `pos`, volume 0x40).
@@ -879,7 +879,7 @@ impl Emitter {
         }
         if self.ty == SWEEPER && self.sweep != 0 {
             self.sweep -= 1;
-            self.pan = if self.down { ps2::sub(self.pan, 0.375) } else { ps2::add(self.pan, 0.375) };
+            self.pan = if self.down { (F(self.pan) - 0.375).0 } else { (F(self.pan) + 0.375).0 };
             if 359.0 <= self.pan {
                 self.pan = 0.0;
             } else if self.pan <= 0.0 {
@@ -1059,21 +1059,21 @@ fn jitter((n, j): (i16, f32), roll: &mut impl FnMut() -> u32) -> i16 {
     if j == 0.0 {
         return n;
     }
-    ps2::mul(n as f32, ps2::msub(1.0, j, ps2::mul(2.3283064e-10, ps2::utof(roll())))) as i32 as i16
+    (F(n as f32) * F(1.0).msub(j, F(2.3283064e-10) * ps2::utof(roll()))).0 as i32 as i16
 }
 
 fn dist2([x, y, z, _]: [f32; 4]) -> f32 {
-    ps2::madd(ps2::madd(ps2::add(0.0, ps2::mul(y, y)), x, x), z, z)
+    (F::ZERO + F(y) * y).madd(x, x).madd(z, z).0
 }
 
 fn minus(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    std::array::from_fn(|c| ps2::sub(a[c], b[c]))
+    std::array::from_fn(|c| (F(a[c]) - b[c]).0)
 }
 
 /// `b` turned to `a` the short way round: the plain difference unless adding or taking a full turn is shorter.
 fn turn(a: f32, b: f32) -> f32 {
-    let d = ps2::sub(ps2::add(a, world::PI), ps2::add(b, world::PI));
-    let (up, dn) = (ps2::add(world::TWO_PI, d), ps2::sub(d, world::TWO_PI));
+    let d = (F(a) + world::PI - (F(b) + world::PI)).0;
+    let (up, dn) = ((F(world::TWO_PI) + d).0, (F(d) - world::TWO_PI).0);
     if d.abs() < up.abs() && d.abs() < dn.abs() {
         d
     } else if up.abs() < dn.abs() {
@@ -1086,9 +1086,9 @@ fn turn(a: f32, b: f32) -> f32 {
 /// Into ±π by one turn.
 fn wrap(a: f32) -> f32 {
     if world::PI < a {
-        ps2::sub(a, world::TWO_PI)
-    } else if a < -world::PI {
-        ps2::add(world::TWO_PI, a)
+        (F(a) - world::TWO_PI).0
+    } else if a < NEG_PI {
+        (F(world::TWO_PI) + a).0
     } else {
         a
     }
@@ -1096,25 +1096,25 @@ fn wrap(a: f32) -> f32 {
 
 /// (pitch, yaw) of direction `d`: yaw about Y from x and z, pitch from −y over the horizontal length.
 fn heading([x, y, z, _]: [f32; 4]) -> (f32, f32) {
-    (libm::atan2f(-y, ps2::sqrt(ps2::madd(ps2::mul(z, z), x, x))), libm::atan2f(x, z))
+    (libm::atan2f((-F(y)).0, (F(z) * z).madd(x, x).sqrt().0), libm::atan2f(x, z))
 }
 
 /// `d` scaled to unit length (its w too).
 fn unit(d: [f32; 4]) -> [f32; 4] {
-    let q = ps2::div(1.0, ps2::sqrt(dist2(d)));
-    d.map(|c| ps2::mul(c, q))
+    let q = (F(1.0) / F(dist2(d)).sqrt()).0;
+    d.map(|c| (F(c) * q).0)
 }
 
 /// [`unit`] with the length summed y, x, z on the accumulator (no leading zero).
 fn unit3(d: [f32; 4]) -> [f32; 4] {
     let [x, y, z, _] = d;
-    let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
-    d.map(|c| ps2::mul(c, q))
+    let q = (F(1.0) / (F(y) * y).madd(x, x).madd(z, z).sqrt()).0;
+    d.map(|c| (F(c) * q).0)
 }
 
 /// The ball's speed in km/h from its last move (its position change over the last tick; the length summed y, x, z).
 pub fn ball_kmh([x, y, z]: [f32; 3]) -> f32 {
-    ps2::div(ps2::mul(3600.0, ps2::mul(60.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)))), 1000.0)
+    (F(3600.0) * (F(60.0) * (F(y) * y).madd(x, x).madd(z, z).sqrt()) / 1000.0).0
 }
 
 /// The box half-extents of obstacle types 14 and 21, and of any other type (38's), set by the game's code.
@@ -1129,27 +1129,27 @@ pub fn obstacle_extents(ty: u8) -> [f32; 3] {
 /// Whether box `a` (half-extents 0.2 along its matrix rows: a player or the ball) overlaps obstacle box `b`
 /// (half-extents `e`): the separating-axis test over both boxes' axes and their nine cross products.
 pub fn boxes_overlap(a: &M4, b: &M4, e: [f32; 3]) -> bool {
-    let dot = |u: [f32; 4], l: [f32; 4]| ps2::madd(ps2::madd(ps2::mul(u[1], l[1]), u[0], l[0]), u[2], l[2]);
+    let dot = |u: [f32; 4], l: [f32; 4]| (F(u[1]) * l[1]).madd(u[0], l[0]).madd(u[2], l[2]).0;
     let cross = |u: [f32; 4], v: [f32; 4]| {
-        let c = |i: usize, j: usize| ps2::msub(ps2::mul(u[i], v[j]), u[j], v[i]);
+        let c = |i: usize, j: usize| (F(u[i]) * v[j]).msub(u[j], v[i]).0;
         [c(1, 2), c(2, 0), c(0, 1), 0.0]
     };
     let t = minus(b[3], a[3]);
     let mut axes = (0..3).flat_map(|i| [a[i], b[i]]).chain((0..9).map(|k| cross(a[k / 3], b[k % 3])));
-    let radius = |m: &M4, e: [f32; 3], l: [f32; 4]| ps2::add(ps2::mul(e[2], dot(m[2], l)).abs(), ps2::add(ps2::mul(e[0], dot(m[0], l)).abs(), ps2::mul(e[1], dot(m[1], l)).abs()));
-    axes.all(|l| dot(l, t).abs() <= ps2::add(radius(a, [0.2; 3], l), radius(b, e, l)))
+    let radius = |m: &M4, e: [f32; 3], l: [f32; 4]| (F((F(e[2]) * dot(m[2], l)).0.abs()) + (F((F(e[0]) * dot(m[0], l)).0.abs()) + (F(e[1]) * dot(m[1], l)).0.abs())).0;
+    axes.all(|l| dot(l, t).abs() <= (F(radius(a, [0.2; 3], l)) + radius(b, e, l)).0)
 }
 
 /// Whether the ball's box (±0.2 about `ball`) overlaps the box ±`e` about `at`.
 fn ball_in(ball: [f32; 4], at: [f32; 4], e: [f32; 3]) -> bool {
-    (0..3).all(|c| ps2::sub(ball[c], 0.2) < ps2::add(at[c], e[c]) && !(ps2::add(ball[c], 0.2) <= ps2::sub(at[c], e[c])))
+    (0..3).all(|c| (F(ball[c]) - 0.2).0 < (F(at[c]) + e[c]).0 && !((F(ball[c]) + 0.2).0 <= (F(at[c]) - e[c]).0))
 }
 
 /// The sound a trigger creature's key plays: the ball-hit obstacles' on program 2 (43's on 7) at the game's sound
 /// effect level (0.9 · 128) scaled by 1.2 (1.35 for 38); 15's and 43's on 7 at that ×1.2; the others' on program 7
 /// at 0x40.
 pub fn trigger_sound(ty: u8, key: i32) -> sound::Play {
-    let level = |k: f32| ps2::mul(115.0, k) as i32;
+    let level = |k: f32| (F(115.0) * k).0 as i32;
     let (program, volume) = match ty {
         14 | 21 => (2, level(1.2)),
         38 => (2, level(1.35)),
@@ -1210,10 +1210,10 @@ impl Trigger {
             return t.clamp(0.0, len);
         }
         while len <= t {
-            t = ps2::sub(t, len);
+            t = (F(t) - len).0;
         }
         while t < 0.0 {
-            t = ps2::add(t, len);
+            t = (F(t) + len).0;
         }
         t
     }
@@ -1264,8 +1264,8 @@ impl Trigger {
     pub fn give_voice(&mut self, row: &TriggerRow, voice: (i32, i32), roll: &mut impl FnMut() -> u32) {
         self.voice = voice;
         if voice.1 != 0 {
-            let u = ps2::mul(2.3283064e-10, ps2::utof(roll()));
-            self.gap = ps2::mul(voice.1 as f32, ps2::msub(1.0, row.idle.1, u)) as i32;
+            let u = (F(2.3283064e-10) * ps2::utof(roll())).0;
+            self.gap = (F(voice.1 as f32) * F(1.0).msub(row.idle.1, u)).0 as i32;
         }
     }
 
@@ -1275,10 +1275,10 @@ impl Trigger {
         if row.exact {
             return p;
         }
-        let u = ps2::mul(2.3283064e-10, ps2::utof(roll()));
-        let a = ps2::madd(ps2::add(0.0, -world::PI), world::TWO_PI, u);
+        let u = (F(2.3283064e-10) * ps2::utof(roll())).0;
+        let a = (F::ZERO + NEG_PI).madd(world::TWO_PI, u).0;
         let (f, r) = (world::mat_mul(&world::IDENTITY, &world::rot_y(a))[2], self.radii.get(i).copied().unwrap_or(0.0));
-        [ps2::add(p[0], ps2::mul(f[0], r)), ps2::madd(ps2::add(0.0, p[1]), f[1], r), ps2::madd(ps2::add(0.0, p[2]), f[2], r), ps2::madd(ps2::add(0.0, p[3]), f[3], r)]
+        [(F(p[0]) + F(f[0]) * r).0, (F::ZERO + p[1]).madd(f[1], r).0, (F::ZERO + p[2]).madd(f[2], r).0, (F::ZERO + p[3]).madd(f[3], r).0]
     }
 
     /// Next waypoint: the leg's target, pause, velocity; `first` (from a reset) also turns to face it.
@@ -1339,8 +1339,8 @@ impl Trigger {
         if face {
             let d = minus(target, self.pos());
             let [x, y, z, _] = d;
-            let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::madd(ps2::mul(y, y), x, x), z, z)));
-            self.face(d.map(|c| ps2::mul(c, q)));
+            let q = (F(1.0) / (F(y) * y).madd(x, x).madd(z, z).sqrt()).0;
+            self.face(d.map(|c| (F(c) * q).0));
             if row.steer != 0.0 {
                 (self.pitch, self.yaw) = heading(unit(minus(target, self.pos())));
             }
@@ -1350,13 +1350,13 @@ impl Trigger {
         if row.mode != 6 && row.speed != 0.0 && row.steer == 0.0 {
             let d = minus(target, self.pos());
             let s = dist2(d);
-            let dist = ps2::sqrt(s);
+            let dist = F(s).sqrt().0;
             let unit = if self.every == 0 { 1 } else { self.every };
-            let f = ps2::mul(row.speed, unit as f32);
-            let ticks = unit.wrapping_mul(ps2::div(ps2::add(dist, ps2::sub(f, 1.0)), f) as i32 as i16).max(unit);
+            let f = (F(row.speed) * unit as f32).0;
+            let ticks = unit.wrapping_mul(((F(dist) + (F(f) - 1.0)) / f).0 as i32 as i16).max(unit);
             (self.total, self.left) = (ticks, ticks);
-            let (inv, step) = (ps2::div(1.0, ps2::sqrt(s)), ps2::div(dist, ticks as f32));
-            self.vel = d.map(|c| ps2::mul(ps2::mul(c, inv), step));
+            let (inv, step) = ((F(1.0) / F(s).sqrt()).0, (F(dist) / ticks as f32).0);
+            self.vel = d.map(|c| (F(c) * inv * step).0);
         }
     }
 
@@ -1379,42 +1379,42 @@ impl Trigger {
                 }
                 if row.mode == 6 {
                     let dir = if self.clockwise { -1.0 } else { 1.0 };
-                    let mut a = ps2::madd(self.angle, ps2::mul(0.017453292, row.speed), dir);
+                    let mut a = F(self.angle).madd(F(0.017453292) * row.speed, dir).0;
                     if world::PI < a {
-                        a = ps2::sub(a, world::TWO_PI);
-                    } else if a < -world::PI {
-                        a = ps2::add(world::TWO_PI, a);
+                        a = (F(a) - world::TWO_PI).0;
+                    } else if a < NEG_PI {
+                        a = (F(world::TWO_PI) + a).0;
                     }
                     self.angle = a;
                     let m = world::mat_mul(&world::IDENTITY, &world::rot_y(a));
-                    self.world[3] = std::array::from_fn(|c| ps2::madd(self.target[c], m[2][c], self.radius));
+                    self.world[3] = std::array::from_fn(|c| F(self.target[c]).madd(m[2][c], self.radius).0);
                     if self.orient {
                         let pos = self.world[3];
-                        let turn = world::mat_mul(&world::IDENTITY, &world::rot_y(ps2::mul(dir, world::HALF_PI)));
+                        let turn = world::mat_mul(&world::IDENTITY, &world::rot_y((F(dir) * world::HALF_PI).0));
                         self.world = world::mat_mul(&m, &turn);
                         self.world[3] = pos;
                     }
                 } else if row.steer != 0.0 {
                     // steering: pitch and yaw eased by `steer` toward the target, a step of `speed` along the heading
                     let (p, y) = heading(unit(minus(self.target, self.pos())));
-                    self.pitch = wrap(ps2::madd(ps2::add(0.0, self.pitch), row.steer, turn(p, self.pitch)));
-                    self.yaw = wrap(ps2::madd(ps2::add(0.0, self.yaw), row.steer, turn(y, self.yaw)));
+                    self.pitch = wrap((F::ZERO + self.pitch).madd(row.steer, turn(p, self.pitch)).0);
+                    self.yaw = wrap((F::ZERO + self.yaw).madd(row.steer, turn(y, self.yaw)).0);
                     let m = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(self.pitch)), &world::rot_y(self.yaw));
                     let f = m[2];
                     if self.orient {
                         self.face(if row.orient == 2 { [f[0], 0.0, f[2], 0.0] } else { f });
                     }
-                    self.world[3] = std::array::from_fn(|c| ps2::madd(ps2::add(0.0, self.world[3][c]), f[c], row.speed));
+                    self.world[3] = std::array::from_fn(|c| (F::ZERO + self.world[3][c]).madd(f[c], row.speed).0);
                     // arrived once the heading points past the target (seen from the origin, then from here)
                     // ponytail: the first point it measures from (+0x260) is never written: the origin in every recording
                     let [x, y, z, _] = unit3(minus(self.target, [0.0; 4]));
-                    if !(ps2::madd(ps2::madd(ps2::mul(f[1], y), f[0], x), f[2], z) < 0.0) {
+                    if !((F(f[1]) * y).madd(f[0], x).madd(f[2], z).0 < 0.0) {
                         let [x, y, z, _] = unit3(minus(self.target, self.pos()));
-                        let dot = ps2::madd(ps2::add(0.0, ps2::madd(ps2::add(0.0, ps2::mul(f[1], y)), f[0], x)), f[2], z);
+                        let dot = (F::ZERO + (F::ZERO + F(f[1]) * y).madd(f[0], x)).madd(f[2], z).0;
                         arrived = dot <= 0.0;
                     }
                 } else {
-                    self.world[3] = std::array::from_fn(|c| ps2::add(self.world[3][c], self.vel[c]));
+                    self.world[3] = std::array::from_fn(|c| (F(self.world[3][c]) + self.vel[c]).0);
                     if self.orient {
                         let v = self.vel;
                         self.face(if row.orient == 2 { [v[0], 0.0, v[2], 0.0] } else { v });
@@ -1455,14 +1455,14 @@ impl Trigger {
                 let (mut speed, mut changed) = (self.speed, false);
                 if self.moving {
                     for (p, r) in [(self.from, row.near[0]), (self.to, row.near[1])] {
-                        let d = ps2::sqrt(dist2(minus(p, self.pos())));
+                        let d = F(dist2(minus(p, self.pos()))).sqrt().0;
                         if r != 0.0 && d < r {
-                            (speed, changed) = (ps2::div(d, r), true);
+                            (speed, changed) = ((F(d) / r).0, true);
                         }
                     }
                 }
                 if row.stages != 0 && self.stage < row.stages {
-                    (speed, changed) = (ps2::div(self.stage as f32, row.stages as f32), true);
+                    (speed, changed) = ((F(self.stage as f32) / row.stages as f32).0, true);
                 }
                 if !changed && self.speed != 1.0 {
                     (speed, changed) = (1.0, true);
@@ -1486,7 +1486,7 @@ impl Trigger {
                 if self.len != 0.0 {
                     self.frame = self.held(self.next, row);
                 }
-                self.next = ps2::add(if self.len == 0.0 { self.next } else { self.frame }, 1.0);
+                self.next = (F(if self.len == 0.0 { self.next } else { self.frame }) + 1.0).0;
             }
         }
         if self.timer != 0 {
@@ -1551,10 +1551,10 @@ impl Trigger {
     /// Type 2's matrix: at the landing spot, turned (about Y) to face the camera's eye.
     fn facing_eye(&self, near: &Near) -> M4 {
         let l = self.landing.unwrap_or_default();
-        let (x, z) = (ps2::sub(near.eye[0], l[0]), ps2::sub(near.eye[2], l[2]));
-        let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(x, x), z, z)));
-        let (f, u) = ([ps2::mul(x, q), 0.0, ps2::mul(z, q), 0.0], [0.0, 1.0, 0.0, 0.0]);
-        let cross = |a: usize, b: usize| ps2::sub(ps2::mul(u[a], f[b]), ps2::mul(u[b], f[a]));
+        let (x, z) = ((F(near.eye[0]) - l[0]).0, (F(near.eye[2]) - l[2]).0);
+        let q = (F(1.0) / (F(x) * x).madd(z, z).sqrt()).0;
+        let (f, u) = ([(F(x) * q).0, 0.0, (F(z) * q).0, 0.0], [0.0, 1.0, 0.0, 0.0]);
+        let cross = |a: usize, b: usize| (F(u[a]) * f[b] - F(u[b]) * f[a]).0;
         [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], u, f, [l[0], l[1], l[2], 1.0]]
     }
 
@@ -1562,9 +1562,9 @@ impl Trigger {
     /// sounds started.
     fn callback(&mut self, row: &TriggerRow, msg: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         let mut sounds = Vec::new();
-        let u = |r: u32| ps2::mul(2.3283064e-10, ps2::utof(r));
+        let u = |r: u32| (F(2.3283064e-10) * ps2::utof(r)).0;
         let pos = self.pos();
-        let within = |r: f32| near.pos.iter().map(|&p| ps2::sqrt(dist2(minus(p, pos))) < r).collect::<Vec<_>>();
+        let within = |r: f32| near.pos.iter().map(|&p| F(dist2(minus(p, pos))).sqrt().0 < r).collect::<Vec<_>>();
         let ty = self.ty as usize;
         match (self.ty, msg) {
             // startled within 2.0 (the first of its type this point): off along its path with a one-shot animation
@@ -1614,7 +1614,7 @@ impl Trigger {
                         self.restart_anim();
                     }
                     let b = near.pos[i];
-                    let (lo, hi) = (|v: f32| ps2::sub(v, 0.2), |v: f32| ps2::add(0.2, v));
+                    let (lo, hi) = (|v: f32| (F(v) - 0.2).0, |v: f32| (F(0.2) + v).0);
                     if i == last && (0..3).all(|c| lo(b[c]) < hi(pos[c]) && !(hi(b[c]) <= lo(pos[c]))) {
                         (self.startled, self.struck) = (true, true);
                     }
@@ -1711,13 +1711,13 @@ impl Trigger {
                 }
             }
             (34, 2) if self.len <= self.frame => {
-                self.counter = ps2::madd(300.0, 300.0, u(roll())) as i32;
+                self.counter = F(300.0).madd(300.0, u(roll())).0 as i32;
                 self.animating = false;
             }
             (34, 4) => {
                 (self.world, self.on, self.moving, self.animating) = (self.home, true, false, false);
                 (self.pitch, self.yaw) = heading(self.home[2]);
-                self.counter = ps2::madd(300.0, 300.0, u(roll())) as i32;
+                self.counter = F(300.0).madd(300.0, u(roll())).0 as i32;
             }
             (37, 2) if self.speed == 0.0 => self.counter = 0,
             (37, 2) => {
@@ -1742,10 +1742,10 @@ impl Trigger {
                         (self.pitch, self.yaw) = heading(self.home[2]);
                     } else {
                         let [p0, p1] = self.routes[self.route as usize - 1];
-                        let (x, z) = (ps2::sub(p1[0], p0[0]), ps2::sub(p1[2], p0[2]));
-                        let q = ps2::div(1.0, ps2::sqrt(ps2::madd(ps2::mul(x, x), z, z)));
-                        let (f, u) = ([ps2::mul(x, q), 0.0, ps2::mul(z, q), 0.0], [0.0, 1.0, 0.0, 0.0]);
-                        let cross = |a: usize, b: usize| ps2::sub(ps2::mul(u[a], f[b]), ps2::mul(u[b], f[a]));
+                        let (x, z) = ((F(p1[0]) - p0[0]).0, (F(p1[2]) - p0[2]).0);
+                        let q = (F(1.0) / (F(x) * x).madd(z, z).sqrt()).0;
+                        let (f, u) = ([(F(x) * q).0, 0.0, (F(z) * q).0, 0.0], [0.0, 1.0, 0.0, 0.0]);
+                        let cross = |a: usize, b: usize| (F(u[a]) * f[b] - F(u[b]) * f[a]).0;
                         let m = [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], u, f, [0.0, 0.0, 0.0, 1.0]];
                         self.world = world::mat_mul(&m, &world::rot_y(world::PI));
                         self.world[3] = [p0[0], p0[1], p0[2], 1.0];
@@ -1761,8 +1761,8 @@ impl Trigger {
                 if [86.0, 147.0, 200.0, 240.0].contains(&self.frame) {
                     sounds.push(row.sound);
                 }
-                if ps2::sub(self.len, self.frame) <= 10.0 {
-                    self.speed = ps2::sub(self.speed, 0.1);
+                if (F(self.len) - self.frame).0 <= 10.0 {
+                    self.speed = (F(self.speed) - 0.1).0;
                 }
                 if self.len <= self.frame {
                     (self.playing, self.on, self.done) = (false, false, true);
@@ -1775,10 +1775,10 @@ impl Trigger {
                 (self.on, self.animating) = (near.deciding, false);
                 near.paused = near.deciding;
                 if self.on {
-                    self.counter = ps2::mul(row.idle.0 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
+                    self.counter = (F(row.idle.0 as f32) * F(1.0).msub(row.idle.1, u(roll()))).0 as i32;
                     self.world = walker_facing(self.home[3], 0.0);
                 } else if self.voice.1 != 0 {
-                    self.gap = ps2::mul(self.voice.1 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
+                    self.gap = (F(self.voice.1 as f32) * F(1.0).msub(row.idle.1, u(roll()))).0 as i32;
                 }
             }
             (44, 2) if self.on => {
@@ -1786,7 +1786,7 @@ impl Trigger {
                 self.gap -= 1;
                 if self.gap < 0 && self.voice.0 != -1 {
                     sounds.push(row.sound);
-                    self.gap = ps2::mul(self.voice.1 as f32, ps2::msub(1.0, row.idle.1, u(roll()))) as i32;
+                    self.gap = (F(self.voice.1 as f32) * F(1.0).msub(row.idle.1, u(roll()))).0 as i32;
                 }
                 if !self.animating {
                     self.counter -= 1;
@@ -1832,10 +1832,10 @@ impl Trigger {
             }
             (6, 2) if self.on => {
                 let (p, y) = heading(unit3(self.vel));
-                self.pitch = wrap(ps2::add(self.pitch, turn(p, self.pitch)));
-                self.yaw = wrap(ps2::add(self.yaw, turn(y, self.yaw)));
+                self.pitch = wrap((F(self.pitch) + turn(p, self.pitch)).0);
+                self.yaw = wrap((F(self.yaw) + turn(y, self.yaw)).0);
                 self.world = world::mat_mul(&world::mat_mul(&world::IDENTITY, &world::rot_x(self.pitch)), &world::rot_y(self.yaw));
-                self.world[3] = [ps2::add(pos[0], self.vel[0]), -60.0, ps2::add(pos[2], self.vel[2]), ps2::add(pos[3], self.vel[3])];
+                self.world[3] = [(F(pos[0]) + self.vel[0]).0, -60.0, (F(pos[2]) + self.vel[2]).0, (F(pos[3]) + self.vel[3]).0];
                 self.volume = flyover_volume(self.world[3][2]);
             }
             (6, 4) => {
@@ -1871,13 +1871,13 @@ impl Trigger {
                 }
                 let t = c as f32;
                 if t < 180.0 {
-                    self.vol = ps2::mul(ps2::sub(1.0, libm::powf(ps2::msub(1.0, t, 0.0055555557), 4.0)), 128.0);
-                    self.angle = ps2::sub(self.angle, 0.5);
+                    self.vol = ((F(1.0) - libm::powf(F(1.0).msub(t, 0.0055555557).0, 4.0)) * 128.0).0;
+                    self.angle = (F(self.angle) - 0.5).0;
                 } else if t == 180.0 {
                     (self.vol, self.angle) = (128.0, 45.0);
                 } else {
-                    self.vol = ps2::mul(ps2::sub(1.0, libm::powf(ps2::mul(ps2::sub(t, 180.0), 0.0055555557), 4.0)), 128.0);
-                    self.angle = ps2::sub(self.angle, 0.5);
+                    self.vol = ((F(1.0) - libm::powf(((F(t) - 180.0) * 0.0055555557).0, 4.0)) * 128.0).0;
+                    self.angle = (F(self.angle) - 0.5).0;
                     if self.angle <= 0.0 {
                         self.angle = 359.0;
                     }
@@ -1918,7 +1918,7 @@ fn flyover_volume(z: f32) -> i32 {
     if 550.0 < a {
         return 0;
     }
-    ps2::mul(ps2::sub(1.0, libm::powf(ps2::sub(1.0, ps2::sub(1.0, ps2::div(a, 550.0))), 2.0)), 128.0) as i32
+    ((F(1.0) - libm::powf((F(1.0) - (F(1.0) - F(a) / 550.0)).0, 2.0)) * 128.0).0 as i32
 }
 
 impl Default for Trigger {

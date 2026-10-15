@@ -5,13 +5,15 @@
 //! point from who serves and receives, then re-picked from its own, its partner's or a shot's position whenever its
 //! team hits, its partner shapes to hit, or every 30 frames while it waits. A new spot rolls the row's centre rate
 //! once: on a pass the bot walks there, after a 60-frame wait if it fails, and stops once inside the centre radius.
+#![deny(clippy::float_arithmetic)]
 
-use crate::ps2;
+use crate::ps2::{self, F, f32s};
 
 /// Half the doubles court's width split three ways: the middle third is lane 1 in the 3-lane split.
 const WIDTH: f32 = 5.485;
 /// A spot's x: the middle of one half of the doubles width.
 const HALF: f32 = 2.7425;
+const NEG_HALF: f32 = -HALF;
 
 /// The bot's place in the formation (lane 0: not placed yet).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -75,12 +77,12 @@ impl Team {
 /// x · sign of z (−z is the near side): which way across a point lies, seen from its own end.
 fn across(p: [f32; 2]) -> f32 {
     let s = if p[1] < 0.0 { 1.0 } else { -1.0 };
-    p[0] * s
+    (F(p[0]) * s).0
 }
 
 /// The width in thirds: 1 the middle, 2 the +x third seen from its end, 0 the other.
 fn third(p: [f32; 2]) -> u8 {
-    if p[0].abs() <= ps2::div(WIDTH, 3.0) {
+    if p[0].abs() <= F(WIDTH) / 3.0 {
         1
     } else if across(p) > 0.0 {
         2
@@ -96,13 +98,13 @@ impl Formation {
     pub fn start(t: &Team, starts: bool, ad: bool) -> Formation {
         let lane = if starts != ad { 1 } else { 2 };
         let front = !starts;
-        let x = ps2::mul(ps2::mul(t.side, HALF), if lane == 1 { 1.0 } else { -1.0 });
+        let x = F(t.side) * HALF * if lane == 1 { 1.0 } else { -1.0 };
         let z = match (t.formation, front) {
             (_, false) => -11.0,
             (0, true) => -3.2,
             (_, true) => -7.9,
         };
-        Formation { lane, front, spot: [x, ps2::mul(t.side, z)] }
+        Formation { lane, front, spot: f32s([x, F(t.side) * z]) }
     }
 
     /// Re-pick the lane, front and spot. `me`: own position. `ball_z`: the ball's depth. `our_hit`: this team hit
@@ -116,13 +118,13 @@ impl Formation {
         };
         let (at, mine) = match cue {
             Cue::Middle => {
-                self.spot = [0.0, ps2::mul(t.side, -6.4)];
+                self.spot = [0.0, (F(t.side) * -6.4).0];
                 return self.spot != old;
             }
             Cue::Me(at) => (at, true),
             Cue::Other(at) => (at, false),
         };
-        self.front = ps2::add(a, me[1].abs()) <= ps2::add(b, at[1].abs());
+        self.front = F(a) + me[1].abs() <= F(b) + at[1].abs();
         // its own hit: at the net it covers the half it stands in, at the back it moves off a wide third; another
         // shot: at the back it takes the half the shot comes across, at the net it follows a wide third
         if self.front == mine {
@@ -136,15 +138,15 @@ impl Formation {
             }
         }
         let side = t.side;
-        let x = ps2::mul(ps2::mul(side, HALF), if self.lane == 1 { 1.0 } else { -1.0 });
+        let x = (F(side) * HALF * if self.lane == 1 { 1.0 } else { -1.0 }).0;
         let inside = mine || at[0].abs() <= 4.115 && at[1].abs() <= 11.885;
         // a shot from outside the court: hold the service-line depth, in the middle when it's well wide
-        let wide = |front_z: f32| [if at[0].abs() > 5.985 { 0.0 } else { x }, ps2::mul(side, front_z)];
+        let wide = |front_z: f32| [if at[0].abs() > 5.985 { 0.0 } else { x }, (F(side) * front_z).0];
         // a net player stays closer in after its partner's shot unless its own team hit a deep ball on this side
         let net = |extra: f32| {
             let deep_here = our_hit && (ball_z < 0.0) == (side < 0.0) && ball_z.abs() > 3.2;
             let d = if mine || deep_here { 0.0 } else { extra };
-            [x, ps2::mul(-ps2::add(d, 3.2), side)]
+            [x, (-(F(d) + 3.2) * side).0]
         };
         self.spot = match (t.formation, self.front) {
             (0, false) => {
@@ -153,16 +155,16 @@ impl Formation {
                     (true, false) => 1.0,
                     (true, true) => 2.0,
                 };
-                [x, ps2::mul(-ps2::sub(11.0, d), side)]
+                [x, (-(F(11.0) - d) * side).0]
             }
             (0, true) if !inside => wide(-6.2),
             (0, true) => net(2.0),
-            (1, false) => [x, ps2::mul(side, -4.9)],
+            (1, false) => [x, (F(side) * -4.9).0],
             (1, true) if !inside => wide(-6.2),
             (1, true) => net(0.5),
-            (_, false) => [x, ps2::mul(side, -11.0)],
+            (_, false) => [x, (F(side) * -11.0).0],
             (_, true) if !inside => wide(-7.9),
-            (_, true) => [x, ps2::mul(side, -7.9)],
+            (_, true) => [x, (F(side) * -7.9).0],
         };
         self.spot != old
     }
@@ -170,7 +172,7 @@ impl Formation {
     /// Before a partner's volley at the net: stay at its depth and cover the half the ball isn't in.
     pub fn hold(&mut self, me: [f32; 2], ball_x: f32) -> bool {
         let old = self.spot;
-        self.spot = [if ball_x < 0.0 { HALF } else { -HALF }, me[1]];
+        self.spot = [if ball_x < 0.0 { HALF } else { NEG_HALF }, me[1]];
         self.spot != old
     }
 }
@@ -210,8 +212,8 @@ impl Return {
             }
             return false;
         }
-        let (dz, dx) = (ps2::sub(spot[1], pos[1]), ps2::sub(spot[0], pos[0]));
-        if ps2::mul(radius, radius) < ps2::madd(ps2::mul(dx, dx), dz, dz) {
+        let (dz, dx) = (F(spot[1]) - pos[1], F(spot[0]) - pos[0]);
+        if F(radius) * radius < (dx * dx).madd(dz, dz) {
             return true;
         }
         self.there = true;
@@ -223,6 +225,7 @@ impl Return {
 const SINGLES: f32 = 4.115;
 /// How far across the dash spot may go: two thirds of the singles half-width.
 const DASH_X: f32 = 2.743333;
+const NEG_DASH_X: f32 = -DASH_X;
 
 /// Where a point lies on the singles court seen from its own end: its lane (1 the middle third, 2 the third on the
 /// +x side seen from that end, 0 the other) and depth band (0 nearest the net, 2 deepest) past 1.5 from the net.
@@ -233,8 +236,8 @@ pub fn zone(p: [f32; 2], blur: Option<&mut dyn FnMut() -> u32>) -> (u8, u8) {
 
 /// [`zone`] on a court of half width `w` (the AI's: 4.115 singles, 5.485 doubles).
 pub fn zone_in(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> (u8, u8) {
-    let (x, d) = (p[0].abs(), ps2::sub(p[1].abs(), 1.5));
-    let third = ps2::div(w, 3.0);
+    let (x, d) = (F(p[0].abs()), F(p[1].abs()) - 1.5);
+    let third = F(w) / 3.0;
     let wide = if across(p) > 0.0 { 2 } else { 0 };
     let Some(roll) = blur else {
         let lane = if x <= third { 1 } else { wide };
@@ -242,18 +245,18 @@ pub fn zone_in(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> (u
         return (lane, depth);
     };
     // the MT word as a fraction of 2³²
-    let mut roll = || ps2::mul(2.3283064e-10, ps2::utof(roll()));
-    let q = ps2::div(ps2::div(ps2::mul(w, 2.0), 3.0), 4.0);
-    let inner = ps2::sub(third, q);
+    let mut roll = || F(2.3283064e-10) * ps2::utof(roll());
+    let q = F(w) * 2.0 / 3.0 / 4.0;
+    let inner = third - q;
     let lane = if x <= inner {
         1
-    } else if ps2::add(third, q) <= x {
+    } else if third + q <= x {
         wide
     } else {
-        let t = ps2::div(ps2::sub(x, inner), ps2::mul(q, 2.0));
+        let t = (x - inner) / (q * 2.0);
         if roll() < t { wide } else { 1 }
     };
-    let band = |lo: f32, d: f32, roll: &mut dyn FnMut() -> f32| roll() < ps2::div(ps2::sub(d, lo), 1.7308334);
+    let band = |lo: f32, d: F, roll: &mut dyn FnMut() -> F| roll() < (d - lo) / 1.7308334;
     let depth = if d <= 2.59625 {
         0
     } else if d < 4.3270836 {
@@ -294,14 +297,14 @@ pub struct Court {
 impl Single {
     /// At the start of a point: in the middle, 10 back (net style) or 11.
     pub fn start(c: &Court, net: bool, roll: &mut impl FnMut() -> u32) -> Single {
-        let z = ps2::mul(c.side, if net { -10.0 } else { -11.0 });
-        Single { net, spot: [0.0, z], dash: None, back: Return::new(c.rate, roll) }
+        let z = F(c.side) * if net { -10.0 } else { -11.0 };
+        Single { net, spot: [0.0, z.0], dash: None, back: Return::new(c.rate, roll) }
     }
 
     /// The net spot: straight up at the reach depth, or a third of the way back from it after shot choice 10.
     fn net_spot(&self, c: &Court, deep: bool) -> [f32; 2] {
-        let d = if deep { ps2::add(ps2::div(ps2::sub(11.885, c.reach), 3.0), c.reach) } else { c.reach };
-        [0.0, ps2::mul(c.side, -d)]
+        let d = if deep { (F(11.885) - c.reach) / 3.0 + c.reach } else { F(c.reach) };
+        [0.0, (F(c.side) * -d).0]
     }
 
     /// Go in to the net (a smash seen): to the middle at the reach depth.
@@ -333,18 +336,18 @@ impl Single {
                 let mine = zone(me, None);
                 self.spot[0] = 0.0;
                 if shot.0 == 1 || shot == them {
-                    self.spot[1] = if me[1].abs() > 10.0 { ps2::mul(c.side, -10.0) } else { me[1] };
+                    self.spot[1] = if me[1].abs() > 10.0 { (F(c.side) * -10.0).0 } else { me[1] };
                 } else {
-                    let back = ps2::add(ps2::div(ps2::mul(ps2::sub(11.885, c.reach), 2.0), 3.0), c.reach);
-                    let back = if opp[1].abs() < back { opp[1].abs() } else { back };
-                    self.spot[1] = ps2::mul(c.side, -back);
+                    let back = (F(11.885) - c.reach) * 2.0 / 3.0 + c.reach;
+                    let back = if opp[1].abs() < back { F(opp[1].abs()) } else { back };
+                    self.spot[1] = (F(c.side) * -back).0;
                     if mine.1 < 2 || them.1 < 2 {
                         self.dash = Some([0.0, 0.0]);
                     }
                 }
             }
             if self.dash.is_some() {
-                let x = target[0].clamp(-DASH_X, DASH_X);
+                let x = target[0].clamp(NEG_DASH_X, DASH_X);
                 self.dash = Some([x, self.net_spot(c, deep)[1]]);
             }
         }

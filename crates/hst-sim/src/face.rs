@@ -5,7 +5,7 @@
 //! at time × ticks per frame, then adds the speed, as [`crate::motion::Clock`] with that length.
 #![deny(clippy::float_arithmetic)]
 
-use crate::ps2::{add, div, mul, sub};
+use crate::ps2::F;
 
 /// A track's value at tick `t`: linear between keys, ramping from 0 to the first key, held after the last.
 /// `cursor` is the key the last sample used (the search walks from it, so a tick that lands on a key takes the
@@ -23,7 +23,7 @@ pub fn sample(ticks: &[i32], values: &[[f32; 4]], t: f32, cursor: &mut usize, uv
     let t0 = ticks[0] as f32;
     if t < t0 {
         *cursor = 0;
-        return if uva { values[0].map(|v| mul(mul(v, t), div(1.0, t0))) } else { values[0].map(|v| div(mul(v, t), t0)) };
+        return if uva { values[0].map(|v| (F(v) * t * (F(1.0) / t0)).0) } else { values[0].map(|v| (F(v) * t / t0).0) };
     }
     let mut k = (*cursor).min(n - 1) as isize;
     while k >= 0 && t < ticks[k as usize] as f32 {
@@ -35,14 +35,14 @@ pub fn sample(ticks: &[i32], values: &[[f32; 4]], t: f32, cursor: &mut usize, uv
     }
     *cursor = k;
     let (a, b) = (values[k], values[k + 1]);
-    let f = div(sub(t, ticks[k] as f32), (ticks[k + 1] - ticks[k]) as f32);
-    std::array::from_fn(|c| add(a[c], mul(f, sub(b[c], a[c]))))
+    let f = (F(t) - ticks[k] as f32) / (ticks[k + 1] - ticks[k]) as f32;
+    std::array::from_fn(|c| (a[c] + f * (F(b[c]) - a[c])).0)
 }
 
 /// The face clock's length in frames: the last key over all tracks over the ticks per frame.
 pub fn length<'a>(last_ticks: impl IntoIterator<Item = &'a [i32]>, ticks_per_frame: i32) -> f32 {
     let last = last_ticks.into_iter().filter_map(|t| t.last().copied()).fold(0, i32::max);
-    div(last as f32, ticks_per_frame as f32)
+    (F(last as f32) / ticks_per_frame as f32).0
 }
 
 #[cfg(test)]
