@@ -159,7 +159,8 @@ fn draw(
         return;
     }
     let (sprites, rays) = build(&g.rng.flare, &sun, p, tf.rotation);
-    let on = crate::weather::now() < 2;
+    // M8f6: none on a court mod without its own
+    let on = crate::weather::now() < 2 && !crate::court_mod::FLARE_OFF.load(std::sync::atomic::Ordering::Relaxed);
     let mut built = [Some(rays), Some(sprites)];
     for (part, mesh, mut vis) in &mut parts {
         let Some(b) = built[part.0 as usize].take() else { continue };

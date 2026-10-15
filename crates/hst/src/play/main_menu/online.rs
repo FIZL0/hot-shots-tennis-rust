@@ -1494,7 +1494,7 @@ fn settings_row(d: &mut Draw, m: &Menu, text: &super::Text, items: &[Item]) {
     use super::INK;
     let Some(r) = m.net.room.as_ref() else { return };
     // the host's own choice (Random stays Random), a guest's the lobby's
-    let (court, sets, games, umpire) = if m.net.hosting { (m.court, m.sets, m.games, m.umpire as usize) } else { (r.court, r.sets, r.games, r.umpire as usize) };
+    let (court, sets, games, umpire) = if m.net.hosting { (m.court_layout(m.court), m.sets, m.games, m.umpire as usize) } else { (r.court, r.sets, r.games, r.umpire as usize) };
     let values = [
         if court == super::COURTS { "Random".into() } else { text.msg(276 + 2 * court).to_string() },
         // M8f3: the host's umpire mod by its name (a guest without it hears the donor)

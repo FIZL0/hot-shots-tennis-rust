@@ -33,6 +33,8 @@ mod modstore;
 mod mods;
 mod mods_online;
 mod mods_umpire;
+mod mods_court;
+mod court_mod;
 mod net;
 mod chat;
 mod hud_gamma;
@@ -129,6 +131,8 @@ struct Cli {
     names: play::name_tags::Names,
     /// M8f3: `--umpire-mod DIR`, or `--umpire-mod-id ID` (online: the room's, if installed under `mods/`).
     umpire_mod: Option<mods_umpire::Umpire>,
+    /// M8f6: `--court-mod DIR`, drawn and heard over its layout court.
+    court_mod: Option<mods_court::Court>,
 }
 
 fn parse(mut a: impl Iterator<Item = String>) -> Cli {
@@ -149,6 +153,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let (mut umpire, mut sets, mut games, mut pads, mut upscale) = (4, 1, 4, None, true);
     let mut roster = None;
     let (mut umpire_given, mut umpire_mod, mut umpire_mod_id) = (false, None, None);
+    let mut court_mod = None::<String>;
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -203,6 +208,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--umpire" => (umpire, umpire_given) = (a.next().and_then(|r| r.parse().ok()).filter(|&u| u < 5).unwrap_or(umpire), true),
             "--umpire-mod" => umpire_mod = a.next(),
             "--umpire-mod-id" => umpire_mod_id = a.next(),
+            "--court-mod" => court_mod = a.next(),
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
             "--games" => games = a.next().and_then(|r| r.parse().ok()).unwrap_or(games),
             "--pads" => {
@@ -266,8 +272,16 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     if let Some(u) = umpire_mod.as_ref().filter(|_| !umpire_given) {
         umpire = u.donor;
     }
+    // M8f6: a court mod plays on its layout court (`--stage`/`--court` default to it)
+    let court_mod = court_mod.and_then(|d| mods_court::read(d.as_ref()).map_err(|e| warn!("{e}")).ok());
+    if let Some(c) = &court_mod {
+        stage = stage.or(Some(c.layout as u32 + 1));
+        if court == 0 {
+            court = c.layout as usize + 1;
+        }
+    }
     let args = Args { iso, archives, shot, shot_at, radius, ball, court, stage, play, singles, chars, outfits, viewer: viewer_char.map(|c| (c, viewer_motion)), sound, music, umpire, sets, games, pads };
-    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod }
+    Cli { args, gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod, court_mod }
 }
 
 // the browser build starts from `web::run` once the page has the disc pack
@@ -297,7 +311,7 @@ fn main() {
 /// The app for `argv` = disc, flags (see the module doc).
 fn start(argv: Vec<String>) {
     let merge_flag = argv.iter().any(|a| a == "--merge-meshes");
-    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod } = parse(argv.into_iter());
+    let Cli { args, mut gfx, upscale, viewer_mod, mod_slot, slot_mods, roster, swap_hands, names, umpire_mod, court_mod } = parse(argv.into_iter());
     // nothing asked for: the main menu, which starts matches in this app (`mode.rs`) with the flags above
     // a bad archive name would otherwise panic inside `load` and take the renderer down with it
     if !args.archives.is_empty() && let Ok(mut iso) = Iso::open(&args.iso) {
@@ -409,6 +423,7 @@ fn start(argv: Vec<String>) {
         let first = mode::Mode::new(move |app| {
             app.insert_resource(a).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
             add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
+            court_mod::add(app, court_mod);
         });
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first.back(back))));
     } else if let Some(r) = roster {
@@ -450,7 +465,7 @@ pub fn menu_mode(app: &mut App) {
 /// The menu's match in this app: `flags` read as on the command line (the settings' `--no-upscale` and
 /// graphics flags take effect here); its quit comes back to `back`.
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
-    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, umpire_mod, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
+    let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, umpire_mod, court_mod, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court);
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
@@ -461,6 +476,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
         (args.shot, args.shot_at) = (old.shot.clone(), old.shot_at);
         app.insert_resource(args).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
         add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
+        court_mod::add(app, court_mod);
     })
     .back(back)
     .cover(cover)
@@ -501,11 +517,14 @@ fn load(
     mut gs_materials: ResMut<Assets<gs::GsMaterial>>,
     (seed, mods): (Option<Res<handshake::MatchSeed>>, Option<Res<mods::MatchMod>>),
     gfx: Option<Res<graphics::Graphics>>,
+    court_mod: Option<Res<mods_court::MatchCourt>>,
 ) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let root = commands
         .spawn((GameSpace, Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)), Visibility::default()))
         .id();
+    // M8f6: under a court mod the layout court is set up as ever (its sim, weather and generators) but not drawn
+    let root = court_mod.map_or(root, |_| commands.spawn((court_mod::DiscCourt, Transform::default(), Visibility::Hidden, ChildOf(root))).id());
     let mut bounds = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     // HST_ONLY / HST_SKIP: substring filters on model paths, for bisecting what draws what
     let only = std::env::var("HST_ONLY").ok();
@@ -1464,6 +1483,26 @@ mod tests {
         assert_eq!((c.args.umpire, c.umpire_mod.is_some()), (3, true));
         let c = cli(&["--umpire", "2", "--umpire-mod-id", "not-installed-anywhere"]);
         assert_eq!((c.args.umpire, c.umpire_mod.is_none()), (2, true));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M8f6: `--court-mod DIR` plays on the mod's layout court unless `--stage`/`--court` say otherwise; a broken
+    /// one is dropped (the disc court plays).
+    #[test]
+    fn court_mod_flags() {
+        let dir = std::env::temp_dir().join(format!("hst-court-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"court","id":"c","name":"C","layout":4}"#).unwrap();
+        std::fs::write(dir.join("court.glb"), b"x").unwrap();
+        let cli = |f: &[&str]| parse(["x.iso", "--play"].iter().chain(f).map(|s| s.to_string()));
+        let d = dir.display().to_string();
+        let c = cli(&["--court-mod", &d]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.map(|c| c.id)), (Some(5), 5, Some("c".into())));
+        let c = cli(&["--stage", "2", "--court", "2", "--court-mod", &d]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.is_some()), (Some(2), 2, true));
+        std::fs::remove_file(dir.join("court.glb")).unwrap();
+        let c = cli(&["--court-mod", &d]);
+        assert_eq!((c.args.stage, c.court_mod.is_none()), (None, true));
         std::fs::remove_dir_all(&dir).ok();
     }
 

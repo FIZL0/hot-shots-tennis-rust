@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -59,6 +59,7 @@ mod pointer;
 mod tabs;
 mod trace;
 mod umpire_mods;
+mod court_mods;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
@@ -479,6 +480,8 @@ struct Menu {
     mods: Vec<crate::mods::Mod>,
     /// M8f3: the installed umpire mods, on the umpire select after the disc five (`umpire_mods`).
     umpire_mods: Vec<crate::mods_umpire::Umpire>,
+    /// M8f6: the installed court mods, on the court select after the disc eleven (`court_mods`).
+    court_mods: Vec<crate::mods_court::Court>,
     /// B368: each player's column's first row on view ([`Menu::page`]), and the tile it was last scrolled to
     /// (`Menu::follow`).
     scroll: [usize; 4],
@@ -539,6 +542,7 @@ impl Default for Menu {
             rebinding: None,
             mods: Vec::new(),
             umpire_mods: Vec::new(),
+            court_mods: Vec::new(),
             scroll: [0; 4],
             followed: [None; 4],
             newest: Vec::new(),
@@ -1338,7 +1342,7 @@ impl Menu {
 
     /// The court and umpire the match gets: a random choice resolved by `roll`.
     fn venue(&self) -> (usize, u8) {
-        let court = if self.court == COURTS { (self.roll % COURTS as u64) as usize } else { self.court };
+        let court = if self.court == COURTS { (self.roll % COURTS as u64) as usize } else { self.court_layout(self.court) };
         let umpire = if self.umpire as usize == UMPIRES { (self.roll / COURTS as u64 % UMPIRES as u64) as u8 } else { self.umpire_donor(self.umpire as usize) as u8 };
         (court, umpire)
     }
@@ -1393,6 +1397,7 @@ impl Menu {
         ]);
         a.extend(slot_mods);
         a.extend(self.umpire_mod_flags());
+        a.extend(self.court_mod_flags());
         a.extend(self.name_flags(order));
         if swaps.contains(&"1") {
             a.extend(["--swap-hands".into(), swaps.join(",")]);
@@ -1760,6 +1765,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         menu.umpire = was;
     }
     menu.umpire_in_range();
+    // M8f6: a court mod pick likewise (never saved)
+    menu.court_mods = crate::mods_court::list(&mods_dir);
+    menu.court_in_range();
     if fresh {
         menu.favs = tabs::load(&args.iso);
     }
@@ -1782,7 +1790,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
         "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
-        "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "sets" | "games" => Screen::Confirm,
+        "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
         "lobby" | "lobby-bot" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
@@ -1852,6 +1860,13 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
             menu.umpire = UMPIRES as u8 + 1;
             if screen == "umpires-mod" {
                 (menu.sel, menu.picking) = (4, Some(2));
+            }
+        }
+        // M8f6: the court select / the confirm screen on the first court mod installed
+        if matches!(screen.as_str(), "courts-mod" | "confirm-court-mod") && !menu.court_mods.is_empty() {
+            menu.court = COURTS + 1;
+            if screen == "courts-mod" {
+                (menu.sel, menu.picking) = (1, Some(8));
             }
         }
         // B192: the confirm screen on Nakagawa River Courts and Lily, as the PCSX2 shots (`context/b192`)
@@ -2509,7 +2524,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     stage(d, m, text, pads, [col[0], col[1], col[2], col[3] - 48.0]);
     // the side card: the court's band, its surface and meters, the umpire
     d.box3([sx, sy, sw, 122.0], 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
-    let court = if m.court == COURTS { "Random Court".to_string() } else { format!("{} {}", text.msg(276 + 2 * m.court), text.msg(277 + 2 * m.court)) };
+    let court = m.court_title(text, m.court);
     court_band(d, [sx, sy, sw], &court);
     court_meters(d, m, [sx + 10.0, sy + 52.0, sw - 20.0]);
     // the umpire's round face (the "?" tile for a random one) and name
@@ -2586,8 +2601,8 @@ fn random_face(d: &mut Draw, src: [f32; 4], [x, y]: [f32; 2], size: f32) {
 
 /// The court's surface (from `[x, y]`) and its bounce and speed meters under it, across `w`; nothing for Random.
 fn court_meters(d: &mut Draw, m: &Menu, [x0, y, w]: [f32; 3]) {
-    if m.court < COURTS {
-        let s = SURFACE[m.court];
+    if m.court_layout(m.court) < COURTS {
+        let s = SURFACE[m.court_layout(m.court)];
         let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
         d.outlined(|d| left(d, ["Grass Court", "Clay Court", "Hard Court"][s], x0, y, 16.0, w, tint));
         // B141a: the icons and balls are ours (`menu_art::pill_layers`)
@@ -2628,7 +2643,7 @@ fn stage(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], [x, y, w, h]: [f3
     let (ix, iy, iw, ih) = (x + 5.0, y + 5.0, w - 10.0, h - 10.0);
     // the picture's corners round, concentric with the box's fill (`box3`'s: 11/16 of `c` across, 4/16 in)
     let at = d.out.len();
-    court_picture(d, m.court, [ix, iy, iw, ih]);
+    court_picture(d, m.court_layout(m.court), [ix, iy, iw, ih]);
     let r = 12.0 * 11.0 / 16.0 - (5.0 - 12.0 * 4.0 / 16.0);
     d.out[at..].iter_mut().filter(|q| q.dst == [ix, iy, iw, ih]).for_each(|q| q.round = [r; 4]);
     // the labels' shade along the foot
@@ -2705,11 +2720,13 @@ fn court_screen(d: &mut Draw, m: &Menu, text: &Text) {
         y += (h - w * 256.0 / 568.0) / 2.0;
         h = w * 256.0 / 568.0;
     }
-    court_picture(d, m.court, [l - 24.0, y, w, h]);
+    court_picture(d, m.court_layout(m.court), [l - 24.0, y, w, h]);
     let pic: Vec<Quad> = d.out.drain(at..).collect();
     d.out.splice(1..1, pic);
     let (name, sub) = match m.court {
         COURTS => ("Random Court".to_string(), "Any of the 11 courts".to_string()),
+        // M8f6: a mod by its name, its game and the disc court it plays as
+        c if c > COURTS => (m.court_title(text, c), m.court_mod_sub(text, c).unwrap_or_default()),
         c => (format!("{} {}", text.msg(276 + 2 * c), text.msg(277 + 2 * c)), format!("Court {} of {COURTS}", strip_at(m))),
     };
     name_card(d, m, &name, &sub, m.court < COURTS);
@@ -2783,16 +2800,21 @@ fn name_card(d: &mut Draw, m: &Menu, name: &str, sub: &str, meters: bool) -> [f3
 fn strip_rects(m: &Menu) -> (Vec<[f32; 4]>, f32) {
     let [l, _, r, b] = m.grid.reach();
     let court = m.sel == 1;
-    let n = strip_order(m).len() as f32;
-    let at = strip_at(m);
+    // M8f6: a long strip (court or umpire mods past the disc's) shows `STRIP_SHOWN` slots around the pick, the
+    // rest zero-sized off it
+    let total = strip_order(m).len();
+    let first = strip_at(m).saturating_sub(STRIP_SHOWN / 2).min(total.saturating_sub(STRIP_SHOWN));
+    let n = total.min(STRIP_SHOWN) as f32;
+    let at = strip_at(m) - first;
     let top = b - 26.0 - STRIP_H;
     // tile room above the courts' names; the aspect of the disc's tiles
     let (room, aspect) = if court { (STRIP_H - 30.0, 92.0 / 68.0) } else { (STRIP_H - 12.0, 80.0 / 64.0) };
     let p = ((r - l - 16.0) / (n + 0.4)).min(room * aspect / 1.26);
     let foot = top + 6.0 + room;
     let mut x = (l + r) / 2.0 - p * (n + 0.4) / 2.0;
-    let rects = (0..n as usize)
+    let rects = (0..total)
         .map(|i| {
+            let Some(i) = i.checked_sub(first).filter(|&i| i < STRIP_SHOWN) else { return [-640.0, foot, 0.0, 0.0] };
             let slot = if i == at { 1.4 * p } else { p };
             let (w, h) = (slot * 0.9, slot * 0.9 / aspect);
             let rect = [x + (slot - w) / 2.0, foot - h, w, h];
@@ -2805,6 +2827,8 @@ fn strip_rects(m: &Menu) -> (Vec<[f32; 4]>, f32) {
 
 /// The picker strip's height over the description bar.
 const STRIP_H: f32 = 84.0;
+/// The most slots the picker strip shows at once (M8f6).
+const STRIP_SHOWN: usize = 17;
 
 /// The picker strip (`strip_rects`): a dark band, the disc's court tiles named under them or the umpire cards
 /// (`Confirmation_03`, their names on them) and Random's "?" tile; a tap on one hovers it, on the hovered one keeps
@@ -2818,12 +2842,17 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
     d.anchor = Anchor::Centre;
     let at = strip_at(m);
     for (i, (v, r)) in strip_order(m).into_iter().zip(rects).enumerate() {
+        if r[2] == 0.0 {
+            continue;
+        }
         let on = i == at;
         let (tex, src) = match v {
             _ if m.sel != 1 && v < UMPIRES => (CONFIRM, [8.0 + 88.0 * v as f32, 392.0, 80.0, 64.0]),
             // M8f3: a mod on a plain card, named below
             _ if m.sel != 1 && v > UMPIRES => (Tex::Solid, [0.0; 4]),
-            _ if m.sel == 1 && v < COURTS => {
+            // M8f6: a mod on its layout court's tile, named below
+            _ if m.sel == 1 && m.court_layout(v) < COURTS => {
+                let v = m.court_layout(v);
                 let t = if v < 7 { 2 * v } else { 2 * (v - 7) + 1 };
                 (C02, [96.0 * (t % 2) as f32, 72.0 * (t / 2) as f32, 92.0, 68.0])
             }
@@ -2841,9 +2870,12 @@ fn strip(d: &mut Draw, m: &Menu, text: &Text) {
         let cx = r[0] + r[2] / 2.0;
         if m.sel == 1 {
             let size = if on { 10.0 } else { 8.5 };
-            let lines = if v < COURTS { [text.msg(276 + 2 * v).to_string(), text.msg(277 + 2 * v).to_string()] } else { ["Random".to_string(), String::new()] };
+            let lines = m.court_lines(text, v);
+            // M8f6: with court mods on the strip only the hovered tile's names are outlined (the menu's quad pool)
+            let plain = !on && strip_order(m).len() > COURTS + 1;
             for (j, s) in lines.iter().enumerate() {
-                d.outlined(|d| d.label(s, cx, r[1] + r[3] + 3.0 + (size + 1.0) * j as f32, size, r[2] + 2.0, rgb));
+                let name = |d: &mut Draw| d.label(s, cx, r[1] + r[3] + 3.0 + (size + 1.0) * j as f32, size, r[2] + 2.0, rgb);
+                if plain { name(d) } else { d.outlined(name) }
             }
         } else if v == UMPIRES {
             d.outlined(|d| d.label("Random", cx, r[1] + r[3] - 14.0, 12.0, r[2] - 4.0, rgb));
@@ -2894,7 +2926,7 @@ fn side_button(d: &mut Draw, [x, y, w, h]: [f32; 4], label: &str, on: bool, big:
 /// The picker strip's values (court or umpire, by `m.sel`): Random first, then the courts in the original's strip
 /// order or the umpires in theirs, then the umpire mods (M8f3).
 fn strip_order(m: &Menu) -> Vec<usize> {
-    if m.sel == 1 { std::iter::once(COURTS).chain(STRIP).collect() } else { std::iter::once(UMPIRES).chain(0..UMPIRES).chain(umpire_mods::values(m)).collect() }
+    if m.sel == 1 { std::iter::once(COURTS).chain(STRIP).chain(court_mods::values(m)).collect() } else { std::iter::once(UMPIRES).chain(0..UMPIRES).chain(umpire_mods::values(m)).collect() }
 }
 
 /// Where the picked value sits on [`strip_order`].

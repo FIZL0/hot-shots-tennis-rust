@@ -14,3 +14,6 @@ One README per task; iterations below, newest last.
 - `3-GAG-UMPIRE-MODEL-FINAL.md` — M8f4: Get a Grip's 8 umpire models + motions → each mod's `umpire.glb`
   (HST-MODS `tools/psp2gltf/export_getagrip_umpires.py`), drawn on the chair with `--umpire-mod DIR`
   (`mods/umpire.rs`, `play/npcs.rs`). Turn direction checked against the disc clips. M8f3 already landed: the menu/online pick sets the model too.
+- `4-COURT-LOADER-FINAL.md` — M8f6 done: court mods draw (court/gimmick/sky glb, baked light, fog, sun) and sound
+  (BGM stream at the disc BGMs' RMS, ambience loops) over a hidden layout court; Select Court lists them; replays
+  unchanged. Yamate's additive light material → M8f5a1.
