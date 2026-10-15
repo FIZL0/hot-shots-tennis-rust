@@ -27,3 +27,5 @@ One README per task; iterations below, newest last.
 - `6-GAG-C17-BARS-FINAL.md` — M8f5a2 done: c17's bars were NORMA's 17 m opaque cable strands 9–12 m in front of
   HST's (further-back) match eye; the exporter drops gimmick.glb islands in HST's resting view within 20 m of the eye
   (HST-MODS d22e1cc). c05's basket goals have the same cause → M8f5a3.
+- `6-ONLINE-COURTS-FINAL.md` — M8f8 done: rooms carry the court mod (id, name) over its layout court;
+  `--court-mod-id` draws it where installed, else the disc court plays; host's strip lists mods online.

@@ -294,8 +294,8 @@ fn side_panel(d: &mut Draw, m: &Menu, r: &Room, g: &Geo, items: &[Item], on: &dy
     // the host's own choice (Random stays Random), a guest's the lobby's
     let (court, sets, games, umpire) = if m.net.hosting { (m.court, m.sets, m.games, m.umpire as usize) } else { (r.court, r.sets, r.games, r.umpire as usize) };
     // the court card: its picture, COURT over its name, the host's "change"
-    let name = if court == super::super::COURTS { "Random".to_string() } else { text.msg(276 + 2 * court).to_string() };
-    frame::court_card(d, court, &name, g.court, on(Item::Set(0)), at(Item::Set(0)).is_some());
+    let name = m.room_court_name(text, r, m.net.hosting);
+    frame::court_card(d, m.court_layout(court), &name, g.court, on(Item::Set(0)), at(Item::Set(0)).is_some());
     if let Some(k) = at(Item::Set(0)) {
         d.hit(g.court, Act::Row(k, OK));
     }

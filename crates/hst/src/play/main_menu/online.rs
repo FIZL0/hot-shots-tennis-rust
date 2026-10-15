@@ -239,7 +239,8 @@ impl Menu {
         let (court, umpire) = self.venue();
         let names = [("host".to_string(), cfg.name.clone())].into();
         let picking = ["host".to_string()].into();
-        Room { name: cfg.name, doubles: self.doubles, court, sets: self.sets, games: self.games, umpire, seats, names, picking, private: cfg.private, ..Default::default() }
+        let court_mod = self.court_mod_wire();
+        Room { name: cfg.name, doubles: self.doubles, court, sets: self.sets, games: self.games, umpire, seats, names, picking, private: cfg.private, court_mod, ..Default::default() }
     }
 
     /// The code screen's keys: the short code's symbols, or the name's.
@@ -333,10 +334,16 @@ impl Menu {
         Effect::Online(Fx::Net(Cmd::UmpireMod(u)))
     }
 
-    /// The host's court, sets, games and umpire to everyone.
+    /// M8f8: the host's court mod (id, name), or none.
+    fn court_mod_wire(&self) -> Option<(String, String)> {
+        self.court_mod_of(self.court).map(|x| (x.id.clone(), x.name.clone()))
+    }
+
+    /// The host's court, sets, games and umpire (and their mods) to everyone.
     fn send_venue(&mut self, out: &mut Vec<Effect>) {
         let (court, umpire) = self.venue();
         out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Venue(court, self.sets, self.games, umpire))), self.umpire_mod_fx()]);
+        out.push(Effect::Online(Fx::Net(Cmd::CourtMod(self.court_mod_wire()))));
     }
 
     /// The lobby's Court or Umpire pill (`i` 0 / 1): their select (the confirm screen's picker), back to the lobby
@@ -678,6 +685,7 @@ impl Menu {
         self.go(Screen::Lobby, out);
         let (court, umpire) = self.venue();
         out.extend([Effect::Online(Fx::Net(Cmd::Venue(court, self.sets, self.games, umpire))), self.umpire_mod_fx()]);
+        out.push(Effect::Online(Fx::Net(Cmd::CourtMod(self.court_mod_wire()))));
     }
 
     /// One device's presses on the Online screens.

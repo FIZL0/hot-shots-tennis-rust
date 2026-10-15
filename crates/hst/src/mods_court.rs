@@ -225,6 +225,11 @@ pub fn list(root: &Path) -> Vec<Court> {
     crate::mods::dirs(root).iter().filter(|d| Kind::of_dir(d) == Kind::Court).filter_map(|d| read(d).map_err(|e| warn!("{e}")).ok()).collect()
 }
 
+/// M8f8: the court mod with `id` under `root` (an online room's), if it's installed.
+pub fn find(root: &Path, id: &str) -> Option<Court> {
+    list(root).into_iter().find(|c| c.id == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
