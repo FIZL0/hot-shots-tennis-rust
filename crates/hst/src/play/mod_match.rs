@@ -154,6 +154,10 @@ mod tests {
         if !Path::new(ISO).is_file() || ump.is_empty() {
             return eprintln!("no ISO or umpire mods under mods/, skipped");
         }
+        if ump.iter().any(|m| m.dir.join("store.json").is_file()) {
+            // installed one by one from the mod store, not the packaged set
+            return eprintln!("umpire mods under mods/ came from the store, skipped");
+        }
         let ids: Vec<&str> = ump.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["hst_umpire_03_robottennis"]);
         let mut iso = Iso::open(ISO).unwrap();
