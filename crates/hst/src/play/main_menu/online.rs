@@ -2014,6 +2014,13 @@ mod tests {
         assert_eq!(m.screen, Screen::Lobby);
         let Some(Effect::Online(Fx::Net(Cmd::Host(r)))) = fx.into_iter().find(|e| matches!(e, Effect::Online(_))) else { panic!() };
         assert_eq!((r.doubles, r.open(), r.picking.contains("host")), (true, 3, true));
+        // B305: the court and umpire start on Random as offline; the host throws the dice once and every peer gets the
+        // same resolved pair, in the lobby and again at Start
+        assert_eq!((m.court, m.umpire as usize), (super::super::COURTS, super::super::UMPIRES));
+        assert!(r.court < super::super::COURTS && (r.umpire as usize) < super::super::UMPIRES, "{r:?}");
+        let mut start = Vec::new();
+        m.clone().online_host(&mut start);
+        assert!(start.contains(&Effect::Online(Fx::Net(Cmd::Venue(r.court, m.sets, m.games, r.umpire)))), "{start:?}");
         m.heard(Event::Room(r));
         assert_eq!(m.screen, Screen::Chars, "the lobby open: its character select");
         let fx = m.step(dev, ok);
