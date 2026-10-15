@@ -43,3 +43,7 @@ One README per task; iterations below, newest last.
   `Outside_Building`); the exporter now splits every court.glb island between either resting eye and the court into
   a `__clear` child (HST-MODS 52baa54). The survey of all 16 courts also caught c02, c09, c16 and c17: 32 resting
   views are now clear.
+- `9-OT2-NAKAGAWA-COURT-FINAL.md` — M8f10a1 done: Open Tee 2 Nakagawa h07's tennis court exported as a court mod
+  (HST-MODS e05ece6, `tools/psp2gltf/export_opentee2_court.py`). The near court sits on HST's origin, lines exact at the
+  outer edges, surface clay (earth courts), Western layout. HST now draws untextured glTF vertex colour at full
+  brightness (`court_mod.rs`).

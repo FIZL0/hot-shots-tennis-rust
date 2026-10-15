@@ -377,6 +377,15 @@ fn primitive(p: &gltf::Primitive, blob: &[u8], light: Option<&Light>, rest: &[Ma
             *c = [rgb.x, rgb.y, rgb.z, c[3]];
         }
     }
+    // gs.wgsl draws an untextured colour as the GS does (0x80 = 128 of 255); glTF's vertex colour 1.0 is full white
+    // (M8f10a1: Open Tee 2's and Get a Grip's vertex-coloured skies came out at half brightness)
+    if p.material().pbr_metallic_roughness().base_color_texture().is_none() {
+        for c in &mut col {
+            for v in &mut c[..3] {
+                *v *= 255.0 / 128.0;
+            }
+        }
+    }
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, crate::cull::usage(RenderAssetUsages::RENDER_WORLD))
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
