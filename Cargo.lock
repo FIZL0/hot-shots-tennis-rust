@@ -3269,6 +3269,7 @@ dependencies = [
  "libudev-sys",
  "log",
  "nix",
+ "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-io-kit",
  "uuid",

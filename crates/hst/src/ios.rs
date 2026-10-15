@@ -14,6 +14,68 @@ pub fn log_to_documents(docs: &std::path::Path) {
         unsafe { libc::dup2(f.as_raw_fd(), 2) };
     }
     eprintln!("Hot Shots Tennis {} (build {})", env!("CARGO_PKG_VERSION"), option_env!("HST_BUILD").unwrap_or("?"));
+    // a close with no log line and no crash report says nothing: these say which kind of end it was
+    unsafe {
+        libc::atexit(on_exit);
+        for sig in [libc::SIGABRT, libc::SIGSEGV, libc::SIGBUS, libc::SIGILL, libc::SIGTRAP, libc::SIGFPE] {
+            libc::signal(sig, on_signal as *const () as libc::sighandler_t);
+        }
+        NSSetUncaughtExceptionHandler(on_exception);
+    }
+}
+
+extern "C" fn on_exit() {
+    eprintln!("exit() called");
+}
+
+extern "C" fn on_signal(sig: libc::c_int) {
+    // only async-signal-safe calls here: write, then die of the same signal
+    let msg: &[u8] = match sig {
+        libc::SIGABRT => b"fatal signal: SIGABRT (abort)\n",
+        libc::SIGSEGV => b"fatal signal: SIGSEGV (bad memory access)\n",
+        libc::SIGBUS => b"fatal signal: SIGBUS (bad memory access)\n",
+        libc::SIGILL => b"fatal signal: SIGILL\n",
+        libc::SIGTRAP => b"fatal signal: SIGTRAP\n",
+        _ => b"fatal signal: SIGFPE\n",
+    };
+    unsafe {
+        libc::write(2, msg.as_ptr().cast(), msg.len());
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
+// UIKit failures are Objective-C exceptions: their name and reason, before the abort
+unsafe extern "C" {
+    fn NSSetUncaughtExceptionHandler(handler: extern "C" fn(*mut std::ffi::c_void));
+    fn sel_registerName(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+    fn objc_msgSend();
+}
+
+extern "C" fn on_exception(e: *mut std::ffi::c_void) {
+    let text = |obj: *mut std::ffi::c_void, sel: &std::ffi::CStr| unsafe {
+        let send: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void = std::mem::transmute(objc_msgSend as *const ());
+        let s = send(obj, sel_registerName(sel.as_ptr()));
+        let utf8: extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *const std::ffi::c_char = std::mem::transmute(objc_msgSend as *const ());
+        if s.is_null() { "?".into() } else { std::ffi::CStr::from_ptr(utf8(s, sel_registerName(c"UTF8String".as_ptr()))).to_string_lossy().into_owned() }
+    };
+    eprintln!("Objective-C exception {}: {}", text(e, c"name"), text(e, c"reason"));
+}
+
+/// The first frame, a heartbeat every 5 s, quits asked for and iOS lifecycle changes, in the log.
+pub fn heartbeat(time: Res<Time<Real>>, mut frames: Local<u64>, mut last: Local<f32>, mut exits: MessageReader<AppExit>, mut life: MessageReader<bevy::window::AppLifecycle>) {
+    *frames += 1;
+    let t = time.elapsed_secs();
+    if *frames == 1 || t - *last >= 5.0 {
+        *last = t;
+        eprintln!("frame {} at {t:.1}s", *frames);
+    }
+    for e in exits.read() {
+        eprintln!("AppExit {e:?} at frame {}", *frames);
+    }
+    for l in life.read() {
+        eprintln!("lifecycle {l:?} at {t:.1}s");
+    }
 }
 
 /// `LogPlugin::custom_layer`: the engine's log as text on stderr (bevy only sends it to os_log on iOS).
@@ -35,11 +97,11 @@ pub fn no_disc() -> ! {
                     Node { max_width: percent(85), ..default() },
                     Text::new(
                         "Hot Shots Tennis needs your disc image.\n\n\
-                         1. Open the Files app → Browse → On My iPhone → Hot Shots\n   (the folder with this app's icon, not one you make yourself).\n\
-                         2. Put your Hot Shots Tennis (USA) ISO (SCUS-97610) in it.\n\
-                         3. Close this app (swipe it away) and open it again.",
+                         In the Files app, open On My iPhone → Hot Shots\n\
+                         (the folder with this app's icon), put your\n\
+                         Hot Shots Tennis (USA) ISO in it, then close and reopen this app.",
                     ),
-                    TextFont { font_size: FontSize::VMin(4.5), ..default() },
+                    TextFont { font_size: FontSize::VMin(3.5), ..default() },
                 ));
         })
         .run();

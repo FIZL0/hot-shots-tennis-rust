@@ -309,6 +309,8 @@ fn start(argv: Vec<String>) {
     #[cfg(target_os = "ios")]
     let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, ..default() });
     app.add_plugins(plugins);
+    #[cfg(target_os = "ios")]
+    app.add_systems(Last, ios::heartbeat);
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]
