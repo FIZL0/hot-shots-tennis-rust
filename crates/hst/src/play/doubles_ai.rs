@@ -4,7 +4,7 @@
 
 use super::*;
 use hst_sim::ai::{Guess, Phase as Ai, Play};
-use hst_sim::rally::{Ball as PathBall, Body, Human, Out, PATH_MAX, PathCopy, Rally, SEEN, Shot, World};
+use hst_sim::rally::{Ball as PathBall, Body, Human, Out, PATH_MAX, PathCopy, PathFrom, Rally, SEEN, Shot, World};
 
 /// The doubles AI state the players share (the path copy and the shot records) and each one's own.
 #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -38,20 +38,88 @@ fn no_cache() -> bool {
     false
 }
 
-/// The predicted ball path from now, and (B57) the path's mode and gap.
-fn path(g: &mut Game) -> Vec<PathBall> {
+/// The predicted ball path from now (or, for a held ball, what to step it from), and (B57) the path's mode and gap.
+fn path(g: &mut Game) -> (Vec<PathBall>, Option<PathFrom>) {
+    let mut start = g.flight;
+    start.net = false;
+    // P38: a ball without line calls (held, tossed) keeps its call and makes no gap: only the entries need its steps,
+    // and only on the frames a copy is taken
+    if start.lines.is_none() && !no_cache() {
+        let b = &mut g.doubles_ai.built;
+        (b.0, b.2, b.3) = (Vec::new(), start.call as u8, None);
+        return (Vec::new(), Some(PathFrom { flight: start, shot: g.shot, court: g.court, base: g.path_base }));
+    }
     // the path is the same for every player stepping on the same ball (P23: 180 steps each, the doubles AI's
-    // whole cost); keyed on everything it's stepped from, bit for bit (Debug prints each float's exact value)
-    // ponytail: a Debug string as the key; derive Eq on Flight/Shot if formatting ever shows in a profile
-    let key = format!("{:?} {:?} {} {}", g.flight, g.shot, g.path_base, g.court);
+    // whole cost); keyed on everything it's stepped from, bit for bit (bincode writes each float's bits)
+    let key = Steps::key(&start, &g.shot, g.path_base, g.court);
     if g.doubles_ai.built.0 != key || no_cache() {
-        let (path, mode, gap) = predict(g.flight, &g.shot, g.court, g.path_base);
-        g.doubles_ai.built = Built(key, path, mode, gap);
+        let s = &mut g.doubles_ai.built.4;
+        // P38: the ball moved one step along last tick's path: the same path one step on, so one new step instead
+        // of PATH_MAX
+        if s.next != key || no_cache() {
+            *s = Steps::new(start, &g.shot, g.court);
+        } else {
+            s.advance(&g.shot, g.court);
+        }
+        s.next = Steps::key(&s.flights[1], &g.shot, g.path_base, g.court);
+        let (path, mode, gap) = s.path(g.path_base);
+        if no_cache() {
+            assert_eq!(format!("{:?}", (&path, mode, gap)), format!("{:?}", predict(g.flight, &g.shot, g.court, g.path_base)));
+        }
+        (g.doubles_ai.built.0, g.doubles_ai.built.1, g.doubles_ai.built.2, g.doubles_ai.built.3) = (key, path, mode, gap);
     }
     if let Some(gap) = g.doubles_ai.built.3 {
         g.doubles_ai.gap = gap;
     }
-    g.doubles_ai.built.1.clone()
+    (g.doubles_ai.built.1.clone(), None)
+}
+
+/// The flights a path is stepped through (`predict`'s, kept): `flights[k]` is the ball `k` steps on, `gaps[k]` the
+/// gap step `k` → `k + 1` takes if it calls the ball out.
+#[derive(Default, Clone)]
+struct Steps {
+    flights: std::collections::VecDeque<Flight>,
+    gaps: std::collections::VecDeque<Option<f32>>,
+    /// The key of the path stepped from `flights[1]`.
+    next: Vec<u8>,
+}
+
+impl Steps {
+    fn key(f: &Flight, shot: &hst_sim::ball::Shot, base: i32, court: usize) -> Vec<u8> {
+        bincode::serialize(&(f, shot, base, court)).expect("flight key")
+    }
+
+    /// `start` and the PATH_MAX steps from it.
+    fn new(start: Flight, shot: &hst_sim::ball::Shot, court: usize) -> Self {
+        let mut s = Steps { flights: [start].into(), ..Default::default() };
+        for _ in 0..PATH_MAX {
+            s.push(shot, court);
+        }
+        s
+    }
+
+    fn push(&mut self, shot: &hst_sim::ball::Shot, court: usize) {
+        let mut f = *self.flights.back().expect("a start");
+        let was = f.call;
+        f.step(shot, &COURTS[court]);
+        let out = was == hst_sim::judge::Call::None && f.call == hst_sim::judge::Call::Out;
+        self.gaps.push_back(out.then_some(f.line_distance));
+        self.flights.push_back(f);
+    }
+
+    /// Starts one step on.
+    fn advance(&mut self, shot: &hst_sim::ball::Shot, court: usize) {
+        self.flights.pop_front();
+        self.gaps.pop_front();
+        self.push(shot, court);
+    }
+
+    /// The path as `predict` gives it: the first PATH_MAX balls, the last flight's call, the last out call's gap.
+    fn path(&self, base: i32) -> (Vec<PathBall>, u8, Option<f32>) {
+        let path = self.flights.iter().take(PATH_MAX).map(|f| PathBall::of(f, base));
+        let mode = self.flights.back().expect("a start").call as u8;
+        (path.collect(), mode, self.gaps.iter().rev().find_map(|g| *g))
+    }
 }
 
 /// The path stepped from `f` against the court (no net), its mode (the far end's line call) and, B57, the gap the
@@ -74,9 +142,10 @@ fn predict(mut f: Flight, shot: &hst_sim::ball::Shot, court: usize, base: i32) -
     (path, f.call as u8, gap)
 }
 
-/// A cache, so not part of the state (`snapshot::state_hash` prints `Game`).
+/// A cache, so not part of the state (`snapshot::state_hash` prints `Game`); the flights it was stepped through (P38)
+/// aren't saved either.
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
-struct Built(String, Vec<PathBall>, u8, Option<f32>);
+struct Built(Vec<u8>, Vec<PathBall>, u8, Option<f32>, #[serde(skip)] Steps);
 
 impl std::fmt::Debug for Built {
     fn fmt(&self, _: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -195,6 +264,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         drag: hst_sim::ball::Params::default().drag,
         floor: 0,
         path: Vec::new(),
+        path_from: None,
         records: g.doubles_ai.records,
         path_mode: 0,
         path_gap: 0.0,
@@ -202,7 +272,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     // B57: a CPU lets a ball that will land out by its row's margin go by (the NET and BASE routines' hold)
     (w.path_mode, w.path_gap) = (g.doubles_ai.built.2, g.doubles_ai.gap);
     if g.doubles_ai.path.stamp != w.frame {
-        w.path = path(g);
+        (w.path, w.path_from) = path(g);
     }
     let row = p.ai;
     let me = &mut g.doubles_ai.me[i];
@@ -462,7 +532,7 @@ pub(super) fn human(g: &mut Game, i: usize) {
         ..Default::default()
     };
     if g.doubles_ai.path.stamp != w.frame {
-        w.path = path(g);
+        (w.path, w.path_from) = path(g);
     }
     let row = p.ai;
     let d = &mut g.doubles_ai;
