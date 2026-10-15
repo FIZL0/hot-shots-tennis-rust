@@ -993,6 +993,9 @@ impl Menu {
         // a lobby link's start (`online::linked`): the first device to press anything is this machine's player
         if self.screen == Screen::Assign && self.online() && self.seats[0].is_none() {
             self.seats[0] = Some(dev);
+            // B392: and straight into the lobby, no controllers screen
+            self.online_enter(&mut out);
+            return out;
         }
         let host = self.seats[0];
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
@@ -1158,6 +1161,10 @@ impl Menu {
                 // B371: Start the name picker for the device's own seat; while open it takes the presses
                 let np = (0..self.players()).find(|&q| self.seats[q] == Some(dev) && self.naming(q)).unwrap_or(p);
                 if self.name_step(np, dev, k, &mut out) {
+                    return out;
+                }
+                // B392: online, the host's 1P swaps the lobby's
+                if k.page && self.online_swap(dev, &mut out) {
                     return out;
                 }
                 // B375: 1P's device (only) swaps Singles ↔ Doubles with □ / Tab (or a tap on the mode pill)

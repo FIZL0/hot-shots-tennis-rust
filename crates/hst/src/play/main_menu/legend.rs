@@ -227,7 +227,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if let Some(v) = m.name_acts(np, dev) {
                 return v.into_iter().map(|(a, l)| (a, l.to_string())).collect();
             }
-            if m.can_swap(dev) {
+            if m.can_swap(dev) || m.online_can_swap(dev) {
                 v.push((Act::Page, "Singles / Doubles"));
             }
             let me = m.players[p];

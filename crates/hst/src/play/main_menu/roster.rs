@@ -264,8 +264,8 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     rounded(d, [mx, my, mw, 30.0 * PY], 15.0, WHITE, 128.0);
     rounded(d, [mx + 2.0 * PX, my + 2.0 * PY, mw - 4.0 * PX, 26.0 * PY], 13.0, hex(fill), 128.0);
     d.centred(mode, mx + mw / 2.0, my + 7.0 * PY, ms, WHITE);
-    if m.local_roster() {
-        // B375: a tap swaps Singles ↔ Doubles, as 1P's □ / Tab (step checks the device is 1P's)
+    if m.local_roster() || m.online() && m.net.hosting {
+        // B375: a tap swaps Singles ↔ Doubles, as 1P's □ / Tab (step checks the device is 1P's; B392: online, the host's)
         d.hit([mx, my, mw, 30.0 * PY], pointer::press(|k| k.page = true));
     }
     let humans = m.humans() + (0..m.players()).filter(|&p| m.seats[p].is_none() && m.remote(p).is_some_and(|s| s.human())).count();
