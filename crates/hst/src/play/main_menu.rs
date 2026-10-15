@@ -281,7 +281,7 @@ impl Settings {
             } else if k.trim() == "renderer" {
                 s.5 = RENDERERS.iter().position(|r| r.0 == v.trim()).unwrap_or(0) as u8;
             } else if k.trim() == "aspect" {
-                aspect = super::widescreen::ASPECTS.iter().position(|a| *a == v.trim()).map(|i| i as u8);
+                aspect = super::widescreen::ASPECTS[..super::widescreen::aspect_choices()].iter().position(|a| *a == v.trim()).map(|i| i as u8);
             } else if k.trim() == "widescreen" {
                 // before B117's aspect ratio: on was Auto, off the 4:3 picture
                 wide = Some(if v.trim() == "off" { 1 } else { 0 });

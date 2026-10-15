@@ -636,6 +636,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B443** Rename "mods wishlist" to "saved mods": everywhere the UI calls it the mods wishlist, it should be called "saved mods" instead (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_kind.rs
 - [x] **B442** Settings tab switch click and select volume: switching tabs in the settings screen should not play the loud click sound, and the select sound should be slightly quieter by default (user 2026-10-15) → crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/audio.rs · crates/hst/src/play/main_menu/options.rs
 - [x] **B444** Mod titles sidescroll when too long: on the mods screen, a mod's game title that is too big to fit should scroll sideways (marquee) so the whole title can be read, instead of being cut off (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_kind.rs
+- [x] **B421** Mobile stretch aspect ratio: add a "stretch" aspect ratio option on mobile (iOS and Android) that fills the whole screen, ignoring the island and notch safe-area rule we made (user 2026-10-15) → crates/hst/src/play/widescreen.rs · crates/hst/src/graphics.rs · crates/hst/src/play/touch_pad.rs
 
 
 ### Shots
