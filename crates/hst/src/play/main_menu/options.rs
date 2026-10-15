@@ -147,7 +147,7 @@ fn about(o: Opt) -> &'static str {
         ShowFps => "Show the frame rate in the bottom-left corner, in the menus and in a match. Detailed: where each frame's time goes (game, simulation, rendering, waiting on the GPU/browser), meshes drawn and the renderer.",
         KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
         ButtonIcons => "The controller buttons the hints show. Auto: each controller's own (PlayStation, Switch, Steam Deck, else Xbox); or the same set for every controller.",
-        Preset => "High draws at full quality with every speed-up off; Default looks the same with Fewer Shadows and Skip Off-Screen on; Steam Deck, Low and Phone trade detail for frame rate.",
+        Preset => "High draws at full quality with every speed-up off; Default looks the same with Fewer Shadows and Skip Off-Screen on; Steam Deck, Low and Phone trade detail for frame rate; Lowest is the cheapest (half resolution, no shadows, simpler characters, 30 fps) for the weakest devices.",
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
@@ -971,6 +971,13 @@ mod tests {
         s.step(Preset, 1);
         assert_eq!((s.1.windowed, s.1.show_fps, s.value(Preset).as_str(), s.value(Display).as_str()), (true, 1, "High", "Window"));
         assert!(Settings::parse(&s.text()).1.show_fps == 1 && s.flags().contains(&"--show-fps".into()));
+        // B414: Lowest sits between Low and Phone
+        let mut l = Settings::default();
+        l.1 = Graphics::LOW;
+        l.step(Preset, 1);
+        assert_eq!((l.1, l.value(Preset).as_str()), (Graphics::LOWEST, "Lowest"));
+        l.step(Preset, 1);
+        assert_eq!(l.1, Graphics::PHONE);
         s.step(Original, 1);
         assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
         // B301: Key Hints, on by default, saved

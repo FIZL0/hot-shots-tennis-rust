@@ -75,10 +75,14 @@ impl Graphics {
     pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
     /// The cheapest that still looks like the game: for weak GPUs.
     pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
+    /// B414: below Low, for the weakest devices: half scale, no shadows or MSAA, the characters at a quarter of their
+    /// triangles, every speed-up on. Capped at 30: a device that needs this can't hold 60, and an even 30 judders less
+    /// than an uneven 40–50 (the sim stays 60 Hz).
+    pub const LOWEST: Graphics = Graphics { fps: 30, vsync: false, scale: 50, shadows: Shadows::Off, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: true, cull: true, mesh: 25 };
     /// B412: the best look, with every speed-up off (Fewer Shadows, Skip Off-Screen; full meshes). Default is the
     /// balanced one: the same picture with the speed-ups on.
     pub const HIGH: Graphics = Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: false, cull: false, mesh: 100 };
-    pub const PRESETS: [(&str, Graphics); 5] = [("High", Self::HIGH), ("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Phone", Self::PHONE)];
+    pub const PRESETS: [(&str, Graphics); 6] = [("High", Self::HIGH), ("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Lowest", Self::LOWEST), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -652,7 +656,11 @@ mod tests {
         assert_eq!(Graphics::HIGH.flags()[8..], ["--cull", "off", "--fewer-shadows", "off"]);
         let w = Graphics { windowed: true, show_fps: 1, ..default() };
         assert_eq!((w.keep(Graphics::HIGH).preset(), w.keep(Graphics::HIGH).windowed, w.keep(Graphics::HIGH).show_fps), ("High", true, 1));
+        // B414: Lowest, below Low, with every speed-up on
+        assert_eq!(Graphics::LOWEST.flags(), ["--fps", "30", "--scale", "50", "--shadows", "off", "--msaa", "off", "--mesh", "25"]);
+        assert_eq!((Graphics::LOWEST.preset(), w.keep(Graphics::LOWEST).preset()), ("Lowest", "Lowest"));
+        assert!(Graphics::LOWEST.fewer_shadows && Graphics::LOWEST.cull && Graphics::LOWEST.mesh == MESHES[0] && Graphics::LOWEST.scale == SCALES[0]);
         let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
-        assert_eq!(names, ["High", "Default", "Steam Deck", "Low", "Phone"]);
+        assert_eq!(names, ["High", "Default", "Steam Deck", "Low", "Lowest", "Phone"]);
     }
 }
