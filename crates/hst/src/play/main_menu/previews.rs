@@ -1,6 +1,7 @@
 //! The select cards' 3D previews (B40b1): each card a player is picking on shows its hovered character in its costume
 //! as the original's inspect screen draws it (`inspect.rs`), in place of the portrait, under the card's text. That
-//! player's R2 / L2 (keyboard: 1, 2) play the inspect screen's win and loss; △ is the stats, not a preview action.
+//! player's right stick flicked up / down (keyboard: R, F; B422: L2 / R2 jump the roster's sections now) play the
+//! inspect screen's win and loss; △ is the stats, not a preview action.
 //!
 //! B86: a card shows a PNG of the preview (character × costume) while its player scrolls, and the live model only once
 //! the hover has held [`SETTLE`] seconds (B99: or at once when there is no PNG yet; the PNG is read on the frame its
@@ -1068,9 +1069,12 @@ struct Shot;
 #[derive(Component)]
 struct Card(usize);
 
-/// Each seated player's R2 / L2 on their own preview.
+/// Each seated player's right stick up / down (keyboard R / F) on their own preview (B422: off R2 / L2, the
+/// roster's section jumps): a flick past half way, again once the stick has come back.
+#[allow(clippy::too_many_arguments)]
 fn buttons(
     menu: Res<Menu>,
+    mut held: Local<HashMap<Entity, i8>>,
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     mut cams: Query<(&mut Preview, &Card)>,
@@ -1084,15 +1088,24 @@ fn buttons(
     }
     for player in 0..4 {
         let Some(dev) = menu.seats[player] else { continue };
-        let pressed = |b: GamepadButton, k: bool| match dev {
-            Dev::Keys => k,
-            Dev::Pad(e) => pads.get(e).is_ok_and(|g| g.just_pressed(b)),
-            Dev::Open => false,
+        // the keyboard's R / F are letters while a name picker is open (B371)
+        if dev == Dev::Keys && (0..4).any(|q| menu.naming(q)) {
+            continue;
+        }
+        let flick = match dev {
+            Dev::Keys => keys.just_pressed(KeyCode::KeyR) as i8 - keys.just_pressed(KeyCode::KeyF) as i8,
+            Dev::Pad(e) => {
+                let y = pads.get(e).map_or(0.0, |g| g.right_stick().y);
+                let now = if y > 0.5 { 1 } else if y < -0.5 { -1 } else { 0 };
+                let was = held.insert(e, now).unwrap_or(0);
+                if now != was { now } else { 0 }
+            }
+            Dev::Open => 0,
         };
-        if pressed(GamepadButton::RightTrigger2, keys.just_pressed(KeyCode::Digit1)) {
-            pending.0[player] = Some(Act::Win);
-        } else if pressed(GamepadButton::LeftTrigger2, keys.just_pressed(KeyCode::Digit2)) {
-            pending.0[player] = Some(Act::Loss);
+        match flick {
+            1 => pending.0[player] = Some(Act::Win),
+            -1 => pending.0[player] = Some(Act::Loss),
+            _ => {}
         }
     }
     // a card still on its PNG keeps the press until `sync` has loaded and spawned its live model

@@ -61,6 +61,8 @@ pub(crate) enum Act {
     Chat,
     /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab; B382: the character select's sections.
     Kind,
+    /// B422: the right stick up / down (keyboard R / F): the select's preview plays its win / loss.
+    Preview,
 }
 
 /// A device's button art.
@@ -152,6 +154,7 @@ fn menu_keys(act: Act, bind: &Bindings) -> Vec<String> {
         Act::Type => vec!["A-Z".into()],
         Act::Chat => vec!["T".into()],
         Act::Kind => vec!["1".into(), "3".into()],
+        Act::Preview => vec!["R".into(), "F".into()],
         Act::Key => vec![],
     }
     .into_iter()
@@ -241,6 +244,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 if m.sections().len() > 1 {
                     v.push((Act::Kind, "Section"));
                 }
+            }
+            // B422: the device's own preview plays its win / loss (`previews::buttons`; Random has no figure)
+            if m.seats[p] == Some(dev) && !me.random {
+                v.push((Act::Preview, "Win / Loss"));
             }
             // B369 / B375: △ in or out of the favorites (not Random)
             if !me.ready && !me.random {
@@ -648,6 +655,8 @@ enum Glyph {
     Shoulder(&'static str),
     /// Select / Start.
     Small(&'static str),
+    /// B422: the right stick, up / down.
+    Stick,
     /// The d-pad, arms lit: up, down, left, right.
     Dpad([bool; 4]),
     Slash,
@@ -678,6 +687,7 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Kind if sw => vec![Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")],
         Act::Kind if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("L2"), Glyph::Shoulder("R2")],
         Act::Kind => vec![Glyph::Shoulder("LT"), Glyph::Shoulder("RT")],
+        Act::Preview => vec![Glyph::Stick],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start | Act::Name => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
@@ -821,6 +831,25 @@ fn draw_glyph(g: &Glyph) -> Pixmap {
             fill_rgb(&mut out, &rounded(x - a, cy - a, x + a, cy + a, 1.0), DARK, Transform::identity());
             for (&(l, t, rr, b), &on) in arms.iter().zip(lit) {
                 fill_rgb(&mut out, &cross(l, t, rr, b), if on { WHITE } else { DARK }, Transform::identity());
+            }
+            out
+        }
+        Glyph::Stick => {
+            // a thumbstick's cap with an R on it, arrows above and below
+            let mut out = pixmap(52.0);
+            let x = 26.0;
+            let p = tiny_skia::PathBuilder::from_circle(x, cy, 17.0).expect("cap");
+            fill_rgb(&mut out, &p, DARK, Transform::identity());
+            stroke_rgb(&mut out, &tiny_skia::PathBuilder::from_circle(x, cy, 16.0).expect("cap"), RIM, 2.0, Transform::identity());
+            words(&mut out, "R", 20.0, x - text_w("R", 20.0) / 2.0, cy, WHITE);
+            for dir in [-1.0, 1.0] {
+                let mut pb = tiny_skia::PathBuilder::new();
+                let tip = cy + dir * 31.0;
+                pb.move_to(x, tip);
+                pb.line_to(x + 7.0, tip - dir * 9.0);
+                pb.line_to(x - 7.0, tip - dir * 9.0);
+                pb.close();
+                fill_rgb(&mut out, &pb.finish().expect("arrow"), WHITE, Transform::identity());
             }
             out
         }

@@ -18,14 +18,16 @@ pub(super) const PY: f32 = 448.0 / 720.0;
 pub(super) const PX: f32 = PY * 15.0 / 14.0;
 
 /// The mockup's sizes (px at 720 lines): the top bar over the columns, the side margins and the columns' gap, a
-/// column's padding and the gap between its rows, the rows' heights, the stats stack's width, a tile and its gap,
-/// the scroll bar, a section's heading (B382).
+/// column's padding and the gap between its rows, the rows' heights (B422: the seat's header band across the card's
+/// top, the section rail over the grid), the stats stack's width, a tile and its gap, the scroll bar, a section's
+/// heading (B382).
 const TOP_BAR: f32 = 60.0;
 const MARGIN: f32 = 24.0;
 const GAP: f32 = 12.0;
 const PAD: f32 = 10.0;
 const ROW_GAP: f32 = 8.0;
-const HEAD: f32 = 36.0;
+const BAND: f32 = 50.0;
+const RAIL: f32 = 24.0;
 const PILL: f32 = 26.0;
 const PREVIEW: f32 = 150.0;
 const FOOT: f32 = 14.0;
@@ -47,9 +49,13 @@ fn hex(c: u32) -> [f32; 3] {
 /// The screen's background.
 const BG: u32 = 0x0e1a2e;
 
-/// A seat's colours (the mockup's): its ring, a selected tile, the column, the pills' well, a tile, soft words.
+/// A seat's colours (B422's "Players" board): its own colour (the header band, the card's rim, the cursor's tile) and the
+/// words on it, the same character's other tile, the column's tint, the pills' well, a tile, soft words. The four
+/// differ in lightness too, not just hue (yellow, green, red, blue from light to dark), so they tell apart side by
+/// side for anyone.
 struct Seat {
     ring: [f32; 3],
+    ink: [f32; 3],
     sel: [f32; 3],
     bg: [f32; 3],
     well: [f32; 3],
@@ -58,14 +64,14 @@ struct Seat {
 }
 
 fn seat(p: usize) -> Seat {
-    const C: [[u32; 6]; 4] = [
-        [0xff6b6b, 0xb33b3b, 0x4a1c1c, 0x5e1f1f, 0x6a2a2a, 0xffd0d0],
-        [0xffd23f, 0x8a6a1a, 0x3d300b, 0x4e3c0c, 0x5e4810, 0xfff0b8],
-        [0x5cc8ff, 0x1f6d99, 0x122d44, 0x153a57, 0x1d4a6e, 0xcdeeff],
-        [0x7fd99a, 0x2f6b44, 0x15291d, 0x183022, 0x20402c, 0xc9f2d4],
+    const C: [[u32; 7]; 4] = [
+        [0xdc3c44, 0xffffff, 0x8e2a30, 0x3e171c, 0x5a1d24, 0x6a2730, 0xffd0d0],
+        [0xffd84a, 0x2a2008, 0x8a6a1a, 0x3a2f0c, 0x4e3c0c, 0x5e4810, 0xfff0b8],
+        [0x2a5bc4, 0xffffff, 0x1f4a99, 0x111f40, 0x172c5a, 0x1f3a70, 0xcfe0ff],
+        [0x3fb86a, 0x0c2414, 0x2f6b44, 0x14301e, 0x183b26, 0x204a30, 0xc9f2d4],
     ];
-    let [ring, sel, bg, well, tile, soft] = C[p % 4].map(hex);
-    Seat { ring, sel, bg, well, tile, soft }
+    let [ring, ink, sel, bg, well, tile, soft] = C[p % 4].map(hex);
+    Seat { ring, ink, sel, bg, well, tile, soft }
 }
 
 /// The select's player columns on a view (`Grid::view`): how many tiles a row and rows on view each column's grid
@@ -92,10 +98,13 @@ pub(super) struct Columns {
 /// The parts of a player's column.
 pub(super) struct Parts {
     pub card: [f32; 4],
+    /// B422: the seat's header band, across the card's top.
     pub head: [f32; 4],
     /// The pills' row (both rows when stacked).
     pub pills: [f32; 4],
     pub preview: [f32; 4],
+    /// B422: the section rail.
+    pub rail: [f32; 4],
     /// The tiles on view, and the scroll bar right of them.
     pub grid: [f32; 4],
     pub bar: [f32; 4],
@@ -119,7 +128,7 @@ pub(super) fn columns(view: [f32; 4], n: usize) -> Columns {
     let th = tw * PY / PX;
     let gy = TILE_GAP * PY;
     let pills = if stack { 2.0 * PILL + ROW_GAP } else { PILL };
-    let fixed = (2.0 * PAD + HEAD + pills + FOOT + 4.0 * ROW_GAP) * PY;
+    let fixed = (BAND + 2.0 * PAD + pills + RAIL + FOOT + 4.0 * ROW_GAP) * PY;
     // the preview gives way to keep a row of tiles on a short view; B382: the grid has room for a heading over its
     // rows
     let room = h - fixed - (HEADING * PY + gy);
@@ -137,20 +146,21 @@ impl Columns {
         let [x0, top, w, h] = self.first;
         let x = x0 + self.step * p as f32;
         let (ix, iw) = (x + PAD * PX, w - 2.0 * PAD * PX);
-        let mut y = top + PAD * PY;
+        let head = [x, top, w, BAND * PY];
+        let mut y = top + (BAND + PAD) * PY;
         let mut next = |hh: f32| {
             let r = [ix, y, iw, hh];
             y += hh + ROW_GAP * PY;
             r
         };
-        let head = next(HEAD * PY);
         let pills = next(if self.stack { 2.0 * PILL + ROW_GAP } else { PILL } * PY);
         let preview = next(self.preview);
+        let rail = next(RAIL * PY);
         let gh = self.grid_h();
         let grid = next(gh);
         let foot = [ix, top + h - (PAD + FOOT) * PY, iw, FOOT * PY];
         let bar = [ix + iw - BAR * PX, grid[1], BAR * PX, gh];
-        Parts { card: [x, top, w, h], head, pills, preview, grid: [ix, grid[1], iw - (BAR + TILE_GAP) * PX, gh], bar, foot }
+        Parts { card: [x, top, w, h], head, pills, preview, rail, grid: [ix, grid[1], iw - (BAR + TILE_GAP) * PX, gh], bar, foot }
     }
 
     /// The grid's height: `rows` rows of tiles and a heading.
@@ -396,6 +406,14 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     }
 }
 
+/// Whether player `p` of `n` is picking or has picked: who's picking (the old select's rules) is a seated human, else
+/// a computer player once the humans before it are done; online, a seat with a player on it or the one being edited.
+fn is_active(m: &Menu, n: usize, p: usize) -> bool {
+    let picking = |q: usize| m.seats[q].is_some() || m.bot(q) && (0..n).filter(|&o| m.bot(o)).all(|o| o >= q || m.players[o].ready) && (0..n).all(|o| m.seats[o].is_none() || m.players[o].ready);
+    let picking = |q: usize| if m.select_online() { m.seats[q].is_some() || m.remote(q).is_some() || m.net.edit == Some(q) } else { picking(q) };
+    picking(p) || m.players[p].ready
+}
+
 /// Player `p`'s column; `mine`: the pointer's device picks for it (its pills take taps).
 #[allow(clippy::too_many_arguments)]
 fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], c: &Columns, p: usize, mine: bool) {
@@ -404,10 +422,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let s = seat(p);
     let pl = m.players[p];
     let at = c.parts(p);
-    // who's picking (the old select's rules): a seated human, else a computer player once the humans before it are done
-    let picking = |q: usize| m.seats[q].is_some() || m.bot(q) && (0..n).filter(|&o| m.bot(o)).all(|o| o >= q || m.players[o].ready) && (0..n).all(|o| m.seats[o].is_none() || m.players[o].ready);
-    let picking = |q: usize| if online { m.seats[q].is_some() || m.remote(q).is_some() || m.net.edit == Some(q) } else { picking(q) };
-    let active = picking(p) || pl.ready;
+    let active = is_active(m, n, p);
     let human = matches!(m.seats[p], Some(Dev::Keys | Dev::Pad(_))) || m.remote(p).is_some_and(|s| s.human());
     // the card: a rim in the seat's colour, dashed for a computer player
     let [x, y, w, _] = at.card;
@@ -421,38 +436,34 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         d.hit(at.card, pointer::Act::Grid(p));
     }
 
-    // the header: seat tag, the character's name, the device on the right, on one baseline
-    let [hx, hy, hw, hh] = at.head;
-    let (big, small) = (34.0 * PY, 16.0 * PY);
-    // B371: the player's name in place of "1P" (a tap on it opens the name picker)
-    let tag = m.seat_tag(p);
-    let tag = ellipsis(d, &tag, small, hw * 0.3);
-    d.text(&tag, hx, hy + hh - small - 2.0 * PY, small, s.ring);
-    let tw = d.width(&tag, small) + 8.0 * PX;
-    if mine && m.seats[p].is_some() {
-        d.hit([hx - 4.0, hy, tw + 4.0, hh], pointer::press(|k| k.name = true));
-    }
+    // B422: the header band: the seat's colour across the card's top (a computer player's dark, its words in the
+    // seat's colour), a big 1P–4P, the character's name over the player's own name (B371) and the device, the side pill
+    let solid = human || m.seats[p] == Some(Dev::Open);
     let device = match m.remote(p).filter(|s| s.human() && online) {
         Some(st) => m.net.room.as_ref().and_then(|r| r.names.get(&st.peer)).map_or("Online".to_string(), |n| n.clone()),
         None if m.seats[p] == Some(Dev::Open) => "Open".into(),
         None => dev_name(m.seats[p], pads),
     };
-    let ds = 14.0 * PY;
-    let dev_w = d.width(&device, ds).min(hw * 0.3);
-    let drop = m.droppable(p);
-    let dx = hx + hw - dev_w - if drop { 22.0 } else { 0.0 };
-    d.label(&device, dx + dev_w / 2.0, hy + hh - ds - 3.0 * PY, ds, dev_w, s.soft);
+    let device = match m.player_name(p) {
+        Some(own) => format!("{own} - {device}"),
+        None => device,
+    };
     let name = match m.who(p) {
         _ if pl.random => "Random".to_string(),
+        _ if !active => "-".to_string(),
         Who::Mod(i) => m.mods[i].name.clone(),
         // B234: another machine's mod this one doesn't have: its own name over the donor's looks
         Who::Disc(ch) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[ch]).to_string(),
     };
-    let room = (dx - 8.0 * PX - (hx + tw)).max(10.0);
-    let name = ellipsis(d, &name, big, room);
-    d.text(&name, hx + tw, hy + hh - big + 2.0 * PY, big, WHITE);
+    let side = if p < (n / 2).max(1) { "Near" } else { "Far" };
+    band(d, &s, at.head, solid, p, &name, &device, side, m.droppable(p));
+    if mine && m.seats[p].is_some() {
+        // B371: a tap on the seat's number or names opens the name picker
+        let [hx, hy, hw, hh] = at.head;
+        d.hit([hx, hy, hw * 0.6, hh], pointer::press(|k| k.name = true));
+    }
     // B238: a joined device's ✕ on its column's corner
-    if drop {
+    if m.droppable(p) {
         drop_button(d, p, x + w - 30.0, y - 6.0);
     }
 
@@ -464,6 +475,12 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let sw = (STATS_W * PX).min(pw * 0.56);
     let (sx, area) = (px + pw - sw, pw - sw - 8.0 * PX);
     rounded(d, [px, py, area, ph], 10.0, s.tile, 128.0);
+    // B422: the seat's number, big and faint, behind the figure
+    let num = format!("{}P", p + 1);
+    let big = (ph * 0.78).min(area * 0.9 * 32.0 / d.width(&num, 32.0));
+    let start = d.out.len();
+    d.centred(&num, px + area / 2.0, py + (ph - big) / 2.0, big, s.ring);
+    d.out[start..].iter_mut().for_each(|q| q.alpha = 26.0);
     if active {
         if pl.random {
             let fw = (area - 8.0 * PX).min((ph - 8.0 * PY) * 92.0 / 68.0);
@@ -497,7 +514,9 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     // seat's colour (the same character in its other section filled, without the rim)
     let v = m.view(p);
     let (mine_cell, mine_at) = (m.cell(p), m.place(p, &v.secs));
+    let active_at: Vec<Option<usize>> = (0..n).map(|q| if is_active(m, n, q) { m.place(q, &v.secs) } else { None }).collect();
     let (heads, tiles) = c.laid(p, &v);
+    rail(d, &v.secs, m.section_at(p, &v.secs), active, &s, at.rail, p);
     for (k, rect) in heads {
         heading(d, &v.secs[k], rect, &s);
         d.hit(rect, pointer::Act::Section(p, k));
@@ -509,7 +528,8 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         let n0 = d.out.len();
         let on = active && Some(k) == mine_at;
         if on {
-            ringed(d, rect, 10.0, 3.0, s.ring, s.sel);
+            // B422: the cursor's tile filled in the seat's colour
+            rounded(d, rect, 10.0, s.ring, 128.0);
         } else if active && cell == mine_cell {
             rounded(d, rect, 10.0, s.sel, 128.0);
         } else {
@@ -524,6 +544,9 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         if let Some(w) = cell && m.favorite(w) {
             tabs::star(d, rect);
         }
+        // B422: a 1P–4P tag for each player whose cursor is on this tile (this column's own and the others')
+        let on_it: Vec<usize> = (0..n).filter(|&q| active_at[q] == Some(k)).collect();
+        tags(d, rect, &on_it);
         cut(d, n0, foot);
         d.hit(hit, pointer::Act::Cell(p, k));
     }
@@ -587,6 +610,168 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
     tx += cw + 8.0 * PX;
     if tx < x + w {
         d.q(Tex::Solid, [0.0; 4], [tx, y + h / 2.0 - 1.0 * PY, x + w - tx, 2.0 * PY], s.well, 128.0);
+    }
+}
+
+/// B422: seat `p`'s header band in `[x, y, w, h]`: `solid` the seat's colour (a computer player's dark, its words in
+/// the seat's colour), its top corners the card's; a big `1P`, the character's `name` over `device`, and the `side`
+/// pill on the right (left of the ✕ when `drop`; left out when the column is too narrow for it and a name).
+#[allow(clippy::too_many_arguments)]
+fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, name: &str, device: &str, side: &str, drop: bool) {
+    let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.well, s.ring) };
+    rounded(d, [x, y, w, h], 14.0, fill, 128.0);
+    d.out.last_mut().unwrap().round = [14.0 * PX, 14.0 * PX, 0.0, 0.0];
+    let big = 36.0 * PY;
+    let tag = format!("{}P", p + 1);
+    let tx = x + 12.0 * PX;
+    d.text(&tag, tx, y + (h - big) / 2.0 + 2.0 * PY, big, ink);
+    let nx = tx + d.width(&tag, big) + 10.0 * PX;
+    let (ss, sh) = (12.0 * PY, 20.0 * PY);
+    let sw = d.width(side, ss) + 16.0 * PX;
+    let sx = x + w - 12.0 * PX - sw - if drop { 30.0 } else { 0.0 };
+    let end = if sx - 8.0 * PX - nx >= 48.0 * PX {
+        rounded(d, [sx, y + (h - sh) / 2.0, sw, sh], 10.0, hex(BG), 128.0);
+        d.centred(side, sx + sw / 2.0, y + (h - ss) / 2.0, ss, WHITE);
+        sx - 8.0 * PX
+    } else {
+        x + w - 8.0 * PX - if drop { 30.0 } else { 0.0 }
+    };
+    let room = (end - nx).max(10.0);
+    let (ns, ds) = (20.0 * PY, 12.0 * PY);
+    let top = y + (h - ns - 3.0 * PY - ds) / 2.0;
+    let name = ellipsis(d, name, ns, room);
+    d.text(&name, nx, top, ns, ink);
+    let device = ellipsis(d, device, ds, room);
+    d.text(&device, nx, top + ns + 3.0 * PY, ds, ink);
+}
+
+/// B422: how far the section rail scrolls (px) to show chip `cur` of chips `widths` wide, `gap` apart, in `room`:
+/// none while they all fit or `cur` is on view from the start; else as little as keeps `cur` clear of the `fade` at
+/// a cut edge (no fade past the last chip), never past the last chip's end.
+pub(super) fn rail_offset(widths: &[f32], gap: f32, room: f32, cur: usize, fade: f32) -> f32 {
+    let n = widths.len();
+    let total = widths.iter().sum::<f32>() + gap * n.saturating_sub(1) as f32;
+    if total <= room || cur >= n {
+        return 0.0;
+    }
+    let left = widths[..cur].iter().sum::<f32>() + gap * cur as f32;
+    let right = left + widths[cur];
+    let edge = if cur + 1 == n { 0.0 } else { fade };
+    let mut off = (right - (room - edge)).max(0.0);
+    if off > 0.0 && left - off < fade {
+        off = (left - fade).max(0.0);
+    }
+    off.clamp(0.0, total - room)
+}
+
+/// The rail's fade at a cut edge (px).
+const FADE: f32 = 22.0;
+
+/// B422: the section rail in `[x, y, w, h]`, one row that never scrolls with the grid: a chip per section (a gold star
+/// and the count for Favorites, else the name and count, so "16" reads as "16 here"), section `cur`'s filled in the
+/// seat's colour while the seat picks, the rest outlined. Chips keep their size (never squeezed): past the rail's
+/// width it scrolls sideways to keep `cur` on view, a fade and « / » at a cut edge. A tap on a chip jumps there.
+#[allow(clippy::too_many_arguments)]
+fn rail(d: &mut Draw, secs: &[Section], cur: usize, active: bool, s: &Seat, [x, y, w, h]: [f32; 4], p: usize) {
+    let (size, cs) = (13.0 * PY, 12.0 * PY);
+    let (pad, gap, inner) = (9.0 * PX, 5.0 * PX, 6.0 * PX);
+    let star = size * 1.3;
+    let lead = |d: &Draw, sec: &Section| if sec.id == tabs::FAVORITES { d.width("*", star) } else { d.width(&sec.name, size) };
+    let widths: Vec<f32> = secs.iter().map(|sec| 2.0 * pad + lead(d, sec) + inner + d.width(&sec.cells.len().to_string(), cs)).collect();
+    let fade = FADE * PX;
+    let off = rail_offset(&widths, gap, w, cur, fade);
+    let total = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
+    let mut cx = x - off;
+    for (k, sec) in secs.iter().enumerate() {
+        let cw = widths[k];
+        let (l, r) = (cx.max(x), (cx + cw).min(x + w));
+        if r > l + 1.0 {
+            let start = d.out.len();
+            let filled = k == cur && active;
+            if filled {
+                rounded(d, [cx, y, cw, h], h / PY / 2.0, s.ring, 128.0);
+            } else {
+                ringed(d, [cx, y, cw, h], h / PY / 2.0, 1.5, if k == cur { s.ring } else { s.sel }, s.bg);
+            }
+            let (words, soft) = if filled { (s.ink, s.ink) } else { (WHITE, s.soft) };
+            let mut tx = cx + pad;
+            if sec.id == tabs::FAVORITES {
+                d.outlined(|d| d.text("*", tx, y + (h - star) / 2.0 + 1.0 * PY, star, GOLD));
+            } else {
+                d.text(&sec.name, tx, y + (h - size) / 2.0, size, words);
+            }
+            tx += lead(d, sec) + inner;
+            d.text(&sec.cells.len().to_string(), tx, y + (h - cs) / 2.0, cs, soft);
+            clip_x(d, start, x, x + w);
+            d.hit([l, y, r - l, h], pointer::Act::Section(p, k));
+        }
+        cx += cw + gap;
+    }
+    // the cut edges: the card's tint fading in over the chips, an arrow on it
+    let edge = |d: &mut Draw, left: bool| {
+        let n = 8;
+        for i in 0..n {
+            let sw = fade / n as f32;
+            let sx = if left { x + sw * i as f32 } else { x + w - sw * (i + 1) as f32 };
+            d.q(Tex::Solid, [0.0; 4], [sx, y, sw, h], s.bg, 128.0 * (1.0 - i as f32 / n as f32));
+        }
+        let a = if left { "«" } else { "»" };
+        let aw = d.width(a, size);
+        d.text(a, if left { x + 2.0 * PX } else { x + w - aw - 2.0 * PX }, y + (h - size) / 2.0, size, s.soft);
+    };
+    if off > 0.5 {
+        edge(d, true);
+    }
+    if off + w < total - 0.5 {
+        edge(d, false);
+    }
+}
+
+/// The quads drawn since `start` cut to `l..r` across: a picture's source with its box, rounded corners squared on a
+/// cut side, those wholly outside dropped.
+fn clip_x(d: &mut Draw, start: usize, l: f32, r: f32) {
+    let mut kept = Vec::new();
+    for mut q in d.out.drain(start..) {
+        let [qx, _, qw, _] = q.dst;
+        let (a, b) = (qx.max(l), (qx + qw).min(r));
+        if b <= a {
+            continue;
+        }
+        if qw > 0.0 && (a > qx || b < qx + qw) {
+            let k = q.src[2] / qw;
+            q.src[0] += (a - qx) * k;
+            q.src[2] = (b - a) * k;
+            if a > qx {
+                q.round[0] = 0.0;
+                q.round[3] = 0.0;
+            }
+            if b < qx + qw {
+                q.round[1] = 0.0;
+                q.round[2] = 0.0;
+            }
+            q.dst[0] = a;
+            q.dst[2] = b - a;
+        }
+        kept.push(q);
+    }
+    d.out.extend(kept);
+}
+
+/// B422: a `1P`–`4P` tag in each of `seats`' colours along tile `[x, y, w, h]`'s foot, left to right (as many as fit).
+fn tags(d: &mut Draw, [x, y, w, h]: [f32; 4], seats: &[usize]) {
+    let th = (16.0 * PY).min(h * 0.3);
+    let size = th * 0.72;
+    let mut tx = x + 2.0 * PX;
+    for &q in seats {
+        let t = format!("{}P", q + 1);
+        let tw = d.width(&t, size) + 6.0 * PX;
+        if tx + tw > x + w + 0.01 {
+            break;
+        }
+        let s = seat(q);
+        ringed(d, [tx, y + h - th - 2.0 * PY, tw, th], 5.0, 1.5, hex(BG), s.ring);
+        d.centred(&t, tx + tw / 2.0, y + h - th - 2.0 * PY + (th - size) / 2.0, size, s.ink);
+        tx += tw + 2.0 * PX;
     }
 }
 
@@ -684,6 +869,48 @@ pub(super) fn stats(d: &mut Draw, grades: Option<[u8; 5]>, [x, y, w, h]: [f32; 4
                 let ls = disc * 0.72;
                 let lw = d.width("?", ls);
                 ringed_text(d, "?", cx + (dw - lw) / 2.0, cy + (disc - ls) / 2.0, ls, hex(0xc8ccd0));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B422: the rail stays put while its chips fit or the cursor's is on view, else scrolls as little as keeps that
+    /// chip clear of the fade, never past the last chip.
+    #[test]
+    fn the_rail_scrolls_to_the_cursors_chip() {
+        let w = [30.0, 100.0, 80.0, 120.0, 50.0];
+        // 380 + 4 gaps of 5 = 400 wide
+        assert_eq!(rail_offset(&w, 5.0, 400.0, 3, 20.0), 0.0, "all fit");
+        assert_eq!(rail_offset(&w, 5.0, 250.0, 0, 20.0), 0.0);
+        assert_eq!(rail_offset(&w, 5.0, 250.0, 1, 20.0), 0.0, "on view from the start");
+        // chip 2 ends at 220: 220 - (250 - 20) < 0, on view; chip 3 ends at 345: shifted to end at 230
+        assert_eq!(rail_offset(&w, 5.0, 250.0, 2, 20.0), 0.0);
+        assert_eq!(rail_offset(&w, 5.0, 250.0, 3, 20.0), 115.0);
+        // the last chip: right to the end, no fade after it
+        assert_eq!(rail_offset(&w, 5.0, 250.0, 4, 20.0), 150.0);
+        // a chip wider than the room keeps its start clear of the left fade
+        assert_eq!(rail_offset(&[50.0, 300.0, 50.0], 0.0, 200.0, 1, 20.0), 30.0);
+    }
+
+    /// B422: the header band across the card's top, the rail between the preview and the grid, at every aspect and
+    /// column count.
+    #[test]
+    fn band_and_rail_in_the_card() {
+        let inside = |r: [f32; 4], c: [f32; 4]| r[0] >= c[0] - 1e-3 && r[1] >= c[1] - 1e-3 && r[0] + r[2] <= c[0] + c[2] + 1e-3 && r[1] + r[3] <= c[1] + c[3] + 1e-3;
+        for a in [0.4, 9.0 / 16.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
+            let g = super::super::Grid::fit(a);
+            for n in 1..=4 {
+                let c = columns(g.view, n);
+                for p in 0..n {
+                    let at = c.parts(p);
+                    assert_eq!((at.head[0], at.head[1], at.head[2]), (at.card[0], at.card[1], at.card[2]), "{a} {n}");
+                    assert!(at.head[1] + at.head[3] < at.pills[1], "{a} {n}");
+                    assert!(inside(at.rail, at.card) && at.preview[1] + at.preview[3] <= at.rail[1] + 1e-3 && at.rail[1] + at.rail[3] <= at.grid[1] + 1e-3, "{a} {n} {p}");
+                }
             }
         }
     }
