@@ -6,7 +6,7 @@
   - Web: `web/index.html` reads `version.txt` (written by `tools/web.sh`: `git rev-parse --short=7 HEAD`) before the
     game loads, then every 10 min and when the tab comes back; a different value sets `window.hstLatest`.
   - Desktop: only builds made by GitHub Actions (`GITHUB_SHA` at compile time) ask
-    `api.github.com/repos/FIZL0/hot-shots-tennis-rust/releases/tags/alpha` for `target_commitish` at start and every
+    `api.github.com/repos/FIZL0/open-tennis/releases/tags/alpha` for `target_commitish` at start and every
     30 min; local/dev builds never ask (their commit is never the alpha's, they'd nag forever).
   - `HST_LATEST=<commit>` fakes one natively (screenshots); `HST_MENU=main-update` highlights the card.
 - Main menu (`home.rs`): `Row::Update`, a gold "NEW VERSION OUT / Refresh|Download" card under the rows, reachable by

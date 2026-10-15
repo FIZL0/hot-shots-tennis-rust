@@ -15,7 +15,7 @@ and per pixel against `--inspect` shots of one mod at a time (`--inspect MODDIR:
 
 ## Why
 
-The cause is in the draw, not in load, rerig or the HST-MODS packaging. The baked PNG's RGB had the gi, but its
+The cause is in the draw, not in load, rerig or the open-tennis-mods packaging. The baked PNG's RGB had the gi, but its
 alpha did not. Every GS blend kept the destination alpha (`gs.rs` specialize: alpha `Zero·src + One·dst`).
 A preview target is cleared to alpha −1, meaning "nothing drawn" (`inspect.wgsl`). A part drawn only by blended
 passes therefore left −1 and showed as transparent on the card. That covers a glTF BLEND material, which is GS mode 25:

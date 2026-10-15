@@ -1,6 +1,6 @@
 # 4 — Get a Grip courts → court mods (M8f5)
 
-## What landed (all in ../HST-MODS, commit e465bb8; nothing in this repo but this entry)
+## What landed (all in ../open-tennis-mods, commit e465bb8; nothing in this repo but this entry)
 - `tools/psp2gltf/export_getagrip_courts.py`: the 16 courts (01–09, 13–18, 20) → `out/mods/gag_cNN_<stem>/`:
   `court.glb` (ground model less its sky + every haichi-placed object), `sky.glb` (dome + drifting clouds with their
   motion, unlit), `gimmick.glb` (csv-placed set pieces at their route's first point looping a resting motion, plus

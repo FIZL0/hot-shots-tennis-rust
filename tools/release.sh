@@ -13,7 +13,7 @@ set -e
 cd "$(dirname "$0")/.."
 key=~/.config/hst/release.key
 pub=RWTW5uzveKqmVluF6+6vYS5Uq/H7St1d9WMjyxVxXGpJAbr8+sT6HimM
-repo=FIZL0/hot-shots-tennis-rust
+repo=FIZL0/open-tennis
 notes= publish=--draft version=
 for a; do
     case $a in

@@ -3,16 +3,16 @@
 ## Cause
 Every costume failed `mods::check` with `rest pose must be the bind pose (max diff 3.17e0)`; the select's preview loader
 marked each costume broken, so the card couldn't be picked. The only joint off was `__bansoko:tape_mirror` (under
-`Bip01Head`). Nick is left-handed (gloved left hand), so the packager pre-mirrors his costumes with HST-MODS
+`Bip01Head`). Nick is left-handed (gloved left hand), so the packager pre-mirrors his costumes with open-tennis-mods
 `tools/rerig/mirror.py`. His head tape `__bansoko:tape` has no left/right twin, so mirror.py adds a mirrored copy. That
 joint has a non-uniform scale (4.99, 1.48, 1.48), and the copy wrote only translation and rotation, so the scale was lost.
 Nick is the only mod with a scaled joint that needed a copy.
 
 ## Fix
-- HST-MODS 1376d3b: `mirror.py` `copy()` splits the copy's local matrix into rotation and column-norm scale and writes
+- open-tennis-mods 1376d3b: `mirror.py` `copy()` splits the copy's local matrix into rotation and column-norm scale and writes
   `scale` when it isn't 1.
 - I re-mirrored Nick's six costumes from `out/rerig/oob/pc01_nick/` into `out/mods/oob_pc01_nick/model/`. Nothing else
-  changed, because mirror.py is the only step that writes those files. `mods/hst-mods` is a symlink to HST-MODS
+  changed, because mirror.py is the only step that writes those files. `mods/hst-mods` is a symlink to open-tennis-mods
   `out/mods`, so the fixed mod is already in place.
 
 ## Checks

@@ -1,10 +1,10 @@
 # 5 — Get a Grip additive court materials → `@add` (M8f5a1)
 
 ## What landed
-- The exporter change was already in ../HST-MODS (27c618f, made while B401 was being worked on): `Scene.prims` reads
+- The exporter change was already in ../open-tennis-mods (27c618f, made while B401 was being worked on): `Scene.prims` reads
   each material's texture record (`i3d.Material.raw`, the type-0x26 record) and passes `add = raw[0x24] & 1` to
   `material()`, which names it `<name>@add`, BLEND. The standard (§2) defines `@add`. This task checked that the flag is
-  right and that HST draws it, and documented the format in HST-MODS `notes/getagrip.md` *Courts* (c8698cc).
+  right and that HST draws it, and documented the format in open-tennis-mods `notes/getagrip.md` *Courts* (c8698cc).
 - The flag, over all 2558 material records in `200_court`: +0x24 is 0x10 or 0x11; every 0x11 record also has +0x31 = 2
   and +0x33 = 0x10 (38 records, no mixed cases). +0x31 = 2 also appears without the flag on 4 records (yamate's court,
   ground03, stairs01, c16's roof01): plain surfaces, so +0x24 bit 0 is the test, not +0x31.

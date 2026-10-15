@@ -1,6 +1,6 @@
 # B381 — drop Lily, Anna, Suzuki, Chika from the modded roster
 
-The four are HST's own chair umpires packaged as character mods by HST-MODS `tools/rerig/hst_umpires.py`
+The four are HST's own chair umpires packaged as character mods by open-tennis-mods `tools/rerig/hst_umpires.py`
 (`hst_umpire_00_chika`, `_01_suzuki`, `_02_lily`, `_04_anna`); their stood-up meshes look wrong as players.
 Robot Tennis (`hst_umpire_03_robottennis`) and the real player Suzukis (`getagrip_pc12_suzuki`, `oob_pc13_suzuki`,
 `gag_ump06_suzuki`) are untouched.
@@ -10,7 +10,7 @@ Robot Tennis (`hst_umpire_03_robottennis`) and the real player Suzukis (`getagri
 - `modstore::merge` and the cached listing in `modstore::list` filter them → not offered in the store.
 - Tests: `mods::tests::dropped_umpires_stay_off_the_roster` (temp mods dir, Lily copy dropped),
   `modstore::tests::main_then_newest_pr` (store listing), `mod_match::tests::umpires_are_on_the_roster_and_play_a_rally`
-  now expects only Robot Tennis; run once with `mods/hst-mods` → HST-MODS `out/mods` (all five umpire mods): passes,
+  now expects only Robot Tennis; run once with `mods/hst-mods` → open-tennis-mods `out/mods` (all five umpire mods): passes,
   Robot Tennis plays a rally.
 
 ## Not verified / not 1:1

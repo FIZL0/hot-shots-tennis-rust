@@ -4,7 +4,7 @@
 - `mods.rs`: `mod.json` `disc_racket` (0–13, optional, checked in `read`): with no `racket.glb` the mod holds that
   disc character's racket (`PC/PCnnC00.XB` `racket_nn`, read from the user's disc) instead of its donor's. Order:
   racket.glb → disc_racket → donor. Looks only (the racket mesh never reaches gameplay; handshake hash untouched).
-- ../HST-MODS (commit 2862b75) `tools/rerig/package.py pick_racket`, standard §1/§6, README, build.sh,
+- ../open-tennis-mods (commit 2862b75) `tools/rerig/package.py pick_racket`, standard §1/§6, README, build.sh,
   notes/getagrip.md. All 87 mods repackaged.
 
 ## Sources

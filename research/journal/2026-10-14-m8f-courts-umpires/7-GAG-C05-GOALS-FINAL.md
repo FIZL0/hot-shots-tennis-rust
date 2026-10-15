@@ -12,7 +12,7 @@ stand ~21 m in front of HST's resting eye, square over the near half. Of the thr
   same as HST's own pass, and no blend pass to add to GS materials.
 
 ## What changed
-- Standard §2 (../HST-MODS 68606db): a node whose name ends in `__clear` (before any `__singles`/`__doubles`) isn't
+- Standard §2 (../open-tennis-mods 68606db): a node whose name ends in `__clear` (before any `__singles`/`__doubles`) isn't
   drawn while a line from the eye to a point of the playing area (doubles court + 2 m behind each baseline, ground
   and 2 m up) passes through its box at rest, or the eye is inside it. Its skinned meshes go with it.
 - HST `court_mod.rs`: `scene` collects each `__clear` node's box (rigid meshes by their node, skinned ones by each

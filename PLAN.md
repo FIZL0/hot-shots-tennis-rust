@@ -73,9 +73,9 @@ Open tasks: `plan/TODO.md` (index: `tools/ctx.py`, next: `tools/ctx.py next`). F
   (the only place with retail offsets) · `bin/` xbdump, tm2png, mdlstat
 - tests: `characters.rs`, `collision.rs`
 
-`crates/hst-gltf` — exports HST's own characters (all motions, faces) to `.glb` as modding reference rigs (`hst-gltf hst context/xb DIR`); other games' extraction and mod packaging live in ../HST-MODS
+`crates/hst-gltf` — exports HST's own characters (all motions, faces) to `.glb` as modding reference rigs (`hst-gltf hst context/xb DIR`); other games' extraction and mod packaging live in ../open-tennis-mods
 
-README *Character mods* — links the mods repo (../HST-MODS: standard, tutorial, extract/rerig tools); `crates/hst/hst_skeleton.json` is the game's copy of its skeleton
+README *Character mods* — links the mods repo (../open-tennis-mods: standard, tutorial, extract/rerig tools); `crates/hst/hst_skeleton.json` is the game's copy of its skeleton
 
 `crates/hst-sim/src/` — the game, bit-exact, no Bevy
 

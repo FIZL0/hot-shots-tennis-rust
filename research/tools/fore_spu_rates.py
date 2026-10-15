@@ -1,10 +1,10 @@
-# Check HST-MODS audio.py's Fore sample rates against the running game: for every sounding SPU2 voice in a PCSX2 save
+# Check open-tennis-mods audio.py's Fore sample rates against the running game: for every sounding SPU2 voice in a PCSX2 save
 # state of Hot Shots Golf Fore!, find its sample among the SShd banks (SPU RAM at the voice's start address vs each
 # tone's .bd bytes) and print the SPU pitch register as a rate next to the rate audio.py gave that sample.
-#   fore_spu_rates.py STATE.p2s [STATE.p2s ...]   (needs ../HST-MODS/out/files/fore from its build.sh)
+#   fore_spu_rates.py STATE.p2s [STATE.p2s ...]   (needs ../open-tennis-mods/out/files/fore from its build.sh)
 import os, struct, subprocess, sys
 MODS = os.path.join(os.path.dirname(subprocess.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)), 'rev-parse',
-    '--path-format=absolute', '--git-common-dir'], capture_output=True, text=True).stdout.strip()), '../HST-MODS')
+    '--path-format=absolute', '--git-common-dir'], capture_output=True, text=True).stdout.strip()), '../open-tennis-mods')
 sys.path.insert(0, f'{MODS}/tools')
 states, sys.argv = sys.argv[1:], sys.argv[:1] + ['fore']  # audio.py reads its own argv on import
 from audio import fore_tones, fore_rate

@@ -29,9 +29,9 @@ characters, `KEEP_PNGS` = 48 pictures (`play/main_menu/previews.rs`). A not-yet-
 
 ## Test run note
 `tools/check.sh`: 138 passed, 1 failed — `play::mod_match::tests::get_a_grip_stats_reach_the_match` asserts Emi's
-`ai_row` ≠ `donor`, but the locally rebuilt ../HST-MODS `out/mods/getagrip_pc00_emi/mod.json` (git-ignored there) now
+`ai_row` ≠ `donor`, but the locally rebuilt ../open-tennis-mods `out/mods/getagrip_pc00_emi/mod.json` (git-ignored there) now
 has `donor` 0 and `ai_row` 0. Mod data, not this task's code (M1m doesn't touch AI rows or donors); ticked and
-committed by hand rather than through `tools/done.sh`. Whoever owns the HST-MODS sizing/donor change (M1l) should
+committed by hand rather than through `tools/done.sh`. Whoever owns the open-tennis-mods sizing/donor change (M1l) should
 check Emi's donor or the test.
 
 ## Recovered (same day, later run)

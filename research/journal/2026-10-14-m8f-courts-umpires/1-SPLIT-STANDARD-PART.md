@@ -27,7 +27,7 @@ M8f8), the store (M8f9, after B373 draws the kind tabs) and the golf games' venu
   `setting/cNN_se.csv` (sounds) and `cNN_areaclip.csv`; `200_court/umpire.xb` and `lensflare.xb`.
 
 ## Done (M8f1)
-- ../HST-MODS `standard/HST-COURT-UMPIRE-STANDARD.md` (new): §1 kinds, §2 court mod (`layout`, `court.glb`,
+- ../open-tennis-mods `standard/HST-COURT-UMPIRE-STANDARD.md` (new): §1 kinds, §2 court mod (`layout`, `court.glb`,
   `sky.glb`, `gimmick.glb`, `light`, sound, `npcs.json` §2b), §3 umpire mod (`donor` timing/fallback, call table
   §3a, `umpire.glb` §3b). Character standard §6 points at it for `kind`; README lists it.
 - `crates/hst/src/mods.rs`: `Kind` (`Kind::of`, `Kind::of_dir`); `read` refuses a non-character with

@@ -4,7 +4,7 @@ The user asked for investigation only: no code changes are committed. This entry
 only things in git. The prototype lives in `context/b365/` (git-ignored). The proposals below are for the user
 to pick from; no TODO lines were added.
 
-## What the mods weigh (costume c00, base-colour images; `context/b365/` scripts, numbers from `../HST-MODS/out`)
+## What the mods weigh (costume c00, base-colour images; `context/b365/` scripts, numbers from `../open-tennis-mods/out`)
 
 | set | triangles | vertices | prims/materials | joints | texture Mpx | largest side |
 |---|---|---|---|---|---|---|
@@ -58,7 +58,7 @@ Side by side (`context/b365/run1/crop.png`: HST pc06, Fore! Phoebe, OOB Jasmine,
   (5.4 vs 5.5 high-pass energy at 128²). The grain on screen comes from texel density without mipmaps, not from
   the art itself.
 - Proportions are already handled by the rerig (`size_why`: head scaled toward HST's ratio). Felipe still reads
-  larger than HST players in the match shot (`match_pair.png`), worth a look in HST-MODS.
+  larger than HST players in the match shot (`match_pair.png`), worth a look in open-tennis-mods.
 
 ### Prototype (`context/b365/proto/hst_style.py`, not committed)
 It rewrites a costume `.glb`: base-colour images box-downscaled to ≤256 px and brightened (HSV value^0.7);
@@ -70,7 +70,7 @@ black shirt turns charcoal grey). A final version should lift mid-tones and keep
 curve, or match each texture's value histogram to HST's.
 
 ## Proposals for the user (none started)
-1. **HST-MODS, `hst_style` pass for OOB** (and any future HD source) in `tools/rerig` packaging:
+1. **open-tennis-mods, `hst_style` pass for OOB** (and any future HD source) in `tools/rerig` packaging:
    - textures to HST's budget (≤256, 512 for a face/body atlas; ≤~0.5 Mpx per costume), mip-friendly box filter;
    - drop normal maps from the `.glb` and from `textures/upscaled/` (≈ 13 of 39 files);
    - a tone curve toward HST's brightness that keeps blacks;

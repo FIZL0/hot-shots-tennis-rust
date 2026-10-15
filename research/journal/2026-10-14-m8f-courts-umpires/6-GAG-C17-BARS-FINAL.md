@@ -12,7 +12,7 @@
 - How Get a Grip keeps them out: its PSP camera sits closer to the court than HST's, so NORMA (30 m behind the
   baseline) is behind its back in a match. Inferred from the geometry; Get a Grip itself wasn't run (no PSP capture).
 
-## Fix (../HST-MODS d22e1cc)
+## Fix (../open-tennis-mods d22e1cc)
 - `export_getagrip_courts.py`: `Scene(clear_view=True)` for `gimmick.glb`. Each rigid mesh's triangles are welded
   into islands (shared or coincident corners, 1 cm) in world space. An island with a corner inside HST's resting match
   view (either end: the camera turns when the human is on +z; 7°+1.5° up/down, 21:9 wide) and within 20 m of the eye

@@ -46,7 +46,7 @@ the disc eleven.
   at 1.0; gimmicks are lit at their bind pose, not per frame.
 - Yamate's `c01_yamate_light` (sun dapples) draws as a black octagon left of the net: on the PSP it's additive
   but the exporter doesn't record GE blend state, so the loader can't know. Not guessed here: task **M8f5a1**
-  (HST-MODS exporter names additive materials `@add`, which the loader already honours).
+  (open-tennis-mods exporter names additive materials `@add`, which the loader already honours).
 - Gimmick reactions (pigeons flying off, baskets tipping) aren't ported (the PSP program's, encrypted); they
   only loop their idle animation.
 - The mod's own lens-flare sprite isn't drawn; the disc's flare stands in at the sun when the mod has one.

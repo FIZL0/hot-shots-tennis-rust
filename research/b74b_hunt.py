@@ -11,7 +11,7 @@ lim=float(sys.argv[4]) if len(sys.argv)>4 else 0.1; mx=int(sys.argv[5]) if len(s
 p.lockstep=False; p.load_state(slot); time.sleep(3)
 fl=lambda a:struct.unpack('<f',struct.pack('<I',p._u32(a)))[0]
 def view(): return [fl(0x1e7d20+4*i) for i in range(3)]+[fl(0x1e7d30+4*i) for i in range(3)]+[fl(0x1e7d40+4*i) for i in range(3)]+[fl(0x1e7d64)]
-d=f"/home/ryha/repos/HST-Remastered-slots/pcsx2/s{os.environ['HST_PCSX2']}/PCSX2/snaps"
+d=f"/home/ryha/repos/open-tennis-slots/pcsx2/s{os.environ['HST_PCSX2']}/PCSX2/snaps"
 odir=os.environ.get("HST_SHOTS","context/shots/b74b"); os.makedirs(odir,exist_ok=True)
 pid=open(f"{os.environ['XDG_RUNTIME_DIR']}/hst-pcsx2{os.environ['HST_PCSX2']}.pid").read().strip()
 t0=time.time();n=0;prev=None;last_shot=-999

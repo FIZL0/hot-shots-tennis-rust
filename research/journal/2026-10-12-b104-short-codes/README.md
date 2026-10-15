@@ -19,7 +19,7 @@
   puts a transparent input over the canvas so a tap opens the OS keyboard (`web.rs` `code_entry`/`typed_code`).
   Paste still takes full tickets, `rtc…` codes, short codes or a whole link (`code_in` pulls `code=` out of it).
 - Host lobby: the short code big beside the QR (QR now encodes the link), "OK: Copy Link" copies
-  `https://fizl0.github.io/hot-shots-tennis-rust/?code=<code>`.
+  `https://fizl0.github.io/open-tennis/?code=<code>`.
 - Opening `?code=<code>` (or `HST_CODE=<code> hst` on desktop) skips the title and goes straight to character pick,
   joining that lobby after the pick; on a first visit the disc import runs first (same as before).
 

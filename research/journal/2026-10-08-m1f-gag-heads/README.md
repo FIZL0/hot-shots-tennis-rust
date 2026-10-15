@@ -4,7 +4,7 @@
 Doesn't reproduce on main at 1831c12. The Get a Grip (and Open Tee) heads and faces are mesh nodes **without a
 skin**, children of `Bip01Head` (`Bip01Head9face00_…`, `Bip01Head9head300`). Before M1b (f87dc68, merged 16:46)
 `mods::load` only built skinned nodes, so those meshes were dropped: headless. M1b added the "a mesh without a skin
-rides the nearest joint at or above it" path (`rides` in `mods::load`), with HST-MODS 6c781b2 writing the matching
+rides the nearest joint at or above it" path (`rides` in `mods::load`), with open-tennis-mods 6c781b2 writing the matching
 standard rule. The report (PLAN line added 17:21) was most likely made on a binary from before that merge.
 
 Checked the transform: the standard's inverse bind matrices are game space (`ibm[Bip01Head] · space · W = I` on
@@ -17,7 +17,7 @@ with it removed, the head went upside down under the court. Reverted.
 - `--play --mod …getagrip_pc00_emi` (slot 0 near, slot 1 far, `--outfits 0,1,0,0` for set4): heads drawn,
   `context/m1f/emi_play.png`, `slot1.png`, `emi_c1.png`.
 - New test `mods.rs psp_mods_keep_their_heads`: every costume of every Get a Grip/Open Tee mod linked in
-  `context/mods` (local symlinks to ../HST-MODS/out/mods) has vertices on `Bip01Head` above the neck at rest
+  `context/mods` (local symlinks to ../open-tennis-mods/out/mods) has vertices on `Bip01Head` above the neck at rest
   (62 costumes). It fails if the unskinned head meshes are dropped again.
 
 ## Not verified / not 1:1

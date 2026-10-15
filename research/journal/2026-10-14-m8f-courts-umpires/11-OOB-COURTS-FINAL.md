@@ -1,13 +1,13 @@
 # M8f10a3 — Out of Bounds golf venues as court mods (FINAL)
 
 ## What
-`../HST-MODS/tools/oob2gltf/court.py` (HST-MODS 121715a): `python3 tools/oob2gltf/court.py out/files/oob
+`../open-tennis-mods/tools/oob2gltf/court.py` (open-tennis-mods 121715a): `python3 tools/oob2gltf/court.py out/files/oob
 out/venues/oob.json <HST iso> out/mods [course…] [--end -] [--data DIR]` writes `out/mods/oob_cCC_<stem>/`
 (`mod.json`, `court.glb`, `sky.glb`) for 6 of Out of Bounds' 7 courses, ~25 s each. It follows M8f10a2's rules
-(spot, run-off, ground height, laid court, `__clear` within 45 m). The full method and per-course table are in HST-MODS
+(spot, run-off, ground height, laid court, `__clear` within 45 m). The full method and per-course table are in open-tennis-mods
 `notes/venues.md` → *Out of Bounds*. The format notes are in `notes/oob.md` → *Static course meshes*.
 
-New in HST-MODS: `static.py` reads static (unskinned) `.rem` meshes, which `rem.py` skipped. `dds.py` now decodes
+New in open-tennis-mods: `static.py` reads static (unskinned) `.rem` meshes, which `rem.py` skipped. `dds.py` now decodes
 uncompressed RGB(A). `fore2gltf chairs <iso>` prints the layout courts' umpire chairs for the Python exporter.
 
 - **Space.** OOB is Y-up and its height map sits in the hole model's own space. `oob_spot` turns it 180° about Z into

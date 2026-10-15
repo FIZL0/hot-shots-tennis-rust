@@ -11,7 +11,7 @@ Mod hair, ponytails, skirts, earrings sit rigid; give each its source game's own
 - Verified crates/hst/src/noise.rs, crates/hst/src/mods.rs, crates/hst-gltf/src/main.rs already implement §3a sway via mesh.extras.noise + _HST_NOISE VEC2 attribute.
 - Confirmed modding/HST-CHARACTER-STANDARD.md §3a exists.
 - Confirmed rerig.py preserves extras (lines 422-426).
-- Inspected ../HST-MODS/notes/fore.md and oob.md; exporter tools fore2gltf/oob2gltf/psp2gltf identified.
+- Inspected ../open-tennis-mods/notes/fore.md and oob.md; exporter tools fore2gltf/oob2gltf/psp2gltf identified.
 - Inspected fore2gltf/src/main.rs: export() does not accept noise deformers; fore() does not read sibling .NOI.
 
 ## Not verified / not 1:1

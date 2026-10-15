@@ -18,7 +18,7 @@
 //! it finds without waiting for the button (an unattended end-to-end run).
 
 /// The release page the desktop notice's Download opens.
-pub const RELEASES: &str = "https://github.com/FIZL0/hot-shots-tennis-rust/releases/tag/alpha";
+pub const RELEASES: &str = "https://github.com/FIZL0/open-tennis/releases/tag/alpha";
 
 /// This build's release tag (`v0.1.0-alpha.9`, `v1.0.0`): only builds made by `tools/release.sh` have one, and only
 /// they check for and install newer releases.
@@ -100,7 +100,7 @@ pub fn latest() -> Option<String> {
         };
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            let api = std::env::var("HST_UPDATE_API").unwrap_or_else(|_| "https://api.github.com/repos/FIZL0/hot-shots-tennis-rust/releases/latest".into());
+            let api = std::env::var("HST_UPDATE_API").unwrap_or_else(|_| "https://api.github.com/repos/FIZL0/open-tennis/releases/latest".into());
             loop {
                 match ours {
                     Ok(v) => match rt.block_on(check(&api, v, ASSET)) {
@@ -134,7 +134,7 @@ pub fn latest() -> Option<String> {
 /// The commit the "Latest alpha" release was built from (GitHub's API asks for a User-Agent).
 #[cfg(not(target_arch = "wasm32"))]
 async fn alpha() -> Result<String, String> {
-    let j = json("https://api.github.com/repos/FIZL0/hot-shots-tennis-rust/releases/tags/alpha").await?;
+    let j = json("https://api.github.com/repos/FIZL0/open-tennis/releases/tags/alpha").await?;
     // `gh release create --target $GITHUB_SHA`: the full commit
     j["target_commitish"].as_str().filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())).map(str::to_string).ok_or_else(|| "no commit".into())
 }

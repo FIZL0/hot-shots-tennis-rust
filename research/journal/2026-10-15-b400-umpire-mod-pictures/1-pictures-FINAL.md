@@ -19,7 +19,7 @@ this when the Browse/Installed tiles come.
   required `Res` made `pause::open_change_back_in_a_match` panic).
 - Test `umpire_mod_pictures_find_the_head`: head square from a synthetic PNG; a blank picture gives none; only
   mod values with a picture draw one.
-- HST-MODS `b4d05f9`: `tools/psp2gltf/export_getagrip_umpire_previews.py` writes the eight GaG pictures. Each is
+- open-tennis-mods `b4d05f9`: `tools/psp2gltf/export_getagrip_umpire_previews.py` writes the eight GaG pictures. Each is
   cut from the umpire's art on their English loading panel (`loadmes_jNN.xb0`). The band is what ≥4 of the 8
   panels share. The name is the part that differs between the English, French and Spanish panels. In the name
   strip only opaque pixels are kept. Then speck removal and hole fill. Documented in README and notes/getagrip.md.
@@ -29,7 +29,7 @@ this when the Browse/Installed tiles come.
 stage keep their aspect, nothing stretched) and `confirm-umpire-mod` (Natasha's round face). The `hst` tests pass.
 
 ## Rejected
-Rendering each mod's `umpire.glb` (HST-MODS render.py) as the picture: Natasha, Nate and Helghast are fine, but
+Rendering each mod's `umpire.glb` (open-tennis-mods render.py) as the picture: Natasha, Nate and Helghast are fine, but
 u_01–03 and u_05–07 have stray hands/feet, even at rest (an export bug, now task M93).
 
 ## Not verified / not 1:1

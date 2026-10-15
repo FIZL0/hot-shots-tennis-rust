@@ -1,7 +1,7 @@
 # M8f10a1 — Open Tee 2 Nakagawa h07 court mod (FINAL)
 
 ## What
-`../HST-MODS/tools/psp2gltf/export_opentee2_court.py` (HST-MODS e05ece6; it reuses the Get a Grip exporter's
+`../open-tennis-mods/tools/psp2gltf/export_opentee2_court.py` (open-tennis-mods e05ece6; it reuses the Get a Grip exporter's
 scene/model/run-off code) writes `out/mods/ot2_c13_h07_nakagawa/`, with `mod.json`, `court.glb`, `sky.glb`,
 `sound/bgm.wav` and `sound/ambience_0.wav`. Run it with `cd tools/psp2gltf && python3 export_opentee2_court.py
 [--court ±] [--end ±]` (~2 s).

@@ -29,7 +29,7 @@ block):
   vertices (HST boxes the accessor's vertices).
 - Result: c02 10 pieces (roof, both end walls, beams, windows, banner, posts), c05 7, c09 2, c16 6, c17 2, the other
   11 none. Listed in each mod.json `todo`. After the split the check finds only nets and decals on all 16 courts.
-- HST-MODS 52baa54 (`export_getagrip_courts.py`, `notes/getagrip.md`). No HST code changed.
+- open-tennis-mods 52baa54 (`export_getagrip_courts.py`, `notes/getagrip.md`). No HST code changed.
 
 ## Checks (`context/m8f5a4/run1/`)
 `--play --singles --court-mod <export>`, `HST_WEATHER=0`, with `HST_EYE` at each resting eye (game (0, −11.89, ±39.24),
