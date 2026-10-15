@@ -16,13 +16,27 @@
 //! centred in the safe rect; the notch, cutout and home-indicator strips stay black like the bars. The touch pad keeps
 //! to the whole window (`touch_pad`), so neither the safe area nor the Aspect Ratio moves it. `HST_SAFE=l,t,r,b`
 //! (logical px) fakes the insets anywhere, for `--shot`s.
+//!
+//! B421: there the Aspect Ratio also offers Stretch (`STRETCH`, `aspect_choices`): the view is the whole window, notch,
+//! cutout and home-indicator strips included, so the picture fills the screen (HUD and menus may reach under the island
+//! then). Nothing is distorted: the 3D view widens to it and the HUD keeps its 4:3 screen, as at Auto. The touch pad
+//! still keeps its buttons clear of the safe area.
 
 use bevy::prelude::*;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 /// The Aspect Ratio setting's choices (index in `ASPECT`): Auto fills the window (B17's widescreen).
-pub const ASPECTS: [&str; 5] = ["Auto", "4:3", "16:9", "16:10", "21:9"];
+/// Stretch (B421) is the phone apps' only (`aspect_choices`).
+pub const ASPECTS: [&str; 6] = ["Auto", "4:3", "16:9", "16:10", "21:9", "Stretch"];
 const RATIOS: [f32; 5] = [0.0, 4.0 / 3.0, 16.0 / 9.0, 16.0 / 10.0, 21.0 / 9.0];
+/// B421: the `ASPECTS` index of Stretch: the whole window, the safe area ignored.
+pub const STRETCH: u8 = 5;
+
+/// How many of `ASPECTS` the setting offers: Stretch only where there is a safe area to ignore (the phone apps, or
+/// `HST_SAFE`); elsewhere Auto already fills the window.
+pub fn aspect_choices() -> usize {
+    if cfg!(any(target_os = "ios", target_os = "android")) || fake_safe().is_some() { ASPECTS.len() } else { STRETCH as usize }
+}
 /// The aspect ratio in force (an `ASPECTS` index): the settings' (`main_menu`), 4:3 in the original mode.
 pub static ASPECT: AtomicU8 = AtomicU8::new(0);
 
@@ -38,6 +52,9 @@ fn view_at(size: Vec2, aspect: u8) -> Rect {
 
 /// `view_at` with the safe-area insets `safe` (left, top, right, bottom, as shares of the window's width and height).
 fn view_in(size: Vec2, aspect: u8, [l, t, r, b]: [f32; 4]) -> Rect {
+    if aspect == STRETCH {
+        return Rect::from_corners(Vec2::ZERO, size);
+    }
     let safe = Rect::from_corners(Vec2::new(l * size.x, t * size.y), Vec2::new(size.x * (1.0 - r), size.y * (1.0 - b)));
     let ratio = RATIOS.get(aspect as usize).copied().unwrap_or(0.0);
     let s = safe.size();
@@ -310,6 +327,9 @@ fn views_in_the_safe_area() {
     assert_eq!(v, Rect::new(96.0, 0.0, 2400.0, 1080.0));
     // no insets: as before
     assert_eq!(view_in(size, 0, [0.0; 4]), Rect::new(0.0, 0.0, 852.0, 393.0));
+    // B421: Stretch fills the whole window, notch and home indicator included, upright too
+    assert_eq!(view_in(size, STRETCH, safe), Rect::new(0.0, 0.0, 852.0, 393.0));
+    assert_eq!(view_in(Vec2::new(393.0, 852.0), STRETCH, [0.0, 59.0 / 852.0, 0.0, 34.0 / 852.0]), Rect::new(0.0, 0.0, 393.0, 852.0));
 }
 
 #[test]

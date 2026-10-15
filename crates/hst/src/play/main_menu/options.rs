@@ -4,7 +4,7 @@
 //! panel, a side panel with the chosen option's name, description and choices; no description bar (the legend
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
-use super::super::widescreen::ASPECTS;
+use super::super::widescreen::{ASPECTS, aspect_choices};
 use super::{BROWN, CHAT, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
@@ -146,7 +146,7 @@ fn label(o: Opt) -> &'static str {
 fn about(o: Opt) -> &'static str {
     match o {
         Display => "Borderless fullscreen on the current monitor, or a window.",
-        Aspect => "Auto fills the window; a fixed ratio shows the whole picture at that shape, black bars around it.",
+        Aspect => aspect_about(),
         MenuSize => "Makes every menu smaller or bigger. The whole layout scales together, never stretched; the extra room goes around it.",
         ShowFps => "Show the frame rate in the bottom-left corner, in the menus and in a match. Detailed: where each frame's time goes (game, simulation, rendering, waiting on the GPU/browser), meshes drawn and the renderer.",
         KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
@@ -181,6 +181,15 @@ fn about(o: Opt) -> &'static str {
 }
 
 /// B329: the Vibration row's text, by what this browser can do (`web/touch.js`).
+/// B421: the phone apps' Aspect Ratio also has Stretch.
+fn aspect_about() -> &'static str {
+    if aspect_choices() > 5 {
+        "Auto fills the screen clear of the notch; a fixed ratio shows the whole picture at that shape, black bars around it; Stretch fills the whole screen, notch and all."
+    } else {
+        "Auto fills the window; a fixed ratio shows the whole picture at that shape, black bars around it."
+    }
+}
+
 fn vibration_about() -> &'static str {
     #[cfg(target_arch = "wasm32")]
     let can = crate::web::vibration();
@@ -214,7 +223,7 @@ fn choices(o: Opt) -> Vec<String> {
     match o {
         _ if locked(o) => words(&["Off"]),
         Display => words(&["Fullscreen", "Window"]),
-        Aspect => words(&ASPECTS),
+        Aspect => words(&ASPECTS[..aspect_choices()]),
         MenuSize => MENU_SIZES.iter().map(|&t| menu_size_name(t)).collect(),
         Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
@@ -254,7 +263,7 @@ impl Settings {
         let g = &mut self.1;
         match o {
             Display => g.windowed = !g.windowed,
-            Aspect => self.3 = (self.3 as isize + d).rem_euclid(ASPECTS.len() as isize) as u8,
+            Aspect => self.3 = (self.3 as isize + d).rem_euclid(aspect_choices() as isize) as u8,
             MenuSize => self.7 = cycle(&MENU_SIZES, self.7, d),
             ShowFps => g.show_fps = (g.show_fps as isize + d).rem_euclid(3) as u8,
             KeyHints => self.0[KEY_HINTS] = !self.0[KEY_HINTS],
@@ -1061,7 +1070,13 @@ mod tests {
         s.step(Downloads, 1);
         assert!(!s.0[0] && s.0[UPSCALED_DOWNLOADS]);
         s.step(Aspect, -1);
-        assert_eq!(s.value(Aspect), ASPECTS[ASPECTS.len() - 1]);
+        assert_eq!(s.value(Aspect), ASPECTS[aspect_choices() - 1]);
+        // B421: Stretch is the phone apps' only; a settings.txt's Stretch reads back there (elsewhere as the default)
+        assert_eq!(choices(Aspect).len(), aspect_choices());
+        let mut t = s.clone();
+        t.3 = crate::play::widescreen::STRETCH;
+        let stretch = aspect_choices() == ASPECTS.len();
+        assert!(t.text().contains("aspect = Stretch") && (Settings::parse(&t.text()) == t) == stretch);
         // B339: Downloads at Once steps Auto, 1..=8 and wraps; its side panel lists the same
         assert_eq!((s.value(AtOnce), choices(AtOnce).len()), ("Auto".into(), 9));
         s.step(AtOnce, -1);
