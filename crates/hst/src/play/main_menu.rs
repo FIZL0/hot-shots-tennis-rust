@@ -16,15 +16,16 @@
 //! doubles 1P→0, 2P→2 (1P's partner), 3P→1, 4P→3. In the character select a costume someone has locked in (ready)
 //! is closed to everyone else on that character (B66: landing on it moves on to the next free costume, L1 / R1 pass
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
-//! picked by player 1 after the humans.
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods with 1P's △ card, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry) opens on that screen (for `--shot`).
+//! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
+//! scrolling the roster on its own device, its stats card always up (△ does nothing there).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
 //! columns and rows a page as the window fits (B190, [`Grid`]) in one framed group, each a face icon (`inspect::face_icon`, cut from the mod's baked
 //! costume-0 preview, blank until that's baked) with its name under it, the players' hands and tags on it as on the
 //! disc grid (←→ one, ↑↓ a row). A card on a mod shows its 3D preview, its name in `word.tm2`, its TParam.csv row's
-//! play style and (△) its power and footwork numbers; its costumes are `mod.json`'s. Picked, it plays that match slot
+//! play style and its power and footwork grades; its costumes are `mod.json`'s. Picked, it plays that match slot
 //! (`--slot-mod N DIR`, `--chars` the donor), and a costume readied on is closed to the others as on the disc.
 
 use bevy::prelude::*;
@@ -360,7 +361,7 @@ struct Press {
     right: bool,
     ok: bool,
     back: bool,
-    /// △: the attribute card.
+    /// △: a computer player on the seat assignment, an umpire's call (nothing on the select, B368).
     card: bool,
     /// L1 / R1: the costume.
     prev: bool,
@@ -1752,7 +1753,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" => Screen::Assign,
-        "chars" | "chars2" | "chars4" | "chars4-pads" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
+        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
@@ -1828,7 +1829,24 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
                 menu.players[1].ready = true;
             }
         }
+        // B368: 1 to 4 humans (`rosterN`: 1P keys, the rest pads; doubles past 2), a computer in the seats left,
+        // each on their own character, 2P scrolled down its column
+        if let Some(n) = screen.strip_prefix("roster").and_then(|n| n[..1].parse::<usize>().ok()) {
+            let pad = |i: u32| Some(Dev::Pad(Entity::from_raw_u32(1_000_000 + i).unwrap()));
+            menu.doubles = n > 2;
+            menu.bots = [false; 4];
+            for p in 0..menu.players() {
+                menu.seats[p] = if p == 0 { Some(Dev::Keys) } else if p < n { pad(p as u32) } else { None };
+                menu.bots[p] = p >= n;
+                menu.players[p].cursor = [6, 9, 3, 12][p];
+            }
+            menu.players[menu.players() - 1].ready = n < menu.players();
+        }
         mods_screen::sample(&mut menu, &screen);
+        // B368: `roster2-deep`: 2P on a mod far down, its column scrolled there, 1P's at the top
+        if screen == "roster2-deep" && menu.mods.len() > 40 {
+            menu.put(1, Some(Who::Mod(40)));
+        }
         // B306: the one roster, 1P on the first mod (scrolled to it)
         if screen.starts_with("mods") && menu.screen == Screen::Chars && menu.own_mods() > 0 {
             menu.put(0, Some(Who::Mod(0)));

@@ -125,6 +125,9 @@ pub(super) fn columns(view: [f32; 4], n: usize) -> Columns {
     let room = h - fixed;
     let preview = (PREVIEW * PY).min(room - th).max(60.0 * PY);
     let rows = (((room - preview + gy) / (th + gy)) as usize).max(1);
+    // what's left under the last row whole goes to the preview, up to twice its size
+    let spare = room - preview - (rows as f32 * (th + gy) - gy);
+    let preview = preview + spare.clamp(0.0, PREVIEW * PY);
     Columns { n, cols, rows, tile: [tw, th], gap: [gx, gy], first: [l + MARGIN * PX, top, w, h], step: w + GAP * PX, stack, preview }
 }
 
@@ -315,7 +318,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         None => dev_name(m.seats[p], pads),
     };
     let ds = 14.0 * PY;
-    let dev_w = d.width(&device, ds).min(hw * 0.4);
+    let dev_w = d.width(&device, ds).min(hw * 0.3);
     let drop = m.droppable(p);
     let dx = hx + hw - dev_w - if drop { 22.0 } else { 0.0 };
     d.label(&device, dx + dev_w / 2.0, hy + hh - ds - 3.0 * PY, ds, dev_w, s.soft);
