@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use super::super::pointer::{Act, OK, press};
-use super::super::{BROWN, CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, STYLE_NAMES, Tex, WHITE, attribute_card};
+use super::super::{BROWN, CARD_FILL, CHAR_NAMES, Draw, Effect, GOLD, INK, Menu, Press, STYLE_NAMES, Tex, WHITE};
 use super::{Entry, GREEN, Page, RED, View, mb, modstore};
 
 /// The sort words, then (the whole store) Refresh, or (an author's mods) Download all and All mods.
@@ -993,7 +993,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
 }
 
 /// The chosen mod's panel: its name and ✓ Verified, the game, uploader, version and size, its costumes and hand,
-/// its full picture with its play style and △ card, a line on how it plays, then Install (Update, or Remove),
+/// its full picture with its play style and stats card, a line on how it plays, then Install (Update, or Remove),
 /// More by its uploader and Wish list. On the search box, a word or a filter: what it does.
 fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let v = &m.add;
@@ -1056,9 +1056,9 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let pic = [tx, ty, tw, ph];
     d.q(Tex::Solid, [0.0; 4], pic, [20.0, 18.0, 24.0], 128.0);
     let stats = mt.style.map(usize::from).zip(mt.grades);
-    // the △ card on the right of the picture when there's room, at the size that fits
-    let cs = (ph / 160.0).min(tw * 0.48 / 144.0).min(1.0);
-    let card_w = if stats.is_some() && cs >= 0.45 { 144.0 * cs + 4.0 } else { 0.0 };
+    // B384: the roster's stats card (Serve...Footwork, the original's grade letters) on the right of the picture when
+    // there's room
+    let card_w = if stats.is_some() && tw >= 100.0 && ph >= 70.0 { (tw * 0.44).min(110.0) } else { 0.0 };
     let shot = [tx, ty, tw - card_w, ph];
     if v.shot {
         // the full preview, the select's portrait shape (0.8 wide), as big as fits
@@ -1071,8 +1071,9 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     } else {
         d.centred("No picture", shot[0] + shot[2] / 2.0, ty + ph / 2.0 - 6.0, 11.0, LIGHT);
     }
-    if let Some((style, grades)) = stats.filter(|_| card_w > 0.0) {
-        attribute_card(d, 0, style, &grades, [tx + tw - 144.0 * cs, ty + (ph - 160.0 * cs) / 2.0], cs);
+    if let Some((_, grades)) = stats.filter(|_| card_w > 0.0) {
+        let chh = ph.min(100.0);
+        super::super::roster::stats(d, Some(grades), [tx + tw - card_w + 4.0, ty + (ph - chh) / 2.0, card_w - 4.0, chh]);
     } else if let Some(s) = mt.style {
         let sx = shot[0] + 4.0;
         let sw = chip(d, [sx, ty + ph - 18.0], STYLE_NAMES[(s as usize).min(3)], 9.0, PINK, WHITE);
