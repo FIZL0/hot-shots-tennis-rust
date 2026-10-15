@@ -172,6 +172,8 @@ impl View {
         w.extend(match (self.page, &self.by) {
             (Page::Installed, _) => &["Add mod", "Reload", "Remove all"][..],
             (_, Some(_)) => &["Download all", "All mods"][..],
+            // B445
+            (Page::Mine, _) => &["Refresh", "Remove all uploads"][..],
             _ => &["Refresh"][..],
         });
         if self.changed && self.page != Page::Installed {
@@ -543,6 +545,7 @@ impl Menu {
             Slot::Word(i) if k.ok => match v.words()[i] {
                 "Refresh" if v.page == Page::Mine => self.mine_step(0, out),
                 "Add mod" => self.installed_step(0, out),
+                "Remove all uploads" => self.wipe_ask(out),
                 "Remove all" => self.installed_step(2, out),
                 "Refresh" => {
                     if !self.add.busy {
@@ -1314,6 +1317,7 @@ pub(super) fn info(m: &Menu) -> String {
             "Add mod" if v.phone => "Not available in the browser on phones: use the desktop app.".into(),
             "Add mod" => "Install a mod from a .zip file on this computer: a character, court or umpire.".into(),
             "Remove all" => "Remove every mod the game installed (ones added by hand stay).".into(),
+            "Remove all uploads" => "Take every mod you shared off the store (asks first).".into(),
             "Reload" => "Restart the game so your mod changes take effect: new mods join the select screens, removed ones leave.".into(),
             "Download all" => format!("Install every mod by {} you don't have yet.", v.by.as_ref().map_or("", |b| super::who(&b.author))),
             _ => "Back to every mod in the store.".into(),
