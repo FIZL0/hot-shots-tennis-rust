@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Hot Shots Tennis</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg">
@@ -27,7 +27,9 @@
      a size read once on load: iOS Safari can open with its toolbar's height still unsettled and leave an empty bar
      ("chin") until the phone is turned. 100dvh before the script runs. The canvas is pinned to the top left so a
      page scrolled by the browser can't shift it. */
-  html, body { width: var(--app-w, 100%); height: 100%; height: var(--app-h, 100dvh); }
+  /* B438: the page's width is the layout viewport's own (100%), not --app-w: a width left over from before a turn made
+     the document wider than the new screen, iOS zoomed out to fit it and then reported that wider width back. */
+  html, body { width: 100%; height: 100%; height: var(--app-h, 100dvh); }
   /* B314: the canvas starts below the top safe area (the iPhone's Dynamic Island / status bar, which the home-screen
      app blurs over): the game's view is that much shorter, so neither the far side's score nor a menu's top is drawn
      under it. 0 everywhere else (landscape, desktop, Safari with its own bar). */
@@ -85,14 +87,31 @@ if (answer) {
 // open keyboard (Join by Code) shrinks the visual viewport and must not shrink the game.
 {
   const root = document.documentElement.style;
+  // B438: in the 2 s after a turn on a touch screen, whether the screen is sideways (null where the browser doesn't
+  // say), so a size still from before the turn is skipped: iOS fires orientationchange (and sometimes resize) before
+  // innerWidth/innerHeight follow. Only then: a desktop window or an iPad's split view can be taller than its screen.
+  let until = 0;
+  const coarse = matchMedia('(pointer: coarse)');
+  const sideways = () => performance.now() >= until || !coarse.matches ? null
+    : screen.orientation?.type?.startsWith('landscape') ?? (typeof orientation === 'number' ? orientation % 180 !== 0 : null);
   const fit = () => {
-    if (innerWidth > 0 && innerHeight > 0) {
-      root.setProperty('--app-w', innerWidth + 'px');
-      root.setProperty('--app-h', innerHeight + 'px');
+    // the width no wider than the layout viewport (clientWidth): a zoomed-out page's innerWidth is wider (B438)
+    const iw = innerWidth, h = innerHeight, w = Math.min(iw, document.documentElement.clientWidth || iw), s = sideways();
+    if (w > 0 && h > 0 && (s === null || iw === h || s === iw > h)) {
+      root.setProperty('--app-w', w + 'px');
+      root.setProperty('--app-h', h + 'px');
     }
     if (scrollX || scrollY) scrollTo(0, 0);
   };
-  const settle = () => { fit(); for (const ms of [50, 150, 400, 1000, 2000]) setTimeout(fit, ms); };
+  // after a turn every frame for 2 s (B438: the canvas follows the screen as soon as the browser has the new size,
+  // not at the next of a few fixed times), and still a few times after in case frames stop (a hidden page)
+  const frame = () => { fit(); if (performance.now() < until) requestAnimationFrame(frame); };
+  const settle = () => {
+    if (performance.now() >= until) requestAnimationFrame(frame);
+    until = performance.now() + 2000;
+    fit();
+    for (const ms of [50, 150, 400, 1000, 2000, 3000]) setTimeout(fit, ms);
+  };
   for (const e of ['resize', 'pageshow', 'load', 'focus']) addEventListener(e, fit);
   addEventListener('orientationchange', settle);
   screen.orientation?.addEventListener?.('change', settle);

@@ -90,6 +90,10 @@ async function visit(n, pick) {
   const turn = () => send('Emulation.setDeviceMetricsOverride', turned ? { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, screenOrientation: { type: 'portraitPrimary', angle: 0 } } : { width: 844, height: 390, deviceScaleFactor: 3, mobile: true, screenOrientation: { type: 'landscapePrimary', angle: 90 } }).then(() => { turned = !turned; turns++; });
   if (rotate) { await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }); await send('Emulation.setEmitTouchEventsForMouse', { enabled: true }); await turn(); }
   const rotating = rotate && setInterval(turn, rotate);
+  // WEB_TURNS=s,s,…: the same phone (TURN_SHOTS=ms,… screenshots after each turn), landscape from the start, turned at those seconds of visit 2 (B438); each second
+  // after logs the page's, the canvas box's and its backing store's sizes
+  const turnsAt = pick ? [] : (process.env.WEB_TURNS ?? '').split(',').filter(Boolean).map(Number);
+  if (process.env.WEB_TURNS && !rotate) { await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }); await turn(); }
   if (process.env.THROTTLE && !pick) await send('Emulation.setCPUThrottlingRate', { rate: +process.env.THROTTLE });
   t0 = process.env.THROTTLE ? Date.now() : 0;
   await send('Page.navigate', { url: `http://localhost:${web}/?${query}` });
@@ -119,6 +123,18 @@ async function visit(n, pick) {
         await sleep(80);
       }
     }
+    if (turnsAt.includes(t)) {
+      await turn(); log.push(`[${n}] ${t}s turned ${turned ? 'landscape' : 'portrait'}`);
+      // TURN_SHOTS=ms,ms,…: screenshots that long after each turn (what the page shows while it settles)
+      const t1 = Date.now();
+      for (const ms of (process.env.TURN_SHOTS ?? '').split(',').filter(Boolean).map(Number)) {
+        await sleep(Math.max(0, t1 + ms - Date.now()));
+        const shot = await send('Page.captureScreenshot', { format: 'png' });
+        writeFileSync(resolve(out, `visit${n}-${t}s-turn${ms}ms.png`), Buffer.from(shot.result.data, 'base64'));
+        log.push(`[${n}] ${t}s +${Date.now() - t1}ms sizes ${await evaluate("JSON.stringify([innerWidth, innerHeight, ...[...document.querySelectorAll('canvas')].flatMap(c => { const r = c.getBoundingClientRect(); return [[r.left, r.top, r.width, r.height], [c.width, c.height]]; })])")}`);
+      }
+    }
+    if (turnsAt.length) log.push(`[${n}] ${t}s sizes ${await evaluate("JSON.stringify([innerWidth, innerHeight, ...[...document.querySelectorAll('canvas')].flatMap(c => { const r = c.getBoundingClientRect(); return [[r.left, r.top, r.width, r.height], [c.width, c.height]]; })])")}`);
     if (!pick && process.env.WEB_CPUPROFILE) {
       const [at, len] = process.env.WEB_CPUPROFILE.split(':').map(Number);
       if (t === at) { await send('Profiler.enable'); await send('Profiler.setSamplingInterval', { interval: 1000 }); await send('Profiler.start'); }

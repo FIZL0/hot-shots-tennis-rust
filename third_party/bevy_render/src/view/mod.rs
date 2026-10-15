@@ -1200,6 +1200,7 @@ pub fn prepare_view_targets(
     mut commands: Commands,
     clear_color_global: Res<ClearColor>,
     render_device: Res<RenderDevice>,
+    render_adapter: Res<crate::renderer::RenderAdapter>,
     mut texture_cache: ResMut<TextureCache>,
     cameras: Query<(
         Entity,
@@ -1214,6 +1215,9 @@ pub fn prepare_view_targets(
     main_texture_atomics.retain(|_, weak| weak.strong_count() > 0);
 
     let mut textures = <HashMap<_, _>>::default();
+    // hst B438: an sRGB view of an 8-bit main texture needs VIEW_FORMATS, which WebGL2 never has (the texture then
+    // fails to create and the app quits); nothing here makes such a view, so it's only asked for where it exists
+    let view_formats = render_adapter.get_downlevel_capabilities().flags.contains(wgpu::DownlevelFlags::VIEW_FORMATS);
     for (entity, camera, view, texture_usage, msaa) in cameras.iter() {
         let Some(target_size) = camera.physical_target_size else {
             // If we don't have a target size, we can't create the main texture and have to bail
@@ -1266,6 +1270,7 @@ pub fn prepare_view_targets(
                 format: main_texture_format,
                 usage: texture_usage.0,
                 view_formats: match main_texture_format {
+                    _ if !view_formats => &[],
                     TextureFormat::Bgra8Unorm => &[TextureFormat::Bgra8UnormSrgb],
                     TextureFormat::Rgba8Unorm => &[TextureFormat::Rgba8UnormSrgb],
                     _ => &[],
