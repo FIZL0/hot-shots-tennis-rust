@@ -2,7 +2,7 @@
 # tools/ship-local.sh [-w] — put HEAD's website live from this machine instead of waiting ~20 min for Actions: build
 # the browser version here (tools/web.sh), push HEAD to main, upload web/ and deploy it through pages.yml's `prebuilt`
 # input (download + deploy, ~1 min). -w watches the deploy. Executables are left to Actions: the push still starts the
-# full pages run, which rebuilds "Latest alpha" (and deploys the same website again when it ends).
+# full pages run, which rebuilds the rolling "Beta" release (and deploys the same website again when it ends).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "commit first: what ships is HEAD" >&2; exit 1; }

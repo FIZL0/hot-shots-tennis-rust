@@ -71,7 +71,12 @@ EOF
 rm -rf "$out/classes" && mkdir -p "$out/classes" "$out/dex"
 javac -nowarn --release 17 -classpath "$JAR" -d "$out/classes" $(find crates/hst/android -name '*.java')
 "$BT/d8" --release --min-api 26 --lib "$JAR" --output "$out/dex" $(find "$out/classes" -name '*.class')
-"$BT/aapt2" link -o "$out/base.apk" --manifest "$out/AndroidManifest.xml" -I "$JAR" -A crates/hst/assets "$out/res.zip"
+# a release (tools/release.sh, HST_VERSION=v1.2.3) names its version; versionCode 10203 keeps each release an upgrade
+ver=${HST_VERSION#v}; ver=${ver%%-*}
+vargs=()
+[[ $ver =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] && vargs=(--replace-version --version-name "${HST_VERSION#v}" \
+    --version-code $((BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3])))
+"$BT/aapt2" link -o "$out/base.apk" --manifest "$out/AndroidManifest.xml" -I "$JAR" -A crates/hst/assets "${vargs[@]}" "$out/res.zip"
 (cd "$out" && zip -q -0 -r base.apk lib && zip -q -j base.apk dex/classes.dex)
 "$BT/zipalign" -f -p 4 "$out/base.apk" "$out/aligned.apk"
 key=$HOME/.android/debug.keystore

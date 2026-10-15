@@ -159,7 +159,6 @@ jobs:
           else
             # recreated each time so the tag moves to this commit; the download links stay the same
             gh release delete beta --cleanup-tag -y || true
-            gh release delete alpha --cleanup-tag -y 2>/dev/null || true  # the old rolling alpha, once
             printf '%s\n\n%s\n\n%s\n' \
               "**Beta: rebuilt on every change to main (${GITHUB_SHA::7}). Newer than the latest release, less tested.** For the stable version, see [the latest release](https://github.com/$GH_REPO/releases/latest)." \
               "No game data is included: you need your own *Hot Shots Tennis (USA)* (SCUS-97610) ISO." \

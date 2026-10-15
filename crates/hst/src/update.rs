@@ -3,13 +3,13 @@
 //!
 //! Browser: `web/index.html` reads the site's `version.txt` (`tools/web.sh` writes the commit there) when the page
 //! loads and again every few minutes; once the site's differs from the one this page loaded with, it sets
-//! `hstLatest`. Desktop: builds made by GitHub Actions (`pages.yml`, the rolling "Latest alpha") ask GitHub which
-//! commit the alpha release is at, at start and every half hour; a local build never asks (its commit is never the
-//! alpha's). `HST_LATEST=<commit>` in the environment fakes a newer one (the browser: set `hstLatest` in the console).
+//! `hstLatest`. Desktop: builds made by GitHub Actions (`pages.yml`, the rolling "Beta") ask GitHub which
+//! commit the beta release is at, at start and every half hour; a local build never asks (its commit is never the
+//! beta's). `HST_LATEST=<commit>` in the environment fakes a newer one (the browser: set `hstLatest` in the console).
 //!
 //! B374: a release build (`tools/release.sh` builds it with `HST_VERSION=v1.2.3`) asks GitHub for the latest `v*`
 //! release instead, at start and every half hour, unless Settings' Check for Updates is off or `--no-update-check`
-//! was given; no network, a rate limit or bad JSON say nothing. A newer one (semver order, `-alpha.N` before the
+//! was given; no network, a rate limit or bad JSON say nothing. A newer one (semver order, `-beta.N` before the
 //! release) is offered; Update downloads the platform's bare binary beside the game as `hst.new`, checks it against
 //! the release's `SHA256SUMS` (signed with minisign, the key in [`PUBLIC_KEY`]), swaps it in (Windows can't replace
 //! a running .exe: it becomes `hst.exe.old`, removed at the next start) and starts it with the same arguments. A game
@@ -18,9 +18,9 @@
 //! it finds without waiting for the button (an unattended end-to-end run).
 
 /// The release page the desktop notice's Download opens.
-pub const RELEASES: &str = "https://github.com/FIZL0/opentennis/releases/tag/alpha";
+pub const RELEASES: &str = "https://github.com/FIZL0/opentennis/releases/tag/beta";
 
-/// This build's release tag (`v0.1.0-alpha.9`, `v1.0.0`): only builds made by `tools/release.sh` have one, and only
+/// This build's release tag (`v0.1.0-beta.9`, `v1.0.0`): only builds made by `tools/release.sh` have one, and only
 /// they check for and install newer releases.
 pub const VERSION: Option<&str> = option_env!("HST_VERSION");
 
@@ -52,7 +52,7 @@ pub fn latest() -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct State {
-    /// The rolling alpha's newer commit (short).
+    /// The rolling beta's newer commit (short).
     commit: Option<String>,
     /// A newer release.
     found: Option<Found>,
@@ -113,7 +113,7 @@ pub fn latest() -> Option<String> {
                         }
                         Err(e) => bevy::log::info!("update check: {e}"),
                     },
-                    Err(ours) => match rt.block_on(alpha()) {
+                    Err(ours) => match rt.block_on(beta()) {
                         Ok(sha) if sha != ours => STATE.lock().unwrap().commit = Some(sha[..7.min(sha.len())].to_string()),
                         Ok(_) => {}
                         Err(e) => bevy::log::info!("update check: {e}"),
@@ -131,10 +131,10 @@ pub fn latest() -> Option<String> {
     s.found.as_ref().map(|f| f.tag.clone()).or_else(|| s.commit.clone())
 }
 
-/// The commit the "Latest alpha" release was built from (GitHub's API asks for a User-Agent).
+/// The commit the "Beta" release was built from (GitHub's API asks for a User-Agent).
 #[cfg(not(target_arch = "wasm32"))]
-async fn alpha() -> Result<String, String> {
-    let j = json("https://api.github.com/repos/FIZL0/opentennis/releases/tags/alpha").await?;
+async fn beta() -> Result<String, String> {
+    let j = json("https://api.github.com/repos/FIZL0/opentennis/releases/tags/beta").await?;
     // `gh release create --target $GITHUB_SHA`: the full commit
     j["target_commitish"].as_str().filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())).map(str::to_string).ok_or_else(|| "no commit".into())
 }
@@ -192,7 +192,7 @@ fn found(j: &serde_json::Value, ours: &str, asset: Option<&str>) -> Option<Found
     Some(Found { tag: tag.into(), page: j["html_url"].as_str().unwrap_or(RELEASES).into(), files })
 }
 
-/// Whether version `a` comes after `b` (`v1.2.3`, `v0.1.0-alpha.10`; semver order: a pre-release before its
+/// Whether version `a` comes after `b` (`v1.2.3`, `v0.1.0-beta.10`; semver order: a pre-release before its
 /// release, numeric parts by number). Unreadable ones are never newer.
 pub fn newer(a: &str, b: &str) -> bool {
     fn parse(s: &str) -> Option<([u64; 3], Option<&str>)> {
@@ -527,13 +527,13 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
         let asset = Some("hst-linux-x86_64");
 
         // same version: nothing
-        let api = release("v0.1.0-alpha.9", SUMS, SIG);
-        assert_eq!(rt.block_on(check(&api, "v0.1.0-alpha.9", asset)).unwrap(), None);
-        assert_eq!(rt.block_on(check(&api, "v0.1.0-alpha.10", asset)).unwrap(), None);
+        let api = release("v0.1.0-beta.9", SUMS, SIG);
+        assert_eq!(rt.block_on(check(&api, "v0.1.0-beta.9", asset)).unwrap(), None);
+        assert_eq!(rt.block_on(check(&api, "v0.1.0-beta.10", asset)).unwrap(), None);
 
         // newer: offered with its files, installs, swaps
-        let f = rt.block_on(check(&api, "v0.1.0-alpha.8", asset)).unwrap().expect("offered");
-        assert_eq!(f.tag, "v0.1.0-alpha.9");
+        let f = rt.block_on(check(&api, "v0.1.0-beta.8", asset)).unwrap().expect("offered");
+        assert_eq!(f.tag, "v0.1.0-beta.9");
         let files = f.files.expect("files");
         let exe = game("hst");
         rt.block_on(install(&files, &exe, KEY, &quiet)).unwrap();
@@ -551,11 +551,11 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
 
         // a signature by another key, sums that don't match their signature, a wrong checksum: old game kept
         for (api, key) in [
-            (release("v0.1.0-alpha.9", SUMS, SIG), PUBLIC_KEY),
-            (release("v0.1.0-alpha.9", BAD_SUMS, SIG), KEY),
-            (release("v0.1.0-alpha.9", BAD_SUMS, BAD_SUMS_SIG), KEY),
+            (release("v0.1.0-beta.9", SUMS, SIG), PUBLIC_KEY),
+            (release("v0.1.0-beta.9", BAD_SUMS, SIG), KEY),
+            (release("v0.1.0-beta.9", BAD_SUMS, BAD_SUMS_SIG), KEY),
         ] {
-            let f = rt.block_on(check(&api, "v0.1.0-alpha.8", asset)).unwrap().unwrap();
+            let f = rt.block_on(check(&api, "v0.1.0-beta.8", asset)).unwrap().unwrap();
             let exe = game("hst");
             let e = rt.block_on(install(&f.files.unwrap(), &exe, key, &quiet)).unwrap_err();
             assert!(e.contains("signature") || e.contains("checksum"), "{e}");
@@ -564,7 +564,7 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
         }
 
         // no binary for this platform: offered (the page), nothing to install
-        let f = rt.block_on(check(&api, "v0.1.0-alpha.8", Some("hst-plan9"))).unwrap().unwrap();
+        let f = rt.block_on(check(&api, "v0.1.0-beta.8", Some("hst-plan9"))).unwrap().unwrap();
         assert!(f.files.is_none() && f.page.ends_with("/page"));
         // no server: an error, which the menu never shows
         assert!(rt.block_on(check("http://127.0.0.1:9/latest", "v0.0.1", asset)).is_err());
@@ -573,19 +573,19 @@ THUyxgpuyuPsVsduXm9/89sC63YSLcd9AFKPHAktynRfuDPj7/rA9oduqCWq9oP4WO9Ii8CBBtn5eZhl
 
     #[test]
     fn versions_in_semver_order() {
-        let order = ["v0.1.0-alpha.1", "v0.1.0-alpha.2", "v0.1.0-alpha.10", "v0.1.0-beta", "v0.1.0", "v0.1.1", "v0.2.0", "v1.0.0-alpha.1", "v1.0.0", "v1.10.0"];
+        let order = ["v0.1.0-beta.1", "v0.1.0-beta.2", "v0.1.0-beta.10", "v0.1.0-beta", "v0.1.0", "v0.1.1", "v0.2.0", "v1.0.0-beta.1", "v1.0.0", "v1.10.0"];
         for (i, a) in order.iter().enumerate() {
             for (j, b) in order.iter().enumerate() {
                 assert_eq!(newer(a, b), i > j, "{a} vs {b}");
             }
         }
-        assert!(!newer("alpha", "v0.1.0") && !newer("v0.1.0", "alpha") && !newer("v1.2", "v1.0.0"));
+        assert!(!newer("beta", "v0.1.0") && !newer("v0.1.0", "beta") && !newer("v1.2", "v1.0.0"));
         assert!(newer("1.0.0", "v0.9.9"));
     }
 
     #[test]
     fn a_found_release_needs_a_v_tag_and_all_its_files() {
-        let j = serde_json::json!({ "tag_name": "alpha", "assets": [] });
+        let j = serde_json::json!({ "tag_name": "beta", "assets": [] });
         assert_eq!(found(&j, "v0.0.1", ASSET), None);
         let j = serde_json::json!({ "tag_name": "v2.0.0", "html_url": "p", "assets": [{ "name": "SHA256SUMS", "browser_download_url": "s" }] });
         assert_eq!(found(&j, "v1.0.0", Some("hst-linux-x86_64")), Some(Found { tag: "v2.0.0".into(), page: "p".into(), files: None }));
