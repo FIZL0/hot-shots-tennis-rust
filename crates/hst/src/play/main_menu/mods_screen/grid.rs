@@ -105,6 +105,8 @@ pub(super) struct Browse {
     pub tapped: Option<usize>,
     /// Frames since the page opened (the loading tiles' shimmer, the downloads' spinner).
     pub tick: u32,
+    /// B444: seconds the cursor has been on `Menu::sel` `.1` (a long title's slide starts over on every move).
+    pub roll: (f32, usize),
     /// The made-up store of a `sample` screen: no picture is fetched (installed ones show the select's).
     pub offline: bool,
 }
@@ -867,12 +869,74 @@ fn tile(d: &mut Draw, m: &Menu, e: &Entry, [x, y, w, _]: [f32; 4], ph: f32, on: 
     // the name, the hand's letter at its right; the line under: the uploader when sorted by them, else the game
     let hand = mt.hand.map(|h| if h < 0 { "L" } else { "R" });
     let hw = if hand.is_some() { 10.0 } else { 0.0 };
-    super::super::left(d, &mt.name, x + 1.0, y + ph + 2.0, 11.0, w - hw - 2.0, if on { GOLD } else { WHITE });
+    let roll = on.then_some(v.b.roll.0);
+    marquee(d, &mt.name, [x + 1.0, y + ph + 2.0], 11.0, w - hw - 2.0, if on { GOLD } else { WHITE }, roll);
     if let Some(h) = hand {
         d.label(h, x + w - 4.0, y + ph + 3.0, 9.0, 9.0, LIGHT);
     }
     let sub = if v.b.sort == Sort::Uploader || mt.source.is_empty() { format!("by {}", super::who(&mt.author)) } else { mt.source.clone() };
-    super::super::left(d, &sub, x + 1.0, y + ph + 13.5, 8.0, w - 2.0, LIGHT);
+    marquee(d, &sub, [x + 1.0, y + ph + 13.5], 8.0, w - 2.0, LIGHT, roll);
+}
+
+/// B444: still this long at each end of a long title's slide, which goes this fast (px a second).
+const ROLL_REST: f32 = 1.2;
+const ROLL_SPEED: f32 = 30.0;
+
+/// B444: `s` from `[x, y]` at `size` in `max` px. Too long for it: with `roll` (seconds it has been chosen) it slides
+/// left until its end shows, rests, and starts over (clipped to `max`, its height kept); without, it ends in "...".
+fn marquee(d: &mut Draw, s: &str, [x, y]: [f32; 2], size: f32, max: f32, rgb: [f32; 3], roll: Option<f32>) {
+    let w = d.width(s, size);
+    if w <= max {
+        d.text(s, x, y, size, rgb);
+        return;
+    }
+    let Some(t) = roll else {
+        let mut cut = s.trim_end().to_string();
+        while !cut.is_empty() && d.width(&format!("{cut}..."), size) > max {
+            cut.pop();
+            cut = cut.trim_end().to_string();
+        }
+        d.text(&format!("{cut}..."), x, y, size, rgb);
+        return;
+    };
+    let kept = rolled(d, s, x, y, size, max, rgb, roll_offset(w - max, t));
+    d.out.extend(kept);
+}
+
+/// How far left a title `over` px too long has slid `t` seconds after it was chosen.
+fn roll_offset(over: f32, t: f32) -> f32 {
+    let slide = over / ROLL_SPEED;
+    ((t % (2.0 * ROLL_REST + slide)) - ROLL_REST).clamp(0.0, slide) * ROLL_SPEED
+}
+
+/// `s`'s glyphs from `x - off`, cut to `[x, x + max]` (a glyph across an edge loses the part past it).
+#[allow(clippy::too_many_arguments)]
+fn rolled(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32, rgb: [f32; 3], off: f32) -> Vec<super::super::Quad> {
+    let start = d.out.len();
+    d.text(s, x - off, y, size, rgb);
+    let (x0, x1) = (x, x + max);
+    d.out
+        .drain(start..)
+        .filter_map(|mut q| {
+            let [qx, _, qw, _] = q.dst;
+            let (a, b) = ((x0 - qx).max(0.0), (qx + qw - x1).max(0.0));
+            if a + b >= qw {
+                return None;
+            }
+            q.src[0] += q.src[2] * a / qw;
+            q.src[2] *= (qw - a - b) / qw;
+            q.dst[0] += a;
+            q.dst[2] -= a + b;
+            Some(q)
+        })
+        .collect()
+}
+
+/// B444: counts the seconds the cursor has stayed put, for [`marquee`].
+pub(super) fn roll_time(mut menu: ResMut<Menu>, time: Res<Time>) {
+    let sel = menu.sel;
+    let r = &mut menu.add.b.roll;
+    *r = if r.1 == sel { (r.0 + time.delta_secs(), sel) } else { (0.0, sel) };
 }
 
 /// The downloads' pill: "2 downloading - 1 queued" by a spinner (nothing waiting: how many are installed).
@@ -1110,10 +1174,11 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     let mt = &e.meta;
     let mut ty = y + 10.0;
     let vw = if e.verified { d.width("Verified", 10.0) + 22.0 } else { 0.0 };
-    let ns = 18.0 * ((tw - vw) / d.width(&mt.name, 18.0).max(1.0)).min(1.0);
-    super::super::left(d, &mt.name, tx, ty + (18.0 - ns) / 2.0, ns, tw - vw, GOLD);
+    // B444: smaller to fit, down to 13 px; longer still, it slides
+    let ns = (18.0 * ((tw - vw) / d.width(&mt.name, 18.0).max(1.0)).min(1.0)).max(13.0);
+    marquee(d, &mt.name, [tx, ty + (18.0 - ns) / 2.0], ns, tw - vw, GOLD, Some(v.b.roll.0));
     if e.verified {
-        let vx = tx + d.width(&mt.name, ns) + 8.0;
+        let vx = tx + d.width(&mt.name, ns).min(tw - vw) + 8.0;
         tick_disc(d, vx + 6.0, ty + 9.0, 6.0);
         super::super::left(d, "Verified", vx + 15.0, ty + 4.0, 10.0, vw, [80.0, 128.0, 128.0]);
     }
@@ -1128,7 +1193,7 @@ fn detail(d: &mut Draw, m: &Menu, b: [f32; 4], hand_x: f32) {
     .flatten()
     .collect::<Vec<_>>()
     .join(" - ");
-    super::super::left(d, &line, tx, ty, 10.0, tw, LIGHT);
+    marquee(d, &line, [tx, ty], 10.0, tw, LIGHT, Some(v.b.roll.0));
     ty += 15.0;
     let mut cx = tx;
     let pills: Vec<String> = [
@@ -1417,4 +1482,21 @@ pub(super) fn faces(m: &Menu) -> Vec<super::super::Who> {
 /// The cache folder of the tiles' pictures: `mod-pictures/` beside `mods/`.
 pub(super) fn cache_dir() -> std::path::PathBuf {
     super::root().with_file_name("mod-pictures")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B444: a long title rests at its start, slides at `ROLL_SPEED` until its end shows, rests there, starts over.
+    #[test]
+    fn a_long_title_rests_slides_rests_and_starts_over() {
+        let over = 60.0;
+        let slide = over / ROLL_SPEED;
+        assert_eq!(roll_offset(over, 0.0), 0.0);
+        assert_eq!(roll_offset(over, ROLL_REST * 0.9), 0.0);
+        assert!((roll_offset(over, ROLL_REST + slide / 2.0) - over / 2.0).abs() < 1e-3);
+        assert_eq!(roll_offset(over, ROLL_REST + slide + 0.5), over);
+        assert_eq!(roll_offset(over, 2.0 * ROLL_REST + slide + 0.1), 0.0);
+    }
 }
