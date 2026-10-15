@@ -62,6 +62,30 @@ pub struct Meta {
     pub costumes: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub like: Option<u8>,
+    /// B373 (M5a/M5c share it): what the mod is, the Mods pages' kind tab it shows on. Absent: a character.
+    #[serde(default, skip_serializing_if = "Kind::is_character")]
+    pub kind: Kind,
+}
+
+/// B373: a mod's kind (`meta.json` / `mod.json` `"kind"`): absent is a character, so every older entry still reads;
+/// one this game doesn't know yet reads as `Other` and shows on no tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Character,
+    Court,
+    Umpire,
+    /// M5a: a texture replacement pack.
+    Textures,
+    #[serde(other)]
+    Other,
+}
+
+impl Kind {
+    pub fn is_character(&self) -> bool {
+        *self == Kind::Character
+    }
 }
 
 /// One mod in the store.
@@ -652,6 +676,7 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, Stri
         hand: Some(if m.hand < 0.0 { -1 } else { 1 }),
         costumes: Some(m.costumes.len() as u32),
         like: Some(m.donor as u8),
+        kind: Kind::Character,
     };
     let preview = files.iter().find(|f| f.0.starts_with("previews/") && f.0.ends_with(".png")).map(|f| f.1.clone());
     Ok(Package { zip, meta, preview })
@@ -967,6 +992,23 @@ mod tests {
         assert_eq!(meta_of(b"not json", "lauryn"), None);
         let loud = meta_of(&j(&Meta { name: format!("A\u{1b}[31mB{}", "x".repeat(100)), ..ok.clone() }), "lauryn").unwrap();
         assert!(!loud.name.contains('\u{1b}') && loud.name.chars().count() == 40);
+    }
+
+    /// B373: a meta.json without "kind" (every upload before it) is a character's, and a character's is written
+    /// without one; the other kinds round-trip, and one this game doesn't know yet still reads (as `Other`).
+    #[test]
+    fn reads_kind() {
+        let ok = meta("lauryn", b"zip");
+        let j = serde_json::to_string(&ok).unwrap();
+        assert!(!j.contains("kind"));
+        assert_eq!(meta_of(j.as_bytes(), "lauryn").unwrap().kind, Kind::Character);
+        for (k, word) in [(Kind::Court, "court"), (Kind::Umpire, "umpire"), (Kind::Textures, "textures")] {
+            let j = serde_json::to_string(&Meta { kind: k, ..ok.clone() }).unwrap();
+            assert!(j.contains(&format!("\"kind\":\"{word}\"")), "{j}");
+            assert_eq!(meta_of(j.as_bytes(), "lauryn").unwrap().kind, k);
+        }
+        let later = j.replacen('{', "{\"kind\":\"stadium\",", 1);
+        assert_eq!(meta_of(later.as_bytes(), "lauryn").unwrap().kind, Kind::Other);
     }
 
     /// `main` wins an id over any PR, a newer PR over an older one.

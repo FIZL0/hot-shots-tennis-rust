@@ -53,6 +53,7 @@ mod home;
 mod names;
 mod online;
 mod options;
+mod mods_kind;
 mod mods_screen;
 mod pointer;
 mod tabs;
@@ -377,6 +378,9 @@ struct Press {
     page: bool,
     /// Select / − (keyboard: the camera key, C): the hand toggle.
     hand: bool,
+    /// B373: L2 / R2 (keyboard: 1 / 3, over Q / E): the Mods pages' kind tab.
+    kind_prev: bool,
+    kind_next: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2965,6 +2969,8 @@ fn step(
                 k.next = keys.any_just_pressed([KeyCode::KeyE, KeyCode::PageDown]);
                 k.page = keys.just_pressed(KeyCode::Tab);
                 k.hand = bind.key_just_pressed(&keys, Action::Camera);
+                k.kind_prev = keys.just_pressed(KeyCode::Digit1);
+                k.kind_next = keys.just_pressed(KeyCode::Digit3);
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };
@@ -2977,6 +2983,8 @@ fn step(
                 k.next = g.just_pressed(GamepadButton::RightTrigger);
                 k.page = g.just_pressed(GamepadButton::West);
                 k.hand = g.just_pressed(GamepadButton::Select);
+                k.kind_prev = g.just_pressed(GamepadButton::LeftTrigger2);
+                k.kind_next = g.just_pressed(GamepadButton::RightTrigger2);
             }
         }
         let mut dirs = [false; 4];

@@ -39,10 +39,12 @@ pub(super) enum Act {
     Category(usize, usize),
     /// B371: seat `p`'s name picker's row or key `i`: hovering selects it, a tap presses it.
     Name(usize, usize),
+    /// B373: the Mods pages' kind tab `i` (`mods_kind::KINDS`): a tap opens it.
+    Kind(usize),
 }
 
 /// ✕.
-pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false };
+pub(super) const OK: Press = Press { up: false, down: false, left: false, right: false, ok: true, back: false, card: false, prev: false, next: false, page: false, hand: false, kind_prev: false, kind_next: false };
 
 pub(super) fn press(f: impl FnOnce(&mut Press)) -> Act {
     let mut k = Press::default();
@@ -197,6 +199,8 @@ impl Menu {
             }
             Act::Category(..) => {}
             Act::Name(p, i) => out = self.name_point(p, i, tap),
+            Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
+            Act::Kind(_) => {}
         }
         out
     }
