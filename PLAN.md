@@ -97,7 +97,8 @@ README *Character mods* — links the mods repo (../opentennis-mods: standard, t
 
 - `handshake.rs` online match seed (`MatchSeed`) and peer handshake check (M2e) · `mods_online.rs` mods in online lobbies: gameplay wire, looks packs, stand-ins (M2i) · `mods_umpire.rs` umpire mods: manifest, calls over the donor's bank (M8f3) · `main.rs` args, disc load, court models, orbit, auto_shot · `play.rs` (1.4k lines) the match: setup, input,
   strike/serve/locomote/advance_stroke, bot, simulate, react/next_point, camera, draw, motions, balloons, hud ·
-  `character.rs` disc characters, rig, animate · `sandbox.rs`
+  `character.rs` disc characters, rig, animate · `sandbox.rs` · `ui_pool.rs` overlay quad pools only while shown (P39) ·
+  `ui_census.rs` `HST_UI_CENSUS=1` UI node counts/changes per root
 - tests: `line_calls.rs`, `shot_params.rs`
 
 `tools/` — `pcsx2-hst.sh` launch · `pine.py` RAM/states · `vpad.py` virtual pad · `screenshot.sh` ·
