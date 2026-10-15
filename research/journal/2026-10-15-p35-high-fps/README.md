@@ -38,3 +38,4 @@ All `hst::` systems together: ~1.3 ms/frame self (traced). Follow-ups: P36–P48
 
 Rerun: `tools/profile.sh context/perf/<name>.txt [seconds] [hst args…]` (builds `target/trace`, ~2.5 min first time).
 `samply` needs `perf_event_paranoid` ≤ 1 (root); trace_chrome needs nothing.
+- P36 (shadow casters): research/journal/2026-10-15-p36-shadow-casters/

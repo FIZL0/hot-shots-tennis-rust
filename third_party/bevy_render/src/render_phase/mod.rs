@@ -233,6 +233,10 @@ pub struct RenderMultidrawableBatchSetGpuBuffers {
     /// A mapping from each `RenderBinnedMeshInstanceIndex` to the offset of its
     /// indirect draw parameters.
     pub bin_index_to_indirect_parameters_offset_buffer: RawBufferVec<u32>,
+    /// hst P36: whether either buffer changed since it was last uploaded. Retained bins mostly hold still from frame
+    /// to frame, so `write_binned_instance_buffers` skips the upload (per view × batch set, 4 shadow cascades) when
+    /// nothing changed.
+    pub dirty: bool,
 }
 
 /// Information about each binned mesh instance that the
@@ -270,6 +274,7 @@ impl RenderMultidrawableBatchSetGpuBuffers {
         RenderMultidrawableBatchSetGpuBuffers {
             render_binned_mesh_instance_buffer: render_bin_entry_buffer,
             bin_index_to_indirect_parameters_offset_buffer,
+            dirty: true,
         }
     }
 
@@ -295,6 +300,7 @@ impl RenderMultidrawableBatchSetGpuBuffers {
             match bin.entity_to_binned_mesh_instance_index.entry(main_entity) {
                 Entry::Occupied(occupied_entry) => *occupied_entry.get(),
                 Entry::Vacant(vacant_entry) => {
+                    self.dirty = true;
                     let render_bin_buffer_index = RenderBinnedMeshInstanceIndex(
                         self.render_binned_mesh_instance_buffer
                             .push(GpuRenderBinnedMeshInstance::default())
@@ -308,8 +314,12 @@ impl RenderMultidrawableBatchSetGpuBuffers {
 
         // Place the entry in the instance buffer at the proper spot. Also, save
         // the entity and bin index in the CPU-side array.
-        self.render_binned_mesh_instance_buffer.values_mut()
-            [render_binned_mesh_instance_buffer_index.0 as usize] = gpu_render_bin_entry;
+        let slot = &mut self.render_binned_mesh_instance_buffer.values_mut()
+            [render_binned_mesh_instance_buffer_index.0 as usize];
+        if *slot != gpu_render_bin_entry {
+            *slot = gpu_render_bin_entry;
+            self.dirty = true;
+        }
         cpu_binned_mesh_instance_buffer[render_binned_mesh_instance_buffer_index.0 as usize] =
             CpuRenderBinnedMeshInstance {
                 main_entity,
@@ -355,6 +365,7 @@ impl RenderMultidrawableBatchSetGpuBuffers {
         // mesh instance indices must be contiguous, this requires use of
         // `swap_remove`.
         cpu_binned_mesh_instance_buffer.swap_remove(old_index.0 as usize);
+        self.dirty = true;
         self.render_binned_mesh_instance_buffer
             .swap_remove(old_index.0 as usize);
 
@@ -587,6 +598,7 @@ where
         // parameters offset.
         let indirect_parameters_offset = self.indirect_parameters_offset_to_bin_index.len() as u32;
         self.indirect_parameters_offset_to_bin_index.push(bin_index);
+        self.gpu_buffers.dirty = true;
 
         // Update the reverse mapping from bin index to indirect parameters offset.
         if bin_index.0 as usize
@@ -617,6 +629,7 @@ where
         self.bin_key_to_bin_index.remove(bin_key);
         self.bin_free_list.push(bin_index);
         self.bins[bin_index.0 as usize] = None;
+        self.gpu_buffers.dirty = true;
 
         // Remove the indirect parameters offset corresponding to the bin. Note
         // that indirect parameters must be tightly packed. Thus we must use
@@ -663,7 +676,7 @@ where
 /// This is a data structure shared between CPU and GPU. It is *not* sorted in
 /// the [`RenderMultidrawableBatchSetGpuBuffers`]: mesh instances in any given
 /// bin are not guaranteed to be adjacent.
-#[derive(Clone, Copy, Default, Pod, Zeroable, ShaderType)]
+#[derive(Clone, Copy, Default, PartialEq, Pod, Zeroable, ShaderType)]
 #[repr(C)]
 pub struct GpuRenderBinnedMeshInstance {
     /// The index of the `MeshInputUniform` in the buffer.

@@ -2544,16 +2544,21 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
                 continue;
             };
 
-            // Write the various buffers to the GPU.
+            // Write the various buffers to the GPU (hst P36: only when they changed, or have no GPU buffer yet).
 
-            batch_set
-                .gpu_buffers
-                .render_binned_mesh_instance_buffer
-                .write_buffer(&render_device, &render_queue);
-            batch_set
-                .gpu_buffers
-                .bin_index_to_indirect_parameters_offset_buffer
-                .write_buffer(&render_device, &render_queue);
+            let gpu_buffers = &mut batch_set.gpu_buffers;
+            if gpu_buffers.dirty
+                || gpu_buffers.render_binned_mesh_instance_buffer.buffer().is_none()
+                || gpu_buffers.bin_index_to_indirect_parameters_offset_buffer.buffer().is_none()
+            {
+                gpu_buffers
+                    .render_binned_mesh_instance_buffer
+                    .write_buffer(&render_device, &render_queue);
+                gpu_buffers
+                    .bin_index_to_indirect_parameters_offset_buffer
+                    .write_buffer(&render_device, &render_queue);
+                gpu_buffers.dirty = false;
+            }
 
             let (
                 Some(render_bin_entry_buffer),

@@ -461,7 +461,7 @@ fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>
     }
 }
 
-/// Shadow quality: off, or the shadow map's size and cascades (high = Bevy's default 2048 and 4 cascades).
+/// Shadow quality: off, or the shadow map's size and cascades (High: 2048, two cascades).
 fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalLightShadowMap>, mut lights: Query<(Entity, Mut<DirectionalLight>)>) {
     if !g.is_changed() && !lights.iter().any(|(_, l)| l.is_added()) {
         return;
@@ -473,9 +473,12 @@ fn lights(mut commands: Commands, g: Res<Graphics>, mut map: ResMut<DirectionalL
     let (size, cascades, far) = (2048, 1, 60.0);
     // B287: the first cascade covers the whole court from either baseline camera; past it the jungle's tall canopy
     // shadows on the far half faded out. Low is one 2048 cascade to 120 m (still more texels a metre than the old
-    // 1024-to-80 m first cascade): each cascade draws every caster again, too many draws for a phone (B328)
+    // 1024-to-80 m first cascade): each cascade draws every caster again, too many draws for a phone (B328).
+    // P36: High is the same first cascade to 80 m and one more to 120 m. Bevy's default 4 split 80–120 m into three
+    // slivers that each drew every caster again; A/B shots on court 1 show no change on the court (one cascade to
+    // 120 m like Low does: tree and net shadow edges move)
     #[cfg(not(all(target_arch = "wasm32", not(feature = "webgpu"))))]
-    let (size, cascades, far) = if g.shadows == Shadows::Low { (2048, 1, 120.0) } else { (2048, 4, 120.0) };
+    let (size, cascades, far) = if g.shadows == Shadows::Low { (2048, 1, 120.0) } else { (2048, 2, 120.0) };
     if map.size != size {
         map.size = size;
     }
