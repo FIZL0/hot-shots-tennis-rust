@@ -50,6 +50,7 @@ pub(crate) mod flame;
 pub(crate) mod legend;
 mod child;
 mod confirm;
+mod frame;
 mod home;
 mod names;
 mod online;
