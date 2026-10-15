@@ -200,6 +200,8 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 play::main_menu::ASPECT.store(play::widescreen::ASPECTS.iter().position(|n| *n == a).unwrap_or(0) as u8, std::sync::atomic::Ordering::Relaxed);
             }
             "--no-upscale" => upscale = false,
+            // B374: no check for a newer release this run
+            "--no-update-check" => update::NO_CHECK_FLAG.store(true, std::sync::atomic::Ordering::Relaxed),
             "--sound" => {
                 let mut n = || a.next().unwrap_or_default();
                 let (xb, hd, program, key) = (n(), n(), n(), n());
@@ -249,6 +251,8 @@ fn main() {
         *play::netplay::PENDING.lock().unwrap() = Some(started);
         argv = rest.unwrap_or_default();
     }
+    // B374: where the game's file is, before an update swaps it; a Windows update's leftover hst.exe.old goes
+    update::cleanup();
     disc::resolve(&mut argv);
     start(argv);
 }

@@ -1014,7 +1014,7 @@ impl Menu {
             // the Online screen's own search failing: its card says none found
             Event::Failed(_) if self.screen == Screen::Online && v.finding > 0 => v.finding = 0,
             Event::Failed(s) => {
-                v.status = s;
+                v.status = crate::update::refused(s);
                 v.fail = Some(match v.go {
                     _ if v.finding > 0 => "Couldn't search for lobbies",
                     Some(Go::Host) if v.pick_next => "Couldn't create the lobby",
