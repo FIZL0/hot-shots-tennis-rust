@@ -393,10 +393,10 @@ fn side_panel(d: &mut Draw, m: &Menu, r: &Room, g: &Geo, items: &[Item], on: &dy
     let ph = h - 34.0;
     let pic = [x + 3.0, y + 3.0, w - 6.0, ph];
     let first = d.out.len();
-    super::super::court_picture(d, court, pic);
+    super::super::court_picture(d, m.court_layout(court), pic);
     let rr = 12.0 * 11.0 / 16.0 - (3.0 - 12.0 * 4.0 / 16.0);
     d.out[first..].iter_mut().filter(|q| q.dst == pic).for_each(|q| q.round = [rr, rr, 0.0, 0.0]);
-    let name = if court == super::super::COURTS { "Random".to_string() } else { text.msg(276 + 2 * court).to_string() };
+    let name = m.room_court_name(text, r, m.net.hosting);
     let ny = y + 3.0 + ph + 3.0;
     d.text("COURT", x + 9.0, ny, 7.0, CAPTION);
     let change = at(Item::Set(0)).map(|_| "OK: change");

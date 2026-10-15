@@ -154,7 +154,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
     let (mut umpire, mut sets, mut games, mut pads, mut upscale) = (4, 1, 4, None, true);
     let mut roster = None;
     let (mut umpire_given, mut umpire_mod, mut umpire_mod_id) = (false, None, None);
-    let mut court_mod = None::<String>;
+    let (mut court_mod, mut court_mod_id) = (None::<String>, None::<String>);
     while let Some(x) = a.next() {
         match x.as_str() {
             "--shot" => shot = a.next(),
@@ -210,6 +210,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--umpire-mod" => umpire_mod = a.next(),
             "--umpire-mod-id" => umpire_mod_id = a.next(),
             "--court-mod" => court_mod = a.next(),
+            "--court-mod-id" => court_mod_id = a.next(),
             "--sets" => sets = a.next().and_then(|r| r.parse().ok()).unwrap_or(sets),
             "--games" => games = a.next().and_then(|r| r.parse().ok()).unwrap_or(games),
             "--pads" => {
@@ -274,7 +275,18 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
         umpire = u.donor;
     }
     // M8f6: a court mod plays on its layout court (`--stage`/`--court` default to it)
-    let court_mod = court_mod.and_then(|d| mods_court::read(d.as_ref()).map_err(|e| warn!("{e}")).ok());
+    let court_mod = match (court_mod, court_mod_id) {
+        (Some(dir), _) => mods_court::read(dir.as_ref()).map_err(|e| warn!("{e}")).ok(),
+        // M8f8: an online room's, by id; not installed (or another layout) → the disc court the room plays on
+        (None, Some(id)) => {
+            let found = mods_court::find(&play::main_menu::Settings::path(&iso).with_file_name("mods"), &id).filter(|c| stage.is_none_or(|s| s == c.layout as u32 + 1));
+            if found.is_none() {
+                info!("court mod {id} not installed: the disc court is played");
+            }
+            found
+        }
+        (None, None) => None,
+    };
     if let Some(c) = &court_mod {
         stage = stage.or(Some(c.layout as u32 + 1));
         if court == 0 {
@@ -1508,6 +1520,26 @@ mod tests {
         let c = cli(&["--court-mod", &d]);
         assert_eq!((c.args.stage, c.court_mod.is_none()), (None, true));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M8f8: an online room's `--court-mod-id` is looked up under `mods/` beside the disc: installed, it's drawn over
+    /// the room's layout court; not installed (or on another layout here), the disc court plays as the room says.
+    #[test]
+    fn court_mod_id_flags() {
+        let root = std::env::temp_dir().join(format!("hst-court-id-{}", std::process::id()));
+        let dir = root.join("mods/pack/c");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"court","id":"c","name":"C","layout":4}"#).unwrap();
+        std::fs::write(dir.join("court.glb"), b"x").unwrap();
+        let iso = root.join("x.iso").display().to_string();
+        let cli = |f: &[&str]| parse([iso.as_str(), "--play"].iter().chain(f).map(|s| s.to_string()));
+        let c = cli(&["--stage", "5", "--court", "5", "--court-mod-id", "c"]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.map(|c| c.id)), (Some(5), 5, Some("c".into())));
+        let c = cli(&["--stage", "5", "--court", "5", "--court-mod-id", "not-installed-anywhere"]);
+        assert_eq!((c.args.stage, c.args.court, c.court_mod.is_none()), (Some(5), 5, true));
+        let c = cli(&["--stage", "2", "--court", "2", "--court-mod-id", "c"]);
+        assert_eq!((c.args.stage, c.court_mod.is_none()), (Some(2), true), "another layout here: the room's court");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

@@ -1,14 +1,16 @@
 //! M8f6: court mods on the court select, after the disc eleven (`crate::mods_court`). A pick's value past Random
 //! (`COURTS`) is mod `value - COURTS - 1` of `Menu::court_mods`; the match plays on its layout court (`--stage`,
-//! `--court`: collision, judging, the chair) and draws and sounds the mod (`--court-mod DIR`). Online rooms don't
-//! carry court mods yet (M8f8): the strip leaves them out there and a pick plays its layout.
+//! `--court`: collision, judging, the chair) and draws and sounds the mod (`--court-mod DIR`). Online (M8f8) the room
+//! carries the layout as its court and the mod's id and name (`Room::court_mod`): a peer with it installed draws it
+//! (`--court-mod-id`), one without plays the layout's disc court. A vanilla lobby's strip leaves them out.
 
 use super::{COURTS, Menu, Text};
 use crate::mods_court::Court;
 
-/// The court mods' values on the select's strip, after the disc eleven (none online).
+/// The court mods' values on the select's strip, after the disc eleven (none in a vanilla lobby).
 pub(super) fn values(m: &Menu) -> impl Iterator<Item = usize> {
-    let n = if m.online() { 0 } else { m.court_mods.len() };
+    let vanilla = m.online() && m.net.room.as_ref().is_some_and(|r| r.vanilla);
+    let n = if vanilla { 0 } else { m.court_mods.len() };
     COURTS + 1..COURTS + 1 + n
 }
 
@@ -55,6 +57,19 @@ impl Menu {
     /// The picked court's mod flags for the match (`--court-mod DIR`), if it's a mod.
     pub(super) fn court_mod_flags(&self) -> Vec<String> {
         self.court_mod_of(self.court).map(|x| vec!["--court-mod".to_string(), x.dir.display().to_string()]).unwrap_or_default()
+    }
+
+    /// M8f8: the court card's name for online room `r`: the host's own pick, a guest's the room's mod when it's
+    /// installed here (its id), else the layout's disc court.
+    pub(super) fn room_court_name(&self, text: &Text, r: &crate::net::Room, hosting: bool) -> String {
+        if hosting {
+            return if self.court == COURTS { "Random".into() } else { self.court_lines(text, self.court)[0].clone() };
+        }
+        match r.court_mod.as_ref().filter(|_| !r.vanilla).and_then(|(id, _)| self.court_mods.iter().find(|x| x.id == *id)) {
+            Some(x) => x.name.clone(),
+            None if r.court < COURTS => text.msg(276 + 2 * r.court).to_string(),
+            None => "Random".into(),
+        }
     }
 
     /// A pick past the installed mods (one taken away since): Random.
@@ -123,6 +138,44 @@ mod tests {
         m.court_mods.pop();
         m.court_in_range();
         assert_eq!(m.court, COURTS);
+    }
+
+    /// M8f8: online, the host's strip has the court mods (none in a vanilla lobby); its Start sends the mod's layout
+    /// as the room's court and the mod's id and name alongside; a guest's court card names the mod only when it has it
+    /// installed, else the layout's disc court it will play on.
+    #[test]
+    fn online_rooms_carry_the_court_mod() {
+        use super::super::online::{Fx, Go};
+        use crate::net::{Cmd, Room};
+        let court = |n: u8, layout| crate::mods_court::Court { dir: format!("mods/gag_c{n:02}").into(), id: format!("gag_c{n:02}"), name: format!("Court {n:02}"), source: "Get a Grip".into(), layout, light: None, sky: false, gimmick: false, bgm: None, ambience: Vec::new(), lens_flare: None };
+        let mut m = Menu { screen: Screen::Lobby, court: COURTS + 2, court_mods: vec![court(1, 5), court(3, 9)], ..default() };
+        m.sel = 1;
+        m.net.go = Some(Go::Host);
+        m.net.hosting = true;
+        m.net.room = Some(Room::default());
+        assert_eq!(strip_order(&m).len(), 1 + STRIP.len() + 2, "the mods online");
+        let mut fx = Vec::new();
+        m.online_host(&mut fx);
+        assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Venue(9, ..))))), "{fx:?}");
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::CourtMod(Some(("gag_c03".into(), "Court 03".into())))))), "{fx:?}");
+        m.court = 3;
+        let mut fx = Vec::new();
+        m.online_host(&mut fx);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::CourtMod(None)))), "a disc court: no mod");
+        m.net.room.as_mut().unwrap().vanilla = true;
+        m.sel = 1;
+        assert_eq!(strip_order(&m).len(), 1 + STRIP.len(), "a vanilla lobby: none");
+        // a guest: the room's mod by name if it's installed here, else its layout's disc name
+        let t = Text { msg: (0..300).map(|i| format!("msg{i}")).collect(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
+        let mut r = Room { court: 9, court_mod: Some(("gag_c03".into(), "Court 03".into())), ..default() };
+        assert_eq!(m.room_court_name(&t, &r, false), "Court 03");
+        r.court_mod = Some(("gag_c99".into(), "Court 99".into()));
+        assert_eq!(m.room_court_name(&t, &r, false), "msg294", "not installed: the layout");
+        r.court_mod = Some(("gag_c03".into(), "Court 03".into()));
+        r.vanilla = true;
+        assert_eq!(m.room_court_name(&t, &r, false), "msg294", "vanilla: the layout");
+        m.court = COURTS + 1;
+        assert_eq!(m.room_court_name(&t, &r, true), "Court 01", "the host's own pick");
     }
 
     /// M8f6: the court select with a hundred court mods (long names) at every aspect: the strip scrolls (at most

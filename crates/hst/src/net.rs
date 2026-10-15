@@ -221,6 +221,11 @@ pub struct Room {
     /// vanilla lobby (`netplay::flags`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub umpire_mod: Option<(String, String)>,
+    /// M8f8: the host's court mod (id, name); `court` is its layout court, the one the match plays on every peer
+    /// (collision, judging, the chair). A peer with the mod installed draws and hears it (`--court-mod-id`), one
+    /// without plays the plain disc court. None in a vanilla lobby (`netplay::flags`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub court_mod: Option<(String, String)>,
     /// Set by the host at the start (M2g): the match's seed (the weather generator's, `main.rs`) and the input delay
     /// in ticks, from the slowest guest's measured round trip.
     #[serde(default)]
@@ -764,6 +769,8 @@ pub enum Cmd {
     Venue(usize, usize, i32, u8),
     /// M8f3: the host's umpire mod (id, name) alongside `Venue`'s umpire (its donor), or none.
     UmpireMod(Option<(String, String)>),
+    /// M8f8: the host's court mod (id, name) alongside `Venue`'s court (its layout), or none.
+    CourtMod(Option<(String, String)>),
     /// B201: this machine's players' places on the select; the host's computer player in a seat (`None` opens it);
     /// the host's singles (false) or doubles.
     Live(Vec<Live>),
@@ -1809,6 +1816,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     cx.say(Event::Room(room.clone()));
                     dirty = true;
                 }
+                Some(Cmd::CourtMod(c)) if starting.is_none() && c != room.court_mod => {
+                    room.court_mod = c;
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                    dirty = true;
+                }
                 Some(Cmd::Kick(peer)) => {
                     if let Some((_, l, c)) = joined.iter().find(|(p, ..)| *p == peer) {
                         refuse(l, c.clone(), "the host took you out of the lobby".into());
@@ -2798,7 +2811,9 @@ mod tests {
             hcmd.send(Cmd::Bot(2, Some(Pick::disc(9, 4)))).unwrap();
             hcmd.send(Cmd::Bot(1, None)).unwrap();
             hcmd.send(Cmd::Venue(5, 1, 4, 2)).unwrap();
-            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 5)).await else { unreachable!() };
+            // M8f8: the host's court mod rides along with its layout court
+            hcmd.send(Cmd::CourtMod(Some(("gag_c01_yamate".into(), "Yamate".into())))).unwrap();
+            let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 5 && r.court_mod.is_some())).await else { unreachable!() };
             assert_eq!(seen.seats[2].as_ref().map(|s| (s.human(), s.pick.char, s.pick.costume)), Some((false, 9, 4)));
             assert_eq!(seen.seats[1].as_ref().map(|s| s.peer.as_str()), Some(me.as_str()), "the guest's seat isn't the host's to clear");
             assert_eq!(seen.live_of(0).map(|l| l.char), Some(2));
@@ -2809,6 +2824,7 @@ mod tests {
             let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             let seats: Vec<_> = r.seats.iter().flatten().map(|s| (s.pick.char, s.pick.costume)).collect();
             assert_eq!(seats[..3], [(0, 0), (6, 3), (9, 4)], "the match has the lobby's picks and the host's computer player");
+            assert_eq!((r.court, r.court_mod), (5, Some(("gag_c01_yamate".into(), "Yamate".into()))));
         });
     }
 

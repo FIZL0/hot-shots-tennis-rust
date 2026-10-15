@@ -20,3 +20,5 @@ One README per task; iterations below, newest last.
 - `5-GAG-ADDITIVE-FINAL.md` — M8f5a1 done: GaG's additive flag (texture record +0x24 bit 0) checked over all
   2558 court records; flagged materials export as `@add` (HST-MODS 27c618f), yamate's black octagon is now sun
   dapples. c17's black bars come from a gimmick → M8f5a2.
+- `6-ONLINE-COURTS-FINAL.md` — M8f8 done: rooms carry the court mod (id, name) over its layout court;
+  `--court-mod-id` draws it where installed, else the disc court plays; host's strip lists mods online.
