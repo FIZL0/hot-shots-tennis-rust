@@ -54,6 +54,9 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
   rendering still need PCSX2 recordings.
 - `CAPTURE FAILED` from any PINE tool means the output file is incomplete: fix PCSX2, re-record.
 - Wrap-up is one call, no subagent: `tools/done.sh <ID> "<msg>"` (tests, tick, commit) or `… --blocked "<why>"`.
+  In the main checkout (shared with other sessions) add `-- <paths you changed>`; it commits only those + plan/.
+  A hook blocks `git add -A/./-u` and `git commit -a` there: stage and commit your own paths
+  (`git commit -m … -- <paths>`). Bigger ad-hoc work: `git worktree add ../opentennis-<slug>`, merge when done.
   The `chore` subagent is only for bigger mechanical jobs (checking a capture, reformatting).
 
 ## Controlling the game

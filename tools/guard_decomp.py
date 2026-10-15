@@ -26,6 +26,18 @@ if t.get('tool_name') == 'Bash' and (re.search(r'/tasks/\w+\.output', cmd) or TE
     sys.exit(print('Don\'t poll a background task or test run: end your turn now (say what you are waiting for); its '
                    'completion notification wakes you and the runner keeps the session alive meanwhile. Run '
                    'tools/check.sh / tools/done.sh in the foreground: they get a 60 min timeout.', file=sys.stderr) or 2)
+# main checkout: several sessions edit it at once, so sweeping commits (add -A/./-u, commit -a) take the others' edits
+# (worktrees -- runner slots -- are exempt: their .git dir differs from the common one)
+SWEEP = re.compile(r'\bgit\b[^;&|]*\badd\b[^;&|]*\s(-A|--all|-u|--update|\.|:/)(?=\s|$|[;&|)])'
+                   r'|\bgit\b[^;&|]*\bcommit\b[^;&|]*\s(-[a-zA-Z]*a[a-zA-Z]*|--all)(?=\s|$|[;&|)])')
+if t.get('tool_name') == 'Bash' and SWEEP.search(cmd):
+    import subprocess
+    d = [subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=t.get('cwd') or ROOT, capture_output=True,
+                        text=True).stdout.strip() for f in ('--git-dir', '--git-common-dir')]
+    if d[0] and d[0] == d[1]:
+        sys.exit(print('Main checkout is shared with other sessions: stage and commit only your own paths '
+                       '(git add <paths>; git commit -m ... -- <paths>), never add -A/./-u or commit -a. '
+                       'Bigger work: git worktree add ../opentennis-<slug>.', file=sys.stderr) or 2)
 upd = {}
 if t.get('tool_name') == 'Bash' and TESTS.search(cmd) and not i.get('run_in_background'):
     upd['timeout'] = 3600000
