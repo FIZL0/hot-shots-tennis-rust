@@ -14,8 +14,7 @@ pub fn log_to_documents(docs: &std::path::Path) {
         unsafe { libc::dup2(f.as_raw_fd(), 2) };
     }
     // the frame-rate log (`main.rs` log_fps, log_assets; `graphics.rs` log_draws) every 5 s: the phone's only profiler
-    // SAFETY: first thing in main, before any other thread
-    unsafe { std::env::set_var("HST_FPS", "1") };
+    crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
     eprintln!("Hot Shots Tennis {} (build {})", env!("CARGO_PKG_VERSION"), option_env!("HST_BUILD").unwrap_or("?"));
     // a close with no log line and no crash report says nothing: these say which kind of end it was
     unsafe {

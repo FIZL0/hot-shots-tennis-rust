@@ -616,8 +616,8 @@ mod tests {
         }
         let hashes = |cache: bool| {
             NO_CACHE.store(!cache, std::sync::atomic::Ordering::Relaxed);
-            // SAFETY: only `Pads::slot_of` reads it; every player is a bot
-            unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+            // every player a bot
+            crate::play::AUTOPLAY.store(true, std::sync::atomic::Ordering::Relaxed);
             let mut app = App::new();
             app.add_plugins((MinimalPlugins, AssetPlugin::default()));
             app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
@@ -648,8 +648,8 @@ mod tests {
         if !std::path::Path::new(ISO).is_file() {
             return eprintln!("no ISO, skipped");
         }
-        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
-        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+        // every player a bot
+        crate::play::AUTOPLAY.store(true, std::sync::atomic::Ordering::Relaxed);
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();

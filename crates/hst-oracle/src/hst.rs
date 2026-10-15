@@ -19,15 +19,20 @@ pub fn addr(name: &str) -> u32 {
         .unwrap_or_else(|| panic!("{name} not in research/oracle.txt"))
 }
 
+/// `None` for a missing disc file or dump, said on stderr so a skipped test shows; with `HST_REQUIRE_DATA=1` (a run
+/// that must check against the game) it fails instead of passing quietly.
+fn missing<T>(what: &Path) -> Option<T> {
+    assert!(std::env::var_os("HST_REQUIRE_DATA").is_none(), "HST_REQUIRE_DATA: no {}", what.display());
+    eprintln!("skip: no {}", what.display());
+    None
+}
+
 /// The boot ELF and the GAME overlay (bytes, load address) from `context/iso/`, the disc checked to be the supported
 /// one; `None` without a disc.
 pub fn program() -> Option<(Vec<u8>, Vec<u8>, u32)> {
     let iso = root().join("context/iso");
-    let (cnf, boot, game) = (
-        std::fs::read(iso.join("SYSTEM.CNF")).ok()?,
-        std::fs::read(iso.join("SCUS_976.10")).ok()?,
-        std::fs::read(iso.join("ZZBIN/GAME.BIN")).ok()?,
-    );
+    let read = |f: &str| std::fs::read(iso.join(f)).ok().or_else(|| missing(&iso.join(f)));
+    let (cnf, boot, game) = (read("SYSTEM.CNF")?, read("SCUS_976.10")?, read("ZZBIN/GAME.BIN")?);
     hst_data::exe::Game::new(&cnf, &game).expect("supported disc");
     // the overlay header (checked just above) names its own load address
     let load = u32::from_le_bytes(game[8..12].try_into().unwrap());
@@ -50,7 +55,8 @@ impl HstEe for Ee {
     }
 
     fn from_ram(name: &str) -> Option<Self> {
-        let ram = std::fs::read(root().join("context/ram").join(name)).ok()?;
+        let path = root().join("context/ram").join(name);
+        let ram = std::fs::read(&path).ok().or_else(|| missing(&path))?;
         let (_, game, load) = program()?;
         let (at, n) = (load as usize + 0x100, 0x1000); // code, past the overlay header
         assert_eq!(ram[at..at + n], game[0x100..0x100 + n], "{name} holds a different GAME overlay");

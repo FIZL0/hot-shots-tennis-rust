@@ -113,8 +113,8 @@ mod tests {
     /// A bot singles match, Carol against mod `m` (set up as disc character `char`), after its first update.
     fn bot_match(m: &Mod, char: usize) -> App {
         use super::super::*;
-        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
-        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+        // every player a bot
+        crate::play::AUTOPLAY.store(true, std::sync::atomic::Ordering::Relaxed);
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();

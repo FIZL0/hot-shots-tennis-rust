@@ -4348,8 +4348,8 @@ mod tests {
             return eprintln!("no ISO, match half skipped");
         }
         let cli = crate::parse(std::iter::once(ISO.to_string()).chain(a));
-        // SAFETY: only `Pads::slot_of` reads it; every player is a bot
-        unsafe { std::env::set_var("HST_AUTOPLAY", "1") };
+        // every player a bot
+        crate::play::AUTOPLAY.store(true, std::sync::atomic::Ordering::Relaxed);
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();

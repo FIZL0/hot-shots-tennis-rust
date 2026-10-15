@@ -535,9 +535,13 @@ struct Pads {
     autoplay: bool,
 }
 
+/// `HST_AUTOPLAY` set from code: tests turn it on here, since changing the environment while other test threads
+/// read it is undefined behaviour.
+pub static AUTOPLAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 impl Default for Pads {
     fn default() -> Self {
-        Pads { slots: default(), connected: 0, seats: None, autoplay: std::env::var_os("HST_AUTOPLAY").is_some() }
+        Pads { slots: default(), connected: 0, seats: None, autoplay: AUTOPLAY.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("HST_AUTOPLAY").is_some() }
     }
 }
 

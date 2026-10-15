@@ -438,7 +438,7 @@ fn start(argv: Vec<String>) {
     if std::env::var_os("HST_SCENE_CENSUS").is_some() {
         app.add_plugins(scene_census::plugin);
     }
-    if std::env::var_os("HST_FPS").is_some() {
+    if crate::fps_log() {
         app.add_systems(Last, (log_fps, log_assets)).add_plugins(stall::plugin);
     }
     if std::env::var_os("HST_KEYS").is_some() {
@@ -1442,6 +1442,15 @@ fn fixed_eye(mut camera: Query<(&mut Transform, &mut Projection), With<Orbit>>, 
     if let Projection::Perspective(p) = &mut *proj {
         p.fov = 2.0 * (v[9] * 0.75f32.max(1.0 / aspect)).atan();
     }
+}
+
+/// The phone builds turn the frame-rate log on here: setting `HST_FPS` while the OS's own threads read the
+/// environment is undefined behaviour.
+pub static FPS_LOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `HST_FPS=1` or `FPS_LOG`.
+fn fps_log() -> bool {
+    FPS_LOG.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("HST_FPS").is_some()
 }
 
 /// `HST_FPS=1`: every 5 s, the frame rate and the slowest frame to stderr, and each frame over 33 ms as it happens

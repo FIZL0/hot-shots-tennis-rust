@@ -227,7 +227,7 @@ pub fn plugin(app: &mut App) {
         #[cfg(target_os = "ios")]
         r.add_systems(RenderGraph, (gpu_time::<false>.in_set(G::Begin), gpu_time::<true>.after(G::Render).before(G::Submit)));
     }
-    if std::env::var_os("HST_FPS").is_some() {
+    if crate::fps_log() {
         app.init_resource::<SplitLog>().add_systems(Last, (log_draws, log_split, |t: Res<Time<Real>>| NOW.store(t.elapsed_secs().to_bits(), Ordering::Relaxed)));
         if let Some(r) = app.get_sub_app_mut(bevy::render::RenderApp) {
             r.add_systems(bevy::render::Render, log_pipelines.in_set(bevy::render::RenderSystems::Cleanup));
