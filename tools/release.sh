@@ -42,6 +42,11 @@ if ! grep -qx "version = \"$version\"" crates/hst/Cargo.toml; then
     git commit -q -m "Release $tag" crates/hst/Cargo.toml Cargo.lock
 fi
 
+# M97: prompt/token/commit counts for the website and donate screen; the ledger keeps transcripts Claude Code deletes
+tools/dev_stats.py >/dev/null
+git add research/dev-stats.json web/stats.json
+git diff --cached --quiet || git commit -q -m "Dev stats for $tag" research/dev-stats.json web/stats.json
+
 HST_VERSION=$tag tools/build.sh all  # B374: update.rs compares this tag
 out=dist/release
 rm -rf "$out" && mkdir -p "$out"
