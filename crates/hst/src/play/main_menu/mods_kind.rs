@@ -1,9 +1,9 @@
 //! B373: the Mods pages' kind tabs (spec `plan/B372.md` § Kinds). A row under the page tabs, between the L2 / R2
 //! glyphs (keyboard 1 / 3, the keys over Q / E): Characters · Courts · Umpires · Texture packs, each with its count,
 //! the current one gold, and on the right how the kind behaves online. Every page (Browse, Installed, Upload, My
-//! uploads) lists only the chosen kind (`modstore::Meta::kind`; an installed mod is a character). The store carries
-//! characters only so far: the other tabs show what is coming and from which task (M5 texture packs, M8f courts and
-//! umpires) until those land.
+//! uploads) lists only the chosen kind (`modstore::Meta::kind`; an installed mod's from its `mod.json`). The store
+//! carries characters, courts and umpires (M8f9); the Texture packs tab shows what is coming and from which task (M5)
+//! until it lands.
 
 use super::{BROWN, CELL_FILL, Draw, GOLD, INK, WHITE, legend, pointer};
 use crate::modstore::Kind;
@@ -36,11 +36,10 @@ pub(super) fn online(k: Kind) -> &'static str {
 /// What a kind's tab says while the store doesn't carry it yet (None: it does).
 pub(super) fn coming(k: Kind) -> Option<&'static str> {
     match k {
-        Kind::Character => None,
+        Kind::Character | Kind::Court | Kind::Umpire => None,
         Kind::Textures | Kind::Other => {
             Some("Texture packs arrive with M5: until then, install packs by hand in mods/texture-replacements/.")
         }
-        Kind::Court | Kind::Umpire => Some("Courts and umpires arrive with M8f."),
     }
 }
 
@@ -109,7 +108,8 @@ pub(super) fn empty(d: &mut Draw, k: Kind, [x, y, w, h]: [f32; 4]) {
 mod tests {
     use super::*;
 
-    /// L2 / R2 go round the four tabs; only characters are in the store yet, the rest name the task that brings them.
+    /// L2 / R2 go round the four tabs; characters, courts and umpires are in the store (M8f9), texture packs name
+    /// the task that brings them.
     #[test]
     fn tabs_go_round_and_say_what_is_coming() {
         let mut k = Kind::Character;
@@ -121,9 +121,8 @@ mod tests {
         assert_eq!(seen, [Kind::Court, Kind::Umpire, Kind::Textures, Kind::Character]);
         assert_eq!(step(Kind::Character, true), Kind::Textures);
         assert_eq!(step(Kind::Other, false), Kind::Court);
-        assert!(coming(Kind::Character).is_none());
+        assert!([Kind::Character, Kind::Court, Kind::Umpire].iter().all(|k| coming(*k).is_none()));
         assert!(coming(Kind::Textures).unwrap().contains("M5") && coming(Kind::Textures).unwrap().contains("mods/texture-replacements/"));
-        assert!(coming(Kind::Court).unwrap().contains("M8f") && coming(Kind::Umpire).unwrap().contains("M8f"));
         assert!(KINDS.iter().all(|k| online(*k).starts_with("Online: ")));
     }
 }

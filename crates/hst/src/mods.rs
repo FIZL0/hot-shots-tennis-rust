@@ -184,6 +184,46 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     })
 }
 
+/// M8f9: the mod in `dir` of any kind this build plays, read and checked as its kind (`read`, `mods_court::read`,
+/// `mods_umpire::read`), as the [`Mod`] the Mods pages, Install and Upload handle: a court or umpire mod is its folder,
+/// id, name and game, with no costumes (its donor stays 0: what it plays as is in its own manifest). A kind this build
+/// doesn't know is refused.
+pub fn read_any(dir: &Path) -> Result<Mod, String> {
+    let bare = |id: String, name: String, source: String| Mod {
+        dir: dir.to_path_buf(),
+        id,
+        name,
+        source,
+        costumes: Vec::new(),
+        donor: 0,
+        hand: 1.0,
+        base: 0,
+        overrides: Vec::new(),
+        ai_row: 0,
+        texture_face: false,
+        no_face: true,
+        voice: String::new(),
+        motions: None,
+        costume_of: None,
+        skeleton: None,
+    };
+    match Kind::of_dir(dir) {
+        Kind::Character => read(dir),
+        Kind::Court => crate::mods_court::read(dir).map(|c| bare(c.id, c.name, c.source)),
+        Kind::Umpire => crate::mods_umpire::read(dir).map(|u| bare(u.id, u.name, u.source)),
+        k @ Kind::Other(_) => Err(format!("{}: `kind` is {k}: not a kind this game plays", dir.join("mod.json").display())),
+    }
+}
+
+/// Every mod of `kind` under `root` ([`read_any`], `dirs`' order; characters as [`list`] has them); a broken one is
+/// left out with its reason logged.
+pub fn list_kind(root: &Path, kind: &Kind) -> Vec<Mod> {
+    if *kind == Kind::Character {
+        return list(root);
+    }
+    dirs(root).iter().filter(|d| Kind::of_dir(d) == *kind).filter_map(|d| read_any(d).map_err(|e| warn!("{e}")).ok()).collect()
+}
+
 /// A `source` up to its platform tag: "Hot Shots Golf Fore! (PS2) pc03" → "Hot Shots Golf Fore!".
 fn game(source: &str) -> String {
     source.split(" (").next().unwrap_or("").trim().to_string()

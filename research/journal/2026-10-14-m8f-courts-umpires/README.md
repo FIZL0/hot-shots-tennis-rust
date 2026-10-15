@@ -29,3 +29,6 @@ One README per task; iterations below, newest last.
   (HST-MODS d22e1cc). c05's basket goals have the same cause → M8f5a3.
 - `6-ONLINE-COURTS-FINAL.md` — M8f8 done: rooms carry the court mod (id, name) over its layout court;
   `--court-mod-id` draws it where installed, else the disc court plays; host's strip lists mods online.
+- `6-STORE-FINAL.md` — M8f9 done: court and umpire mods upload, list (Courts / Umpires tabs) and install with
+  `kind` in `meta.json` (`mods::read_any`); umpire heads on the Mods pages (B400). The parent still waits on M8f7
+  (NPCs), M8f8 and M8f10.

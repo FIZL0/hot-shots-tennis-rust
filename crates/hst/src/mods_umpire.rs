@@ -81,6 +81,19 @@ pub fn bank(disc: &SoundBank, u: &Umpire) -> SoundBank {
     bank
 }
 
+/// B400: the square round a seated umpire's head (in `previews/umpire.png`), in its pixels: as wide as 0.36 of the
+/// figure's height, from just over its top, centred on what's drawn in its top fifth (the head and hat). None for a
+/// picture with nothing drawn.
+pub fn head(img: &image::RgbaImage) -> Option<[f32; 4]> {
+    let solid: Vec<(u32, u32)> = img.enumerate_pixels().filter(|p| p.2[3] > 127).map(|p| (p.0, p.1)).collect();
+    let (top, foot) = (solid.iter().map(|p| p.1).min()?, solid.iter().map(|p| p.1).max()?);
+    let tall = (foot - top + 1) as f32;
+    let crown: Vec<f32> = solid.iter().filter(|p| ((p.1 - top) as f32) < 0.2 * tall).map(|p| p.0 as f32 + 0.5).collect();
+    let cx = crown.iter().sum::<f32>() / crown.len() as f32;
+    let s = 0.36 * tall;
+    Some([cx - s / 2.0, top as f32 - 0.05 * s, s, s])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

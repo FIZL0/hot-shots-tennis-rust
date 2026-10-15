@@ -86,6 +86,16 @@ impl Kind {
     pub fn is_character(&self) -> bool {
         *self == Kind::Character
     }
+
+    /// M8f9: the store's word for a `mod.json`'s kind (`mods::Kind`).
+    pub fn of(k: &crate::mods::Kind) -> Kind {
+        match k {
+            crate::mods::Kind::Character => Kind::Character,
+            crate::mods::Kind::Court => Kind::Court,
+            crate::mods::Kind::Umpire => Kind::Umpire,
+            crate::mods::Kind::Other(_) => Kind::Other,
+        }
+    }
 }
 
 /// One mod in the store.
@@ -753,6 +763,9 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, Stri
         return Err("too big for the store (1 GB unpacked at most)".into());
     }
     let j: serde_json::Value = files.iter().find(|f| f.0 == "mod.json").and_then(|f| serde_json::from_slice(&f.1).ok()).unwrap_or_default();
+    // M8f9: a court or umpire goes up with its kind and none of a character's card facts
+    let kind = Kind::of(&crate::mods::Kind::of(&j));
+    let player = kind == Kind::Character;
     let meta = Meta {
         id: m.id.clone(),
         name: plain_text(&m.name, 40),
@@ -762,15 +775,44 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, Stri
         size: zip.len() as u64,
         sha256: sha256(&zip),
         skeleton: j["standard"].as_u64().unwrap_or(1) as u32,
-        style: stats.map(|s| s.0 as u8),
-        grades: stats.map(|s| s.1),
-        hand: Some(if m.hand < 0.0 { -1 } else { 1 }),
-        costumes: Some(m.costumes.len() as u32),
-        like: Some(m.donor as u8),
-        kind: Kind::Character,
+        style: stats.filter(|_| player).map(|s| s.0 as u8),
+        grades: stats.filter(|_| player).map(|s| s.1),
+        hand: player.then_some(if m.hand < 0.0 { -1 } else { 1 }),
+        costumes: player.then_some(m.costumes.len() as u32),
+        like: player.then_some(m.donor as u8),
+        kind,
     };
-    let preview = files.iter().find(|f| f.0.starts_with("previews/") && f.0.ends_with(".png")).map(|f| f.1.clone());
+    let preview = preview_of(&files, kind);
     Ok(Package { zip, meta, preview })
+}
+
+/// M8f9: an upload's `preview.png` among its `files`: an umpire's `previews/umpire.png` (the standard's §3 picture,
+/// B400), a court's `previews/court.png`; else (and a character's) its first picture under `previews/`.
+fn preview_of(files: &[(String, Vec<u8>)], kind: Kind) -> Option<Vec<u8>> {
+    let own = match kind {
+        Kind::Umpire => Some("previews/umpire.png"),
+        Kind::Court => Some("previews/court.png"),
+        _ => None,
+    };
+    own.and_then(|n| files.iter().find(|f| f.0 == n)).or_else(|| files.iter().find(|f| f.0.starts_with("previews/") && f.0.ends_with(".png"))).map(|f| f.1.clone())
+}
+
+/// M8f9/B400: an umpire picture's head square (`mods_umpire::head`) as its own PNG, transparent where the square
+/// runs past the picture; None when it isn't a picture of anyone.
+fn head_of(png: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
+    let [x, y, s, _] = crate::mods_umpire::head(&img)?;
+    let (x, y, n) = (x.round() as i64, y.round() as i64, (s.round() as u32).max(1));
+    let mut out = image::RgbaImage::new(n, n);
+    for (ox, oy, p) in out.enumerate_pixels_mut() {
+        let (sx, sy) = (x + ox as i64, y + oy as i64);
+        if (0..img.width() as i64).contains(&sx) && (0..img.height() as i64).contains(&sy) {
+            *p = *img.get_pixel(sx as u32, sy as u32);
+        }
+    }
+    let mut b = Vec::new();
+    out.write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).ok()?;
+    Some(b)
 }
 
 /// The signed-in account: its name and token.
@@ -884,8 +926,10 @@ async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>,
     let dir = format!("mods/{}", m.id);
     let mut files = vec![(format!("{dir}/mod.zip"), p.zip), (format!("{dir}/meta.json"), serde_json::to_vec_pretty(&p.meta).unwrap())];
     if let Some(png) = p.preview.or(card).filter(|b| b.len() as u64 <= MAX_PREVIEW) {
-        // B372: Browse's tile picture, the preview small (Browse fetches it first)
-        if let Some(t) = shrink(&png, THUMB) {
+        // B372: Browse's tile picture, the preview small (Browse fetches it first); M8f9/B400: an umpire's is its
+        // head, as the umpire select's card has it
+        let tile = if p.meta.kind == Kind::Umpire { head_of(&png) } else { None };
+        if let Some(t) = shrink(tile.as_deref().unwrap_or(&png), THUMB) {
             files.push((format!("{dir}/thumb.png"), t));
         }
         files.push((format!("{dir}/preview.png"), png));
@@ -1184,6 +1228,62 @@ mod tests {
         assert!(!mod_files(&got.dir).unwrap().iter().any(|f| f.0 == "store.json"));
         assert_eq!(mod_files(&got.dir).unwrap().len(), mod_files(&m.dir).unwrap().len());
         std::fs::remove_dir_all(&disk).unwrap();
+    }
+
+    /// M8f9: an umpire mod (made here) and a court mod (the mods repo's smallest, when linked in) package with their
+    /// kind and none of a character's card facts, their own picture as the preview (an umpire's tile its head
+    /// square), then install from the zip as any mod does and list as their kind (what the court / umpire select
+    /// reads after Reload).
+    #[test]
+    fn courts_and_umpires_go_up_and_come_down() {
+        let base = std::env::temp_dir().join(format!("hst-store-kinds-{}", std::process::id()));
+        let ump = base.join("src/gag_ump09");
+        std::fs::create_dir_all(ump.join("previews")).unwrap();
+        std::fs::write(ump.join("mod.json"), r#"{"standard":1,"kind":"umpire","id":"gag_ump09","name":"Nine","source":"Hot Shots Tennis: Get a Grip (PSP)","donor":2,"version":"1.1"}"#).unwrap();
+        // a 40×100 figure on a 60×120 picture, its head 16 wide on top
+        let mut img = image::RgbaImage::new(60, 120);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            if (10..30).contains(&y) && (22..38).contains(&x) || (30..110).contains(&y) && (10..50).contains(&x) {
+                *px = image::Rgba([200, 90, 40, 255]);
+            }
+        }
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        std::fs::write(ump.join("previews/umpire.png"), &png).unwrap();
+        std::fs::write(ump.join("previews/other.png"), &png[..]).unwrap();
+        let mut srcs = vec![(ump, crate::mods::Kind::Umpire, Some("previews/umpire.png"))];
+        let hst = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods");
+        let court = std::fs::read_dir(hst).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| crate::mods::Kind::of_dir(p) == crate::mods::Kind::Court).min_by_key(|p| walk_len(p));
+        match court {
+            Some(c) => srcs.push((c, crate::mods::Kind::Court, Some("previews/court.png"))),
+            None => eprintln!("no court mods in {hst} (the court half skipped)"),
+        }
+        for (src, kind, pic) in srcs {
+            let m = crate::mods::read_any(&src).unwrap();
+            let p = package(&m, Some((2, [1, 2, 3, 4, 5]))).unwrap();
+            assert_eq!(p.meta.kind, Kind::of(&kind));
+            assert_eq!((p.meta.style, p.meta.grades, p.meta.hand, p.meta.costumes, p.meta.like), (None, None, None, None, None), "{}", m.id);
+            let j = serde_json::to_string(&p.meta).unwrap();
+            assert_eq!(meta_of(j.as_bytes(), &m.id).unwrap(), p.meta);
+            if let Some(f) = pic.filter(|f| src.join(f).is_file()) {
+                assert_eq!(p.preview.as_deref(), Some(&std::fs::read(src.join(f)).unwrap()[..]), "{}", m.id);
+            }
+            let root = base.join("mods");
+            let got = modfs::install(&p.zip, &root).unwrap();
+            assert_eq!((got.id.as_str(), crate::mods::Kind::of_dir(&got.dir)), (m.id.as_str(), kind.clone()));
+            match kind {
+                crate::mods::Kind::Umpire => assert_eq!(crate::mods_umpire::list(&root).iter().map(|u| (u.id.as_str(), u.donor)).collect::<Vec<_>>(), [("gag_ump09", 2)]),
+                _ => assert_eq!(crate::mods_court::list(&root).iter().map(|c| c.id.clone()).collect::<Vec<_>>(), [m.id.clone()]),
+            }
+            // not a character: the roster leaves it out
+            assert!(crate::mods::list(&root).is_empty());
+            assert_eq!(crate::mods::list_kind(&root, &kind).len(), 1);
+        }
+        // the umpire's tile: its head's square (0.36 of 100 tall, from just over its top), transparent past the top
+        let head = image::load_from_memory(&head_of(&png).unwrap()).unwrap().into_rgba8();
+        assert_eq!(head.dimensions(), (36, 36));
+        assert_eq!((head.get_pixel(18, 0)[3], head.get_pixel(18, 10)[3], head.get_pixel(1, 10)[3]), (0, 255, 0));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// The real store answers (`HST_LIVE=1`): a listing comes back (empty while nobody has uploaded), and a mod

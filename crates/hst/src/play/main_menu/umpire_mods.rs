@@ -44,22 +44,10 @@ pub(super) fn load(mut menu: ResMut<Menu>, mut pics: ResMut<Pics>, mut images: R
 /// A picture's PNG: its [`Pic`] and image.
 fn decode(png: &[u8]) -> Option<(Pic, Image)> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
-    let face = head(&img)?;
+    let face = crate::mods_umpire::head(&img)?;
     let (w, h) = img.dimensions();
     let pic = Pic { size: [w as f32, h as f32], face };
     Some((pic, Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, img.into_raw(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)))
-}
-
-/// The square round a seated umpire's head: as wide as 0.36 of the figure's height, from just over its top, centred
-/// on what's drawn in its top fifth (the head and hat). None for a picture with nothing drawn.
-fn head(img: &image::RgbaImage) -> Option<[f32; 4]> {
-    let solid: Vec<(u32, u32)> = img.enumerate_pixels().filter(|p| p.2[3] > 127).map(|p| (p.0, p.1)).collect();
-    let (top, foot) = (solid.iter().map(|p| p.1).min()?, solid.iter().map(|p| p.1).max()?);
-    let tall = (foot - top + 1) as f32;
-    let crown: Vec<f32> = solid.iter().filter(|p| ((p.1 - top) as f32) < 0.2 * tall).map(|p| p.0 as f32 + 0.5).collect();
-    let cx = crown.iter().sum::<f32>() / crown.len() as f32;
-    let s = 0.36 * tall;
-    Some([cx - s / 2.0, top as f32 - 0.05 * s, s, s])
 }
 
 /// B400: umpire mod `v`'s card on the strip in `r` when it has a picture: its head across the card (cut to the card's
@@ -103,6 +91,15 @@ pub(super) fn face(d: &mut Draw, m: &Menu, v: usize, [x, y]: [f32; 2], size: f32
     d.q(Tex::Umpire(i), pic.face, [x - r, y - r, 2.0 * r, 2.0 * r], WHITE, 128.0);
     d.out.last_mut().unwrap().round = [r; 4];
     true
+}
+
+/// M8f9/B400: installed umpire mod `dir`'s head (`Tex::Umpire` and its square), for the Mods pages' cards and
+/// tiles; None when it isn't an umpire mod the menu read at startup, or ships no picture.
+pub(super) fn face_of(m: &Menu, dir: &std::path::Path) -> Option<(Tex, [f32; 4])> {
+    // the menu's dirs keep `./mods`'s `./`, the Mods pages' drop it
+    let bare = |p: &std::path::Path| p.strip_prefix(".").unwrap_or(p).to_path_buf();
+    let i = m.umpire_mods.iter().position(|x| bare(&x.dir) == bare(dir))?;
+    Some((Tex::Umpire(i), (*m.umpire_pics.get(i)?)?.face))
 }
 
 /// Umpire value `v`'s mod index and picture, if it's a mod with one.

@@ -2487,6 +2487,10 @@ fn face_frame(d: &mut Draw, (tex, src): (Tex, [f32; 4]), x: f32, y: f32, size: f
         return d.q(tex, [u + (w - h) / 2.0, v, h, h], [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
     }
     d.q(tex, src, [x - f, y - f, 2.0 * f, 2.0 * f], tint, 128.0);
+    // M8f9/B400: an umpire mod's head is a square of its picture: clipped round
+    if matches!(tex, Tex::Umpire(_)) {
+        d.out.last_mut().unwrap().round = [f; 4];
+    }
 }
 
 impl Grid {
