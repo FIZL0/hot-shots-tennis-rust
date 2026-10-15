@@ -850,6 +850,20 @@ impl Menu {
         }
     }
 
+    /// B388: 1P's pad gone (unplugged or flat) leaves the screens only 1P drives stuck: the keyboard's first press
+    /// takes 1P over (from its own seat, which the missing pad gets instead, so plugged back in it drives that one), as
+    /// does a pad no seat holds.
+    fn takes_lost_1p(&mut self, dev: Dev, pads: &[Entity]) {
+        if !matches!(self.seats[0], Some(Dev::Pad(e)) if !pads.contains(&e)) {
+            return;
+        }
+        match (dev, self.seats.iter().position(|s| *s == Some(dev))) {
+            (Dev::Keys, Some(q)) => self.seats.swap(0, q),
+            (Dev::Keys | Dev::Pad(_), None) => self.seats[0] = Some(dev),
+            _ => {}
+        }
+    }
+
     /// B238: whether seat `p` has a device that ✕ may take off: not this machine's first (the menu's driver), except
     /// on the assignment screen while another device is seated, which then moves up into it (changing 1P).
     fn droppable(&self, p: usize) -> bool {
@@ -2993,6 +3007,10 @@ fn step(
         if k != Press::default() && touch_page() {
             menu.pad_takes_touch_seat(dev, &pads);
         }
+        // a click or tap is the keyboard's while 1P's pad is out (`pointer::device`)
+        if k != Press::default() || dev == pointed && !acts.is_empty() {
+            menu.takes_lost_1p(dev, &pads);
+        }
         let mut fx = Vec::new();
         if dev == pointed {
             for (a, tap) in std::mem::take(&mut acts) {
@@ -3518,6 +3536,32 @@ mod tests {
         assert!(!m.players[0].ready && !m.players[1].ready);
         m.step(pad, press(|p| &mut p.back));
         assert_eq!(m.screen, Screen::Main);
+    }
+
+    /// B388: 1P's pad unplugged on the select: the keyboard takes 1P over (from its 2P seat, which the pad gets back)
+    /// and backs out; with 1P's pad still in, the keyboard keeps its own seat.
+    #[test]
+    fn keyboard_takes_over_a_lost_1p() {
+        let [a, b] = [9, 10].map(|n| Entity::from_raw_u32(n).unwrap());
+        let pad = Dev::Pad(a);
+        let mut m = Menu::default();
+        m.step(pad, press(|p| &mut p.ok));
+        assert_eq!(m.seats[0], Some(pad));
+        m.takes_lost_1p(Dev::Keys, &[a]);
+        assert_eq!(m.seats[0], Some(pad), "1P's pad is in");
+        m.takes_lost_1p(Dev::Keys, &[]);
+        assert_eq!(m.seats, [Some(Dev::Keys), None, None, None]);
+        m.step(Dev::Keys, press(|p| &mut p.back));
+        assert_eq!(m.screen, Screen::Main);
+        // the keyboard seated as 2P trades seats; a seated pad never takes 1P, a spare one does
+        m.seats = [Some(pad), Some(Dev::Keys), Some(Dev::Pad(b)), None];
+        m.takes_lost_1p(Dev::Pad(b), &[b]);
+        assert_eq!(m.seats[0], Some(pad));
+        m.takes_lost_1p(Dev::Keys, &[b]);
+        assert_eq!(m.seats, [Some(Dev::Keys), Some(pad), Some(Dev::Pad(b)), None]);
+        m.seats = [Some(pad), None, None, None];
+        m.takes_lost_1p(Dev::Pad(b), &[b]);
+        assert_eq!(m.seats[0], Some(Dev::Pad(b)));
     }
 
     #[test]

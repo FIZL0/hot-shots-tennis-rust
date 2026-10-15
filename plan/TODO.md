@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B388** Keyboard can take over for player one when the controller disconnects: if P1's controller is disconnected, a keyboard should be able to take over P1 so the player can go back a menu and continue, instead of being stuck (user 2026-10-15) → crates/hst/src/play/controls.rs · crates/hst/src/play/menu.rs · crates/hst/src/play/main_menu.rs
 - [ ] **B387** Mod menu reload prompt can be dismissed with back, and has no reload after Later: when exiting the mod menu, pressing back should not dismiss the reload prompt; the player must press Later. Choosing Later should leave a reload button available in the mod menu, since after dismissing the prompt there is currently no way to reload (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu.rs · crates/hst/src/mods.rs
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:
 index out of bounds: the len is 0 but the index is 0"
