@@ -34,6 +34,14 @@ cat > "$app/Info.plist" <<EOF
 	<key>CFBundleIcons</key><dict><key>CFBundlePrimaryIcon</key><dict>
 		<key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array>
 	</dict></dict>
+	<key>UIApplicationSceneManifest</key><dict>
+		<key>UIApplicationSupportsMultipleScenes</key><false/>
+		<key>UISceneConfigurations</key><dict>
+			<key>UIWindowSceneSessionRoleApplication</key><array><dict>
+				<key>UISceneConfigurationName</key><string>Default</string>
+			</dict></array>
+		</dict>
+	</dict>
 	<key>UILaunchScreen</key><dict/>
 	<key>UIRequiresFullScreen</key><true/>
 	<key>UIStatusBarHidden</key><true/>

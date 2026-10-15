@@ -23,6 +23,16 @@ User 2026-10-14: the browser build runs poorly on an iPhone 13 Pro; wants a nati
 - `disc.rs`: data dir = `$HOME/Documents` on iOS; no import before the window (launch watchdog): runs from the pack
   if present, else straight from the first `*.iso` in Documents.
 
+## First device runs (iPhone 15 Pro, iOS 27.0.1)
+- Build 2006: black screen, closes. A folder the user makes in Files isn't the app's; iOS lists the app's own folder
+  only once the app has written a file there. Fix: `ios.rs` writes `Documents/hst-log.txt` (stderr, panics, the
+  engine's log through `LogPlugin::custom_layer`) every launch, and shows a "where the ISO goes" page instead of exiting.
+- Build 2007: the log reached Metal (A17 Pro) and stopped; the crash report (`hst-….ips`) is EXC_BREAKPOINT in
+  `_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption`: iOS 27 refuses apps without the UIScene lifecycle.
+  winit 0.30.13 (bevy 0.19's) has none. Fix: Info.plist `UIApplicationSceneManifest` (no delegate class) and
+  `third_party/winit` puts its windows in the scene (`window.rs` adopt_scene / scene_connected on
+  `UISceneWillConnectNotification`; Bevy makes its window before the scene connects). Waiting on the next device run.
+
 ## Not done / next
 - Input: gilrs has no iOS backend and the touch controls are `web/touch.js` (browser only), so the app reaches the
   menu but can't be driven. Next: a GameController-framework bridge (Xbox/PS/MFi pads), then native touch controls.
