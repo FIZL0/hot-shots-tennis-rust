@@ -480,9 +480,15 @@ struct Slot(usize);
 const POOL: usize = 80;
 
 pub fn plugin(app: &mut App) {
+    // the calls' material renders through the base app's `MaterialPlugin` (`main.rs`); headless tests only hold it
+    if !app.world().contains_resource::<Assets<crate::effects::OnTop>>() {
+        app.init_asset::<crate::effects::OnTop>();
+    }
     app.add_systems(PostStartup, (setup.after(super::setup), setup_calls))
         .add_systems(PostStartup, (setup_banners, setup_speed).after(setup))
         .add_systems(Update, (draw, draw_calls, draw_banners, draw_speed))
+        .add_systems(PostUpdate, follow_camera.before(bevy::transform::TransformSystems::Propagate))
+        .add_systems(PostUpdate, call_camera_on.after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(FixedUpdate, (tick_calls, tick_banners, tick_result, tick_speed).after(super::simulate))
         .add_systems(FixedUpdate, point_jingle.after(super::simulate))
         .init_resource::<ResultBanner>();
@@ -501,13 +507,27 @@ pub(super) const CALL_FOV_DEG: f32 = 25.0;
 pub(super) const CALL_DISTANCE: f32 = 10.0;
 const CALL_SCALE: f32 = 5.7;
 
-/// The camera drawing the call models over the match.
+/// The overlay camera on CALL_LAYER: the intro's GAME START and the prize screen's GAME SET banners (`OnCallCamera`).
 #[derive(Component)]
 struct CallCamera;
 
+/// A banner model's root the overlay camera draws: the camera only runs while one shows.
+#[derive(Component)]
+pub(super) struct OnCallCamera;
+
+/// The umpire's calls' space (P33): a child of the match camera, its view space scaled (x, y) so a call projects
+/// through the match camera's field of view as it did through the overlay camera's 50°. A second 3D camera over the
+/// match cost a phone 5–7 ms a frame (its own passes over the full-size MSAA HDR scene image); the calls' `OnTop`
+/// material draws them over the scene as that camera did.
+#[derive(Component)]
+struct CallSpace;
+
+/// The calls' blended draws sort after every scene draw (the landing markers' `markers::LAST` is 1e4).
+const CALL_SORT: f32 = 1e5;
+
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Calls {
-    models: Vec<(hst_sim::effect::Effect, crate::effects::Shown)>,
+    models: Vec<(hst_sim::effect::Effect, crate::effects::Shown<crate::effects::OnTop>)>,
     playing: Option<usize>,
     alpha: f32,
 }
@@ -517,7 +537,7 @@ fn setup_calls(
     mut commands: Commands,
     args: Res<Args>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<crate::effects::OnTop>>,
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
 ) {
@@ -525,20 +545,27 @@ fn setup_calls(
     let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
     let layer = bevy::camera::visibility::RenderLayers::layer(CALL_LAYER);
-    // game space (y down) → Bevy, as the court's root
-    let root = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)), Visibility::default())).id();
+    // game space (y down) → Bevy, in front of the camera as the overlay camera saw them
+    let space = commands.spawn((CallSpace, Transform::default(), Visibility::default())).id();
+    let root = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::PI)), Visibility::default(), ChildOf(space))).id();
     let models = CALL_MODELS.map(|name| {
         let (mut effect, shown) = crate::effects::model(&arc, &format!("azuma/inpane/mdl/{name}"), &mut commands, root, &mut meshes, &mut materials, &mut images, &mut bindposes)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         effect.hold = true;
         commands.entity(shown.root).insert(Transform::from_xyz(0.0, 0.0, CALL_DISTANCE).with_rotation(Quat::from_rotation_y(std::f32::consts::PI)).with_scale(Vec3::splat(CALL_SCALE)));
+        for h in &shown.materials {
+            if let Some(mut m) = materials.get_mut(h) {
+                m.base.depth_bias = CALL_SORT;
+            }
+        }
         (effect, shown)
     });
-    commands.entity(root).insert_recursive::<Children>(layer.clone());
+    // the sun sees the match camera's layer: the calls cast and take no shadow
+    commands.entity(root).insert_recursive::<Children>((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
     commands.spawn((
         CallCamera,
         Camera3d::default(),
-        Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
+        Camera { order: 1, is_active: false, clear_color: ClearColorConfig::None, ..default() },
         bevy::core_pipeline::tonemapping::Tonemapping::None,
         Projection::Perspective(PerspectiveProjection::default()),
         Transform::default(),
@@ -551,7 +578,16 @@ fn setup_calls(
 /// the change-ends phase just entered, else play the one on show a frame.
 fn tick_calls(mut g: ResMut<Game>, calls: Option<ResMut<Calls>>) {
     let Some(mut calls) = calls else { return };
-    let (model, start, alpha) = match (&g.phase, g.post.as_ref().and_then(|p| p.call().map(|c| (c, p.tick == 0)))) {
+    if let Some((k, f)) = forced_call() {
+        if calls.playing != Some(k) {
+            let effect = &mut calls.models[k].0;
+            effect.start();
+            (0..f).for_each(|_| effect.tick());
+            calls.playing = Some(k);
+        }
+        return;
+    }
+    let (model, start, alpha) =match (&g.phase, g.post.as_ref().and_then(|p| p.call().map(|c| (c, p.tick == 0)))) {
         (Phase::ChangeEnds(n), _) => (Some(CHANGE_SIDES), *n == hst_sim::flow::CHANGE_ENDS, 1.0),
         (_, Some((c, fresh))) => (Some(CALL_MODEL[c.call as usize]), fresh, c.alpha),
         _ => (None, false, 1.0),
@@ -571,25 +607,67 @@ fn tick_calls(mut g: ResMut<Game>, calls: Option<ResMut<Calls>>) {
     calls.playing = Some(k);
 }
 
+/// The calls' space follows the match camera: its child, the view's x and y scaled by the match camera's half-angle
+/// tangent over the overlay's (both widen alike for windows narrower than 4:3, `draw_calls`), z kept, so each call vertex
+/// lands on the same pixel and clips at the same near plane as through the overlay camera. Before the transforms
+/// propagate, after every camera writer (the match camera, the intro, cut-aways and replays run in `Update`).
+fn follow_camera(
+    mut commands: Commands,
+    calls: Option<Res<Calls>>,
+    window: Query<&Window>,
+    camera: Query<(Entity, &Projection), With<crate::Orbit>>,
+    mut space: Query<(Entity, &mut Transform, Option<&ChildOf>), With<CallSpace>>,
+) {
+    let (Some(calls), Ok((cam, proj)), Ok((e, mut t, parent))) = (calls, camera.single(), space.single_mut()) else { return };
+    if calls.playing.is_none() {
+        return;
+    }
+    if parent.is_none_or(|p| p.parent() != cam) {
+        commands.entity(cam).add_child(e);
+    }
+    let Projection::Perspective(p) = proj else { return };
+    let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::scene_aspect);
+    let k = (p.fov / 2.0).tan() / (CALL_FOV_DEG.to_radians().tan() * super::SHOWN_ASPECT.max(1.0 / aspect));
+    let scale = Vec3::new(k, k, 1.0);
+    if t.scale != scale {
+        t.scale = scale;
+    }
+}
+
+/// The overlay camera draws only while a banner of the intro or the prize screen shows: idle, it would still cost a
+/// second shadow pass, light clustering and GPU preprocessing every frame (P23). After visibility propagates, before
+/// the frame is drawn, so a banner's first frame shows.
+fn call_camera_on(banners: Query<&InheritedVisibility, With<OnCallCamera>>, mut cam: Query<&mut Camera, With<CallCamera>>) {
+    let on = banners.iter().any(|v| v.get());
+    if let Ok(mut c) = cam.single_mut()
+        && c.is_active != on
+    {
+        c.is_active = on;
+    }
+}
+
+/// `HST_CALL=k@f` (unattended `--shot` checks): call model k (`CALL_MODELS`) held on its frame f all match.
+fn forced_call() -> Option<(usize, usize)> {
+    static FORCED: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
+    *FORCED.get_or_init(|| {
+        let v = std::env::var("HST_CALL").ok()?;
+        let (k, f) = v.split_once('@')?;
+        Some((k.parse().ok().filter(|&k| k < CALL_MODELS.len())?, f.parse().ok()?))
+    })
+}
+
 /// Pose, morph and fade the model on show (hide the others); the overlay's projection follows the window as the
 /// match camera's does.
 fn draw_calls(
     calls: Option<Res<Calls>>,
     window: Query<&Window>,
-    mut cam: Query<(&mut Projection, &mut Camera), With<CallCamera>>,
+    mut cam: Query<&mut Projection, With<CallCamera>>,
     mut q: Query<(&mut Visibility, &mut bevy::mesh::morph::MorphWeights)>,
     mut joints: Query<&mut Transform>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<crate::effects::OnTop>>,
 ) {
     let Some(calls) = calls else { return };
-    // the overlay camera only draws while a call is on show: idle, it would still cost a second shadow pass,
-    // light clustering and GPU preprocessing every frame (P23)
-    if let Ok((_, mut c)) = cam.single_mut()
-        && c.is_active != calls.playing.is_some()
-    {
-        c.is_active = calls.playing.is_some();
-    }
-    if let Ok((mut proj, _)) = cam.single_mut()
+    if let Ok(mut proj) = cam.single_mut()
         && let Projection::Perspective(p) = &mut *proj
     {
         let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::scene_aspect);
@@ -601,7 +679,7 @@ fn draw_calls(
             // the scoreboard's fade scales every material's alpha
             for (h, a) in view.materials.iter().zip(&effect.alphas) {
                 if let Some(mut m) = materials.get_mut(h) {
-                    m.base_color.set_alpha(a * calls.alpha);
+                    m.base.base_color.set_alpha(a * calls.alpha);
                 }
             }
         } else if let Ok((mut v, _)) = q.get_mut(view.root) {

@@ -500,6 +500,7 @@ fn setup(
                 .expect("i_gameset_00");
             effect.hold = true;
             commands.entity(root).insert_recursive::<Children>(bevy::camera::visibility::RenderLayers::layer(popups::CALL_LAYER));
+            commands.entity(shown.root).insert(popups::OnCallCamera);
             commands.insert_resource(Banner(effect, shown));
         }
     }
