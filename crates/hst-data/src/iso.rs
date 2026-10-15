@@ -24,6 +24,9 @@ pub fn mount(path: impl AsRef<Path>, bytes: Arc<[u8]>) {
     MOUNTS.lock().unwrap().insert(path.as_ref().to_path_buf(), bytes);
 }
 
+/// Bytes read off discs and packs so far (any `Iso`): the frame profiler's disc share of a stall.
+pub static READ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub struct Iso {
     file: Box<dyn Source>,
     /// Upper-case path with `/` separators and no `;1` suffix -> (byte offset, size).
@@ -134,6 +137,7 @@ impl Iso {
     }
 
     fn read_at(&mut self, off: u64, len: usize) -> io::Result<Vec<u8>> {
+        READ.fetch_add(len as u64, std::sync::atomic::Ordering::Relaxed);
         let mut buf = vec![0; len];
         self.file.seek(SeekFrom::Start(off))?;
         self.file.read_exact(&mut buf)?;
