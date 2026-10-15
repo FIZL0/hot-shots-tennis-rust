@@ -441,9 +441,9 @@ pub(super) mod tests {
         let [x, y, w, h] = m.tile_rect(0, 6).unwrap();
         tap(&mut m, x + w / 2.0, y + h / 2.0);
         assert!(m.players[0].ready && m.players[0].cursor == 5);
-        let [x, y, w, h] = m.tile_rect(1, 10).unwrap();
+        let [x, y, w, h] = m.tile_rect(1, 4).unwrap();
         tap(&mut m, x + w / 2.0, y + h / 2.0);
-        assert!(m.players[1].ready && m.players[1].cursor == 9);
+        assert!(m.players[1].ready && m.players[1].cursor == 3);
         assert_eq!(m.screen, Screen::Confirm);
         // the court picker (B257: a pill grid): a pill hovers it, a tap off (the side card) puts it back, the hovered
         // pill again keeps it
