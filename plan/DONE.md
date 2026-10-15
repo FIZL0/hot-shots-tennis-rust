@@ -635,6 +635,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B409** Mobile browser freezes loading into a match: sometimes the page freezes for far too long when loading into a match on mobile (in the browser), and it may even crash; loading should not freeze or crash (user 2026-10-15) → crates/hst/src/loading.rs · crates/hst/src/stall.rs · crates/hst/src/web.rs — see B415 (user 2026-10-15: loading shows 'Not responding' on desktop, web and mobile)
 - [x] **B443** Rename "mods wishlist" to "saved mods": everywhere the UI calls it the mods wishlist, it should be called "saved mods" instead (user 2026-10-15) → crates/hst/src/play/main_menu/mods_screen.rs · crates/hst/src/play/main_menu/mods_screen/grid.rs · crates/hst/src/play/main_menu/mods_kind.rs
 - [x] **B442** Settings tab switch click and select volume: switching tabs in the settings screen should not play the loud click sound, and the select sound should be slightly quieter by default (user 2026-10-15) → crates/hst/src/play/main_menu/tabs.rs · crates/hst/src/audio.rs · crates/hst/src/play/main_menu/options.rs
+- [x] **B440** Rematch default selection: when returning to the menu after a match, "rematch" should not be selected by default; the default selection should be local (user 2026-10-15) → crates/hst/src/play/match_stats.rs · crates/hst/src/play/main_menu/home.rs · crates/hst/src/play/main_menu/cursor.rs
 
 
 ### Shots

@@ -7,7 +7,7 @@
 //! uniformly at any aspect ratio.
 
 use super::{
-    CARD_FILL, CHAR_NAMES, COURTS, Draw, GOLD, INK, Menu, SETS, Tex, Text, WHITE, Who, face_frame, legend, mods_screen, options, pointer,
+    CARD_FILL, CHAR_NAMES, COURTS, Draw, GOLD, INK, Menu, SETS, Screen, Tex, Text, WHITE, Who, face_frame, legend, mods_screen, options, pointer,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,6 +43,11 @@ impl Menu {
     /// Where `r` is on the main screen (Back from its pages lands there).
     pub(super) fn main_at(&self, r: Row) -> usize {
         self.main_rows().iter().position(|x| *x == r).unwrap_or(0)
+    }
+
+    /// Back from a match: the main screen on Local, not the Rematch card above it (B440, user 2026-10-15).
+    pub(super) fn after_match(&mut self) {
+        (self.screen, self.sel) = (Screen::Main, self.main_at(Row::Local));
     }
 
     /// The Rematch card's words: "Singles - Carol vs Kent", "Random Court - 1 set".
@@ -586,5 +591,14 @@ mod tests {
         assert_eq!(pw169, pw219);
         let s = store.expect("21:9 has the store column");
         assert!(x - 60.0 >= -extra(21.0 / 9.0) && s + STORE_W <= 640.0 + extra(21.0 / 9.0));
+    }
+
+    /// B440: a match comes back to the main screen with Local highlighted, the Rematch card one row up.
+    #[test]
+    fn a_match_comes_back_on_local() {
+        let mut m = Menu { screen: Screen::Playing, sel: 3, rematch: true, ..Default::default() };
+        m.after_match();
+        assert_eq!((m.screen, m.main_rows()[m.sel]), (Screen::Main, Row::Local));
+        assert_eq!(m.main_rows()[0], Row::Rematch);
     }
 }
