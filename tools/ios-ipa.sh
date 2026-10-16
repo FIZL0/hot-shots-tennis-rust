@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$(realpath -m "${1:-target/opentennis-ios.ipa}")
-HST_BUILD=$(git rev-list --count HEAD) tools/ios-build.sh build --release -p hst
+HST_BUILD=$(git rev-list --count HEAD) tools/ios-build.sh build --release -p hst --features ship
 stage=target/aarch64-apple-ios/ipa
 app=$stage/Payload/OpenTennis.app
 rm -rf target/aarch64-apple-ios/ipa

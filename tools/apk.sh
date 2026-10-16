@@ -16,7 +16,7 @@ for abi in ${HST_ABIS:-arm64-v8a}; do
     case $abi in arm64-v8a) t=aarch64-linux-android ;; x86_64) t=x86_64-linux-android ;; *) echo "unknown ABI $abi"; exit 2 ;; esac
     T_=${t//-/_}; cc=$T/${t}26-clang
     env "CARGO_TARGET_${T_^^}_LINKER=$cc" "CC_$T_=$cc" "CXX_$T_=$cc++" "AR_$T_=$T/llvm-ar" \
-        cargo build --release -p hst --example hst --features android --target $t
+        cargo build --release -p hst --example hst --features android,ship --target $t
     mkdir -p "$out/lib/$abi"
     "$T/llvm-strip" -o "$out/lib/$abi/libhst.so" target/$t/release/examples/libhst.so
 done

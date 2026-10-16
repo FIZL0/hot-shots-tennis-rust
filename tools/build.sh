@@ -28,7 +28,7 @@ linux() {
         -e HST_VERSION -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
         $sdk sh -ec '
             [ -x /cache/cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --no-modify-path
-            /cache/cargo/bin/cargo build --release -p hst'
+            /cache/cargo/bin/cargo build --release -p hst --features ship'
     rm -rf dist/linux && mkdir -p dist/linux  # the tarball is the whole folder: nothing stale in it
     strip -o dist/linux/opentennis target/steamrt/release/hst
     # the icon on Wayland/X11 docks (the window's app id is "opentennis"): opentennis.desktop into ~/.local/share/applications, opentennis.png into
@@ -52,7 +52,7 @@ windows() {
     fi
     # crt-static: no MinGW runtime DLLs to ship beside the .exe
     CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc RUSTFLAGS="-C target-feature=+crt-static" \
-        cargo build --release -p hst --target $t
+        cargo build --release -p hst --features ship --target $t
     rm -rf dist/windows && mkdir -p dist/windows
     x86_64-w64-mingw32-strip -o dist/windows/opentennis.exe target/$t/release/hst.exe
     echo "dist/windows/opentennis.exe"

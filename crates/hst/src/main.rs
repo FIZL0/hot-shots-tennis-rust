@@ -150,7 +150,10 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 sound = Some((xb, hd, program.parse().unwrap_or(0), key.parse().unwrap_or(0)));
             }
             "--dump-textures" => {
-                let mut iso_ = Iso::open(&iso).expect("open iso");
+                let Ok(mut iso_) = Iso::open(&iso) else {
+                    eprintln!("hst: can't open {iso}");
+                    std::process::exit(2);
+                };
                 let o = hst_data::texhash::Overrides::scan(std::path::Path::new(&iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()));
                 let n = o.dump(&mut iso_);
                 println!("wrote {n} disc textures to {} (upscale them into mods/texture-replacements)", o.root.join("mods/textures-src").display());
@@ -260,8 +263,27 @@ pub fn run() -> Result<(), wasm_bindgen::JsValue> {
     Ok(())
 }
 
+/// B492: a shipped build (`ship`) ignores the developers' `HST_*` variables (fixtures, stress runs, net traces, dumps, net
+/// lag/desync, key scripts…): dropped before anything reads them, so a stray one on a player's machine changes nothing.
+/// Kept: the ones for a player's own machine: the frame log, the menu input trace (`HST_TRACE`) and
+/// `docs/DEVELOPING.md`'s texture reload.
+#[cfg(not(target_arch = "wasm32"))]
+fn dev_env() {
+    const KEEP: [&str; 3] = ["HST_FPS", "HST_TRACE", "HST_TEXTURE_RELOAD"];
+    if !cfg!(feature = "ship") {
+        return;
+    }
+    for (k, _) in std::env::vars_os() {
+        if k.to_str().is_some_and(|k| k.starts_with("HST_") && !KEEP.contains(&k)) {
+            // SAFETY: first thing in main, before any other thread exists
+            unsafe { std::env::remove_var(&k) };
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    dev_env();
     #[cfg(target_os = "ios")]
     ios::log_to_documents(&disc::data_dir());
     // `hst net …`: the lobby flow in a terminal (`net::cli`)
@@ -286,6 +308,7 @@ fn main() {
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: bevy::android::android_activity::AndroidApp) {
+    dev_env();
     let dir = app.external_data_path().expect("no external files dir");
     android::log_to_files(&dir);
     let _ = bevy::android::ANDROID_APP.set(app);

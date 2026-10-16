@@ -47,6 +47,9 @@ data-encoding = "2"
 reqwest = { version = "0.13", default-features = false, features = ["stream"] }
 # mod zips (M16, `modfs.rs`): deflate, already built for png
 miniz_oxide = "0.8"
+# B492: only for `ship`'s compile-time log cap (both already in the lock via bevy)
+log = "0.4"
+tracing = { version = "0.1", default-features = false }
 # the mod store's download check (M17, `modstore.rs`; already built for iroh)
 sha2 = "0.11"
 
@@ -116,3 +119,6 @@ hst-base = { path = "../hst-base", features = ["testing"] }
 webgpu = ["bevy/webgpu", "hst-base/webgpu"]
 # the Android .so (`tools/apk.sh`)
 android = ["bevy/android-native-activity"]
+# B492: a build players get (tools/build.sh, apk.sh, ios-ipa.sh, web.sh, pages.yml): debug/trace logs compiled out, the
+# developers' HST_* variables ignored (`main.rs` dev_env). Tests, `cargo run` and tools/shot.sh's release builds keep both
+ship = ["log/release_max_level_info", "tracing/release_max_level_info"]
