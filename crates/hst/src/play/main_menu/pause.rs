@@ -75,9 +75,8 @@ pub(in crate::play) struct Root;
 #[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
 pub(in crate::play) struct Systems;
 
-/// What the overlay draws on: the Settings screens' quads only need the font, the hand, `title_option`,
-/// `wall_option`, `option_00` and our pill (9 quads a pill since its rim, ring and fill are layered); B294's tabs and
-/// panels take up to ~800 (`options::tests::pages_fit`).
+/// What the overlay draws on: the Settings screens' quads only need the font, the wall and our pill (9 quads
+/// a pill since its rim, ring and fill are layered); B294's tabs and panels take up to ~800 (`options::tests::pages_fit`).
 pub(super) const POOL_HERE: usize = 1400;
 
 
@@ -109,11 +108,10 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
         bevy::asset::RenderAssetUsages::RENDER_WORLD,
     ));
     let font = sheet(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
-    let hand = sheet(&mut iso, "AZUMA/INPANE/INPANE.XB0", "/hsm_yubi.tm2");
-    let mut art = vec![solid, super::super::menu_art::image(&mut images, &font, "word"), super::panel::image(&mut images, &hand)];
-    // `Tex::Sheet(k)` is `art[3 + k]`: only the Settings screens' sheets (and B254's controller assignment's wall), the rest left empty
-    for (xb, name) in &super::SHEETS[..10] {
-        art.push(if name.ends_with("option") || *name == "option_00" || *name == "wall_playerselect" { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
+    let mut art = vec![solid, super::super::menu_art::image(&mut images, &font, "word")];
+    // `Tex::Sheet(k)` is `art[2 + k]`: only the wall the Settings screens draw (Z21: and nothing else), the rest left empty
+    for (k, (xb, name)) in super::SHEETS.iter().enumerate() {
+        art.push(if k == super::WALL { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
     }
     // `Tex::Pill` is the last sheet, as in the main menu
     art.push(super::super::menu_art::pill_layers(&mut images));
@@ -373,7 +371,10 @@ fn notice_draw(
             (_, Tex::Solid) => art.0[0].clone(),
             (_, Tex::Font) => art.0[1].clone(),
             (_, Tex::Pill) => art.0.last().expect("pill").clone(),
-            _ => art.0[2].clone(),
+            _ => {
+                vis.set_if_neq(Visibility::Hidden);
+                continue;
+            }
         };
         let [u, v, w, h] = quad.src;
         let rect = (quad.tex != Tex::Solid && three_d.is_none()).then(|| Rect::new(u, v, u + w, v + h));

@@ -79,7 +79,7 @@ impl Menu {
 
 /// The Extras screen.
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
-    d.frame(10, 5);
+    d.frame(10, super::WALL);
     let (x, px, pw, _) = home::columns(m.grid.extra);
     let sel = m.sel.min(ROWS.len() - 1);
     let mut hand = [0.0; 2];
