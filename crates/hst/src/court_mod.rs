@@ -284,6 +284,21 @@ pub(crate) fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document
     Ok(draws)
 }
 
+/// B433: where the court's own chair seats the umpire in a match of this kind (standard §2's `umpire_seat`, or its
+/// `__singles`/`__doubles` one), in the layout court's game space; `None` without one (the layout court's chair).
+pub fn umpire_seat(c: &Court, singles: bool) -> Option<[f32; 3]> {
+    let (doc, _) = crate::mods::open(&c.dir.join("court.glb")).inspect_err(|e| warn!("court mod {}: {e}", c.id)).ok()?;
+    seat(&doc, singles)
+}
+
+fn seat(doc: &gltf::Document, singles: bool) -> Option<[f32; 3]> {
+    let worlds = worlds(doc);
+    let space = doc.nodes().find(|n| n.name() == Some("game_space")).map_or(Mat4::IDENTITY, |n| worlds[n.index()]);
+    let kind = if singles { "umpire_seat__singles" } else { "umpire_seat__doubles" };
+    let n = doc.nodes().find(|n| n.name() == Some(kind)).or_else(|| doc.nodes().find(|n| n.name() == Some("umpire_seat")))?;
+    Some((space.inverse() * worlds[n.index()]).w_axis.truncate().to_array())
+}
+
 /// Each node's world matrix in the file.
 fn worlds(doc: &gltf::Document) -> Vec<Mat4> {
     let mut parent = vec![None; doc.nodes().len()];
@@ -567,5 +582,29 @@ mod tests {
         assert!(blocks(Vec3::new(0.0, -2.0, -19.1), lo - Vec3::Z * 38.2, hi - Vec3::Z * 38.2), "the eye inside it");
         assert!(!blocks(eye, Vec3::new(14.0, -3.0, -20.0), Vec3::new(16.0, 0.0, -18.0)), "off to the side");
         assert!(!blocks(eye, Vec3::new(-1.0, -0.2, -20.0), Vec3::new(1.0, 0.0, -18.0)), "low on the ground");
+    }
+
+    /// B433: the umpire's seat in game space through the file's `game_space` and a Get a Grip court's centimetres
+    /// (Y up), the match kind's own over a plain one, none without.
+    #[test]
+    fn the_umpire_seat_is_read_in_game_space() {
+        let doc = |seats: &str| {
+            let json = format!(
+                r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[
+                {{"name":"game_space","rotation":[0,0,1,0],"children":[1]}},
+                {{"name":"gag_cm","rotation":[1,0,0,0],"scale":[0.01,0.01,0.01],"children":[2,3]}},
+                {{"name":"{seats}","translation":[650,172.8,10]}},
+                {{"name":"umpire_seat__doubles","translation":[750,172.8,10]}}]}}"#
+            );
+            gltf::Gltf::from_slice(json.as_bytes()).unwrap().document
+        };
+        let near = |a: Option<[f32; 3]>, b: [f32; 3]| a.is_some_and(|a| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5));
+        let d = doc("umpire_seat__singles");
+        assert!(near(seat(&d, true), [6.5, -1.728, -0.1]), "{:?}", seat(&d, true));
+        assert!(near(seat(&d, false), [7.5, -1.728, -0.1]));
+        let d = doc("umpire_seat");
+        assert!(near(seat(&d, true), [6.5, -1.728, -0.1]), "a plain seat for either kind");
+        assert!(near(seat(&d, false), [7.5, -1.728, -0.1]), "the kind's own first");
+        assert_eq!(seat(&doc("chair"), true), None);
     }
 }
