@@ -2,6 +2,8 @@
 """Upscale every mod's textures with chaiNNer, skipping the ones already done.
 
     python3 tools/upscale_mods.py MODEL.pth [MODS_DIR ...] [--chain tools/chainner/upscale.chn]
+    python3 tools/upscale_mods.py --check [MODS_DIR ...]   # list what's missing or stale, per mod; exit 1 if any
+    python3 tools/upscale_mods.py --prune [MODS_DIR ...]   # delete upscales no `.glb` image names any more
 
 For each `mod.json` under MODS_DIR (default `mods/`), every image embedded in its costume `.glb`s and
 `racket.glb` (a court mod: `court`/`gimmick`/`sky.glb` and its `npcs.json` people; an umpire mod: `umpire.glb`) without a `textures/upscaled/<glb stem>/<name>.png` yet is upscaled with the chain (its folders and
@@ -50,8 +52,8 @@ def sources(d):
     return json.loads(f.read_text()) if f.exists() else {}
 
 
-def todo(roots):
-    """(mod folder, source PNG bytes, upscaled path) for every image not upscaled yet or changed since."""
+def mods(roots):
+    """(mod folder, its `.glb`s that exist) of every mod that wants upscales."""
     seen = set()
     for root in roots:
         # glob, not rglob: mods/ is often a symlink to a build folder
@@ -61,28 +63,52 @@ def todo(roots):
             if d.resolve() in seen:
                 continue
             seen.add(d.resolve())
-            done = sources(d)
             m = json.loads(Path(mj).read_text())
             if m.get('upscale', True) is False:
                 continue
             glbs = [d / c for c in m.get('costumes', [])] + [d / 'racket.glb'] + [d / f for f in KIND_GLBS.get(m.get('kind'), [])]
             if m.get('kind') == 'court':
                 glbs += npc_glbs(d)
-            for g in filter(Path.is_file, glbs):
-                for name, png in glb_images(g):
-                    out = d / 'textures/upscaled' / g.stem / name
-                    if not out.exists() or done.get(f'{g.stem}/{name}') != hashlib.sha1(png).hexdigest():
-                        yield d, png, out
+            yield d, [g for g in glbs if g.is_file()]
+
+
+def todo(roots):
+    """(mod folder, source PNG bytes, upscaled path) for every image not upscaled yet or changed since."""
+    for d, glbs in mods(roots):
+        done = sources(d)
+        for g in glbs:
+            for name, png in glb_images(g):
+                out = d / 'textures/upscaled' / g.stem / name
+                if not out.exists() or done.get(f'{g.stem}/{name}') != hashlib.sha1(png).hexdigest():
+                    yield d, png, out
+
+
+def unused(roots):
+    """(mod folder, upscaled path) of every upscale no image of the mod's `.glb`s names any more (a rebuilt or
+    dropped model's): the game never draws it, but it still ships in the mod's zip."""
+    for d, glbs in mods(roots):
+        want = {f'{g.stem}/{name}' for g in glbs for name, _ in glb_images(g)}
+        for f in sorted((d / 'textures/upscaled').glob('*/*.png')):
+            if f'{f.parent.name}/{f.name}' not in want:
+                yield d, f
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('model', type=Path, help='the 4x upscaling model (.pth etc.)')
+    ap.add_argument('model', type=Path, nargs='?', help='the 4x upscaling model (.pth etc.)')
     ap.add_argument('roots', nargs='*', default=[REPO / 'mods'], help='folders searched for mod.json')
     ap.add_argument('--chain', type=Path, default=REPO / 'tools/chainner/upscale.chn')
     ap.add_argument('--chainner', default=str(Path.home() / '.local/bin/chainner-app/chainner'), help='the chaiNNer binary')
     ap.add_argument('--batch', type=int, default=500, help='images per chaiNNer run')
+    ap.add_argument('--check', nargs='*', metavar='MODS_DIR', help="only list what's missing or stale (default mods/)")
+    ap.add_argument('--prune', nargs='*', metavar='MODS_DIR', help='delete unused upscales (default mods/)')
     a = ap.parse_args()
+    if a.check is not None:
+        return check(a.check or [REPO / 'mods'])
+    if a.prune is not None:
+        return prune(a.prune or [REPO / 'mods'])
+    if a.model is None:
+        ap.error('the model is required unless --check')
 
     jobs = list(todo(a.roots))
     if not jobs:
@@ -96,6 +122,41 @@ def main():
         print(f'{done}/{len(jobs)} upscaled')
     if done < len(jobs):
         sys.exit('some textures were not written; rerun to retry them')
+
+
+def check(roots):
+    """Print each mod's missing or out-of-date upscales; exit 1 if there are any."""
+    per = {}
+    for d, _, out in todo(roots):
+        per.setdefault(d, []).append(out)
+    for d, outs in per.items():
+        print(f'{d.name}: {len(outs)}')
+        for o in outs:
+            print(f"  {o.relative_to(d)}{'' if o.exists() else ' (missing)'}")
+    print(f'{sum(map(len, per.values()))} textures in {len(per)} mods to upscale')
+    left = {}
+    for d, f in unused(roots):
+        left[d.name] = left.get(d.name, 0) + 1
+    if left:
+        print(f"{sum(left.values())} unused upscales in {len(left)} mods (--prune deletes them): "
+              + ', '.join(f'{k} {v}' for k, v in left.items()))
+    if per:
+        sys.exit(1)
+
+
+def prune(roots):
+    """Delete unused upscales and their `sources.json` entries."""
+    gone = {}
+    for d, f in list(unused(roots)):
+        f.unlink()
+        gone.setdefault(d, []).append(f'{f.parent.name}/{f.name}')
+    for d, keys in gone.items():
+        m = {k: v for k, v in sources(d).items() if k not in keys}
+        (d / 'textures/upscaled/sources.json').write_text(json.dumps(m, indent=0, sort_keys=True))
+        for sub in (d / 'textures/upscaled').iterdir():
+            if sub.is_dir() and not any(sub.iterdir()):
+                sub.rmdir()
+    print(f'{sum(map(len, gone.values()))} unused upscales deleted in {len(gone)} mods')
 
 
 def upscale(jobs, a):
