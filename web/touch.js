@@ -36,8 +36,9 @@ if (AC) {
   };
 }
 const coarse = matchMedia('(pointer: coarse)');
-// M96: the site (index.html #disc, a scrolling page) is up: no pad, no fullscreen, no edge-swipe guard
-const site = () => document.getElementById('disc')?.hidden === false;
+// M96: the site (index.html #disc, a scrolling page) is up: no pad, no fullscreen, no edge-swipe guard. A reload that goes
+// straight back into the game (the Mods Reload, an update) hides #disc with `html[data-game]` only, not `hidden`
+const site = () => !('game' in document.documentElement.dataset) && document.getElementById('disc')?.hidden === false;
 const unlock = () => {
   for (const c of contexts) if (c.state !== 'running') c.resume().catch(() => {});
   if (coarse.matches && !site() && !document.fullscreenElement && !matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches) {
