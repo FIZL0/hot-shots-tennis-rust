@@ -83,7 +83,7 @@ pub fn load(
     let joints = joints_of(&doc, &blob);
     let skeleton = skeleton_of(&joints);
     let mut gs = HashMap::new();
-    let handles = materials_of(&doc, &blob, None, images, materials, &mut gs).map_err(ctx)?;
+    let handles = materials_of(&doc, &blob, super::upscaled_in(&u.dir, &file).as_deref(), images, materials, &mut gs).map_err(ctx)?;
     // a mesh without a skin rides the nearest joint at or above its node, whole (as a character mod's)
     let rides = |n: &gltf::Node| {
         let mut p = Some(n.index());

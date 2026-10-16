@@ -650,7 +650,17 @@ fn image_file(im: &gltf::Image) -> String {
 
 /// `textures/upscaled/<glb stem>/` of a mod's `.glb`, when the "upscaled textures" setting is on.
 fn upscaled_dir(m: &Mod, glb: &Path) -> Option<PathBuf> {
-    crate::textures::on().then(|| m.dir.join("textures/upscaled").join(glb.file_stem().unwrap_or_default()))
+    upscaled_in(&m.dir, glb)
+}
+
+/// `textures/upscaled/<glb stem>/` of mod folder `dir` (any kind: court, umpire), when the setting is on (M110).
+pub(crate) fn upscaled_in(dir: &Path, glb: &Path) -> Option<PathBuf> {
+    crate::textures::on().then(|| dir.join("textures/upscaled").join(glb.file_stem().unwrap_or_default()))
+}
+
+/// The PNG standing for `.glb` image `im` in `upscaled` (`upscaled_in`), if there is one.
+pub(crate) fn upscaled_image(upscaled: Option<&Path>, im: &gltf::Image) -> Option<Vec<u8>> {
+    upscaled.filter(|_| crate::modfs::plain(&image_file(im))).and_then(|d| crate::modfs::read(&d.join(image_file(im))).ok())
 }
 
 /// The `.glb`'s materials as a disc MTL would give them: an unlit `StandardMaterial` and its GS draws. Images
@@ -669,7 +679,7 @@ fn materials_of(
     for im in doc.images() {
         let gltf::image::Source::View { view, mime_type } = im.source() else { return Err("images must be embedded".into()) };
         let bytes = blob.get(view.offset()..view.offset() + view.length()).ok_or("image outside the buffer")?;
-        let up = upscaled.filter(|_| crate::modfs::plain(&image_file(&im))).and_then(|d| crate::modfs::read(&d.join(image_file(&im))).ok());
+        let up = upscaled_image(upscaled, &im);
         let (bytes, ty) = match &up {
             Some(b) => (&b[..], ImageType::Extension("png")),
             None => (bytes, ImageType::MimeType(mime_type)),

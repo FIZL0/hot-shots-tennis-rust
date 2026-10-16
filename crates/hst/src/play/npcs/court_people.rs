@@ -143,7 +143,7 @@ fn spawn(
 ) {
     let (Some(people), Ok(root)) = (&court.0.people, root.single()) else { return };
     let c = &court.0;
-    let mut store = Store { meshes: &mut meshes, images: &mut images, materials: &mut materials, binds: &mut binds, kept: &mut kept };
+    let mut store = Store { meshes: &mut meshes, images: &mut images, materials: &mut materials, binds: &mut binds, kept: &mut kept, upscaled: None };
     let files: Vec<_> = people.models.iter().map(|(name, path, _)| crate::mods::open(path).map_err(|e| warn!("court mod {}: model `{name}`: {e}", c.id)).ok()).collect();
     let mut draws = 0;
     for (i, p) in people.people.iter().enumerate() {
@@ -152,6 +152,7 @@ fn spawn(
         let turn = Quat::from_rotation_y(p.facing.x.atan2(p.facing.y));
         let e = commands.spawn((Transform::from_translation(p.pos).with_rotation(turn), Visibility::default(), ChildOf(root))).id();
         let mut sp = Spawned::default();
+        store.upscaled = crate::mods::upscaled_in(&c.dir, &people.models[p.model].1);
         match crate::court_mod::scene(&mut commands, &mut store, doc, blob, e, args.singles, c.light.as_ref(), false, Some(&mut sp)) {
             Ok(n) => draws += n,
             Err(err) => warn!("court mod {}: person {i}: {err}", c.id),
