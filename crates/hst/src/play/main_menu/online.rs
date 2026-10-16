@@ -1466,7 +1466,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 lobby::draw(d, m, status.as_deref());
                 return;
             }
-            d.frame(6, 8);
+            d.frame(6, 5);
             // B236: no lobby yet: what's happening, the spinner turning; or why it stopped
             let sub = "Progress shows below. It gives up on its own if nothing answers.";
             match (m.net.pick_next, m.net.go) {
