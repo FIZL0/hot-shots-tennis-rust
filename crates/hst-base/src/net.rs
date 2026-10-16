@@ -280,6 +280,9 @@ pub struct Room {
     /// peer has.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub courts: std::collections::BTreeMap<String, Vec<String>>,
+    /// M95: each peer's platform and input (its Hello's, then its `Msg::Device`), for the icons by its name.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub devices: std::collections::BTreeMap<String, crate::device::Device>,
 }
 
 /// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
@@ -436,6 +439,9 @@ impl Room {
         if let Some(c) = self.courts.remove(old) {
             self.courts.insert(new.into(), c);
         }
+        if let Some(d) = self.devices.remove(old) {
+            self.devices.insert(new.into(), d);
+        }
     }
 
     /// B196: the lobby after the match, for the players still in: the computer's seats and `away`'s open again,
@@ -448,6 +454,7 @@ impl Room {
         }
         self.names.retain(|p, _| !away.contains(p));
         self.courts.retain(|p, _| !away.contains(p));
+        self.devices.retain(|p, _| !away.contains(p));
         self.picking.retain(|p| !away.contains(p));
         self.deciding.retain(|p| !away.contains(p));
         self.ready.clear();
@@ -464,6 +471,7 @@ impl Room {
         self.ver += 1;
         self.names.remove(peer);
         self.courts.remove(peer);
+        self.devices.remove(peer);
         self.ready.remove(peer);
         self.picking.remove(peer);
         self.deciding.remove(peer);
@@ -568,6 +576,9 @@ pub enum Msg {
         /// B450: this machine's installed court mods (ids).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         courts: Vec<String>,
+        /// M95: this machine's platform and input.
+        #[serde(default)]
+        device: crate::device::Device,
     },
     Room(Room),
     Refused(String),
@@ -623,6 +634,8 @@ pub enum Msg {
     /// on its card's model. A guest's goes to the host, which checks the seat is that guest's, rate-limits it
     /// ([`EMOTE_GAP`]) and passes it to everyone else; never in the match's input.
     Emote { seat: u8, dir: u8 },
+    /// M95: a guest's input changed in the lobby (`Room::devices`).
+    Device(crate::device::Device),
 }
 
 impl Msg {
@@ -802,6 +815,8 @@ pub enum Cmd {
     Chat(String),
     /// B460: this machine's player in seat `.0` emotes (`.1`: the flick) in the lobby.
     Emote(u8, u8),
+    /// M95: this machine's platform and input (any time: the next Hello carries it; in a lobby everyone hears it).
+    Device(crate::device::Device),
 }
 
 /// What the network tells the app.
@@ -849,7 +864,12 @@ pub struct Net {
     /// B460: the lobby emotes `poll` took out (seat, flick), for `emotes`.
     emotes: std::sync::Mutex<Vec<(u8, u8)>>,
     in_room: std::sync::atomic::AtomicBool,
+    /// M95: this machine's platform and input, shared with the network task (`Ctx::device`).
+    device: Shared,
 }
+
+/// M95: this machine's `Device`, set from the app and read by the network task (its Hello).
+type Shared = std::sync::Arc<std::sync::Mutex<crate::device::Device>>;
 
 impl Net {
     pub fn start(cfg: Online) -> Net {
@@ -858,18 +878,20 @@ impl Net {
         }
         let (cmd, cmd_rx) = amp::unbounded_channel();
         let (ev, events) = mpsc::channel();
+        let device: Shared = std::sync::Arc::new((*crate::device::CURRENT.lock().unwrap()).into());
+        let d = device.clone();
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("net".into())
             .spawn(move || {
                 let rt = tokio::runtime::Builder::new_multi_thread().enable_all().worker_threads(2).build().unwrap();
-                rt.block_on(run(cfg, cmd_rx, ev));
+                rt.block_on(run(cfg, cmd_rx, ev, d));
             })
             .unwrap();
         // the browser: a task on the page's event loop
         #[cfg(target_arch = "wasm32")]
-        n0_future::task::spawn(run(cfg, cmd_rx, ev));
-        Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default() }
+        n0_future::task::spawn(run(cfg, cmd_rx, ev, d));
+        Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default(), device }
     }
 
     /// A `Net` with no network behind it: what it's told to send comes out of the receiver (tests).
@@ -877,7 +899,7 @@ impl Net {
     pub fn wired() -> (Net, amp::UnboundedReceiver<Cmd>) {
         let (cmd, rx) = amp::unbounded_channel();
         let (_, events) = mpsc::channel();
-        (Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default() }, rx)
+        (Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default(), device: Default::default() }, rx)
     }
 
     /// This test `Net` in a lobby (`in_room`), as a `Room` or `Hosting` event would put it.
@@ -889,6 +911,9 @@ impl Net {
     pub fn send(&self, c: Cmd) {
         if matches!(c, Cmd::Leave | Cmd::Find | Cmd::Join(..) | Cmd::Quick(_)) {
             self.in_room.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Cmd::Device(d) = c {
+            *self.device.lock().unwrap() = d;
         }
         let _ = self.cmd.send(c);
     }
@@ -957,6 +982,8 @@ struct Ctx {
     name: String,
     /// B450: this machine's installed court mods (`Cmd::Courts`).
     courts: Vec<String>,
+    /// M95: this machine's platform and input (`Net::device`).
+    device: Shared,
     /// The relays are on (n0 or own): the codes need one, as browsers reach peers only through relays (B175).
     relays: bool,
 }
@@ -1091,7 +1118,7 @@ async fn bind(relay: &Relay) -> Result<(Option<Endpoint>, ()), String> {
     }
 }
 
-async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sender<Event>) {
+async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sender<Event>, device: Shared) {
     let _ = ev.send(Event::Status("Connecting...".into()));
     // timed (B151): binding with a home relay ~3 s; the short code ~1-2 s more (DHT), the pkarr relay's copy 5-20 s
     let t0 = n0_future::time::Instant::now();
@@ -1112,7 +1139,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
     };
     #[cfg(not(target_arch = "wasm32"))]
     let mut dht_since = n0_future::time::Instant::now();
-    let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone(), courts: Vec::new(), relays: cfg.relay != Relay::Off };
+    let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone(), courts: Vec::new(), device, relays: cfg.relay != Relay::Off };
     bevy::log::info!("online in {:?}", t0.elapsed());
     cx.say(Event::Status("Online.".into()));
     // B321: a Host, Join, Quickplay or Find that came in during a Find (dropped for it)
@@ -1328,7 +1355,7 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
 
 /// A joiner's side, inside the host task.
 enum Guest {
-    In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String> },
+    In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device },
     Said(String, Msg),
     Gone(String),
     /// A datagram from the first peer for the second.
@@ -1403,13 +1430,13 @@ fn micros(t0: n0_future::time::Instant) -> u64 {
 
 /// A guest's arrivals into the host task: its Hello first (else it's dropped), then what it says and sends, then gone.
 async fn guest(gtx: amp::UnboundedSender<Guest>, peer: String, conn: Conn, link: Link, mut inbox: Inbox) {
-    let Some(Ok(Msg::Hello { build, picks, name, courts })) = inbox.msgs.recv().await else {
+    let Some(Ok(Msg::Hello { build, picks, name, courts, device })) = inbox.msgs.recv().await else {
         conn.close(b"no hello");
         return;
     };
     let g = gtx.clone();
     n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(g.send(Guest::Pack(h, b)))));
-    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts });
+    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts, device });
     loop {
         tokio::select! {
             m = inbox.msgs.recv() => match m {
@@ -1459,6 +1486,7 @@ fn refuse(link: &Link, conn: Conn, why: String) {
 async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) {
     room.names.insert("host".into(), cx.name.clone());
     room.courts.insert("host".into(), cx.courts.clone());
+    room.devices.insert("host".into(), *cx.device.lock().unwrap());
     cx.say(Event::Hosting);
     // the lobby first: the codes follow as they're ready (B151: the short code took ~30 s before the screen came up)
     cx.say(Event::Room(room.clone()));
@@ -1633,7 +1661,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let put = !l.private || std::mem::take(&mut listed);
                 listed |= !l.private;
                 ep.set_user_data_for_address_lookup(lan_data(&Listing::of(ep.id(), &l)).filter(|_| !l.private));
-                let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), courts: cx.courts.clone(), relays: cx.relays };
+                let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), courts: cx.courts.clone(), device: cx.device.clone(), relays: cx.relays };
                 let n = lobby_number(ep.id());
                 let (code, ticket) = (code.clone(), code_ticket(ep, home.as_ref()));
                 let (id, slot, unlisted) = (ep.id(), slot.clone(), unlisted.clone());
@@ -1718,7 +1746,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
             },
             Some(g) = guests.recv() => match g {
-                Guest::In { peer, name, picks, build, link, conn, courts } => {
+                Guest::In { peer, name, picks, build, link, conn, courts, device } => {
                     let why = if build != BUILD {
                         Some(format!("different version (host {BUILD}, you {build})"))
                     } else if let Err(e) = picks_ok(&picks) {
@@ -1736,6 +1764,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     cx.say(Event::Status(format!("{name} joined.")));
                     room.names.insert(peer.clone(), name);
                     room.courts.insert(peer.clone(), courts);
+                    room.devices.insert(peer.clone(), device);
                     room.picking.insert(peer.clone());
                     link.send(&Msg::Ping(micros(t0)));
                     joined.push((peer, link, conn));
@@ -1801,6 +1830,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
                 Guest::Said(peer, Msg::Chat { text, .. }) => chat(cx, &peer, &text, &room.names, &joined, &mut rates),
                 Guest::Said(peer, Msg::Emote { seat, dir }) => emote(cx, &peer, seat, dir, &room, &joined, &mut emoted),
+                // M95: a guest's input changed (shown only: no relisting, no ready reset)
+                Guest::Said(peer, Msg::Device(d)) => {
+                    if room.names.contains_key(&peer) && room.devices.get(&peer) != Some(&d) {
+                        room.devices.insert(peer, d);
+                        broadcast(&joined, &Msg::Room(room.clone()));
+                        cx.say(Event::Room(room.clone()));
+                    }
+                }
                 Guest::Said(peer, Msg::Pong(sent)) => {
                     rtt.insert(peer.clone(), Duration::from_micros(micros(t0).saturating_sub(sent)));
                     let r = recent.entry(peer.clone()).or_default();
@@ -1966,6 +2003,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
                 Some(Cmd::Chat(t)) => chat(cx, "host", &t, &room.names, &joined, &mut rates),
                 Some(Cmd::Emote(seat, dir)) => emote(cx, "host", seat, dir, &room, &joined, &mut emoted),
+                Some(Cmd::Device(d)) if room.devices.get("host") != Some(&d) => {
+                    room.devices.insert("host".into(), d);
+                    broadcast(&joined, &Msg::Room(room.clone()));
+                    cx.say(Event::Room(room.clone()));
+                }
                 Some(Cmd::Want(h)) => {
                     if let Some(b) = want("host", h, &room, &joined, &mut packs, &mut wants) {
                         deliver("host", h, &b, &joined);
@@ -2328,7 +2370,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
         let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
     let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
-    link.send(&Msg::Hello { build: BUILD.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone() });
+    link.send(&Msg::Hello { build: BUILD.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap() });
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
     let ev = cx.ev.clone();
@@ -2417,6 +2459,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Live(l)) => link.send(&Msg::Live(l)),
                 Some(Cmd::Chat(text)) => link.send(&Msg::Chat { from: String::new(), name: String::new(), text }),
                 Some(Cmd::Emote(seat, dir)) if !playing => link.send(&Msg::Emote { seat, dir }),
+                Some(Cmd::Device(d)) if !playing => link.send(&Msg::Device(d)),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
                     picks = p;
@@ -3029,7 +3072,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -3087,7 +3130,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -3303,7 +3346,7 @@ mod tests {
             let dht = |b: &[String]| Dht::builder().bootstrap(b).build().unwrap();
             let (a, b) = (dht(&net.bootstrap), dht(&net.bootstrap));
             let ep = Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled).bind().await.unwrap();
-            let cx = Ctx { ep: Some(ep), dht: a, lan: Lan::default(), ev: mpsc::channel().0, name: String::new(), courts: Vec::new(), relays: false };
+            let cx = Ctx { ep: Some(ep), dht: a, lan: Lan::default(), ev: mpsc::channel().0, name: String::new(), courts: Vec::new(), device: Default::default(), relays: false };
             let mut r = room(true);
             r.take("host", &[Pick::disc(0, 0)]);
             announce(&cx, 4242, &r).await;
@@ -3325,7 +3368,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: dht(&net.bootstrap), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: dht(&net.bootstrap), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let id = hcx.ep.as_ref().unwrap().id().to_string();
@@ -3453,7 +3496,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let (_hcmd, mut hrx) = amp::unbounded_channel();
@@ -3503,7 +3546,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let (hcmd, mut hrx) = amp::unbounded_channel();
@@ -3559,7 +3602,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -3618,7 +3661,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -3666,7 +3709,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -3720,7 +3763,7 @@ mod tests {
                 async move {
                     let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                     let (tx, rx) = mpsc::channel();
-                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), relays: false }, rx)
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device: Default::default(), relays: false }, rx)
                 }
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
@@ -3799,7 +3842,7 @@ mod tests {
                 async move {
                     let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                     let (tx, rx) = mpsc::channel();
-                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), relays: false }, rx)
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device: Default::default(), relays: false }, rx)
                 }
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
@@ -3853,6 +3896,66 @@ mod tests {
         });
     }
 
+    /// M95: each peer's platform and input reach everyone from its Hello, and a switch mid-lobby follows.
+    #[test]
+    fn devices_in_the_lobby() {
+        use crate::device::{Device, Input, Platform};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = |name: &str, d: Device| {
+                let name = name.to_string();
+                let bootstrap = testnet.bootstrap.clone();
+                async move {
+                    let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                    let (tx, rx) = mpsc::channel();
+                    let device = std::sync::Arc::new(std::sync::Mutex::new(d));
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device, relays: false }, rx)
+                }
+            };
+            async fn room_where(ev: &mpsc::Receiver<Event>, want: impl Fn(&Room) -> bool) -> Room {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if let Event::Room(r) = e
+                            && want(&r)
+                        {
+                            return r;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let desk = Device { platform: Platform::Desktop, input: Input::Controller };
+            let phone = Device { platform: Platform::Android, input: Input::Touch };
+            let ((hcx, hev), (gcx, gev)) = (cx("Host", desk).await, cx("Phone", phone).await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(0, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let code = loop {
+                match hev.try_recv() {
+                    Ok(Event::Code(c)) => break c,
+                    Ok(_) => {}
+                    Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+                }
+            };
+            tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx).await });
+            let r = room_where(&gev, |r| r.devices.len() == 2).await;
+            let guest = r.names.iter().find(|(_, n)| *n == "Phone").map(|(p, _)| p.clone()).unwrap();
+            assert_eq!((r.devices.get("host"), r.devices.get(&guest)), (Some(&desk), Some(&phone)));
+            // the phone's player picks up a pad, the host's puts theirs down for the keyboard
+            let pad = Device { input: Input::Controller, ..phone };
+            gcmd.send(Cmd::Device(pad)).unwrap();
+            room_where(&hev, |r| r.devices.get(&guest) == Some(&pad)).await;
+            let keys = Device { input: Input::Keyboard, ..desk };
+            hcmd.send(Cmd::Device(keys)).unwrap();
+            let r = room_where(&gev, |r| r.devices.get("host") == Some(&keys)).await;
+            assert_eq!(r.devices.get(&guest), Some(&pad));
+        });
+    }
+
     #[test]
     fn short_code_parts() {
         let t = "endpointabc".repeat(60);
@@ -3880,7 +3983,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {

@@ -164,6 +164,7 @@ fn plate(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], p: usize, rect: [
         hide: false,
         empty: false,
         mod_note,
+        device: remote.filter(|s| s.human()).and_then(|s| m.net.room.as_ref()?.devices.get(&s.peer).copied()),
     };
     frame::plate(d, &plate, rect, s);
 }

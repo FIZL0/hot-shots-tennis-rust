@@ -444,6 +444,86 @@ pub(super) struct Plate<'a> {
     pub hide: bool,
     pub empty: bool,
     pub mod_note: Option<String>,
+    /// M95: an online player's platform and input, as icons in the well's corner.
+    pub device: Option<crate::device::Device>,
+}
+
+/// M95: a player's platform (desktop, browser, iOS, Android) and input (keyboard and mouse, controller, touch) as two
+/// small icons in `ink`, cut-outs in `bg`, ending at `right` and centred on `cy`; `(sx, sy)` a plate pixel's units.
+/// Returns where they start.
+pub(super) fn device_icons(d: &mut Draw, dev: crate::device::Device, right: f32, cy: f32, (sx, sy): (f32, f32), ink: [f32; 3], bg: [f32; 3]) -> f32 {
+    use crate::device::{Input, Platform};
+    // each icon on an 18 × 14 pixel box
+    const W: f32 = 18.0;
+    const GAP: f32 = 5.0;
+    let x0 = right - (2.0 * W + GAP) * sx;
+    for (k, box_x) in [x0, x0 + (W + GAP) * sx].into_iter().enumerate() {
+        let at = |x: f32, y: f32, w: f32, h: f32| [box_x + x * sx, cy + (y - 7.0) * sy, w * sx, h * sy];
+        let mut solid = |d: &mut Draw, r: [f32; 4], round: f32, rgb: [f32; 3]| rounded(d, r, round * sx, rgb, 128.0);
+        let ring = |d: &mut Draw, r: [f32; 4], round: f32, t: f32| ringed(d, r, round * sx, t * sx, ink, Some(bg));
+        if k == 0 {
+            match dev.platform {
+                Platform::Desktop => {
+                    // a monitor on its stand
+                    ring(d, at(1.0, 0.0, 16.0, 10.5), 1.5, 1.7);
+                    solid(d, at(8.0, 10.0, 2.0, 2.5), 0.0, ink);
+                    solid(d, at(4.5, 12.2, 9.0, 1.8), 0.9, ink);
+                }
+                Platform::Browser => {
+                    // a window: its title bar with the three dots
+                    ring(d, at(0.0, 1.0, 18.0, 12.0), 2.0, 1.6);
+                    solid(d, at(0.0, 1.0, 18.0, 4.0), 0.0, ink);
+                    d.out.last_mut().unwrap().round = [2.0 * sx, 2.0 * sx, 0.0, 0.0];
+                    for i in 0..3 {
+                        solid(d, at(2.2 + 2.6 * i as f32, 2.3, 1.6, 1.6), 0.8, bg);
+                    }
+                }
+                Platform::Ios => {
+                    // a phone with its notch
+                    ring(d, at(4.5, 0.0, 9.0, 14.0), 2.2, 1.6);
+                    solid(d, at(7.0, 1.4, 4.0, 1.6), 0.8, ink);
+                }
+                Platform::Android => {
+                    // the robot's head: a dome, its eyes and antennae
+                    solid(d, at(2.0, 5.0, 14.0, 7.5), 0.0, ink);
+                    d.out.last_mut().unwrap().round = [7.0 * sx, 7.0 * sx, 0.0, 0.0];
+                    solid(d, at(5.2, 8.0, 2.0, 2.0), 1.0, bg);
+                    solid(d, at(10.8, 8.0, 2.0, 2.0), 1.0, bg);
+                    solid(d, at(4.6, 1.5, 1.5, 4.0), 0.7, ink);
+                    solid(d, at(11.9, 1.5, 1.5, 4.0), 0.7, ink);
+                }
+            }
+        } else {
+            match dev.input {
+                Input::Keyboard => {
+                    // keys in two rows over a space bar
+                    ring(d, at(0.0, 2.0, 18.0, 11.0), 2.0, 1.5);
+                    for row in 0..2 {
+                        for i in 0..5 {
+                            solid(d, at(2.6 + 2.8 * i as f32, 4.3 + 2.6 * row as f32, 1.6, 1.5), 0.3, ink);
+                        }
+                    }
+                    solid(d, at(5.0, 9.6, 8.0, 1.5), 0.4, ink);
+                }
+                Input::Controller => {
+                    // a pad: body and grips, the d-pad and two buttons
+                    solid(d, at(1.0, 2.5, 16.0, 7.5), 3.5, ink);
+                    solid(d, at(0.5, 5.0, 6.0, 8.0), 3.0, ink);
+                    solid(d, at(11.5, 5.0, 6.0, 8.0), 3.0, ink);
+                    solid(d, at(3.0, 5.6, 4.6, 1.4), 0.0, bg);
+                    solid(d, at(4.6, 4.0, 1.4, 4.6), 0.0, bg);
+                    solid(d, at(11.2, 4.0, 1.9, 1.9), 0.95, bg);
+                    solid(d, at(13.6, 6.2, 1.9, 1.9), 0.95, bg);
+                }
+                Input::Touch => {
+                    // a tap: the fingertip and its ripple
+                    ringed(d, at(2.5, 0.5, 13.0, 13.0), 6.5 * sx, 1.4 * sx, ink, None);
+                    solid(d, at(6.0, 4.0, 6.0, 6.0), 3.0, ink);
+                }
+            }
+        }
+    }
+    x0
 }
 
 /// A plate's X (the host's remove) in plate `rect` at scale `s` (`Geo::k * Geo::s`).
@@ -504,6 +584,12 @@ pub(super) fn plate(d: &mut Draw, pl: &Plate, [x, y, w, h]: [f32; 4], s: f32) {
         d.label("Open", well[0] + well[2] / 2.0, well[1] + (well[3] - fs) / 2.0, fs, well[2] - 8.0 * sx, c.soft);
     } else {
         preview(d, pl.p, pl.random, pl.hide, well);
+    }
+    if let Some(dev) = pl.device.filter(|_| !pl.hide) {
+        // M95: a navy pill in the well's top right corner, the icons in the seat's colour
+        let pill = [well[0] + well[2] - 6.0 * sx - 61.0 * sx, well[1] + 6.0 * sy, 61.0 * sx, 22.0 * sy];
+        rounded(d, pill, 11.0 * sx, NAVY, 128.0);
+        device_icons(d, dev, pill[0] + pill[2] - 10.0 * sx, pill[1] + pill[3] / 2.0, (sx, sy), c.ring, NAVY);
     }
     if let Some(note) = &pl.mod_note {
         let ns = 12.0 * sy;

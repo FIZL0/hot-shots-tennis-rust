@@ -1986,6 +1986,13 @@ pub(super) fn sample(m: &mut Menu) {
     // B201: ACE-42 on Kaoru's second costume, live; as 2P (Sunny Day) on the shared select, the host ready beside them
     let r = m.net.room.as_mut().unwrap();
     r.live.insert(peers[1].into(), vec![Live { char: 4, costume: 1, ready: false, r#mod: None, name: String::new(), ..Default::default() }]);
+    // M95: a desktop with a pad, a browser on the keyboard, a phone on touch (an iPhone in `lobby-ios`)
+    {
+        use crate::device::{Device, Input, Platform};
+        let phone = if menu == "lobby-ios" { Platform::Ios } else { Platform::Android };
+        let devices = [("host", Platform::Desktop, Input::Controller), (peers[0], Platform::Browser, Input::Keyboard), (peers[1], phone, Input::Touch)];
+        r.devices = devices.iter().map(|&(p, platform, input)| (p.to_string(), Device { platform, input })).collect();
+    }
     // B216: a computer player on 4P, the host's hand on it
     if menu == "lobby-bot" {
         r.seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(9, 4) });
