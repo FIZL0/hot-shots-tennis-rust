@@ -6,7 +6,7 @@
 
 use super::super::widescreen::{ASPECTS, aspect_choices};
 use super::roster::{self, PX, PY, rounded};
-use super::{look, CHAT, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{look, CHAT, EMOTE_VOICES, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -37,6 +37,8 @@ pub(super) enum Opt {
     Volume(usize),
     MenuMusic,
     MatchMusic,
+    /// B474: the emotes' voice lines.
+    EmoteVoices,
     Downloads,
     /// B339: how many store downloads run at once.
     AtOnce,
@@ -85,7 +87,7 @@ const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, Me
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled, Advanced];
 /// B411: Graphics → Advanced, the speed-up switches for a slow device.
 const ADVANCED: &[Opt] = &[Mesh, FewerShadows, Cull];
-const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), Volume(4), MenuMusic, MatchMusic];
+const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), Volume(4), MenuMusic, MatchMusic, EmoteVoices];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
 const MOBILE: &[Opt] = &[Vibration];
@@ -131,6 +133,7 @@ fn label(o: Opt) -> &'static str {
         Volume(i) => ["Master", "Music", "Sound Effects", "Voices", "Ambience"][i],
         MenuMusic => "Menu Music",
         MatchMusic => "Match Music",
+        EmoteVoices => "Emote Voices",
         Downloads => "Upscaled Downloads",
         AtOnce => "Downloads at Once",
         OnlineMods => "Online Mod Downloads",
@@ -172,6 +175,7 @@ fn about(o: Opt) -> &'static str {
         Volume(_) => "The court's surroundings: birds, surf, chimes and court mods' ambience.",
         MenuMusic => "Play music in the menus.",
         MatchMusic => "Play each court's music during a match.",
+        EmoteVoices => "Hear the players' voice lines when they emote. Off mutes them on this device only; the emote itself still plays.",
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
         AtOnce => "How many mods the mod store downloads side by side (Download all, or several installs). Auto: 3 on a computer, 2 in a browser, 1 on a phone; a browser keeps each one in memory until it's saved, so it allows fewer.",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
@@ -303,6 +307,10 @@ impl Settings {
             }
             MenuMusic => self.0[1] = !self.0[1],
             MatchMusic => self.0[2] = !self.0[2],
+            EmoteVoices => {
+                self.0[EMOTE_VOICES] = !self.0[EMOTE_VOICES];
+                crate::audio::EMOTE_VOICES.store(self.0[EMOTE_VOICES], std::sync::atomic::Ordering::Relaxed);
+            }
             Downloads => self.0[UPSCALED_DOWNLOADS] = !self.0[UPSCALED_DOWNLOADS],
             AtOnce => self.8 = (self.8 as isize + d).rem_euclid(super::max_downloads() as isize + 1) as u8,
             OnlineMods => self.4 = cycle(&ASK_VALUES.map(|(a, _)| a), self.4, d),
@@ -347,6 +355,7 @@ impl Settings {
             Volume(i) => self.2 .0[i].to_string(),
             MenuMusic => on_off(self.0[1]),
             MatchMusic => on_off(self.0[2]),
+            EmoteVoices => on_off(self.0[EMOTE_VOICES]),
             Downloads => on_off(self.0[UPSCALED_DOWNLOADS]),
             AtOnce => at_once_name(self.8 as usize),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),
@@ -394,6 +403,7 @@ impl Menu {
                 if self.settings != was {
                     self.settings = was;
                     crate::chat::HIDDEN.store(!was.0[CHAT], std::sync::atomic::Ordering::Relaxed);
+                    crate::audio::EMOTE_VOICES.store(was.0[EMOTE_VOICES], std::sync::atomic::Ordering::Relaxed);
                     out.push(Effect::SaveSettings);
                 }
                 out.push(Effect::Sound(1));

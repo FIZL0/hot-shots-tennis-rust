@@ -26,6 +26,10 @@ pub fn set_muted(on: bool) {
     MUTED.store(on, Ordering::Relaxed);
 }
 
+/// B474: Settings → Sound → Emote Voices: off leaves the emotes' voice lines unheard on this machine (the motion still
+/// plays, and the line's key memory still turns, so peers stay alike).
+pub static EMOTE_VOICES: AtomicBool = AtomicBool::new(true);
+
 /// A bearing (whole degrees) as heard from the listener's end.
 fn heard(angle: i32) -> i32 {
     if TURNED.load(Ordering::Relaxed) { (angle + 180) % 360 } else { angle }
