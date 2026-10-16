@@ -68,6 +68,7 @@ mod court_mods;
 mod court_picker;
 pub(super) mod pause;
 mod plate_emote;
+mod assign_shake;
 mod previews;
 mod roster;
 mod slide;
@@ -562,6 +563,9 @@ struct Menu {
     /// B516: the device that took 1P on the splash (`splash.rs`), the one that drives 1P's player.
     p1: Option<Dev>,
     splash: splash::Splash,
+    /// P21a: each seat's card's sideways offset on the controller assignment while its pad's right stick moves
+    /// (`assign_shake.rs`).
+    shake: [f32; 4],
 }
 
 impl Default for Menu {
@@ -612,6 +616,7 @@ impl Default for Menu {
             assign_lead: None,
             p1: None,
             splash: default(),
+            shake: [0.0; 4],
         }
     }
 }
@@ -2600,6 +2605,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
             d.frame(2, WALL);
             for (p, &fill) in CARD_FILL.iter().enumerate().take(m.players()) {
                 let y = 90.0 + 70.0 * p as f32;
+                let card = d.out.len();
                 d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(fill)], 128.0);
                 d.hit([120.0, y, 400.0, 56.0], pointer::press(|k| k.ok = true));
                 d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
@@ -2615,6 +2621,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
                     d.centred(label, 468.0, y + 18.0, 20.0, WHITE);
                     d.hit([430.0, y + 14.0, 76.0, 28.0], pointer::Act::Row(p, Press { card: true, ..default() }));
                 }
+                // P21a: the card shakes while its pad's right stick moves (its hit rects stay put)
+                d.out[card..].iter_mut().for_each(|q| q.dst[0] += m.shake[p]);
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [60.0 + hand_x, 102.0 + 70.0 * m.sel.min(m.players() - 1) as f32, 64.0, 32.0], WHITE, 128.0);
             // B437: 1P's own seat change is pending until they leave: tagged on its new seat, spelled out in the help
@@ -2629,9 +2637,9 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
             });
             let pending = pending.unwrap_or_default();
             if m.paused {
-                d.info(&format!("{pending}1P: Up/Down picks a seat, Left/Right swaps its device with the next player's, Tab / Square takes a device off its seat, X or Enter keeps the change, O or Esc leaves it. Others: X or Enter takes a free seat, Left/Right changes seat, O or its red X leaves."));
+                d.info(&format!("{pending}1P: Up/Down picks a seat, Left/Right swaps its device with the next player's, Tab / Square takes a device off its seat, X or Enter keeps the change, O or Esc leaves it. Others: X or Enter takes a free seat, Left/Right changes seat, O or its red X leaves. A controller's right stick shakes its seat."));
             } else {
-            d.info(&format!("{pending}{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
+            d.info(&format!("{pending}{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves. A controller's right stick shakes its seat.", text.msg(193)));
             }
         }
         Screen::Chars => roster::chars(&mut d, m, text, bind, pads),
@@ -3351,6 +3359,7 @@ pub fn plugin(app: &mut App) {
     app.add_systems(Update, online::chat_arm.before(step));
     previews::plugin(app);
     plate_emote::plugin(app);
+    assign_shake::plugin(app);
     mods_screen::plugin(app);
     osk::plugin(app);
     // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it
