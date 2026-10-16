@@ -328,7 +328,7 @@ fn stamp(m: &Mod) -> String {
     dir_stamp(&m.dir)
 }
 
-fn dir_stamp(dir: &Path) -> String {
+pub(super) fn dir_stamp(dir: &Path) -> String {
     use std::hash::{Hash, Hasher};
     fn walk(d: &Path, h: &mut impl Hasher) {
         for p in crate::modfs::read_dir(d) {

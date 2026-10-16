@@ -1094,9 +1094,10 @@ enum Face {
 
 fn draw_face(d: &mut Draw, m: &Menu, f: &Face, [x, y, w, h]: [f32; 4], a: [f32; 3]) {
     match f {
-        // the whole picture, as big as it fits (never stretched)
+        // the whole picture, as big as it fits (never stretched: its pixels' width over height in menu units, B402)
         Face::Thumb(slot, aspect) => {
-            let (pw, ph) = if *aspect > w / h { (w, w / aspect) } else { (h * aspect, h) };
+            let aspect = aspect * PX / PY;
+            let (pw, ph) = if aspect > w / h { (w, w / aspect) } else { (h * aspect, h) };
             d.q(Tex::Thumb(*slot), [0.0, 0.0, 1.0, 1.0], [x + (w - pw) / 2.0, y + (h - ph) / 2.0, pw, ph], WHITE, 128.0);
         }
         Face::Court(c) => super::super::court_picture(d, m, *c, [x, y, w, h]),
@@ -1669,7 +1670,7 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
     let inner = [sx + 8.0 * PX, sy + 6.0 * PY, sw - 16.0 * PX, shh - 12.0 * PY];
     if v.shot {
         // the bake's 4:5 (M8f9: a court's or umpire's own shape), as big as the box allows
-        let aspect = v.shot_aspect.unwrap_or(super::super::previews::CARD_W) * PX / PY;
+        let aspect = v.shot_aspect.map_or(super::super::previews::CARD_W, |a| a * PX / PY);
         let (pw, phh) = if aspect > inner[2] / inner[3] { (inner[2], inner[2] / aspect) } else { (inner[3] * aspect, inner[3]) };
         d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], [inner[0] + (inner[2] - pw) / 2.0, inner[1] + (inner[3] - phh) / 2.0, pw, phh], WHITE, 128.0);
     } else {

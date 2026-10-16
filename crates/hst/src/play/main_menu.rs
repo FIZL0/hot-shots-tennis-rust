@@ -3478,8 +3478,10 @@ mod tests {
     }
 
     /// Writes into the store the play style and grades of characters uploaded before Browse's card went up with
-    /// them, as the select works them out (`read_text`). Network, writes to the store: `HST_CARDS="<mod dir>@<PR> …"`
-    /// `HST_TOKEN=<hf-token.txt>` `HST_ISO=<iso>` `tools/check.sh -p hst store_cards -- --ignored`.
+    /// them, as the select works them out (`read_text`), and with `HST_BAKED=<cache/previews/…-rN>` (an
+    /// `HST_MENU=chars HST_BAKE=all` run over the same mod folders) their costume 0's bake as the listing's picture.
+    /// Network, writes to the store: `HST_CARDS="<mod dir>@<PR> …"` `HST_TOKEN=<hf-token.txt>` `HST_ISO=<iso>`
+    /// `tools/check.sh -p hst store_cards -- --ignored`.
     #[test]
     #[ignore]
     fn store_cards() {
@@ -3500,7 +3502,11 @@ mod tests {
             let m = crate::mods::read_any(std::path::Path::new(dir)).unwrap();
             let row = crate::mods::tparam(&mut iso, &m).unwrap();
             let (st, g) = (mod_style(&m, &style), mod_grades(&row, m.base, &csv, &grades));
-            let got = rt.block_on(crate::modstore::put_card(token, &m.id, pr.parse().unwrap(), st as u8, g));
+            let baked = std::env::var("HST_BAKED").ok().map(|b| {
+                let name = super::previews::dir_stamp(&m.dir);
+                std::fs::read(std::path::Path::new(&b).join(format!("m-{name}-0.png"))).unwrap_or_else(|e| panic!("{}: no bake: {e}", m.id))
+            });
+            let got = rt.block_on(crate::modstore::put_card(token, &m.id, pr.parse().unwrap(), st as u8, g, baked));
             failed += got.is_err() as usize;
             eprintln!("{} style {st} grades {g:?}: {got:?}", m.id);
         }
