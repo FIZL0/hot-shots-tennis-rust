@@ -27,7 +27,7 @@ fn items(bind: &Bindings) -> Vec<Item> {
     ];
     // `menu.rs`: Esc pauses (fixed, not in controls.txt)
     v.push((Act::Key, "Pause", vec!["Esc".into()]));
-    v.into_iter().filter(|(_, _, keys)| !keys.is_empty()).map(|(act, label, keys)| Item { act, label: label.into(), keys }).collect()
+    v.into_iter().filter(|(_, _, keys)| !keys.is_empty()).map(|(act, label, keys)| Item { act, label: label.into(), keys, dim: [false; 2] }).collect()
 }
 
 /// Whether the hints show: the setting on, the keyboard last used and playing a seat (no autoplay).
