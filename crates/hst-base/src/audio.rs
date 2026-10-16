@@ -1438,6 +1438,24 @@ mod tests {
         assert!(Track::AMBIENCE_RMS < Track::BGM_RMS / 3.0);
     }
 
+    /// P0b4c: umpire 4 a's clips as the match times them (`centre_frames`), the lengths behind the slot-5 voice
+    /// checks: her next word came clip + `VOICE_LAG` ticks after each of love, 15, 30, 40 and "game"; the fault and
+    /// out-after-net sprites settled on clip + `VOICE_LAG` (hst-sim's `match_s05_post_point`), the match-over phase
+    /// came clip + `VOICE_LAG` − 1 after the match call (`match_s05_match_over`).
+    #[test]
+    fn call_clips() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let sound = Sound::test(&mut iso);
+        let bank = Arc::new(umpire_bank(&mut iso, 4, 0).unwrap());
+        let frames = |program, key| sound.centre_frames(&bank, sound::Play { slot: 5, program, key, volume: 0x80, speed: 1.0 });
+        let words = [(0, 0), (0, 1), (0, 2), (0, 3), (2, 1)].map(|(p, k)| frames(p, k));
+        assert_eq!(words, [40, 45, 37, 40, 33]);
+        // fault, out after net, match
+        assert_eq!([frames(1, 1), frames(1, 4), frames(2, 4)], [39, 32, 58]);
+    }
+
     fn mix_clone(m: &Mix) -> Mix {
         Mix { pitch: m.pitch.clone(), pan: m.pan.clone(), gain: m.gain.clone(), stereo: m.stereo.clone(), bank_volumes: m.bank_volumes.clone(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2], loops: Vec::new() }
     }

@@ -435,10 +435,11 @@ impl<'a> Game<'a> {
     }
 
     /// How long the scoreboard takes over the score after a point.
-    /// `language` and `umpire` pick the call sprite's countdowns (the US disc's match: language 0, umpire 4).
-    pub fn scoreboard_timing(&self, language: u8, umpire: u8) -> ScoreboardTiming {
+    /// `voice` (the umpire's voice set, 0 a / 1 b) and `umpire` pick the call sprite's countdowns (slot 5's match:
+    /// voice 0, umpire 4).
+    pub fn scoreboard_timing(&self, voice: u8, umpire: u8) -> ScoreboardTiming {
         let i = |a| i32::from_le_bytes(self.at(a, 4).try_into().unwrap());
-        let calls = 0x41_0f0c + language as u32 * 0x14 + umpire as u32 * 0x28;
+        let calls = 0x41_0f0c + voice as u32 * 0x14 + umpire as u32 * 0x28;
         ScoreboardTiming {
             call_wait: std::array::from_fn(|k| i(calls + 4 * k as u32)),
             point_wait: i(0x41_0e90),

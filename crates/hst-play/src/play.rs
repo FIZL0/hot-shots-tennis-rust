@@ -418,7 +418,7 @@ pub struct Game {
     data: Const<Vec<std::sync::Arc<CharacterData>>>,
     /// The team that won the last point.
     post_winner: i32,
-    /// The chair umpire, and whether her word is still sounding (1; 0 none).
+    /// The chair umpire, and the ticks her word still counts as sounding (0 none).
     umpire: Umpire,
     umpire_voice: u64,
     /// The court number (the gallery's banks and keys).
@@ -3833,8 +3833,9 @@ fn simulate(mut g: ResMut<Game>) {
             let g = &mut *g;
             let mut post = g.post.take().expect("post-point state");
             let (reacted, paused, showing) = (post.reacted, post.paused(), post.showing());
+            let calling_match = post.calling_match;
             // her call line has ended (it started the tick the point was decided)
-            let idle = post.tick > 0 && g.umpire_voice == 0;
+            let idle = post.tick > 0 && g.umpire_voice <= post.calling_match as u64;
             let press = std::mem::take(&mut g.post_press);
             let step = post.step_with(&mut g.score, &mut g.rally, &g.board, idle, press);
             if let Some(event) = post.event {
@@ -3847,6 +3848,10 @@ fn simulate(mut g: ResMut<Game>) {
                 if post.reacted && !reacted {
                     react(g, event);
                 }
+            }
+            if post.calling_match && !calling_match {
+                // ponytail: the game also stops the players here (they freeze until the match-over phase)
+                g.umpire.call_match();
             }
             match step {
                 None => g.post = Some(post),
@@ -3862,8 +3867,7 @@ fn simulate(mut g: ResMut<Game>) {
                     return g.phase = Phase::ChangeEnds(CHANGE_ENDS);
                 }
                 Some(Next::MatchOver) => {
-                    // ponytail: the match-over phase isn't played: she announces it as the next match starts
-                    g.umpire.call_match();
+                    // ponytail: the match-over phase isn't played: the next match starts once her match call is over
                     g.umpire.match_over();
                     match_stats::match_over(g);
                     g.score = Score::new();
@@ -4541,14 +4545,13 @@ fn play_sounds(
             played.umpire = sound.play_centre(&b, p);
         }
         g.umpire_voice = (played.umpire != 0) as u64;
-        heard.voice_left = sound.centre_frames(&b, p);
+        heard.voice_left = sound.centre_frames(&b, p) + hst_sim::umpire::VOICE_LAG;
     }
     // timed in ticks, not by the audio thread, so the post-point timeline is the same on every machine (netplay)
     if g.umpire_voice != 0 {
         heard.voice_left = heard.voice_left.saturating_sub(1);
-        if heard.voice_left == 0 {
-            g.umpire_voice = 0;
-        }
+        // the ticks left: the match-over wait hears the stop a tick before her
+        g.umpire_voice = heard.voice_left as u64;
     }
 }
 

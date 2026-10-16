@@ -15,6 +15,15 @@
 use crate::ps2::{F, f32s};
 use crate::score::{Event, Score};
 
+/// Ticks a voice still counts as sounding after its clip has played out (the clip's length in 60 Hz frames, as
+/// the mixer renders it): the game hears of the stop through the sound driver's round trip. Counted from the tick
+/// the caller plays it, it holds for her own words (her next word: clip + 5) and, since the app plays the line call
+/// a tick before the game does (at the verdict, not the next tick's phase entry), for the call sprite's settle too
+/// (the scoreboard's read is clip + 4 after the game's play). The game's own match-over wait reads one tick
+/// sooner still (`PostPoint::calling_match`). Measured on slot 5 (umpire 4 a): seven clips, the mode of each; a
+/// tick less in about one case in four (the driver isn't locked to the frame).
+pub const VOICE_LAG: u32 = 5;
+
 /// Motions: idle, turned to her right, turned to her left (anims `_h`, `_r`, `_l`).
 pub const IDLE: u8 = 0;
 
