@@ -223,6 +223,11 @@ mod tests {
         assert!(m.args(&[]).contains(&"mods/gag_ump01".to_string()));
         m.roll = 3 * 0x1_0000;
         assert_eq!(m.umpire_pick(), 3);
+        // B432: online it keeps to the disc five, which every peer has (6 wraps to 1)
+        m.net.go = Some(super::super::online::Go::Host);
+        m.roll = 6 * 0x1_0000;
+        assert_eq!(m.umpire_pick(), 1);
+        m.net.go = None;
         m.umpire = UMPIRES as u8 + 2;
         m.umpire_mods.pop();
         m.umpire_in_range();
