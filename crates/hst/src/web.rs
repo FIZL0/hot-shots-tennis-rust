@@ -169,8 +169,21 @@ pub fn frame_rate(time: Res<bevy::time::Time<bevy::time::Real>>, mut w: bevy::pr
 
 /// B324: the display's refresh rate (Hz) as the page measured it from requestAnimationFrame before the game was
 /// loaded (`hstRefresh`, index.html), when it could.
-fn refresh() -> Option<f64> {
+pub(crate) fn refresh() -> Option<f64> {
     js_sys::Reflect::get(&js_sys::global(), &"hstRefresh".into()).ok()?.as_f64().filter(|&hz| hz > 0.0)
+}
+
+/// P53: what the page read of the device for the Auto graphics preset (`hstDevice`, index.html): the screen in CSS px,
+/// the DPR, the cores, Chromium's `deviceMemory` and WebGPU's `maxBufferSize`.
+pub fn device(d: &mut crate::graphics::Device) {
+    let Ok(o) = js_sys::Reflect::get(&js_sys::global(), &"hstDevice".into()) else { return };
+    let num = |k: &str| js_sys::Reflect::get(&o, &k.into()).ok().and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+    let (w, h) = (num("w") as u32, num("h") as u32);
+    d.css = [w.min(h), w.max(h)];
+    d.dpr = num("dpr") as f32;
+    d.cores = num("cores") as u32;
+    d.ram_mb = (num("ram") * 1024.0) as u32;
+    d.gpu_buffer_mb = (num("gpuBuffer") / 1048576.0) as u32;
 }
 
 /// B324: on the WebGL2 build, what it reaches here: the best second's frame rate (a match's once one has run, and

@@ -208,6 +208,25 @@ pub(super) const FONT: [&str; 15] = [
     "«»$ß",
 ];
 
+/// P53: the Auto preset's pick for this device (`graphics::pick`), logged.
+pub(super) fn auto_graphics() -> Graphics {
+    let d = crate::graphics::Device::here(touch_page());
+    let g = crate::graphics::pick(&d);
+    info!("auto graphics: {d:?} → {} ({}% scale, shadows {}, msaa {})", g.preset(), g.scale, g.shadows.name(), crate::graphics::msaa_name(g.msaa));
+    g
+}
+
+/// P53: the Auto preset's timing (`graphics::auto_tune`) saves what it stepped down to; the rest of settings.txt (the
+/// window, Show FPS too) stays as it is.
+pub(crate) fn save_graphics(iso: &str, g: Graphics) {
+    let path = Settings::path(iso);
+    let mut s = crate::store::read_to_string(&path).map_or_else(|_| Settings::default(), |t| Settings::parse(&t));
+    s.1 = Graphics { windowed: s.1.windowed, show_fps: s.1.show_fps, ..g };
+    if let Err(e) = crate::store::write(&path, s.text()) {
+        warn!("{}: {e}", path.display());
+    }
+}
+
 // ---------------------------------------------------------------- settings
 
 /// The enhancements, each on or off (all on by default), the graphics settings, the volumes (B235) and the aspect
@@ -1838,8 +1857,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), ranks, mods: mod_text }));
 
     let fresh = kept.is_none();
-    // first run (no settings.txt) on a Steam Deck or a phone (B351: the browser on a touch screen): its graphics preset
-    let first = || Settings(SETTING_DEFAULTS, if std::env::var("SteamDeck").is_ok_and(|v| v == "1") { Graphics::STEAM_DECK } else if touch_page() || cfg!(target_os = "ios") { Graphics::PHONE } else { Graphics::default() }, Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0, 0, 0);
+    // first run (no settings.txt): the Auto preset's pick for this device (P53; B351: a phone's is Phone or below it,
+    // the browser on a touch screen too; a Steam Deck's its own)
+    let first = || Settings(SETTING_DEFAULTS, auto_graphics(), Volumes::default(), default_aspect(), Ask::Each, 0, UMPIRES as u8, 0, 0, 0);
     let saved = crate::store::read_to_string(Settings::path(&args.iso)).map(|t| {
         let mut s = Settings::parse(&t);
         // B289: an older build kept the lobby prompt's answer in the online mod cache

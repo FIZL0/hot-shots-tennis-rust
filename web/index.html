@@ -511,6 +511,12 @@ if (gecko && !seen) {
 const adapter = renderer !== 'webgl2' && (!gecko || renderer === 'webgpu') && navigator.gpu ? Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]) : null;
 const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
 console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'} (renderer setting: ${renderer})`);
+// P53: what the game's Auto graphics preset picks from (iOS Safari hides the model and GPU; `web::device`)
+{
+  const a = webgpu ? await adapter.catch(() => null) : null;
+  window.hstDevice = { w: screen.width, h: screen.height, dpr: devicePixelRatio, cores: navigator.hardwareConcurrency ?? 0,
+    ram: navigator.deviceMemory ?? 0, gpuBuffer: a?.limits?.maxBufferSize ?? 0 };
+}
 if (!webgpu) document.getElementById('gl').hidden = true;
 // B378: no WebGL2 context for the WebGL2 build: stop here, before the download, saying why
 if (!webgpu) {

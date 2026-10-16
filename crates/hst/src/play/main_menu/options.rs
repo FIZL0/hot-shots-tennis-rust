@@ -151,7 +151,7 @@ fn about(o: Opt) -> &'static str {
         ShowFps => "Show the frame rate in the bottom-left corner, in the menus and in a match. Detailed: where each frame's time goes (game, simulation, rendering, waiting on the GPU/browser), meshes drawn and the renderer.",
         KeyHints => "Show the keyboard's keys at the bottom during a match while you play on the keyboard.",
         ButtonIcons => "The controller buttons the hints show. Auto: each controller's own (PlayStation, Switch, Steam Deck, else Xbox); or the same set for every controller.",
-        Preset => "High draws at full quality with every speed-up off; Default looks the same with Fewer Shadows and Skip Off-Screen on; Steam Deck, Low and Phone trade detail for frame rate; Lowest is the cheapest (half resolution, no shadows, simpler characters) for the weakest devices.",
+        Preset => "High draws at full quality with every speed-up off; Default looks the same with Fewer Shadows and Skip Off-Screen on; Steam Deck, Low and Phone trade detail for frame rate; Lowest is the cheapest (half resolution, no shadows, simpler characters) for the weakest devices. Auto picks one for this device, then times the first seconds of each match and lowers the resolution and shadows until it holds 60 fps.",
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
@@ -224,7 +224,7 @@ fn choices(o: Opt) -> Vec<String> {
         Display => words(&["Fullscreen", "Window"]),
         Aspect => words(&ASPECTS[..aspect_choices()]),
         MenuSize => MENU_SIZES.iter().map(|&t| menu_size_name(t)).collect(),
-        Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain(["Custom".into()]).collect(),
+        Preset => Graphics::PRESETS.iter().map(|(n, _)| n.to_string()).chain([AUTO.into(), "Custom".into()]).collect(),
         Scale => SCALES.iter().map(|s| format!("{s} %")).collect(),
         Mesh => MESHES.iter().map(|s| format!("{s} %")).collect(),
         Shadows => words(&SHADOW_NAMES),
@@ -256,10 +256,15 @@ fn cycle<T: PartialEq + Copy>(list: &[T], cur: T, d: isize) -> T {
     list[i]
 }
 
+/// P53: the Preset row's word for `Graphics::auto`.
+const AUTO: &str = "Auto";
+
 impl Settings {
     /// Change `o` one step in direction `d`.
     pub(super) fn step(&mut self, o: Opt, d: isize) {
         let g = &mut self.1;
+        // P53: setting the graphics by hand ends Auto's timing
+        g.auto &= !matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original | Cull | FewerShadows | Mesh);
         match o {
             Display => g.windowed = !g.windowed,
             Aspect => self.3 = (self.3 as isize + d).rem_euclid(aspect_choices() as isize) as u8,
@@ -267,10 +272,14 @@ impl Settings {
             ShowFps => g.show_fps = (g.show_fps as isize + d).rem_euclid(3) as u8,
             KeyHints => self.0[KEY_HINTS] = !self.0[KEY_HINTS],
             ButtonIcons => self.9 = (self.9 as isize + d).rem_euclid(super::legend::LAYOUTS.len() as isize) as u8,
+            // P53: Auto after the presets: the device's pick, timed in matches
             Preset => {
-                let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
-                let n = cycle(&names, g.preset(), d);
-                *g = g.keep(Graphics::PRESETS.iter().find(|(m, _)| *m == n).unwrap().1);
+                let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).chain([AUTO]).collect();
+                let n = cycle(&names, if g.auto { AUTO } else { g.preset() }, d);
+                *g = match Graphics::PRESETS.iter().find(|(m, _)| *m == n) {
+                    Some((_, p)) => Graphics { auto: false, ..g.keep(*p) },
+                    None => Graphics { windowed: g.windowed, show_fps: g.show_fps, ..super::auto_graphics() },
+                };
             }
             Scale => g.scale = cycle(&SCALES, g.scale, d),
             Shadows => g.shadows = cycle(&SHADOWS, g.shadows, d),
@@ -320,6 +329,7 @@ impl Settings {
             ShowFps => SHOW_FPS_NAMES[g.show_fps.min(2) as usize].into(),
             KeyHints => on_off(self.0[KEY_HINTS]),
             ButtonIcons => super::legend::LAYOUTS[self.9 as usize].0.into(),
+            Preset if g.auto => AUTO.into(),
             Preset => g.preset().into(),
             Scale => format!("{} %", g.scale),
             Shadows => SHADOW_NAMES[g.shadows as usize].into(),
@@ -1053,6 +1063,16 @@ mod tests {
         assert_eq!((l.1, l.value(Preset).as_str()), (Graphics::LOWEST, "Lowest"));
         l.step(Preset, 1);
         assert_eq!(l.1, Graphics::PHONE);
+        // P53: Auto after Phone (this device's pick, saved), then round to High; a graphics row by hand ends it
+        l.step(Preset, 1);
+        assert!(l.1.auto && l.value(Preset) == AUTO && Settings::parse(&l.text()) == l && choices(Preset).contains(&l.value(Preset)));
+        l.step(Scale, -1);
+        assert!(!l.1.auto && l.value(Preset) != AUTO);
+        l.step(Preset, 1);
+        assert_eq!((l.1.auto, l.value(Preset).as_str()), (false, "High"));
+        l.step(Preset, -1);
+        l.step(ShowFps, 1);
+        assert!(l.1.auto && l.value(Preset) == AUTO);
         s.step(Original, 1);
         assert!(s.1.original && Settings::parse(&s.text()) == s && s.flags().contains(&"--original".into()));
         // B301: Key Hints, on by default, saved
