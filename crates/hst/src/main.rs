@@ -142,6 +142,8 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 play::main_menu::ASPECT.store(play::widescreen::ASPECTS.iter().position(|n| *n == a).unwrap_or(0) as u8, std::sync::atomic::Ordering::Relaxed);
             }
             "--no-upscale" => upscale = false,
+            // M98: no HUD in the match (promo screenshots)
+            "--no-hud" => play::no_hud::OFF.store(true, std::sync::atomic::Ordering::Relaxed),
             // B374: no check for a newer release this run
             "--no-update-check" => update::NO_CHECK_FLAG.store(true, std::sync::atomic::Ordering::Relaxed),
             "--sound" => {
@@ -1330,11 +1332,11 @@ fn log_assets(w: &World, mut next: Local<f32>) {
 }
 
 /// `HST_KEYS="2:Enter 9:Escape 10:ArrowDown 11:Enter 15:shot=a.png"`: at each real-time second a key is pressed for one
-/// frame (Enter, Space, Escape, Arrow*, Digit1–4) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
+/// frame (Enter, Space, Escape, Arrow*, Digit1–4, F10) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
 fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut<ButtonInput<KeyCode>>, mut done: Local<usize>, mut pressed_at: Local<f32>) {
     let script = std::env::var("HST_KEYS").unwrap_or_default();
     let steps: Vec<_> = script.split_whitespace().filter_map(|s| s.split_once(':')).collect();
-    for k in [KeyCode::Enter, KeyCode::Space, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4] {
+    for k in [KeyCode::Enter, KeyCode::Space, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::F10] {
         // held through at least one 60 Hz menu tick (a fast display's frame may fall between two)
         if keys.pressed(k) && !keys.just_pressed(k) && time.elapsed_secs() - *pressed_at >= 1.0 / 30.0 {
             keys.release(k);
@@ -1359,6 +1361,8 @@ fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut
         "Digit2" => KeyCode::Digit2,
         "Digit3" => KeyCode::Digit3,
         "Digit4" => KeyCode::Digit4,
+        // the HUD on/off (M98)
+        "F10" => KeyCode::F10,
         _ => {
             if let Some(path) = what.strip_prefix("shot=") {
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.to_string()));
