@@ -1,4 +1,32 @@
-//! B12: the yellow smash marker belongs to the shot being struck, never the one after it.
+//! B12: the yellow smash marker belongs to the shot being struck, never the one after it. B507: the original
+//! searches only for the humans on the receiving team, so a human's own lobs never show it; ours (user 2026-10-16)
+//! marks every lob: one onto a team without humans is searched for its players instead, and a lob that peaks below
+//! a smash top is searched with the heights capped at its peak. Presentation only: the match never reads the yellow
+//! marker, and any other shot is searched as the original.
+
+use super::{COURTS, Game, PATH_MAX};
+
+/// Whose smash `[top, middle]` heights a strike by `who` searches the yellow marker's point with: the receiving
+/// team's humans (the original). A `lob` is searched for the receiving team's players when none is human, and with
+/// the heights capped at its own predicted peak, so it always places a point (both ours).
+pub(super) fn receivers(g: &Game, who: usize, lob: bool) -> Vec<[f32; 2]> {
+    let theirs = || (0..g.players.len()).filter(|&i| i & 1 != who & 1);
+    let humans: Vec<[f32; 2]> = theirs().filter(|&i| g.humans.get(i) == Some(&true)).map(|i| g.smash_heights[i]).collect();
+    if !lob {
+        return humans;
+    }
+    let all = if humans.is_empty() { theirs().map(|i| g.smash_heights[i]).collect() } else { humans };
+    // the predicted flight's peak before its first bounce (y down)
+    let (mut f, mut peak) = (g.flight, -g.flight.ball.pos[1]);
+    for _ in 0..PATH_MAX {
+        f.step(&g.shot, &COURTS[g.court]);
+        if f.bounces > 0 {
+            break;
+        }
+        peak = peak.max(-f.ball.pos[1]);
+    }
+    all.into_iter().map(|[t, m]| [t.min(peak), m.min(peak)]).collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -7,19 +35,14 @@ mod tests {
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
-    /// A bot match: at every strike, the search `strike` sets up for the receiver (as if human) over the ball's own
-    /// flight places a point for each lob and for no other shot (B12's report: a lob's marker on the next hit).
-    #[test]
-    fn lob_places_its_own_marker() {
-        if !std::path::Path::new(ISO).is_file() {
-            return eprintln!("no ISO, skipped");
-        }
+    /// A singles match (chars 6, 1, court 0) with these seats human, the rest bots; set up, not ticked yet.
+    fn bot_match(seats: [bool; 4]) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
         app.init_asset::<crate::gs::GsMaterial>();
         app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 2, pads: None });
-        app.insert_resource(Pads { seats: Some([false; 4]), autoplay: true, ..default() });
+        app.insert_resource(Pads { seats: Some(seats), autoplay: false, ..default() });
         app.init_resource::<tick_input::TickPads>();
         app.init_resource::<instant_replay::Recorder>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
@@ -30,6 +53,17 @@ mod tests {
         app.cleanup();
         app.world_mut().run_schedule(Startup);
         app.world_mut().run_schedule(PostStartup);
+        app
+    }
+
+    /// A bot match: at every strike, the search `strike` sets up for the receiver (as if human) over the ball's own
+    /// flight places a point for each lob and for no other shot (B12's report: a lob's marker on the next hit).
+    #[test]
+    fn lob_places_its_own_marker() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = bot_match([false; 4]);
         let (mut shots, mut lobs) = (0, 0);
         for _ in 0..60 * 60 * 2 {
             app.world_mut().run_schedule(FixedUpdate);
@@ -53,5 +87,59 @@ mod tests {
             lobs += lob as u32;
         }
         assert!(lobs >= 2, "only {lobs} lobs");
+    }
+
+    /// B507 (the user's report: their own lobs show no yellow marker; user 2026-10-16: always draw it for lobs):
+    /// 1P human, pressing only △ (and ✕ to serve), so it moves to the ball by itself and lobs; the bot opponent hits
+    /// all kinds. Every lob of 1P's places the marker (for the bot) before it bounces, low ones too, no other shot of 1P's sets up
+    /// a search, and every shot of the opponent's from the return on does (for 1P). The original searches only for
+    /// the humans on the receiving team (checked live on slot 4 in the B507 journal); the lobs onto bots are ours.
+    #[test]
+    fn every_lob_shows_the_marker() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = bot_match([true, false, false, false]);
+        let (mut shots, mut own, mut own_lobs, mut their_lobs) = (0, 0, 0, 0);
+        // a lob in the air: whether its marker has started yet
+        let mut waiting: Option<bool> = None;
+        for t in 0..60 * 60 * 2 {
+            // a fresh △ press every 8 ticks, ✕ in between (the serve's toss and hit)
+            let buttons = match t % 16 {
+                0..4 => 0x1000,
+                8..12 => 0x2000,
+                _ => 0,
+            };
+            let pad = hst_sim::replay::Pad { buttons, ..tick_input::IDLE };
+            app.insert_resource(tick_input::Replay([[pad, tick_input::IDLE, tick_input::IDLE, tick_input::IDLE]].into()));
+            app.world_mut().run_schedule(FixedUpdate);
+            let g = app.world().resource::<Game>();
+            if let Some(started) = &mut waiting {
+                *started |= g.marks.start;
+                if g.flight.bounces > 0 || g.shots != shots {
+                    assert!(*started, "shot {shots}: a lob bounced without a marker");
+                    waiting = None;
+                }
+            }
+            if g.shots == shots || g.shots < 2 {
+                shots = g.shots;
+                continue;
+            }
+            shots = g.shots;
+            let lob = g.shot.class == 1 && g.shot.kind == 3;
+            if g.last_hitter == 0 {
+                assert_eq!(g.marks.smash.is_some(), lob, "shot {shots}: 1P's shot (lob {lob}) and its smash search");
+                own += 1;
+                own_lobs += lob as u32;
+            } else {
+                assert!(g.marks.smash.is_some(), "shot {shots}: no smash search for the human receiver");
+                their_lobs += lob as u32;
+            }
+            if lob {
+                waiting = Some(g.marks.start);
+            }
+        }
+        // the bot rarely lobs back at a lobber (`lob_places_its_own_marker` covers the opponent's lobs)
+        assert!(own_lobs >= 2, "1P: {own} shots, {own_lobs} lobs; the opponent's lobs: {their_lobs}");
     }
 }
