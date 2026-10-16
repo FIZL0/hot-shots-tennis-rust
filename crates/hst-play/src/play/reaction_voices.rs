@@ -44,7 +44,7 @@ fn step(mut g: ResMut<Game>, mut frames: ResMut<Frames>) {
         let lost = i as i32 & 1 != g.post_winner & 1;
         let Some(rv) = sound::reaction_voice(n, motion, lost, false, || g.rng.shared.r15() % 100) else { continue };
         if let Some(play) = g.voices[i].react(i, rv, || g.rng.shared.r15()) {
-            g.whooshes.push((0, i, play));
+            g.lines.push(super::emote::Line::Reaction(i, play));
         }
     }
 }

@@ -383,6 +383,8 @@ pub struct Game {
     sounds: Vec<(sound::Play, V3)>,
     /// Swing whooshes and dive thuds waiting to play: ticks left, the player (played at their position) and the sound.
     whooshes: Vec<(u32, usize, sound::Play)>,
+    /// B473: emote and post-point reaction voice lines due this tick (`emote::play_lines`), each cutting emote lines.
+    lines: Vec<emote::Line>,
     /// The ball's bounce sounds, and whether the last shot was a smash in a game of more than one player.
     bounces: sound::Bounces,
     smashed: bool,
@@ -651,6 +653,7 @@ pub fn plugin(app: &mut App) {
         );
     app.add_systems(FixedUpdate, flare_tick.after(play_sounds));
     app.add_systems(Update, emote::hide_ball.after(draw));
+    app.add_systems(FixedUpdate, emote::play_lines.after(play_sounds));
 }
 
 /// The sun's lens flare's `rand()` draws each tick it shows (clear or cloudy).
@@ -1322,6 +1325,7 @@ pub fn setup(
         respark: None,
         sounds: Vec::new(),
         whooshes: Vec::new(),
+        lines: Vec::new(),
         bounces: default(),
         smashed: false,
         whistle: (false, 0),

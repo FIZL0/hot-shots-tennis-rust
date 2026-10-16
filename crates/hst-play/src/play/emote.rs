@@ -137,7 +137,48 @@ fn voice(g: &mut Game, i: usize, motion: usize) {
     // ponytail: every emote has two keys, so avoiding the last one alternates them; the draw only matters past two
     let draw = g.players[i].pos[0].to_bits() ^ g.players[i].pos[2].to_bits();
     if let Some(play) = line(&mut g.voices[i], i, motion, draw) {
-        g.whooshes.push((0, i, play));
+        g.lines.push(Line::Emote(i, play));
+    }
+}
+
+/// A voice line that cuts emote lines still sounding (B473): an emote's line its own player's last one, a post-point
+/// reaction's every player's.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Line {
+    Emote(usize, sound::Play),
+    Reaction(usize, sound::Play),
+}
+
+/// Plays the lines due this tick at their player, each once however often its tick runs (`heard`), cutting the emote
+/// lines still sounding (`emotes`: each player's last emote line's play id, 0 for none).
+pub(super) fn play_lines(
+    mut g: ResMut<Game>,
+    sound: Option<Res<crate::audio::Sound>>,
+    voices: Option<Res<crate::audio::VoiceBanks>>,
+    heard: Res<super::heard::Heard>,
+    mut played: ResMut<super::heard::Played>,
+    mut emotes: Local<[u64; 4]>,
+) {
+    let lines = std::mem::take(&mut g.lines);
+    let (Some(sound), Some(voices)) = (sound, voices) else { return };
+    for line in lines {
+        let (Line::Emote(i, p) | Line::Reaction(i, p)) = line;
+        let at = g.players[i].pos;
+        if !played.first(heard.tick, ("line", p, at)) {
+            continue;
+        }
+        let cut = match line {
+            Line::Emote(..) => i..i + 1,
+            Line::Reaction(..) => 0..emotes.len(),
+        };
+        for id in emotes[cut].iter_mut().filter(|id| **id != 0) {
+            sound.stop(std::mem::take(id));
+        }
+        let Some(b) = voices.0.get(p.slot as usize - 1).and_then(|b| b.as_ref()) else { continue };
+        let id = sound.play_at(b, p, at);
+        if let Line::Emote(..) = line {
+            emotes[i] = id;
+        }
     }
 }
 
@@ -374,6 +415,40 @@ mod match_tests {
                 assert_eq!(hidden, own_clip && (at..at + len - 1).contains(&t), "own clip {own_clip}, tick {t}");
             }
         }
+    }
+
+    /// B473: 2P's second emote cuts its first one's voice line, and a post-point reaction's line cuts the second.
+    #[test]
+    fn a_new_line_cuts_the_last_emote_line() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let flick = Pad { rx: 0x80, ry: 0, ..IDLE };
+        let mut a = app(vec![]);
+        let len = a.world().resource::<Game>().data[1].motions[&MOTIONS[0]].length.ceil() as usize;
+        let (at, again) = (10, 10 + len + 3);
+        let mut pads = vec![[IDLE; 4]; again + 2];
+        (pads[at][1], pads[again][1]) = (flick, flick);
+        a.insert_resource(Replay(pads.into_iter().collect()));
+        let sound = crate::audio::Sound::test(&mut hst_data::iso::Iso::open(ISO).unwrap());
+        a.insert_resource(sound.clone());
+        a.add_plugins(heard::plugin);
+        a.add_systems(FixedUpdate, super::play_lines.after(held_ball));
+        let mut lines = Vec::new();
+        for t in 0..=again {
+            let before = sound.plays();
+            step(&mut a);
+            if t == at || t == again {
+                assert_eq!(sound.plays(), before + 1, "tick {t}: no emote line");
+                lines.push(sound.plays());
+            }
+        }
+        assert!(!sound.playing(lines[0]) && sound.playing(lines[1]), "the second emote didn't cut the first's line");
+        // a reaction line, here 1P's, cuts every emote line
+        let p = sound::Play { slot: 1, program: 7, key: 1, volume: 0x80, speed: 1.0 };
+        a.world_mut().resource_mut::<Game>().lines.push(super::Line::Reaction(0, p));
+        step(&mut a);
+        assert!(!sound.playing(lines[1]) && sound.playing(sound.plays()), "the reaction didn't cut the emote line");
     }
 
     /// B472 (B363 before it): 1P tosses and swings as the ball drops past (a whiff: a fault); the same flick in the
