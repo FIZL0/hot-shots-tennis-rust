@@ -2,7 +2,7 @@
 //! `frame.rs`). The title and the Singles / Doubles button (□ switches, 1P's device or a tap) along the top; the
 //! players' plates on the court, a team each side of the net (singles: near side, far side); the scoreboard strip
 //! under it: Court (its picture; ✕ opens the court select), Umpire (her face; ✕ opens the umpire select), Sets and
-//! Games (✕, then ←→, as before, B212), Handicap (Off until the original's handicaps are in, B40g1); along the bottom
+//! Games (✕, then ←→, as before, B212); Handicap is hidden until the original's handicaps are in (B482, B40g1); along the bottom
 //! ‹ Back and the big Start the match!. The arrows go about the screen as its parts lie; ✕ on a plate sends that
 //! player back to the character select. The court and umpire selects (`court_screen`, `umpire_screen`) are as before.
 
@@ -13,7 +13,10 @@ use bevy::prelude::{Entity, default};
 
 impl Menu {
     pub(super) fn confirm_geo(&self) -> frame::Geo {
-        frame::layout(self.grid.reach(), Spec { n: self.players(), code: false, public: false, chat: false })
+        let mut g = frame::layout(self.grid.reach(), Spec { n: self.players(), code: false, public: false, chat: false });
+        // Handicap is hidden until handicaps work (B482; B40g1 brings it back)
+        frame::spread(&mut g, 4);
+        g
     }
 
     /// B449: where the arrows go from the confirm screen's chosen row (`Menu::sel`), as its parts lie.
@@ -56,7 +59,7 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], _hand_x
         plate(d, m, text, pads, p, rect, s, on(CONFIRM_ROWS + p));
         d.hit(rect, pointer::Act::Row(CONFIRM_ROWS + p, pointer::OK));
     }
-    // the strip: Court, Umpire, Sets, Games, Handicap
+    // the strip: Court, Umpire, Sets, Games (Handicap hidden, B482)
     let u = m.umpire as usize;
     let umpire = match (u, m.umpire_mod_of(u)) {
         (UMPIRES, _) => "Random".to_string(),
@@ -68,7 +71,6 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], _hand_x
         Cell { label: "UMPIRE", value: umpire, arrows: false, sel: on(4), thumb: Thumb::Umpire(u) },
         Cell { label: "SETS", value: SETS[m.sets].to_string(), arrows: true, sel: on(2), thumb: Thumb::None },
         Cell { label: "GAMES", value: m.games.to_string(), arrows: true, sel: on(3), thumb: Thumb::None },
-        Cell { label: "HANDICAP", value: "Off".into(), arrows: false, sel: false, thumb: Thumb::None },
     ];
     frame::strip(d, m, &g, &cells);
     for (row, cell) in [(1, 0), (4, 1), (2, 2), (3, 3)] {

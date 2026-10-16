@@ -226,6 +226,18 @@ fn layout_in([l, t, r, b]: [f32; 4], spec: Spec, turned: bool) -> Geo {
     Geo { k, s, turned, title, pill, code, copy, public, mode, stage, court, labels, vs, plates, strip, cells, back, chat, start }
 }
 
+/// The strip with only its first `n` cells, spread by their shares across all of it (the rest left zero wide at its
+/// right end): the confirm screen leaves Handicap out until handicaps work (B482, back with B40g1).
+pub(super) fn spread(g: &mut Geo, n: usize) {
+    let sum: f32 = GROW[..n].iter().sum();
+    let mut at = g.strip[0];
+    for (cell, grow) in g.cells.iter_mut().zip(GROW.iter().enumerate().map(|(i, &w)| if i < n { w } else { 0.0 })) {
+        let w = g.strip[2] * grow / sum;
+        *cell = [at, g.strip[1], w, g.strip[3]];
+        at += w;
+    }
+}
+
 // ---------------------------------------------------------------- drawing
 
 /// A box filled `rgb`, its corners rounded `r` units.
@@ -582,14 +594,15 @@ pub(super) enum Thumb {
 }
 
 /// The strip: its cells with the rules between them.
-pub(super) fn strip(d: &mut Draw, m: &Menu, g: &Geo, cells: &[Cell; 5]) {
+pub(super) fn strip(d: &mut Draw, m: &Menu, g: &Geo, cells: &[Cell]) {
     let [x, y, w, h] = g.strip;
+    let last = cells.len() - 1;
     ringed(d, [x, y, w, h], g.x(12.0), g.x(2.0), RULE, Some(PANEL));
     for (k, (c, &[cx, cy, cw, ch])) in cells.iter().zip(&g.cells).enumerate() {
-        let inner = [cx + if k == 0 { g.x(2.0) } else { 0.0 }, cy + g.y(2.0), cw - if k == 0 || k == 4 { g.x(2.0) } else { 0.0 }, ch - g.y(4.0)];
+        let inner = [cx + if k == 0 { g.x(2.0) } else { 0.0 }, cy + g.y(2.0), cw - if k == 0 || k == last { g.x(2.0) } else { 0.0 }, ch - g.y(4.0)];
         if c.sel {
             d.q(Tex::Solid, [0.0; 4], inner, RULE, 128.0);
-            let r = if k == 0 || k == 4 { g.x(10.0) } else { 0.0 };
+            let r = if k == 0 || k == last { g.x(10.0) } else { 0.0 };
             d.out.last_mut().unwrap().round = if k == 0 { [r, 0.0, 0.0, r] } else { [0.0, r, r, 0.0] };
             ringed(d, inner, g.x(3.0), g.x(3.0), WHITE, None);
         }
