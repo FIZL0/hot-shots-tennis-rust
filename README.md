@@ -63,7 +63,7 @@ vs 2 CPUs); in singles it plays the opponent. Every other player is a CPU.
 ## Mods
 
 Main menu → Mods adds characters, courts and umpires from inside the game, on desktop and in the browser. The store
-is the Hugging Face repo [`FIZL0/opentennis-mods`](https://huggingface.co/FIZL0/opentennis-mods).
+is the Hugging Face repo [`FIZL0/opentennis-mods`](https://huggingface.co/datasets/FIZL0/opentennis-mods).
 
 - **Add mod** installs a mod `.zip` from your computer (the system file picker).
 - **Browse mods** lists the store's mods, each with its picture, stats card, author, handedness, costumes and size,
