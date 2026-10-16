@@ -357,6 +357,30 @@ impl Room {
         true
     }
 
+    /// B522: the seat a person's player in seat `i` moves to on the other team (seats 0..half are one team, the rest
+    /// the other): its first open seat, else its first computer player's (who comes over in trade); `None` if a
+    /// person holds every seat there.
+    pub fn team_target(&self, i: usize) -> Option<usize> {
+        let n = self.seats.len();
+        let half = (n / 2).max(1);
+        self.seats.get(i)?.as_ref().filter(|s| s.human())?;
+        let other: Vec<usize> = if i < half { (half..n).collect() } else { (0..half).collect() };
+        let open = other.iter().copied().find(|&j| self.seats[j].is_none());
+        open.or_else(|| other.iter().copied().find(|&j| self.seats[j].as_ref().is_some_and(|s| !s.human())))
+    }
+
+    /// B522: `peer`'s player in seat `i` to the other team (`team_target`); false (no change) if it isn't `peer`'s or
+    /// there's no room.
+    fn switch_team(&mut self, peer: &str, i: usize) -> bool {
+        if self.seats.get(i).is_none_or(|s| s.as_ref().is_none_or(|s| s.peer != peer)) {
+            return false;
+        }
+        let Some(j) = self.team_target(i) else { return false };
+        self.seats.swap(i, j);
+        self.ver += 1;
+        true
+    }
+
     /// Seat `peer`'s picks in the first open seats; false (and no change) if they don't all fit.
     fn take(&mut self, peer: &str, picks: &[Pick]) -> bool {
         if picks.is_empty() || picks.len() > self.open() {
@@ -661,6 +685,8 @@ pub enum Msg {
     Emote { seat: u8, dir: u8 },
     /// M95: a guest's input changed in the lobby (`Room::devices`).
     Device(crate::device::Device),
+    /// B522: a guest's player in seat `.0` to the other team (`Room::team_target`).
+    Team(u8),
 }
 
 impl Msg {
@@ -842,6 +868,8 @@ pub enum Cmd {
     Emote(u8, u8),
     /// M95: this machine's platform and input (any time: the next Hello carries it; in a lobby everyone hears it).
     Device(crate::device::Device),
+    /// B522: a guest's player in seat `.0` to the other team (the host's □ is singles / doubles instead).
+    Team(usize),
 }
 
 /// What the network tells the app.
@@ -1832,6 +1860,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         cx.say(Event::Room(room.clone()));
                     }
                 }
+                // B522: a guest's player to the other team (a line-up change, as the host's Doubles)
+                Guest::Said(peer, Msg::Team(i)) => {
+                    if starting.is_none() && room.switch_team(&peer, i as usize) {
+                        ready.clear();
+                        broadcast(&joined, &Msg::Room(room.clone()));
+                        cx.say(Event::Room(room.clone()));
+                        dirty = true;
+                    }
+                }
                 Guest::Said(peer, Msg::Picks(p)) => {
                     let ok = room.allowed(&p);
                     // B275: a refused pick is a message to both, not a seat change (the guest stays)
@@ -2513,6 +2550,7 @@ async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unb
                 Some(Cmd::Chat(text)) => link.send(&Msg::Chat { from: String::new(), name: String::new(), text }),
                 Some(Cmd::Emote(seat, dir)) if !playing => link.send(&Msg::Emote { seat, dir }),
                 Some(Cmd::Device(d)) if !playing => link.send(&Msg::Device(d)),
+                Some(Cmd::Team(i)) if !playing => link.send(&Msg::Team(i as u8)),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
                     picks = p;
@@ -3092,6 +3130,26 @@ mod tests {
             assert_eq!((u.len(), d.iter().filter(|&&c| c == 3).count()), (4, 1), "{d:?}");
         }
         assert!(all.iter().any(|d| !d.contains(&0)) && all.iter().any(|d| d != &all[0]), "{all:?}");
+    }
+
+    /// B522: a guest's player to the other team: its first open seat, else a computer's (who trades places); never a
+    /// person's, never someone else's player.
+    #[test]
+    fn a_guest_swaps_team() {
+        let mut r = room(true);
+        assert!(r.take("host", &[Pick::disc(0, 0)]) && r.take("g", &[Pick::disc(1, 0)]));
+        assert!(r.bot(3, Some(Pick::disc(4, 0))));
+        assert_eq!(r.team_target(1), Some(2), "the open seat first");
+        assert!(!r.switch_team("h", 1) && !r.switch_team("g", 0), "only its own player");
+        let v = r.ver;
+        assert!(r.switch_team("g", 1) && r.ver == v + 1);
+        assert_eq!(r.seats.iter().map(|s| s.as_ref().map(|s| s.peer.as_str())).collect::<Vec<_>>(), [Some("host"), None, Some("g"), Some(CPU)]);
+        assert!(r.bot(1, Some(Pick::disc(5, 0))) && r.switch_team("g", 2), "onto the computer's, which comes over");
+        assert_eq!(r.seats.iter().map(|s| s.as_ref().map(|s| s.pick.char)).collect::<Vec<_>>(), [Some(0), Some(1), Some(5), Some(4)]);
+        let mut s = room(false);
+        assert!(s.take("host", &[Pick::disc(0, 0)]) && s.take("g", &[Pick::disc(1, 0)]));
+        assert_eq!(s.team_target(1), None, "singles against the host: nowhere to go");
+        assert!(!s.switch_team("g", 1));
     }
 
     /// B201: the host's computer players (open and people's seats only), singles/doubles (the taken seats first, if

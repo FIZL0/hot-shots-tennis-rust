@@ -1266,6 +1266,10 @@ impl Menu {
                 if k.page && self.online_swap(dev, &mut out) {
                     return out;
                 }
+                // B522: a guest's moves its player to the other team
+                if k.page && self.online_team_step(dev, &mut out) {
+                    return out;
+                }
                 // B375: 1P's device (only) swaps Singles ↔ Doubles with □ / Tab (or a tap on the mode pill)
                 if k.page && self.can_swap(dev) {
                     self.swap_mode(true);

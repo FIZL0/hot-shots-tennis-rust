@@ -956,6 +956,10 @@ impl Menu {
                         _ => out.push(Sound(1)),
                     };
                 }
+                // B522: a guest's □ moves its player to the other team instead
+                if k.page && !self.net.hosting {
+                    return self.switch_team(self.lobby_team_seat(), out);
+                }
                 if k.name && self.net.hosting && self.net.room.is_some() && self.counting() == 0 {
                     return self.start(out);
                 }
@@ -1204,6 +1208,57 @@ impl Menu {
             // the help line says why (four seated: doubles only)
             None => out.push(Effect::Sound(1)),
         }
+        true
+    }
+
+    /// B522: a guest's player in seat `p` may go to the other team (`Room::team_target`): the seat it would take.
+    fn team_target(&self, p: usize) -> Option<usize> {
+        if self.net.hosting || self.net.started || !self.online() || !self.mine(p) {
+            return None;
+        }
+        self.net.room.as_ref()?.team_target(p)
+    }
+
+    /// B522: the guest's seat its □ / X moves on the online roster (`dev`'s own; the host's is singles / doubles).
+    pub(super) fn online_team(&self, dev: super::Dev) -> Option<usize> {
+        if self.screen != Screen::Chars || self.net.hosting || !self.online() {
+            return None;
+        }
+        (0..4).find(|&p| self.seats[p] == Some(dev)).filter(|&p| self.team_target(p).is_some())
+    }
+
+    /// B522: the guest's seat its □ / X moves in the lobby: the chosen card if it's this machine's, else its first.
+    pub(super) fn lobby_team(&self) -> Option<usize> {
+        if self.screen != Screen::Lobby || self.lobby_asking() {
+            return None;
+        }
+        self.lobby_team_seat().filter(|&p| self.team_target(p).is_some())
+    }
+
+    fn lobby_team_seat(&self) -> Option<usize> {
+        match self.items().get(self.sel) {
+            Some(&Item::Seat(i)) if self.mine(i) => Some(i),
+            _ => (0..4).find(|&i| self.mine(i)),
+        }
+    }
+
+    /// B522: a guest's □ / X: its player in seat `p` to the other team. The player moves here at once, so this
+    /// machine's players keep the order the host's room puts them in (`align_to` pairs them up in seat order).
+    fn switch_team(&mut self, p: Option<usize>, out: &mut Vec<Effect>) {
+        let Some((p, q)) = p.and_then(|p| Some((p, self.team_target(p)?))) else { return out.push(Effect::Sound(1)) };
+        self.seats.swap(p, q);
+        self.players.swap(p, q);
+        self.scroll.swap(p, q);
+        out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Team(p)))]);
+    }
+
+    /// B522: a guest's □ / X on the online roster (true: taken; the host's goes to `online_swap`).
+    pub(super) fn online_team_step(&mut self, dev: super::Dev, out: &mut Vec<Effect>) -> bool {
+        if self.screen != Screen::Chars || self.net.hosting || !self.online() {
+            return false;
+        }
+        let p = (0..4).find(|&p| self.seats[p] == Some(dev));
+        self.switch_team(p, out);
         true
     }
 
@@ -2429,7 +2484,8 @@ mod tests {
         assert_eq!((m.screen, m.doubles, m.players(), m.seats[0]), (Screen::Chars, true, 4, Some(dev)));
         let mut guest = m.clone();
         guest.net.hosting = false;
-        assert!(!guest.step(dev, page).iter().any(|e| matches!(e, Effect::Online(_))), "only the host swaps");
+        // B522: a guest's □ is its team instead
+        assert!(!guest.step(dev, page).iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Doubles(_))))), "only the host swaps");
         let mut full = m.clone();
         full.net.room.as_mut().unwrap().seats = r.seats.iter().map(|_| r.seats[0].clone()).collect();
         assert_eq!(full.step(dev, page), vec![Effect::Sound(1)], "four seated: doubles only");
@@ -2971,6 +3027,49 @@ mod tests {
         h.players[1].swap = false;
         h.align();
         assert!(h.players[1].swap);
+    }
+
+    /// B522: a guest's □ moves its player to the other team (on the roster and in the lobby, the legend saying so);
+    /// the host's stays Singles / Doubles.
+    #[test]
+    fn a_guests_square_swaps_team() {
+        let (dev, page) = (super::super::Dev::Keys, Press { page: true, ..default() });
+        let mut g = Menu { screen: Screen::Chars, ..default() };
+        sample(&mut g);
+        (g.net.hosting, g.net.me, g.net.go, g.seats[0]) = (false, "k51qzi5uqu5d".into(), Some(Go::Code), Some(dev));
+        g.align();
+        assert_eq!(g.seats[1], Some(dev));
+        let legend = |m: &Menu| super::super::legend::acts(m, dev).into_iter().any(|(a, l)| a == super::super::legend::Act::Page && l == "Swap team");
+        assert!(legend(&g));
+        let fx = g.step(dev, page);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Team(1)))) && !fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Doubles(_))))), "{fx:?}");
+        assert_eq!((g.seats[1], g.seats[3]), (None, Some(dev)), "the open seat on the far team");
+        // the host's room comes back with the guest moved
+        let r = g.net.room.as_mut().unwrap();
+        r.seats.swap(1, 3);
+        g.align();
+        assert_eq!(g.seats[3], Some(dev));
+        // from the lobby back (the near team has the host and an open seat now)
+        g.screen = Screen::Lobby;
+        g.sel = 0;
+        assert!(legend(&g));
+        assert!(g.step(dev, page).contains(&Effect::Online(Fx::Net(Cmd::Team(3)))));
+        assert_eq!(g.seats[1], Some(dev));
+        // nowhere to go: a person in every seat over there
+        let mut full = g.clone();
+        full.net.room.as_mut().unwrap().seats = vec![Some(Seat { peer: "host".into(), pick: Pick::disc(0, 0) }), Some(Seat { peer: "k51qzi5uqu5d".into(), pick: Pick::disc(1, 0) })];
+        full.net.room.as_mut().unwrap().doubles = false;
+        full.align();
+        assert!(!legend(&full));
+        assert_eq!(full.step(dev, page), vec![Effect::Sound(1)]);
+        // the host's □ is Singles / Doubles still, never a team swap
+        let mut h = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut h);
+        (h.net.hosting, h.net.me, h.net.go, h.seats[0]) = (true, "host".into(), Some(Go::Host), Some(dev));
+        h.net.room.as_mut().unwrap().seats[2] = None;
+        let fx = h.step(dev, page);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Doubles(false)))) && !fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Team(_))))), "{fx:?}");
+        assert!(h.lobby_team().is_none());
     }
 
     /// B370: ←→ go along the seat cards (a computer's card onto its ✕ and back), ↓ from a card to the bottom row, ↑ to

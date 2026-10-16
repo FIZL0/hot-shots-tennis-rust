@@ -96,6 +96,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if m.team_switch(dev).is_some() {
                 v.push((Act::Page, "Switch team"));
             }
+            // B522: online, a guest's □ moves its player to the other team
+            if m.online_team(dev).is_some() {
+                v.push((Act::Page, "Swap team"));
+            }
             let me = m.players[p];
             if !me.ready {
                 v.extend([(Act::Move, "Character"), (Act::Costume, "Costume"), (Act::Hand, "Hand")]);
@@ -222,6 +226,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             // B449: the host's □ and Start, from anywhere
             if m.lobby_mode() {
                 v.push((Act::Page, "Singles / Doubles"));
+            }
+            if m.lobby_team().is_some() {
+                v.push((Act::Page, "Swap team"));
             }
             if m.net.hosting && m.net.room.is_some() && m.counting() == 0 {
                 v.push((Act::Name, "Start"));
