@@ -352,7 +352,19 @@ impl Menu {
             3 => self.games = super::GAMES[step(super::GAMES.iter().position(|&g| g >= self.games).unwrap_or(1), super::GAMES.len())],
             4 => {
                 let vanilla = self.net.room.as_ref().is_some_and(|r| r.vanilla);
-                return out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Vanilla(!vanilla)))]);
+                out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Vanilla(!vanilla)))]);
+                // B520: a Random court drawn again from the courts it can be now (the disc's alone with mods off)
+                if self.court != super::COURTS {
+                    return;
+                }
+                let mut m = self.clone();
+                if let Some(r) = m.net.room.as_mut() {
+                    r.vanilla = !vanilla;
+                    let mut fx = Vec::new();
+                    m.send_venue(&mut fx);
+                    out.extend(fx.into_iter().filter(|e| !matches!(e, Effect::Sound(_))));
+                }
+                return;
             }
             _ => return,
         }
@@ -563,6 +575,11 @@ impl Menu {
         for (&i, (d, pl)) in mine.iter().zip(local) {
             (self.seats[i], self.players[i]) = (Some(d), pl);
         }
+        if r.vanilla {
+            for &i in &mine {
+                self.unmod(i, r);
+            }
+        }
         for i in (0..4).filter(|i| !mine.contains(i) && self.net.edit != Some(*i)) {
             let Some(s) = r.seats.get(i).cloned().flatten() else {
                 self.players[i] = default();
@@ -584,6 +601,36 @@ impl Menu {
             pl.random = !s.human() && s.pick.random;
             self.players[i] = pl;
         }
+    }
+
+    /// B520: an online lobby with mods off (vanilla): every pick, Random's too, is a disc character.
+    pub(super) fn vanilla_lobby(&self) -> bool {
+        self.online() && self.net.room.as_ref().is_some_and(|r| r.vanilla)
+    }
+
+    /// B520: mods off: this machine's player in seat `i` on a custom character (or a costume pack's costume) goes to
+    /// its donor's, as `Room::set_vanilla` put its seat (a Random draw stays on the Random card). Not while still
+    /// choosing on the select: only a pick that's in (ready, or the lobby's card).
+    fn unmod(&mut self, i: usize, r: &Room) {
+        let pl = self.players[i];
+        if self.screen == Screen::Chars && !pl.ready {
+            return;
+        }
+        let super::Who::Mod(m) = self.pick(i).0 else { return };
+        let donor = self.mods[m].donor;
+        let seat = r.seats.get(i).cloned().flatten().map(|s| s.pick).filter(|p| p.r#mod.is_none() && p.char == donor);
+        self.put(i, Some(super::Who::Disc(donor)));
+        let me = &mut self.players[i];
+        (me.costume, me.random, me.ready, me.swap) = (seat.map_or(0, |p| p.costume), pl.random, pl.ready, pl.swap);
+    }
+
+    /// B520: mods off and this machine's picks in the room differ from its players' (a custom character readied
+    /// after, refused by the host, now on its donor): its picks to send again.
+    fn vanilla_repick(&self) -> Option<Vec<Pick>> {
+        let r = self.net.room.as_ref().filter(|r| r.vanilla && self.screen == Screen::Lobby && !self.net.started && !self.net.me.is_empty())?;
+        let held: Vec<Pick> = r.seats.iter().flatten().filter(|s| s.peer == self.net.me).map(|s| s.pick.clone()).collect();
+        let picks = self.picks();
+        (picks.len() == held.len() && picks != held && picks.iter().all(|p| p.r#mod.is_none())).then_some(picks)
     }
 
     /// B285: how many of `mods` are this machine's roster; after them come the lobby's mods it has the looks of but
@@ -978,6 +1025,10 @@ impl Menu {
                         _ => out.push(Sound(1)),
                     };
                 }
+                // B522: a guest's □ moves its player to the other team instead
+                if k.page && !self.net.hosting {
+                    return self.switch_team(self.lobby_team_seat(), out);
+                }
                 if k.name && self.net.hosting && self.net.room.is_some() && self.counting() == 0 {
                     return self.start(out);
                 }
@@ -1234,6 +1285,57 @@ impl Menu {
             // the help line says why (four seated: doubles only)
             None => out.push(Effect::Sound(1)),
         }
+        true
+    }
+
+    /// B522: a guest's player in seat `p` may go to the other team (`Room::team_target`): the seat it would take.
+    fn team_target(&self, p: usize) -> Option<usize> {
+        if self.net.hosting || self.net.started || !self.online() || !self.mine(p) {
+            return None;
+        }
+        self.net.room.as_ref()?.team_target(p)
+    }
+
+    /// B522: the guest's seat its □ / X moves on the online roster (`dev`'s own; the host's is singles / doubles).
+    pub(super) fn online_team(&self, dev: super::Dev) -> Option<usize> {
+        if self.screen != Screen::Chars || self.net.hosting || !self.online() {
+            return None;
+        }
+        (0..4).find(|&p| self.seats[p] == Some(dev)).filter(|&p| self.team_target(p).is_some())
+    }
+
+    /// B522: the guest's seat its □ / X moves in the lobby: the chosen card if it's this machine's, else its first.
+    pub(super) fn lobby_team(&self) -> Option<usize> {
+        if self.screen != Screen::Lobby || self.lobby_asking() {
+            return None;
+        }
+        self.lobby_team_seat().filter(|&p| self.team_target(p).is_some())
+    }
+
+    fn lobby_team_seat(&self) -> Option<usize> {
+        match self.items().get(self.sel) {
+            Some(&Item::Seat(i)) if self.mine(i) => Some(i),
+            _ => (0..4).find(|&i| self.mine(i)),
+        }
+    }
+
+    /// B522: a guest's □ / X: its player in seat `p` to the other team. The player moves here at once, so this
+    /// machine's players keep the order the host's room puts them in (`align_to` pairs them up in seat order).
+    fn switch_team(&mut self, p: Option<usize>, out: &mut Vec<Effect>) {
+        let Some((p, q)) = p.and_then(|p| Some((p, self.team_target(p)?))) else { return out.push(Effect::Sound(1)) };
+        self.seats.swap(p, q);
+        self.players.swap(p, q);
+        self.scroll.swap(p, q);
+        out.extend([Effect::Sound(0), Effect::Online(Fx::Net(Cmd::Team(p)))]);
+    }
+
+    /// B522: a guest's □ / X on the online roster (true: taken; the host's goes to `online_swap`).
+    pub(super) fn online_team_step(&mut self, dev: super::Dev, out: &mut Vec<Effect>) -> bool {
+        if self.screen != Screen::Chars || self.net.hosting || !self.online() {
+            return false;
+        }
+        let p = (0..4).find(|&p| self.seats[p] == Some(dev));
+        self.switch_team(p, out);
         true
     }
 
@@ -1983,6 +2085,9 @@ pub(super) fn poll(
         }
         // B201: everyone's places on the select into its panels, and this machine's out when they move
         menu.align();
+        if let Some(p) = menu.vanilla_repick() {
+            net.send(Cmd::Picks(p));
+        }
         if menu.net.room.is_some() && !menu.net.me.is_empty() && !menu.net.started && matches!(menu.screen, Screen::Chars | Screen::Lobby | Screen::Confirm) {
             let lives = menu.lives();
             if menu.net.sent.as_ref() != Some(&lives) {
@@ -2526,7 +2631,8 @@ mod tests {
         assert_eq!((m.screen, m.doubles, m.players(), m.seats[0]), (Screen::Chars, true, 4, Some(dev)));
         let mut guest = m.clone();
         guest.net.hosting = false;
-        assert!(!guest.step(dev, page).iter().any(|e| matches!(e, Effect::Online(_))), "only the host swaps");
+        // B522: a guest's □ is its team instead
+        assert!(!guest.step(dev, page).iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Doubles(_))))), "only the host swaps");
         let mut full = m.clone();
         full.net.room.as_mut().unwrap().seats = r.seats.iter().map(|_| r.seats[0].clone()).collect();
         assert_eq!(full.step(dev, page), vec![Effect::Sound(1)], "four seated: doubles only");
@@ -2837,6 +2943,48 @@ mod tests {
         assert!(!modded(&m));
     }
 
+    /// B520: mods off: this machine's own player on a custom character (the host's too) goes to its donor as the room's
+    /// seat did, hand kept; one still choosing on the select isn't moved; Random draws only disc characters and
+    /// costumes; a Random court is drawn again from the disc's.
+    #[test]
+    fn mods_off_puts_own_mods_on_their_donors() {
+        let w = Wire { id: "emi".into(), name: "Emi".into(), donor: 4, hand: 1.0, base: 4, overrides: vec![], ai_row: 4, names: vec![], parent: vec![], rest: vec![], looks: 7, dir: None };
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        (m.net.hosting, m.net.me, m.net.go, m.seats[0]) = (true, "host".into(), Some(Go::Host), Some(super::super::Dev::Keys));
+        m.mods = vec![crate::mods::Mod { skeleton: None, costumes: vec!["model/c00.glb".into()], ..crate::mods_online::for_match(&w, None) }];
+        m.align();
+        m.put(0, Some(super::super::Who::Mod(0)));
+        (m.players[0].ready, m.players[0].swap) = (true, true);
+        let drawn = |m: &Menu| (0..2_000u64).map(|s| m.draw(0, s.wrapping_mul(0x9e37_79b9_7f4a_7c15))).collect::<Vec<_>>();
+        assert!(drawn(&m).iter().any(|d| matches!(d, Some((super::super::Who::Mod(0), _)))));
+        let r = m.net.room.as_mut().unwrap();
+        r.vanilla = true;
+        r.seats[0].as_mut().unwrap().pick = Pick { swap: true, ..Pick::disc(4, 0) };
+        // still choosing on the select: left on it
+        let mut chars = m.clone();
+        (chars.screen, chars.players[0].ready) = (Screen::Chars, false);
+        chars.align();
+        assert_eq!(chars.who(0), super::super::Who::Mod(0));
+        m.align();
+        assert_eq!((m.who(0), m.players[0].costume, m.players[0].swap, m.players[0].ready), (super::super::Who::Disc(4), 0, true, true));
+        assert_eq!(m.vanilla_repick(), None, "the room has it already");
+        assert!(drawn(&m).iter().all(|d| matches!(d, Some((super::super::Who::Disc(_), c)) if *c < super::super::COSTUMES)));
+        // a custom character readied after (the host refused it, the seat kept the pick before): on its donor, sent again
+        m.net.room.as_mut().unwrap().seats[0].as_mut().unwrap().pick.char = 9;
+        m.put(0, Some(super::super::Who::Mod(0)));
+        m.players[0].ready = true;
+        m.align();
+        assert_eq!(m.vanilla_repick().map(|p| p[0].char), Some(4));
+        // the host's mods pill on a Random court: the court drawn again
+        m.court = super::super::COURTS;
+        m.net.room.as_mut().unwrap().vanilla = false;
+        let mut out = Vec::new();
+        m.change_setting(4, 1, &mut out);
+        assert!(out.contains(&Effect::Online(Fx::Net(Cmd::Vanilla(true)))) && out.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Venue(c, ..))) if *c < super::super::COURTS)), "{out:?}");
+        assert_eq!(out.iter().filter(|e| matches!(e, Effect::Sound(_))).count(), 1);
+    }
+
     /// B234: a mod pick is named by the mod, not its donor, on the peer that has it and on one that doesn't (the
     /// name rides along with the live place and the seat's pick).
     #[test]
@@ -3072,6 +3220,49 @@ mod tests {
         h.players[1].swap = false;
         h.align();
         assert!(h.players[1].swap);
+    }
+
+    /// B522: a guest's □ moves its player to the other team (on the roster and in the lobby, the legend saying so);
+    /// the host's stays Singles / Doubles.
+    #[test]
+    fn a_guests_square_swaps_team() {
+        let (dev, page) = (super::super::Dev::Keys, Press { page: true, ..default() });
+        let mut g = Menu { screen: Screen::Chars, ..default() };
+        sample(&mut g);
+        (g.net.hosting, g.net.me, g.net.go, g.seats[0]) = (false, "k51qzi5uqu5d".into(), Some(Go::Code), Some(dev));
+        g.align();
+        assert_eq!(g.seats[1], Some(dev));
+        let legend = |m: &Menu| super::super::legend::acts(m, dev).into_iter().any(|(a, l)| a == super::super::legend::Act::Page && l == "Swap team");
+        assert!(legend(&g));
+        let fx = g.step(dev, page);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Team(1)))) && !fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Doubles(_))))), "{fx:?}");
+        assert_eq!((g.seats[1], g.seats[3]), (None, Some(dev)), "the open seat on the far team");
+        // the host's room comes back with the guest moved
+        let r = g.net.room.as_mut().unwrap();
+        r.seats.swap(1, 3);
+        g.align();
+        assert_eq!(g.seats[3], Some(dev));
+        // from the lobby back (the near team has the host and an open seat now)
+        g.screen = Screen::Lobby;
+        g.sel = 0;
+        assert!(legend(&g));
+        assert!(g.step(dev, page).contains(&Effect::Online(Fx::Net(Cmd::Team(3)))));
+        assert_eq!(g.seats[1], Some(dev));
+        // nowhere to go: a person in every seat over there
+        let mut full = g.clone();
+        full.net.room.as_mut().unwrap().seats = vec![Some(Seat { peer: "host".into(), pick: Pick::disc(0, 0) }), Some(Seat { peer: "k51qzi5uqu5d".into(), pick: Pick::disc(1, 0) })];
+        full.net.room.as_mut().unwrap().doubles = false;
+        full.align();
+        assert!(!legend(&full));
+        assert_eq!(full.step(dev, page), vec![Effect::Sound(1)]);
+        // the host's □ is Singles / Doubles still, never a team swap
+        let mut h = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut h);
+        (h.net.hosting, h.net.me, h.net.go, h.seats[0]) = (true, "host".into(), Some(Go::Host), Some(dev));
+        h.net.room.as_mut().unwrap().seats[2] = None;
+        let fx = h.step(dev, page);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Doubles(false)))) && !fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Team(_))))), "{fx:?}");
+        assert!(h.lobby_team().is_none());
     }
 
     /// B370: ←→ go along the seat cards (a computer's card onto its ✕ and back), ↓ from a card to the bottom row, ↑ to
