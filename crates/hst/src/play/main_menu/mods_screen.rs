@@ -466,6 +466,12 @@ impl Menu {
         self.go(Screen::Mods, out);
     }
 
+    /// B425: player `p`'s rail ends in the Get more chip: 1P's only (another local player mustn't open the store by
+    /// accident), on a local select, while no mod of any kind (character, court, umpire) is installed.
+    pub(super) fn store_chip(&self, p: usize) -> bool {
+        p == 0 && self.screen == Screen::Chars && !self.online() && !self.select_online() && self.mods.is_empty() && self.court_mods.is_empty() && self.umpire_mods.is_empty()
+    }
+
     fn mods_page(&mut self, p: Page, sel: usize) {
         self.add.page = p;
         self.add.child = None;

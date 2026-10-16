@@ -38,6 +38,8 @@ pub(super) enum Act {
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
     Tab(usize),
+    /// B425: player `p`'s column's Get more chip (1P's, with no mods installed): a tap opens the Mods page's store.
+    Store(usize),
     /// B382: player `p`'s column's section heading `i` (`tabs.rs`): a tap jumps to its first tile.
     Section(usize, usize),
     /// B371: seat `p`'s name picker's row or key `i`: hovering selects it, a tap presses it.
@@ -214,6 +216,8 @@ impl Menu {
                 }
             }
             Act::Section(..) => {}
+            Act::Store(p) if tap && self.driven(dev) == Some(p) && self.store_chip(p) => self.mods_open(&mut out),
+            Act::Store(_) => {}
             Act::Name(p, i) => out = self.name_point(p, i, tap),
             Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
             Act::Kind(_) => {}
