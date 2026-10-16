@@ -147,7 +147,7 @@ def tasks():
     for l in lines:
         if l.startswith('### '):
             section = l[4:]
-        elif (m := TASK.match(l)) and not section.startswith('Stretch') and 'split into' not in l:
+        elif (m := TASK.match(l)) and not section.startswith('Stretch') and '(split into' not in l:
             if any(o != m.group(1) and o.startswith(m.group(1)) and o[len(m.group(1))].isdigit() != m.group(1)[-1].isdigit()
                    for o in open_ids):
                 continue  # a parent: its open subtasks run instead
