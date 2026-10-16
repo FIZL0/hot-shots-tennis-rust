@@ -500,7 +500,7 @@ pub(super) fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
     crate::textures::add_tim2(images, img, &pic)
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResMut<Assets<Image>>, mods: Option<Res<crate::mods::MatchMod>>) {
+fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResMut<Assets<Image>>, mods: Option<Res<crate::mods::MatchMod>>, front: Option<Res<super::front_end::FrontEnd>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso
         .read("AZUMA/INPANE/INPANE.XB0")
@@ -526,7 +526,7 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
     // B133: a mod's own face, cut from its select preview (the donor's until that's baked); B160: a disc one's too
     let own: Vec<_> = g.chars.iter().enumerate().map(|(i, &c)| {
         let o = args.outfits.get(i).copied().unwrap_or(0);
-        super::main_menu::face(&args.iso, mods.as_ref().and_then(|m| m.get(i)), c as usize, o)
+        front.as_ref().and_then(|f| (f.face)(&args.iso, mods.as_ref().and_then(|m| m.get(i)), c as usize, o))
     }).collect();
     let mut drawn = Vec::new();
     for (i, (&c, own)) in g.chars.iter().zip(own).enumerate() {

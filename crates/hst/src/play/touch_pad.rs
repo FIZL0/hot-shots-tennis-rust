@@ -273,7 +273,7 @@ fn input(app: &mut App) {
 
 /// The menus' form while no match is on, or its pause or result screen is up (`web/touch.js` `hstTouchMenu`).
 fn menu_form(w: &World) {
-    let on = w.get_resource::<super::Game>().is_none_or(|g| g.match_stats.result.is_some()) || super::menu::paused(w);
+    let on = w.get_resource::<super::Game>().is_none_or(|g| g.match_stats.result.is_some()) || super::front_end::paused(w);
     MENU.store(on, Ordering::Relaxed);
 }
 

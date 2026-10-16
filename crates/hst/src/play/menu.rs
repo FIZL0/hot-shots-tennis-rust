@@ -492,10 +492,10 @@ pub(super) fn set_paused(w: &mut World, open: bool) {
     }
 }
 
+/// The pause screen, with the match (`main.rs` `add_match`).
 pub fn plugin(app: &mut App) {
     app.init_resource::<Menu>()
-        // every sound from here on is the match's until the mode is torn down (`mode.rs`), held while paused
-        .add_systems(PreStartup, |s: Option<Res<Sound>>| s.iter().for_each(|s| s.begin_match()))
+        .insert_resource(super::front_end::FrontEnd { paused, set_paused, face: super::main_menu::face })
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(Update, (step.after(super::read_input), pool, draw).chain().before(super::main_menu::pause::Systems))
         // B179: the main menus' 3D hand (`cursor.ani`) points here and on the Settings screens over the match

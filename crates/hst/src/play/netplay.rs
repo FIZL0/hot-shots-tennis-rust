@@ -16,7 +16,7 @@
 //! same tick everywhere.
 
 use super::tick_input::{self, IDLE, Replay};
-use super::{Game, Pads, menu, snapshot};
+use super::{Game, Pads, front_end, snapshot};
 use crate::net::{Cmd, Event, Msg, Net, Room};
 use bevy::prelude::*;
 use hst_sim::replay::Pad;
@@ -330,7 +330,7 @@ pub fn take(w: &mut World, e: Event) {
         }
         Event::Match(Msg::Pause(open)) => {
             np.paused = open;
-            menu::set_paused(w, open);
+            front_end::set_paused(w, open);
         }
         Event::Datagram(from, data) => super::rollback::heard(w, from, &data),
         Event::Match(m @ (Msg::State { .. } | Msg::Resynced(_))) => super::resync::heard(&mut np, m),
@@ -499,7 +499,7 @@ fn watch(w: &mut World) {
     let notice = super::recover::tick(w, dt);
     let remote = w.get_resource::<super::rollback::Rollback>().map(|r| r.remote_seats());
     let dt = w.resource::<Time<Real>>().delta_secs();
-    let open = menu::paused(w);
+    let open = front_end::paused(w);
     let result = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
     let mut np = w.resource_mut::<Netplay>();
     if open != np.paused {
@@ -534,7 +534,7 @@ fn watch(w: &mut World) {
     pump(w);
     // B196a: in the pause dialog's window (`main_menu/pause.rs`), the bot-or-lobby question on its pills
     let ask = w.resource::<Netplay>().recover.ask_me && w.resource::<Netplay>().end.is_none();
-    if let Some(mut n) = w.get_resource_mut::<super::main_menu::pause::OnlineNotice>() {
+    if let Some(mut n) = w.get_resource_mut::<OnlineNotice>() {
         if ask && !n.ask {
             n.sel = 0;
         }
@@ -576,7 +576,23 @@ fn again(w: &mut World) {
     *LOBBY.lock().unwrap() = Some((net, room, wait));
 }
 
+/// B196a: an online match's notice (a peer away, the bot-or-lobby question, why it ended), drawn in the pause
+/// dialog's window: dimmed court, our box, the words in the game's font, and while asking the two choices on pills
+/// with the 3D hand. `netplay.rs` fills it each frame; `recover.rs` reads the choice (`sel`, a tap in `tapped`).
+#[derive(Resource, Default)]
+pub struct OnlineNotice {
+    pub text: String,
+    /// The question is up: pill 0 "A bot plays for them", 1 "Everyone to the lobby", 2 "Leave".
+    pub ask: bool,
+    pub sel: usize,
+    pub tapped: bool,
+}
+
+/// The choices' pills.
+pub const CHOICES: [&str; 3] = ["A bot plays for them", "Everyone to the lobby", "Leave"];
+
 pub fn plugin(app: &mut App) {
+    app.init_resource::<OnlineNotice>();
     app.add_systems(Startup, setup).add_systems(Update, watch.run_if(resource_exists::<Netplay>)).add_systems(Last, again.run_if(resource_exists::<Netplay>));
     #[cfg(not(target_arch = "wasm32"))]
     if std::env::var_os("HST_NET_THROTTLE").is_some() {
@@ -635,10 +651,10 @@ pub fn flags(room: &Room, me: &str, devices: &[Option<super::controls::Seat>], e
     a
 }
 
-/// The online match as a mode: `flags(…)`'s match with the lockstep on `net`; it goes back to `back` when it ends.
-pub fn mode(iso: &str, flags: &[String], back: crate::mode::Mode, net: Net, room: Room, me: String) -> crate::mode::Mode {
+/// The online match as a mode: `game`, `flags(…)`'s match (`main.rs` `match_mode`), with the lockstep on `net`.
+pub fn mode(game: crate::mode::Mode, net: Net, room: Room, me: String) -> crate::mode::Mode {
     SEED.store(room.seed as u64, Ordering::Relaxed);
-    crate::match_mode(iso, flags, back).and(move |app| {
+    game.and(move |app| {
         app.insert_resource(Netplay::new(room, me)).insert_resource(net);
     })
 }

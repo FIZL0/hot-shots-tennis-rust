@@ -13,10 +13,12 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use hst_data::{iso::Iso, xb::Archive};
+use hst_data::iso::Iso;
 use std::sync::Arc;
 
 use super::super::widescreen;
+use super::super::word_label::sheet;
+pub(in crate::play) use super::super::word_label::label;
 use super::super::controls::{PadSlots, Seat};
 use super::{Art, Dev, Menu, POOL, Screen, Settings, Slot, Text, TickerClip, Ticker, slide};
 use crate::Args;
@@ -78,58 +80,7 @@ pub(in crate::play) struct Systems;
 /// panels take up to ~800 (`options::tests::pages_fit`).
 pub(super) const POOL_HERE: usize = 1400;
 
-/// One sheet out of a disc archive.
-fn sheet(iso: &mut Iso, xb: &str, name: &str) -> Vec<u8> {
-    let data = iso.read(xb).expect("menu archive on disc");
-    let arc = Archive::parse(&data).expect("xb archive");
-    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name)).unwrap_or_else(|| panic!("{name} in {xb}"));
-    arc.read(e).expect("archive bytes")
-}
 
-/// `s` in `word.tm2`, white, centred on a 256×32 sheet as one of `i_dialog_01`'s rows (the dialog has no "Settings"),
-/// set again in the remastered font (`menu_art::relabel`) unless `--original`.
-pub(in crate::play) fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str) -> Handle<Image> {
-    let font = sheet(iso, "MENU/MENU04.XB0", "/word.tm2");
-    let glyphs = super::glyphs(&font);
-    let pic = hst_data::tim2::decode_alpha8(&font).expect("TIM2").remove(0);
-    let (w, h) = (256usize, 32usize);
-    // the glyphs' coverage, then white over a 2-px dark outline as the dialog's own rows are drawn
-    let width: f32 = s.chars().map(|c| glyphs.get(&c).map_or(10.0, |g| g.2 + 2.0)).sum::<f32>() - 2.0;
-    // B171: words wider than the row are set on a wider one (room for the outline), then shrunk to fit it
-    let wide = w.max(width.ceil() as usize + 4);
-    let mut ink = vec![0f32; wide * h];
-    let mut x = ((wide as f32 - width) / 2.0).max(0.0) as usize;
-    for c in s.chars() {
-        let Some(&(u, v, gw)) = glyphs.get(&c) else {
-            x += 10;
-            continue;
-        };
-        for dy in 0..h {
-            for dx in 0..gw as usize {
-                if x + dx < wide {
-                    ink[dy * wide + x + dx] = pic.rgba[((v as usize + dy) * pic.width as usize + u as usize + dx) * 4 + 3] as f32 / 255.0;
-                }
-            }
-        }
-        x += gw as usize + 2;
-    }
-    let ink = shrink(&ink, wide, w, h);
-    let mut rgba = vec![0u8; w * h * 4];
-    for y in 0..h as i32 {
-        for x in 0..w as i32 {
-            let near = (-2..=2i32).flat_map(|dy| (-2..=2i32).map(move |dx| (dx, dy))).filter(|(dx, dy)| dx * dx + dy * dy <= 5);
-            let edge = near.filter_map(|(dx, dy)| (x + dx >= 0 && y + dy >= 0 && x + dx < w as i32 && y + dy < h as i32).then(|| ink[((y + dy) * w as i32 + x + dx) as usize])).fold(0f32, f32::max);
-            let a = ink[(y * w as i32 + x) as usize];
-            let c = (30.0 + 225.0 * a) as u8;
-            rgba[(y as usize * w + x as usize) * 4..][..4].copy_from_slice(&[c, c, c, (edge.max(a) * 255.0) as u8]);
-        }
-    }
-    if let Some(h) = super::super::menu_art::relabel(images, w, h, &rgba, s) {
-        return h;
-    }
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    images.add(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD))
-}
 
 /// B293: the pause screen's venue caption, from `message0.dat` as the confirm screen names them: the match's court
 /// (`--court`/`--stage` 1–11, none for a viewer court) and its umpire (`--umpire`), e.g. "Umpire Anna".
@@ -141,29 +92,6 @@ pub(in crate::play) fn venue(iso: &mut Iso, court: usize, umpire: u8) -> (String
     (court, if name.is_empty() { String::new() } else { format!("Umpire {name}") })
 }
 
-/// A `wide`×`h` coverage row scaled by `w / wide` both ways (box filter), centred on a `w`×`h` one.
-fn shrink(ink: &[f32], wide: usize, w: usize, h: usize) -> Vec<f32> {
-    if wide == w {
-        return ink.to_vec();
-    }
-    let f = w as f32 / wide as f32;
-    let y0 = h as f32 * (1.0 - f) / 2.0;
-    let mut out = vec![0f32; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            // 4×4 samples over the source square under this pixel
-            let mut sum = 0.0;
-            for k in 0..16 {
-                let (sx, sy) = ((x as f32 + (k % 4) as f32 / 4.0 + 0.125) / f, (y as f32 + (k / 4) as f32 / 4.0 + 0.125 - y0) / f);
-                if sy >= 0.0 && (sy as usize) < h {
-                    sum += ink[sy as usize * wide + (sx as usize).min(wide - 1)];
-                }
-            }
-            out[y * w + x] = sum / 16.0;
-        }
-    }
-    out
-}
 
 fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
@@ -264,27 +192,8 @@ fn fit(window: Query<&Window, With<PrimaryWindow>>, ps: Res<PauseSettings>, mut 
     }
 }
 
-/// The 640×448 point under a window position, on the centred 4:3 screen the rows are drawn on.
-fn screen_point(win: &Window, p: Vec2) -> Vec2 {
-    #[allow(unused_mut)]
-    let mut size = Vec2::new(win.width().max(1.0), win.height().max(1.0));
-    // the browser measures in CSS px (`pointer.rs`)
-    #[cfg(target_arch = "wasm32")]
-    if let Some(css) = crate::web::page_size() {
-        size = css;
-    }
-    let (size, p) = widescreen::in_view(size, p);
-    let (share, v) = (widescreen::share(size.x / size.y), widescreen::vshare(size.x / size.y));
-    let x = (p.x / size.x * 100.0 - 50.0 * (1.0 - share)) * 6.4 / share;
-    Vec2::new(x, (p.y / size.y * 100.0 - 50.0 * (1.0 - v)) * 4.48 / v)
-}
-
-/// This frame's left click or first tap, and whether the right button was clicked.
-pub(in crate::play) fn pointer_press(window: &Query<&Window, With<PrimaryWindow>>, mouse: &ButtonInput<MouseButton>, touches: &Touches) -> (Option<Vec2>, bool) {
-    let Ok(win) = window.single() else { return (None, false) };
-    let at = touches.iter_just_pressed().next().map(|t| t.position()).or_else(|| mouse.just_pressed(MouseButton::Left).then(|| win.cursor_position()).flatten());
-    (at.map(|p| screen_point(win, p)), mouse.just_pressed(MouseButton::Right))
-}
+use crate::widescreen::screen_point;
+pub(in crate::play) use crate::widescreen::pointer_press;
 
 /// The 640×448 point under the mouse, if it's over the window and not hidden (`pointer::MOUSE_IDLE`).
 pub(in crate::play) fn cursor_point(window: &Query<&Window, With<PrimaryWindow>>) -> Option<Vec2> {
@@ -349,20 +258,7 @@ fn after(
     }
 }
 
-/// B196a: an online match's notice (a peer away, the bot-or-lobby question, why it ended), drawn in the pause
-/// dialog's window: dimmed court, our box, the words in the game's font, and while asking the two choices on pills
-/// with the 3D hand. `netplay.rs` fills it each frame; `recover.rs` reads the choice (`sel`, a tap in `tapped`).
-#[derive(Resource, Default)]
-pub(in crate::play) struct OnlineNotice {
-    pub text: String,
-    /// The question is up: pill 0 "A bot plays for them", 1 "Everyone to the lobby", 2 "Leave".
-    pub ask: bool,
-    pub sel: usize,
-    pub tapped: bool,
-}
-
-/// The choices' pills.
-pub(in crate::play) const CHOICES: [&str; 3] = ["A bot plays for them", "Everyone to the lobby", "Leave"];
+pub(in crate::play) use super::super::netplay::{CHOICES, OnlineNotice};
 
 #[derive(Component)]
 struct NoticeSlot(usize);
@@ -532,26 +428,6 @@ mod tests {
     use super::*;
     use super::super::{Press, controls};
 
-    /// A full 512×32 row shrinks to half height, centred, edge to edge (B171).
-    #[test]
-    fn shrink_fits() {
-        let out = shrink(&vec![1.0; 512 * 32], 512, 256, 32);
-        let col: Vec<f32> = (0..32).map(|y| out[y * 256 + 128]).collect();
-        assert!(col[..8].iter().chain(&col[24..]).all(|&a| a == 0.0) && col[8..24].iter().all(|&a| a == 1.0), "{col:?}");
-        assert!(out[16 * 256] == 1.0 && out[16 * 256 + 255] == 1.0);
-    }
-
-    /// The window → 640×448 mapping undoes the centred 4:3 placement at any aspect.
-    #[test]
-    fn window_to_screen() {
-        let mut win = Window::default();
-        win.resolution.set(1920.0, 1080.0);
-        // 16:9: the 4:3 screen is the middle 1440 px
-        assert_eq!(screen_point(&win, Vec2::new(240.0, 540.0)), Vec2::new(0.0, 224.0));
-        assert_eq!(screen_point(&win, Vec2::new(1680.0, 1080.0)), Vec2::new(640.0, 448.0));
-        win.resolution.set(800.0, 600.0);
-        assert_eq!(screen_point(&win, Vec2::new(400.0, 300.0)), Vec2::new(320.0, 224.0));
-    }
 
     /// B254: doubles, 1P on the keyboard, 3P on pad a, 2P and 4P the computer's. 1P's → passes the computer's seat
     /// (its device to 3P, pad a now 1P), △ adds no computer player, the keyboard takes itself off, a new pad b's ✕

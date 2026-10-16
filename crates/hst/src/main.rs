@@ -415,11 +415,12 @@ fn start(argv: Vec<String>) {
                 use play::controls::Seat;
                 let devices: Vec<_> = (0..4).map(|j| Some(if j == 0 { Seat::Keys } else { Seat::Pad(j - 1) })).collect();
                 let flags = play::netplay::flags(&room, &me, &devices, &[]);
-                play::netplay::mode(&args.iso, &flags, mode::Mode::new(|app| {
+                let back = mode::Mode::new(|app| {
                     // no lobby screen to go back to from here (B279's hand-over): the connection ends
                     play::netplay::LOBBY.lock().unwrap().take();
                     menu_mode(app)
-                }), net, room, me)
+                });
+                play::netplay::mode(match_mode(&args.iso, &flags, back), net, room, me)
             }
             None => mode::Mode::new(menu_mode),
         };
@@ -466,7 +467,7 @@ fn lineup(args: &Args, slot_mods: &[(usize, String)], viewer_slot: Option<usize>
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
 /// player N (default 1st), its costume by `--outfits`; `umpire_mod` is heard in the chair (M8f3).
 fn add_match(app: &mut App, viewer_mod: Option<String>, mod_slot: usize, mut slot_mods: Vec<(usize, String)>, umpire_mod: Option<mods_umpire::Umpire>) {
-    app.add_plugins(play::plugin);
+    app.add_plugins(play::plugin).add_plugins(play::menu::plugin);
     if let Some(u) = umpire_mod {
         app.insert_resource(mods_umpire::MatchUmpire(u));
     }

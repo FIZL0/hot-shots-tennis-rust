@@ -1114,10 +1114,10 @@ fn title_box(rgba: &[u8], w: usize, h: usize) -> (u16, u16, u16, u16) {
     (x0 as u16, y0 as u16, (x1 - x0).saturating_sub(2) as u16, (y1 - y0).saturating_sub(2) as u16)
 }
 
-/// `word.tm2`'s glyphs: each cell's ink box and its letter (`main_menu::FONT`'s grid, 32 px cells from row 1).
+/// `word.tm2`'s glyphs: each cell's ink box and its letter (`word_label::FONT`'s grid, 32 px cells from row 1).
 fn glyph_boxes(rgba: &[u8], w: usize) -> Vec<(u16, u16, u16, u16, String)> {
     let mut out = vec![];
-    for (row, chars) in super::main_menu::FONT.iter().enumerate() {
+    for (row, chars) in super::word_label::FONT.iter().enumerate() {
         for (col, ch) in chars.chars().enumerate() {
             let (cx, cy) = (col * 32, 32 + row * 32);
             let ink: Vec<(usize, usize)> = (0..32).flat_map(|y| (0..32).map(move |x| (x, y))).filter(|&(x, y)| rgba[((cy + y) * w + cx + x) * 4 + 3] > 0x20).collect();

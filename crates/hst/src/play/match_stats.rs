@@ -457,8 +457,8 @@ pub fn plugin(app: &mut App) {
 
 /// M14: the result screen's legend: `step`'s ✕ (the next page until the stats page is seen, then Continue once it
 /// shows) and ←→ (the other page).
-fn legend(screen: Res<Screen>, dissolve: Res<dissolve::Dissolve>, last: Res<super::main_menu::legend::Last>, mut out: ResMut<super::main_menu::legend::Legend>) {
-    use super::main_menu::legend::{Act, item};
+fn legend(screen: Res<Screen>, dissolve: Res<dissolve::Dissolve>, last: Res<super::legend::Last>, mut out: ResMut<super::legend::Legend>) {
+    use super::legend::{Act, item};
     if !screen.open || screen.leaving.is_some() || dissolve.fading() {
         return;
     }
@@ -621,7 +621,7 @@ fn step(
     }
     let any = |b: GamepadButton| gamepads.iter().filter(|g| super::controls::readable(g)).any(|p| p.just_pressed(b));
     // B221: a click or tap on the left or right quarter slides that way, anywhere else is the confirm button
-    let tap = super::main_menu::pause::pointer_press(&window, &mouse, &touches).0.map(|p| p.x);
+    let tap = crate::widescreen::pointer_press(&window, &mouse, &touches).0.map(|p| p.x);
     let confirm = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]) || any(GamepadButton::South) || tap.is_some_and(|x| (160.0..480.0).contains(&x));
     // the left stick as a d-pad: a push past half way
     let x = gamepads.iter().filter(|g| super::controls::readable(g)).filter_map(|p| p.get(GamepadAxis::LeftStickX)).find(|x| x.abs() >= 0.5).unwrap_or(0.0);
