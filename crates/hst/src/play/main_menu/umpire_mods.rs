@@ -165,10 +165,11 @@ pub(super) fn voice_ready(m: &Menu, u: u8) -> bool {
     m.umpire_mod_of(u as usize).is_none_or(|x| crate::modfs::ready(&x.dir))
 }
 
-/// B487: whether the match's umpire mod (`--umpire-mod DIR` in `args`), if any, is in memory to be heard; asks the
-/// browser for it if not (the launch waits, as for `--slot-mod`).
+/// B487: whether the match's umpire mod (`--umpire-mod DIR` in `args`) and court mod (`--court-mod DIR`), if any, are
+/// in memory to be heard and drawn; asks the browser for them if not (the launch waits, as for `--slot-mod`). Launched
+/// before then, the court's `.glb`s read as missing and the match plays on an empty layout court.
 pub(super) fn launch_ready(args: &[String]) -> bool {
-    args.windows(2).filter(|w| w[0] == "--umpire-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[1])) && ok)
+    args.windows(2).filter(|w| w[0] == "--umpire-mod" || w[0] == "--court-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[1])) && ok)
 }
 
 /// Preview Voice's bank for umpire `u`: the disc's, or a mod's calls over its donor's.
@@ -250,6 +251,20 @@ mod tests {
         crate::modfs::add(&dir.join("voice/1_1.wav"), vec![0u8; 100].into());
         crate::modfs::loaded(&dir.display().to_string());
         assert!(super::voice_ready(&m, mod_) && super::launch_ready(&launch));
+        crate::modfs::remove(&dir);
+    }
+
+    /// A downloaded court mod's `.glb`s still in the browser's storage hold the launch until they're read in (else the
+    /// match plays on the bare layout court, nothing of the mod drawn).
+    #[test]
+    fn a_court_mod_is_read_in_before_the_match() {
+        let dir = std::path::PathBuf::from(format!("mods-court-ready-{}/gag_c07", std::process::id()));
+        let launch = ["--court-mod".to_string(), dir.display().to_string()];
+        crate::modfs::add_lazy(&dir.join("court.glb"), 100);
+        assert!(!super::launch_ready(&launch));
+        crate::modfs::add(&dir.join("court.glb"), vec![0u8; 100].into());
+        crate::modfs::loaded(&dir.display().to_string());
+        assert!(super::launch_ready(&launch));
         crate::modfs::remove(&dir);
     }
 
