@@ -544,6 +544,148 @@ fn vpad_serves_receive_matches_the_game() {
     assert!(plans[0] > 0 && plans[1] > 0 && short > 0 && smash > 0);
 }
 
+/// What a doubles NET/BASE call ran, read from its entry `e` and exit `x` (P11k5): the not-found walk on a short
+/// landing (by its target: 0 landing + 0.3, 1 the after-bounce descent, 2 entry 11, 3 the last entry; the chase flag
+/// kept), the not-found tail's repick from the partner's record, the give-way defer set, the substate-3 wait
+/// countdown, and beside a human (+0x264 > 0) which of give-way's comparisons decided.
+#[derive(Debug, Default)]
+struct NetBase {
+    short: [usize; 4],
+    chase_kept: usize,
+    repick: [usize; 2],
+    defer: [usize; 2],
+    wait: [usize; 2],
+    give_way: [usize; 5],
+}
+
+impl NetBase {
+    fn add(&mut self, e: &[u8], x: &[u8]) {
+        let (r, after) = (rally(e, false), rally(x, false));
+        let (b, w) = (body(e), world(e));
+        let human = (r.mate > 0) as usize;
+        let sign = |v: f32| if v > 0.0 { 1 } else if v < 0.0 { -1 } else { 0 };
+        if r.sub == 3 && after.wait == r.wait - 1 {
+            self.wait[human] += 1;
+        }
+        if !r.defer && after.defer {
+            self.defer[human] += 1;
+        }
+        // give-way runs on the frames in substate 1 until it defers; on the frame the substate reaches 1 the AI's
+        // own record is the one it has just written (the exit's), the human partner's is never touched here
+        if r.mate > 0 && !r.defer && (r.sub == 1 || after.sub == 1) {
+            let mine = if r.sub == 1 { w.records[b.team as usize] } else { world(x).records[b.team as usize] };
+            self.give_way[give_way_test(&b, &mine, &w.records[(b.team ^ 2) as usize])] += 1;
+        }
+        // past the early returns, the copy taken and nothing found: the tail ends by aiming the next search at the
+        // copy's last entry, or repicks from the partner's record and follows it
+        let tail = r.sub == 0 && after.sub == 0 && !(r.hold || r.held || r.wait > 0 || r.follow || r.ours)
+            && w.shots >= 2 && !after.ours && after.len > 0;
+        if !tail {
+            return;
+        }
+        let copy = balls(x, after.len as usize);
+        let mate = w.records[(b.team ^ 2) as usize];
+        let early = mate.n >= 0 && (!r.fresh || (r.front && sign(b.pos[2]) == sign(w.ball[2])));
+        if after.follow && !after.middle && !early {
+            self.repick[human] += 1;
+        }
+        if after.follow || after.next != after.len - 1 || copy[copy.len() - 1].bounces >= 2 {
+            return;
+        }
+        let other = |p: &[f32; 4]| sign(b.side) != sign(p[2]);
+        let descent = (|| {
+            let mut up = false;
+            for c in &copy {
+                up |= c.bounces == 1 && !(c.vel[1] <= 0.0);
+                if up && c.bounces == 1 && c.vel[1] < 0.0 {
+                    return other(&c.pos);
+                }
+            }
+            false
+        })();
+        let at = if copy[0].bounces == 0 {
+            0
+        } else if descent {
+            1
+        } else if copy.len() > 11 {
+            2
+        } else if other(&copy[copy.len() - 1].pos) {
+            3
+        } else {
+            return;
+        };
+        self.short[at] += 1;
+        if after.chase == r.chase {
+            self.chase_kept += 1;
+        }
+    }
+}
+
+/// Which of give-way's comparisons beside a human decides (0 its own run under 2.5 and well ahead of the partner, 1
+/// the partner's run under 2, 2 its own under 2.5, 3 the frames within 30, 4 the frames or no partner shot), as
+/// `Rally::give_way` reads the two shot records.
+fn give_way_test(b: &Body, mine: &Shot, theirs: &Shot) -> usize {
+    use hst_sim::ps2::F;
+    let n = |s: &Shot| if s.n >= 0 { s.n + s.stamp } else { s.n };
+    if n(theirs) < 0 {
+        return 4;
+    }
+    let run = |s: &Shot| {
+        let (dz, dx) = ((F(s.vec[2]) - s.pos[2]).0, (F(s.vec[0]) - s.pos[0]).0);
+        (F(dz) * dz).madd(dx, dx).sqrt().0
+    };
+    let (f4, f3) = (run(mine), run(theirs));
+    if f4 < 2.5 && (F(1.0) + b.pos[2].abs()).0 < b.mate[2].abs() {
+        0
+    } else if f3 < 2.0 {
+        1
+    } else if f4 < 2.5 {
+        2
+    } else if n(theirs).wrapping_sub(n(mine)).wrapping_abs() < 30 {
+        3
+    } else {
+        4
+    }
+}
+
+/// P11k5: the doubles NET/BASE branches only a human side reaches, slot 3 with P1 driven by the pad (`HST_DRIVE=1`,
+/// journal 2026-10-07-p11-ai 24). Every call of the new fixtures replays bit for bit; the branches are read from the
+/// game's own exits across them and the earlier pad-driven ones (`ai_human_*`, replayed in
+/// `human_record_matches_the_game`). `_lob`: P1 lobs (`HST_BTN=triangle`); `_fast`: the fast row 119 on every CPU
+/// (`HST_AI=1:119:3,2:119:3,3:119:3`); `_base_lob`: lobs against row 121 everywhere; `_slice`: slices (`HST_BTN=cross`) against
+/// the quickest-reacting rows (`HST_AI=1:119:3,2:121:3,3:119:3`: the human's partner reacts in 2..4 frames, before
+/// the path reaches its second bounce, so it walks to the short landing); `_window10`/`_window14`: every CPU's path
+/// window poked to 10/14 entries in rallies (`HST_WINDOW`, the game's is 180), so copies end before the second
+/// bounce after the ball has bounced too, the walk's later targets (no unpoked copy is ever that short: the path
+/// grows 15 entries a frame and reaches the second bounce before any reaction ends).
+#[test]
+fn vpad_rallies_net_and_base_match_the_game() {
+    let new = ["ai_rally_vpad_lob.bin", "ai_rally_vpad_fast.bin", "ai_rally_vpad_base_lob.bin", "ai_rally_vpad_slice.bin", "ai_rally_vpad_window10.bin", "ai_rally_vpad_window14.bin"];
+    for name in new {
+        for (tag, what) in [(1, "receive"), (2, "NET"), (3, "BASE")] {
+            let Some(n) = replay(name, tag) else { return eprintln!("{name} or disc missing, skipped") };
+            eprintln!("{name} {what}: calls, per substate {n:?}");
+        }
+    }
+    let old = ["ai_human_1p.bin", "ai_human_1p_b.bin", "ai_human_1p_c.bin", "ai_human_vpad.bin", "ai_human_vpad_b.bin", "ai_human_vpad_c.bin"];
+    let (mut unpoked, mut all) = (NetBase::default(), NetBase::default());
+    for name in new.iter().chain(&old) {
+        let Ok(d) = std::fs::read(format!("{}/context/fixtures/{name}", root())) else { return eprintln!("{name} missing, skipped") };
+        for (_, _, e, x) in calls(&d, &[2, 3]) {
+            all.add(e, x);
+            if !name.contains("window") {
+                unpoked.add(e, x);
+            }
+        }
+    }
+    eprintln!("unpoked {unpoked:?}\nall {all:?}");
+    assert!(unpoked.short[0] > 0 && all.short.iter().all(|&k| k > 0) && all.chase_kept > 0, "{all:?}");
+    assert!(unpoked.repick.iter().all(|&k| k > 0) && unpoked.defer[1] > 0 && unpoked.wait.iter().all(|&k| k > 0));
+    // the partner's run under 2 m (the human standing near the landing as the AI weighs it) came up once, in a
+    // poked-window match; the window doesn't feed give-way's comparisons
+    assert!([0, 2, 3, 4].iter().all(|&k| unpoked.give_way[k] > 0) && all.give_way[1] > 0, "{all:?}");
+}
+
 #[test]
 fn net_and_base_match_the_game() {
     for (tag, what) in [(2, "NET"), (3, "BASE")] {
@@ -728,3 +870,4 @@ fn rally_state_tick_by_tick_on_match_s05() {
     assert!(tags[1..].iter().all(|&k| k > 500), "{tags:?}");
     assert_eq!(fails, 0, "{fails} of {n} ticks differ");
 }
+

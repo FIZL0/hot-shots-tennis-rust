@@ -127,3 +127,10 @@ See 23-P11K4-VPAD-SERVES-FINAL.md. `record_ai_rally.py` drives P1's serve (`HST_
 out-of-court aims (plans 10/11) are reached unpoked. The last-entry pick and the receive's smash find are reached
 on poked states (`HST_PATH_STOP`, `HST_CHAR`), because normal play can't get there. Test:
 `vpad_serves_receive_matches_the_game`.
+
+## P11k5 (NET/BASE branches from pad-driven rallies)
+
+See 24-P11K5-NETBASE-VPAD-FINAL.md. Pad-driven slot-3 rallies (`HST_DRIVE`, fast rows) reach give-way and its defer
+beside a human, the substate-3 wait, the tail repick, and the short-landing walk (landing + 0.3) unpoked. The
+walk's later targets need `HST_WINDOW`; the substate-2 hold stays on the poked `ai_let_go_s05`. Test:
+`vpad_rallies_net_and_base_match_the_game`.
