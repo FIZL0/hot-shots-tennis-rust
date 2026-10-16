@@ -45,6 +45,7 @@ index out of bounds: the len is 0 but the index is 0"
 - [~] **B3** P1 Carol's walk after a point (bug, user 2026-10-07): when P1 is Carol and she ends the point at the edge of the camera, her walk cycle back to position slides her the wrong way. Compare the original's walk-back (direction, motion, facing) from that spot and fix → `player.rs` · `motion.rs` · `play.rs` next_point/locomote … BLOCKED: no mismatch found: lefty sim exact (new test lefty_s04), reaction facing, paths (gu_set in place for Carol; team reactions go backward as in the original), phase-4 dash and stick flip all match; needs a capture of the slide (frame, human/bot, singles/doubles) — research/journal/2026-10-07-b3-carol-walk
 - [ ] **B472** Emotes can still be triggered between points (post-point timeline); block them outside live play — crates/hst/src/play/tick_input.rs
 - [ ] **B473** Repeated emotes overlap their voice lines: a new emote from the same player should cut that player's previous emote line instead of stacking on it, and a post-point celebration/reaction voice should cut any emote line still playing — crates/hst/src/play/emote.rs (`voice`)
+- [ ] **B474** Sound settings: a toggle to mute emote voice lines (local only; the emote motion still plays) — crates/hst/src/play/main_menu.rs (sound settings), crates/hst/src/audio.rs, crates/hst/src/play/emote.rs (`voice`)
 
 ### Netplay and mobile (user 2026-10-09: right after the bugs/priority list, in this order)
 
