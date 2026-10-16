@@ -730,6 +730,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B430** Pause menu names the stock umpire with a custom umpire (bug, user 2026-10-15): with a mod umpire picked, the pause menu still says 'Umpire Lily' (or whichever stock umpire it stands in for); it should show only the umpire in use, by its mod name → play/main_menu/pause.rs · play/umpire_mod.rs · mods_umpire.rs · mods/umpire.rs
 - [x] **B432** Random court/umpire never picks a mod (bug, user 2026-10-15): choosing Random for court or umpire draws only from the stock ones; it should draw from every installed court and umpire, mods included (menu RNG, never the sim's); online keeps to what every peer has → play/main_menu/confirm.rs · play/main_menu/court_mods.rs · play/main_menu/umpire_mods.rs · mods.rs
 - [x] **B472** Emotes can still be triggered between points (post-point timeline); block them outside live play — crates/hst-play/src/play/tick_input.rs
+- [x] **M115** Browse never goes empty while uploads finish (user 2026-10-16; concept card 3): each Up::Done sets store = None, so Browse blanks and refetches after every upload in a batch (mods show, then vanish). Keep the shown list, mark it stale, refresh once after the last queued upload ends, swap the new tiles in with the cursor kept on the same mod; 'Refreshing…' in the footer pill while it runs. Test: a batch of uploads finishing keeps tiles() non-empty throughout → play/main_menu/mods_screen.rs (Event::Upload, Event::Listing) · play/main_menu/mods_screen/grid.rs
 
 
 ### Shots

@@ -68,6 +68,10 @@ pub(super) struct View {
     umpires: Vec<Mod>,
     /// The store's listing (None: not read yet).
     store: Option<Vec<Entry>>,
+    /// M115: an upload landed since the listing was read (it's read again once the last queued one ends, the
+    /// shown list kept till then), and that read is under way ('Refreshing...' in the footer).
+    stale: bool,
+    refreshing: bool,
     /// M19: the player's own uploads (None: not read yet).
     mine: Option<Vec<Entry>>,
     /// B248: the installed store mods by [`Entry::key`] (a pre-B248 install's under `/<id>`): the zip's sha256 and
@@ -348,6 +352,46 @@ impl View {
             return Vec::new();
         }
         if self.grid() { self.tiles() } else { Vec::new() }
+    }
+
+    /// M115: once every queued upload has ended, reads a stale listing again (fresh, past the cache), keeping the
+    /// shown one till it comes.
+    fn refresh_stale(&mut self) {
+        if !self.stale || self.busy || self.ups.values().any(|u| matches!(u, Up::Queued | Up::Uploading)) {
+            return;
+        }
+        self.stale = false;
+        self.refreshing = true;
+        self.busy = true;
+        // (the tests read nothing)
+        #[cfg(not(test))]
+        modstore::list(true);
+    }
+
+    /// B250: how the upload of the mod in `dir` is going. M115: one landed, Browse keeps its tiles (read again after
+    /// the batch's last upload, [`View::refresh_stale`]).
+    fn uploaded(&mut self, dir: PathBuf, u: Up) {
+        match &u {
+            Up::Done(s) => {
+                self.stale |= self.store.is_some();
+                self.mine = None;
+                self.status = s.clone();
+            }
+            Up::Skipped(s) => self.status = s.clone(),
+            Up::Failed(e) => self.status = format!("Not uploaded: {e}"),
+            _ => {}
+        }
+        self.ups.insert(dir, u);
+    }
+
+    /// M115: the listing read: swaps `list` in; a refresh keeps the cursor on the tile it was on (`sel`, the row).
+    fn listed(&mut self, list: Vec<Entry>, sel: &mut usize) {
+        let was = self.hovered(*sel).map(Entry::key).filter(|_| self.refreshing);
+        self.store = Some(list);
+        self.relist();
+        if let Some(i) = was.and_then(|k| self.items().iter().position(|e| e.key() == k)) {
+            *sel = self.acts() + i;
+        }
     }
 
     /// The installed mod on row `sel`, if it's one.
@@ -1571,6 +1615,7 @@ fn page(
         menu.add.status = format!("{}{s}", menu.add.count());
     }
     let (up, at_once) = (menu.settings.0[super::UPSCALED_DOWNLOADS], menu.settings.downloads_at_once());
+    let mut sel = menu.sel;
     for e in modstore::take() {
         let v = &mut menu.add;
         match e {
@@ -1579,8 +1624,7 @@ fn page(
                 match r {
                     Ok(list) => {
                         v.status = format!("{} mods in the store.", list.len());
-                        v.store = Some(list);
-                        v.relist();
+                        v.listed(list, &mut sel);
                         if let Some(b) = v.by.take() {
                             v.narrow(Some(b.author), b.from);
                         }
@@ -1590,6 +1634,7 @@ fn page(
                         v.store.get_or_insert_default();
                     }
                 }
+                v.refreshing = false;
             }
             Event::Installed(key, r) => {
                 v.finish(&key, &r);
@@ -1642,19 +1687,7 @@ fn page(
                     v.wipe_next();
                 }
             }
-            Event::Upload(dir, u) => {
-                match &u {
-                    Up::Done(s) => {
-                        v.store = None;
-                        v.mine = None;
-                        v.status = s.clone();
-                    }
-                    Up::Skipped(s) => v.status = s.clone(),
-                    Up::Failed(e) => v.status = format!("Not uploaded: {e}"),
-                    _ => {}
-                }
-                v.ups.insert(dir, u);
-            }
+            Event::Upload(dir, u) => v.uploaded(dir, u),
             Event::Signed(r) => {
                 v.busy = false;
                 v.status = match r {
@@ -1681,6 +1714,9 @@ fn page(
             }
         }
     }
+    // M115: the batch's last upload ended (or the read or install holding it back did)
+    menu.add.refresh_stale();
+    menu.sel = sel;
     let on = menu.screen == Screen::Mods;
     if on && menu.add.grid() {
         browse_pictures(&mut menu, &mut shelf, &mut images);
@@ -2371,6 +2407,44 @@ mod tests {
         assert_eq!(m.add.hovered(m.sel).map(|x| x.meta.id.as_str()), Some("b"));
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
+    }
+
+    /// M115: a batch of uploads finishing keeps Browse's tiles throughout: no read till the last one ends, then one
+    /// ('Refreshing...' in the footer), and the new listing comes in with the cursor on the same mod.
+    #[test]
+    fn uploads_keep_browse_shown() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        let e = |id: &str, pr: u32| Entry { meta: Meta { id: id.into(), name: id.into(), author: "ann".into(), sha256: id.repeat(64), size: 1, ..Default::default() }, rev: format!("refs/pr/{pr}"), verified: false };
+        m.add.store = Some(vec![e("a", 3), e("b", 2), e("c", 1)]);
+        m.mods_page(Page::Browse, 0);
+        let t0 = m.add.browse_acts();
+        // the cursor on b (newest first: a b c)
+        m.sel = t0 + 1;
+        assert_eq!(m.add.hovered(m.sel).map(|x| x.meta.id.as_str()), Some("b"));
+        let dirs: Vec<PathBuf> = (0..3).map(|i| root().join(format!("up{i}"))).collect();
+        for d in &dirs {
+            m.add.uploaded(d.clone(), Up::Queued);
+        }
+        for (i, d) in dirs.iter().enumerate() {
+            m.add.uploaded(d.clone(), Up::Uploading);
+            m.add.refresh_stale();
+            m.add.uploaded(d.clone(), if i == 1 { Up::Failed("413".into()) } else { Up::Done(format!("PR {i}")) });
+            m.add.refresh_stale();
+            assert_eq!(m.add.tiles().len(), 3, "after upload {i}");
+            let last = i == dirs.len() - 1;
+            assert_eq!((m.add.refreshing, m.add.busy, m.add.stale), (last, last, !last), "after upload {i}");
+        }
+        assert_eq!(grid::status(&m), ("Refreshing...".into(), true));
+        // the new listing: the two uploads newest first, b moved down; the cursor follows it
+        let mut sel = m.sel;
+        m.add.listed(vec![e("up2", 9), e("up0", 8), e("a", 3), e("b", 2), e("c", 1)], &mut sel);
+        m.add.busy = false;
+        m.add.refreshing = false;
+        assert_eq!(m.add.tiles().len(), 5);
+        assert_eq!((sel, m.add.hovered(sel).map(|x| x.meta.id.as_str())), (t0 + 3, Some("b")));
+        // nothing landed meanwhile: no second read
+        m.add.refresh_stale();
+        assert!(!m.add.refreshing && grid::status(&m).0 != "Refreshing...");
     }
 
     /// B445: Remove all uploads (a word in My uploads' heading) puts up the warning on Cancel: it takes every press, ○

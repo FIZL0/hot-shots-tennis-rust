@@ -1168,8 +1168,13 @@ pub(super) fn roll_time(mut menu: ResMut<Menu>, time: Res<Time>) {
 
 /// B471: the footer's status: the last action's outcome (a mod list's uploader while there's none), else "2
 /// downloading - 1 queued" (nothing waiting: how many are installed); whether downloads are running (a spinner).
-fn status(m: &Menu) -> (String, bool) {
+/// M115: "Refreshing..." with the spinner while the listing is read again after uploads.
+pub(super) fn status(m: &Menu) -> (String, bool) {
     let v = &m.add;
+    // M115: the listing read again after a batch of uploads (the tiles stay till it's in)
+    if v.refreshing {
+        return ("Refreshing...".into(), true);
+    }
     let said = !v.status.is_empty() && v.child.is_none() && !(v.page == Page::Upload && v.status == RULE);
     if said {
         return (v.status.clone(), false);
