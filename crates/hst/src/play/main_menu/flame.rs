@@ -1,15 +1,14 @@
 //! The menus' flame (`hst_sim::rng::MenuFlame`): made at P1's pick on the character select, behind the VS of the
 //! confirmation screen, stepping at 60 Hz until the menus hand over to the match. Its `rand()` draws are the only
 //! ones the original's menus make, so the match seed follows on from them (`rand`).
+//! Our Confirm screen (B449) has no VS, so it isn't drawn: it only steps, for those draws.
 
 use bevy::prelude::*;
 use hst_sim::rng::{MenuFlame, Rand};
 use std::sync::Mutex;
 
-use super::{Draw, Menu, Screen, Tex};
+use super::{Menu, Screen};
 
-/// `f_s.tm2`: fire on the left half, smoke on the right.
-const SHEET: Tex = Tex::Sheet(16);
 /// Frames from the setup until it steps (the original's start "~1 s" after the pick, from its logs).
 const DELAY: u32 = 60;
 
@@ -52,20 +51,6 @@ pub(super) fn tick(mut menu: ResMut<Menu>, time: Res<Time>) {
         }
     }
     *RAND.lock().unwrap() = Some(f.rand);
-}
-
-/// The particles about `at` (B295: the confirm screen's VS between the teams; the original's was the screen centre
-/// plus its node offset (-24, -136) and the effect's own (32, 64)).
-pub(super) fn draw(d: &mut Draw, m: &Menu, at: [f32; 2]) {
-    let Some((fx, _)) = &m.flame.fx else { return };
-    for s in fx.sprites() {
-        let src = [if s.smoke { 64.0 } else { 0.0 }, 0.0, 64.0, 64.0];
-        let [x, y] = [at[0] + s.at[0] - s.size / 2.0, at[1] + s.at[1] - s.size / 2.0];
-        d.q(SHEET, src, [x, y, s.size, s.size], super::WHITE, s.alpha);
-        if let Some(q) = d.out.last_mut() {
-            q.angle = s.angle;
-        }
-    }
 }
 
 #[cfg(test)]

@@ -101,12 +101,6 @@ impl Menu {
         if c == COURTS { "Random Court".into() } else { self.court_lines(text, c)[0].clone() }
     }
 
-    /// The name card's line under a court mod's name: its game and the disc court it plays as.
-    pub(super) fn court_mod_sub(&self, text: &Text, c: usize) -> Option<String> {
-        let x = self.court_mod_of(c)?;
-        Some(format!("{}, plays as {}", source(x), self.court_title(text, x.layout as usize)))
-    }
-
     /// The picked court's mod flags for the match (`--court-mod DIR`), if it's a mod.
     pub(super) fn court_mod_flags(&self) -> Vec<String> {
         self.court_mod_of(self.court_pick()).map(|x| vec!["--court-mod".to_string(), x.dir.display().to_string()]).unwrap_or_default()

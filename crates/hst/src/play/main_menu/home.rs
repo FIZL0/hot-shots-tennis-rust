@@ -425,15 +425,15 @@ fn device_tiles(d: &mut Draw, seats: &[(&str, String)], [x, y, w, _]: [f32; 4]) 
     let tw = (w - 2.0 * pad - 3.0 * gap) / 4.0;
     let n = (seats.len() + 1).min(4);
     let x0 = x + (w - n as f32 * tw - (n - 1) as f32 * gap) / 2.0;
-    for k in 0..n {
+    for (k, &fill) in CARD_FILL.iter().enumerate().take(n) {
         let r = [x0 + (tw + gap) * k as f32, y + 14.0, tw, th];
         let cx = r[0] + tw / 2.0;
         let p = format!("{}P", k + 1);
         match seats.get(k) {
             Some((glyph, name)) => {
-                d.box3(r, 8.0, [Some(INK), Some([96.0; 3]), Some(CARD_FILL[k])], 128.0);
+                d.box3(r, 8.0, [Some(INK), Some([96.0; 3]), Some(fill)], 128.0);
                 d.centred(&p, cx, r[1] + 14.0, 16.0, WHITE);
-                device_glyph(d, glyph, cx, r[1] + 51.0, CARD_FILL[k]);
+                device_glyph(d, glyph, cx, r[1] + 51.0, fill);
                 d.label(name, cx, r[1] + 70.0, 10.0, tw - 12.0, WHITE);
             }
             None => {

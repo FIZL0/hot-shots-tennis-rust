@@ -624,6 +624,7 @@ const CONFIRM_ROWS: usize = 5;
 
 /// What a step asks of the app.
 #[derive(Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)] // `Online`'s network command, as `online::Fx`: a step's effects live for one frame
 enum Effect {
     Sound(u8),
     SaveSettings,
@@ -776,6 +777,7 @@ impl Menu {
 
     /// B296: the player the select's detail panel and description follow: the one who pressed last while picking,
     /// else the first not ready (online: the host's computer player being edited, else this machine's first).
+    #[cfg(test)]
     fn shown(&self) -> usize {
         let n = self.players();
         let first = (0..n).find(|&p| !self.players[p].ready).unwrap_or(0);
@@ -1641,7 +1643,6 @@ impl Repeat {
 enum Tex {
     Solid,
     Font,
-    Hand,
     /// The 3D pointing hand (`cursor.rs`).
     Cursor,
     /// `SHEETS[k]`.
@@ -2433,6 +2434,7 @@ impl Draw<'_> {
 
     /// A column of rows `pitch` px apart, the chosen one bright with the hand beside it, the rows `locked` says greyed out (B243): a faint dark pill and dim words, never the chosen
     /// row's gold even under the hand, so a switch the build keeps off reads as one that can't be pressed.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn rows_locked(&mut self, labels: &[String], sel: usize, x: f32, y: f32, w: f32, hand_x: f32, pitch: f32, locked: impl Fn(usize) -> bool) {
         for (i, l) in labels.iter().enumerate() {
@@ -2620,9 +2622,9 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         }
         Screen::Assign => {
             d.frame(2, 5);
-            for p in 0..m.players() {
+            for (p, &fill) in CARD_FILL.iter().enumerate().take(m.players()) {
                 let y = 90.0 + 70.0 * p as f32;
-                d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(CARD_FILL[p])], 128.0);
+                d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(fill)], 128.0);
                 d.hit([120.0, y, 400.0, 56.0], pointer::press(|k| k.ok = true));
                 d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
                 // B216: a seat with nobody is open (filled at Start) until 1P adds a computer player to it
@@ -2721,11 +2723,6 @@ fn tile_face(c: Option<Who>) -> (Tex, [f32; 4]) {
     (tex, src)
 }
 
-/// B306: the tiles' fills behind their pictures: Random's slate, the disc's warm skin, the mods' gold.
-const TILE_RANDOM: [f32; 3] = [62.0, 60.0, 75.0];
-const TILE_DISC: [f32; 3] = [120.0, 88.0, 60.0];
-const TILE_MOD: [f32; 3] = [116.0, 98.0, 46.0];
-
 /// B306: a T-shirt drawn from quads in `rgb` with an ink outline, filling `[x, y, w, h]`: the body, two sleeves
 /// tilted out, a neck cut out in the card's colour `bg`.
 fn shirt(d: &mut Draw, [x, y, w, h]: [f32; 4], rgb: [f32; 3], bg: [f32; 3]) {
@@ -2789,24 +2786,6 @@ impl Grid {
     /// confirm screens put their help under the seats, not in the description bar.
     fn reach(&self) -> [f32; 4] {
         [self.strip[0], self.strip[1] - 46.0, self.strip[0] + self.strip[2], self.detail[1] + self.detail[3] + 32.0]
-    }
-}
-
-/// The help box at `[x, y, w, h]`.
-fn help_box(d: &mut Draw, [x, y, w, h]: [f32; 4], s: &str) {
-    d.box3([x, y, w, h], 10.0, [None, None, Some(WHITE)], 96.0);
-    let mut size = 13.0;
-    let lines = loop {
-        let lines = wrap(s, ((w - 16.0) / (size * 0.55)) as usize);
-        if lines.len() <= 2 || size < 8.0 {
-            break lines;
-        }
-        size -= 1.0;
-    };
-    let top = y + (h - 1.25 * size * lines.len() as f32) / 2.0;
-    for (i, l) in lines.iter().enumerate() {
-        let lw = d.width(l, size).min(w - 16.0);
-        d.label(l, x + 8.0 + lw / 2.0, top + 1.25 * size * i as f32, size, w - 16.0, INK);
     }
 }
 
@@ -3270,7 +3249,7 @@ fn step(
                 Effect::Launch => {
                     let a = menu.args(&pads);
                     // every one asked at once (no short-circuit), then tried again next frame
-                    if !a.windows(3).filter(|w| w[0] == "--slot-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[2])) && ok) | !umpire_mods::launch_ready(&a) {
+                    if !a.windows(3).filter(|w| w[0] == "--slot-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[2])) & ok) | !umpire_mods::launch_ready(&a) {
                         *launching = true;
                         continue;
                     }
@@ -3364,7 +3343,6 @@ fn draw(
         img.image = match quad.tex {
             Tex::Solid => art.0[0].clone(),
             Tex::Font => art.0[1].clone(),
-            Tex::Hand => art.0[2].clone(),
             Tex::Cursor => match &cursor {
                 Some(c) => c.image.clone(),
                 None => art.0[2].clone(),
@@ -3688,8 +3666,7 @@ mod tests {
     #[test]
     fn description_grows_to_the_laid_out_size() {
         let long = "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.";
-        let mut g = Grow::default();
-        g.sent = ("a".into(), Vec2::new(100.0, 20.0));
+        let mut g = Grow { sent: ("a".into(), Vec2::new(100.0, 20.0)), ..Grow::default() };
         g.measure("b", Vec2::new(300.0, 60.0));
         g.measure("a", Vec2::new(100.0, 20.0));
         assert_eq!((g.w, g.h), (1.0, 1.0), "another text, or as expected: no change");
@@ -3739,8 +3716,7 @@ mod tests {
         assert!(!Settings([true, true, false, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0, Ask::Each).flags().contains(&"--music".to_string()));
         assert!(Settings([true, false, true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0, Ask::Each).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
-        let mut a = Settings::default();
-        a.4 = Ask::Never;
+        let a = Settings { 4: Ask::Never, ..Settings::default() };
         assert_eq!(Settings::parse(&a.text()), a);
         assert_eq!(Settings::parse("online_mods = maybe\n").4, Ask::Each);
         // M20: chat shown unless turned off

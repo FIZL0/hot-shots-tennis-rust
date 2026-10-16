@@ -74,8 +74,8 @@ mod tests {
         let place = |g: &mut Game| -> Option<(usize, swing::Dive)> {
             let path = predicted_path(g, 20);
             let end = g.players[2].end;
-            for k in 6..16 {
-                let q = path[k].pos;
+            for (k, step) in path.iter().enumerate().take(16).skip(6) {
+                let q = step.pos;
                 let near = [0.0f32, 0.3, -0.3, 0.6, -0.6].into_iter().any(|dx| {
                     put(g, 2, q[0] + dx, q[2] - end * g.reach.ahead, None);
                     find_contact(g, 2).is_some()

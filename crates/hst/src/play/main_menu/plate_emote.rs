@@ -185,8 +185,8 @@ fn play(
             }
         }
     }
-    for i in 0..4 {
-        if !live[i] {
+    for (i, &up) in live.iter().enumerate() {
+        if !up {
             plates.until[i] = None;
             match plates.queued[i] {
                 Some((_, t)) if now - t >= WAIT || !on(&menu) => plates.queued[i] = None,

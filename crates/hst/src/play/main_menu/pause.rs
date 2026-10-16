@@ -415,7 +415,7 @@ pub(in crate::play) fn plugin(app: &mut App) {
                 .in_set(Systems),
         )
         // M14: the Settings screens' legend, as the main menu's
-        .add_systems(Update, super::legend::fill.run_if(open.and(resource_exists::<super::legend::Legend>)).after(Systems));
+        .add_systems(Update, super::legend::fill.run_if(open.and_then(resource_exists::<super::legend::Legend>)).after(Systems));
 }
 
 /// B221/B244: the phone's on-screen stick keeps to its corner while the pause or result screen is up, so taps reach the

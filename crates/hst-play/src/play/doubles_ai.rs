@@ -555,12 +555,12 @@ pub(super) fn formations(g: &mut Game, draws: &[u32]) {
         return;
     }
     let human = |g: &Game, k: usize| g.humans.get(k) == Some(&true);
-    for i in 0..4 {
+    for (i, &draw) in draws.iter().enumerate().take(4) {
         let m = i ^ 2;
         g.players[i].formation = if i < 2 {
             let rows = (g.players[i].ai.formation, g.players[m].ai.formation);
             // the menus' setup words have no third byte (slots 3 and 5 read 0)
-            Team::pick((human(g, i), human(g, m)), rows, 0, draws[i])
+            Team::pick((human(g, i), human(g, m)), rows, 0, draw)
         } else {
             g.players[m].formation
         };

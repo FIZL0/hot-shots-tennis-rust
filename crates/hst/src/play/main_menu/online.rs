@@ -102,6 +102,7 @@ pub struct View {
 
 /// What an Online press asks of the app.
 #[derive(Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)] // a press's few effects live for one frame; boxing `Net`'s command only adds an allocation
 pub enum Fx {
     Net(Cmd),
     /// Stop the network (back to the main menu, or the relay changed).
@@ -3544,6 +3545,7 @@ mod tests {
         assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Join(..))))), "the same build's joins: {fx:?}");
     }
 
+    #[test]
     fn find_first_then_pick_in_the_lobby() {
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };

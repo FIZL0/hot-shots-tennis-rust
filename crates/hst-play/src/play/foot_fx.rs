@@ -189,10 +189,10 @@ fn steps(g: &mut Game, feet: &Feet, states: &[u8; 4]) {
     let look = [x, y, z, 0.0];
     let view = super::reaction_voices::matrix(&v);
     let focal = 240.0 / hst_sim::musl::tanf(v.fov);
-    for i in 0..g.players.len() {
+    for (i, &state) in states.iter().enumerate().take(g.players.len()) {
         let p = &g.players[i];
         let at = [p.pos[0], p.pos[1], p.pos[2], 1.0];
-        for _ in feet.stepped[i].iter().filter(|&&s| s && states[i] == 1 && hst_sim::sound::step_heard(eye, look, &view, focal, at)) {
+        for _ in feet.stepped[i].iter().filter(|&&s| s && state == 1 && hst_sim::sound::step_heard(eye, look, &view, focal, at)) {
             debug!("replay footstep, player {i}");
             g.whooshes.push((0, i, hst_sim::sound::step(crate::weather::now())));
         }

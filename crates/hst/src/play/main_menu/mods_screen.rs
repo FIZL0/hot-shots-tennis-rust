@@ -41,9 +41,7 @@ pub(super) fn show_ends(v: &View) -> [bool; 2] {
 // The mods folder, in hst-base (`web.rs` reads it too)
 pub(crate) use hst_base::modfs::{root, set_root};
 
-/// The pills above the list on Installed (Add mod, Reload, Remove all) and Upload (Sign in, Upload all): the rows
-/// before the mods.
-const TOP: usize = 3;
+/// The pills above the list on Upload (Sign in, Upload all): the rows before the mods.
 const UP_TOP: usize = 2;
 /// The tabs across the title band, in Q/E order.
 const PAGES: [Page; 4] = [Page::Browse, Page::Installed, Page::Upload, Page::Mine];
@@ -196,11 +194,6 @@ impl View {
                 };
             }
         }
-    }
-
-    /// How many mods the store lists (the Browse tab's count).
-    fn entries_len(&self) -> usize {
-        self.store.as_ref().map_or(0, Vec::len)
     }
 
     fn refresh(&mut self) {

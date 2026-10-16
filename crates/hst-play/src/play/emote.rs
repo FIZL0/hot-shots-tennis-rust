@@ -547,12 +547,14 @@ mod match_tests {
             if serve.is_none() && t > at && phase == Phase::Serve {
                 serve = Some(t);
             }
-            a.world_mut().resource_mut::<Replay>().0.front_mut().map(|p| p[0] = match serve {
-                Some(s) if t == s + 2 => flick,
-                Some(_) => IDLE,
-                None if t >= at => flick,
-                None => p[0],
-            });
+            if let Some(p) = a.world_mut().resource_mut::<Replay>().0.front_mut() {
+                p[0] = match serve {
+                    Some(s) if t == s + 2 => flick,
+                    Some(_) => IDLE,
+                    None if t >= at => flick,
+                    None => p[0],
+                };
+            }
             a.world_mut().run_schedule(FixedUpdate);
             let g = a.world().resource::<Game>();
             if serve.is_none() {

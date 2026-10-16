@@ -1222,8 +1222,7 @@ mod tests {
 
     #[test]
     fn a_tab_change_ticks() {
-        let mut m = Menu::default();
-        m.screen = TABS[0].1;
+        let mut m = Menu { screen: TABS[0].1, ..Menu::default() };
         assert_eq!(m.step(Dev::Keys, press(|k| &mut k.next)), [Effect::Sound(0)]);
         assert_eq!(m.screen, TABS[1].1);
         assert_eq!(m.step(Dev::Keys, press(|k| &mut k.prev)), [Effect::Sound(0)]);
@@ -1552,8 +1551,7 @@ mod tests {
         assert_eq!((s.1.windowed, s.1.show_fps, s.value(Preset).as_str(), s.value(Display).as_str()), (true, 1, "High", "Window"));
         assert!(Settings::parse(&s.text()).1.show_fps == 1 && s.flags().contains(&"--show-fps".into()));
         // B414: Lowest sits between Low and Phone
-        let mut l = Settings::default();
-        l.1 = Graphics::LOW;
+        let mut l = Settings { 1: Graphics::LOW, ..Settings::default() };
         l.step(Preset, 1);
         assert_eq!((l.1, l.value(Preset).as_str()), (Graphics::LOWEST, "Lowest"));
         l.step(Preset, 1);

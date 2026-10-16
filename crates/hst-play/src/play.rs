@@ -1896,7 +1896,6 @@ fn strike(
         random_bit: branch != 4 && kind != 4 && !matches!(grade, 1 | 2) && g.rng.sound.bit(),
         framed: framed.is_some(),
         dull: miss.is_some_and(|m| m.dull),
-        ..default()
     };
     g.sounds
         .extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
@@ -2045,11 +2044,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     }
     match s.swing {
         None if !s.whiffed => {
-            let allowed = match (toss, press) {
-                (Toss::Under, Some(3)) => true,
-                (Toss::Strong | Toss::Weak, Some(0 | 1)) => true,
-                _ => false,
-            };
+            let allowed = matches!((toss, press), (Toss::Under, Some(3)) | (Toss::Strong | Toss::Weak, Some(0 | 1)));
             if allowed {
                 g.players[i].missed = false;
                 let grades = g.serve_data[i].grades(toss).to_vec();
@@ -3361,18 +3356,14 @@ fn bot(g: &mut Game, i: usize) {
             // the AI presses once the frames left plus its timing error for this stroke reach the sweet frame
             let t = g.players[i].ai_timing;
             let go = ai_lets_go(g, i);
-            if !go && find_contact(g, i).is_some_and(|c| {
+            if !go && (find_contact(g, i).is_some_and(|c| {
                 let err = match c.swing.branch {
                     swing::Branch::Ground => t.stroke,
                     swing::Branch::Volley => t.volley,
                     swing::Branch::Smash => t.smash,
                 };
                 c.frames as i32 + err <= SWEET_FRAME
-            }) {
-                let kind = ai_press_kind(g, i);
-                press(g, i, kind);
-                g.players[i].bot_due = None;
-            } else if !go && ai_dives(g, i) {
+            }) || ai_dives(g, i)) {
                 let kind = ai_press_kind(g, i);
                 press(g, i, kind);
                 g.players[i].bot_due = None;

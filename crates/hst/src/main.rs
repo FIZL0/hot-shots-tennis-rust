@@ -1121,7 +1121,7 @@ fn cutout_mips(t: &mtl::Texture) -> Option<Vec<Vec<u8>>> {
                     acc[3] += p[3] as u32;
                 }
                 let o = &mut next[(y * nw + x) * 4..][..4];
-                (0..3).for_each(|i| o[i] = if acc[3] == 0 { 0 } else { ((acc[i] + acc[3] / 2) / acc[3]) as u8 });
+                (0..3).for_each(|i| o[i] = (acc[i] + acc[3] / 2).checked_div(acc[3]).unwrap_or(0) as u8);
                 o[3] = ((acc[3] + 2) / 4) as u8;
             }
         }

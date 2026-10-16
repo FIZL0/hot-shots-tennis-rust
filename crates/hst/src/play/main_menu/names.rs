@@ -125,6 +125,7 @@ impl Menu {
     }
 
     /// The tag above seat `p`'s player: its name, else "1P".."4P".
+    #[cfg(test)]
     pub(super) fn seat_tag(&self, p: usize) -> String {
         self.player_name(p).unwrap_or_else(|| format!("{}P", p + 1))
     }

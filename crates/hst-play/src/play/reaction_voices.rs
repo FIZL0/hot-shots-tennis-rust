@@ -52,11 +52,11 @@ fn step(mut g: ResMut<Game>, mut frames: ResMut<Frames>) {
 /// `v`'s world → camera matrix as `vu0::transform` takes it (column k is camera axis k).
 pub(super) fn matrix(v: &hst_sim::camera::View) -> [[f32; 4]; 4] {
     let mut m = [[0.0; 4]; 4];
-    for k in 0..3 {
-        for j in 0..3 {
-            m[j][k] = v.rot[k][j];
+    for (k, axis) in v.rot.iter().enumerate() {
+        for (row, &a) in m.iter_mut().zip(axis) {
+            row[k] = a;
         }
-        m[3][k] = -(0..3).map(|j| v.rot[k][j] * v.eye[j]).sum::<f32>();
+        m[3][k] = -axis.iter().zip(v.eye).map(|(a, e)| a * e).sum::<f32>();
     }
     m[3][3] = 1.0;
     m

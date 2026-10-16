@@ -392,11 +392,11 @@ fn take_state(w: &mut World) {
     }
     let mut rb = w.resource_mut::<Rollback>();
     let mut reqs = Vec::new();
-    for f in from as usize..frame {
+    for (f, pads) in (from as usize..).zip(&log[from as usize..frame]) {
         let g = (f - base) as i32;
         let cell = rb.cells.iter().flatten().find(|c| c.0 == g).map_or_else(Cell::default, |c| c.1.clone());
         reqs.push(GgrsRequest::SaveGameState { cell, frame: g });
-        let inputs = rb.seats.iter().map(|&s| (Input(wire(log[f][s])), ggrs::InputStatus::Confirmed)).collect();
+        let inputs = rb.seats.iter().map(|&s| (Input(wire(pads[s])), ggrs::InputStatus::Confirmed)).collect();
         reqs.push(GgrsRequest::AdvanceFrame { inputs });
     }
     rb.frame = from as usize;

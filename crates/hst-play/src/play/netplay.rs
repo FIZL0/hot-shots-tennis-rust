@@ -943,7 +943,7 @@ mod tests {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
-            in_sync(200_000, true);
+            let _ = in_sync(200_000, true);
         }
 
         /// One 100 ms doubles match (2400 ticks) for three checks: both machines stay in sync, a state sent from
@@ -1199,7 +1199,7 @@ mod tests {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
-            assert!(rollback::DELAY <= 2);
+            const { assert!(rollback::DELAY <= 2) };
             let t0 = std::time::Instant::now();
             REPLAYS.set(!to_the_end);
             let apps = play_rollback(5, limit, false);
