@@ -124,9 +124,13 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut bindposes: ResMut<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>,
     mut ambience: ResMut<Ambience>,
+    court_mod: Option<Res<crate::mods_court::MatchCourt>>,
 ) {
     *ambience = default();
     let Ok(root) = root.single() else { return };
+    // B436: under a court mod the layout court's trigger creatures (court 6's fences, court 4's and 7's props, the
+    // animals) still run, as the match draws for them, but under a hidden node: the mod's own gimmicks stand in
+    let triggers_root = court_mod.map_or(root, |_| commands.spawn((crate::court_mod::DiscCourt, Transform::default(), Visibility::Hidden, ChildOf(root))).id());
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let n = g.stage as usize;
     let (Ok(data), Some((list, plants))) = (iso.read(&format!("COURTSET/{n:02}/HOLE01.XB")), crate::court_layout(&mut iso, n)) else {
@@ -140,7 +144,7 @@ fn setup(
     let mut load = |(stem, anims): (String, Vec<String>)| {
         character::load_npc(&arc, &stem, &anims, &mut meshes, &mut materials, &mut images, &mut bindposes).map(Arc::new)
     };
-    let mut place = |data: &Arc<CharacterData>, world: &[[f32; 4]; 4], scale: f32| {
+    let mut place = |data: &Arc<CharacterData>, world: &[[f32; 4]; 4], scale: f32, root: Entity| {
         let e = character::spawn(&mut commands, data, root);
         commands.entity(e).insert(Transform::from_matrix(Mat4::from_cols_array_2d(world)).with_scale(Vec3::splat(scale)));
         // B351: no shadow at Shadows Low (the umpire's comes back below)
@@ -162,7 +166,7 @@ fn setup(
                 // she faces the court centre: rows (up × forward, up, forward, chair)
                 let ([x, z], p) = (umpire.forward, umpire.pos);
                 let world = [[z, 0.0, -x, 0.0], [0.0, 1.0, 0.0, 0.0], [x, 0.0, z, 0.0], [p[0], p[1], p[2], 1.0]];
-                npcs.umpire = Some((place(&data, &world, 1.0), Anim::default()));
+                npcs.umpire = Some((place(&data, &world, 1.0, root), Anim::default()));
             }
             npc::Kind::Walker(k) => {
                 let [model, set, _] = walkers[k as usize];
@@ -178,7 +182,7 @@ fn setup(
                 // the serve placement before the first point turns it to the court centre
                 let world = npc::walker_facing(c.world[3], 0.0);
                 w.wander = npc::Wander::new(c.world[3], &[], &[]);
-                npcs.walkers.push((place(&data, &world, c.scale), w, c.world[3]));
+                npcs.walkers.push((place(&data, &world, c.scale, root), w, c.world[3]));
             }
             npc::Kind::Trigger(t) => {
                 if npc::EMITTERS.contains(&t) {
@@ -212,7 +216,7 @@ fn setup(
                     tr.give_voice(&row, voices.next().unwrap_or((-1, 0)), &mut roll);
                 }
                 tr.reset(&row, &mut roll);
-                let e = place(&data, &c.world, c.scale);
+                let e = place(&data, &c.world, c.scale, triggers_root);
                 if t == 15 {
                     hidden.push(e); // the passing ball waits off until a change of ends rolls it
                 } else if !(tr.active && tr.on && tr.speed != 0.0) {

@@ -51,6 +51,11 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
     let (mut modded, sound) = app(n, Some(&court));
     let meshes = |app: &mut App| app.world_mut().query::<&Mesh3d>().iter(app.world()).count();
     assert!(meshes(&mut modded) > meshes(&mut disc) + 400, "the mod's court wasn't drawn");
+    // B436: the layout court's trigger creatures (court 6's six fences and its bear) run but stand under the hidden
+    // disc court, not on the mod's
+    let mut q = modded.world_mut().query_filtered::<&ChildOf, With<Motion>>();
+    let kept = q.iter(modded.world()).filter(|c| modded.world().get::<crate::court_mod::DiscCourt>(c.parent()).is_some()).count();
+    assert!(n != 6 || kept == 7, "{kept} of court 6's 7 trigger creatures hidden");
     let (mut points, mut last) = (0, String::new());
     for t in 0..60 * 60 * 2 {
         let hash = |app: &mut App| {
@@ -76,7 +81,11 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
         }
     }
     assert!(points >= 2, "only {points} points played");
-    // M8f7: the mod's people stand there, reacted to those points and have their cue sounds
+    // M8f7: the mod's people stand there, reacted to those points and have their cue sounds (a mods repo build
+    // without its `npcs.json` skips this part)
+    if court.people.is_none() {
+        return eprintln!("{MOD} has no npcs.json: its people unchecked");
+    }
     let (placed, reacted, sounds) = npcs::court_people_seen(modded.world_mut());
     let want = court.people.as_ref().map_or(0, |p| p.people.len());
     assert!(want > 0 && placed == want, "{placed} of the mod's {want} people placed");
