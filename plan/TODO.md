@@ -1,5 +1,6 @@
 # TODO — open tasks, in order
 
+- [ ] **M117** Modded court loading screen: when a court mod is picked, the loading screen into the match shows the mod's own loading image (from its zip) instead of its donor court's; falls back to the donor's when the mod ships none. Any aspect ratio (user 2026-10-16) → crates/hst/src/loading.rs · crates/hst-base/src/mods_court.rs · crates/hst-base/src/court_mod.rs
 Rules: `PLAN.md`. Finished tasks move to `plan/DONE.md` (`tools/ctx.py tick <ID>`).
 
 `→` files to open (play.rs fns by name) · `t:` tests · `j:` journal under `research/journal/`. Tests are in the
