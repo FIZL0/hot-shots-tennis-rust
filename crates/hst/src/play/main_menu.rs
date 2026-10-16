@@ -3179,6 +3179,11 @@ fn step(
         if dev == Dev::Keys && let Some((u, program, key)) = voice.2.take().filter(|h| h.0 == menu.umpire) {
             fx.push(Effect::Hear(u, program, key));
         }
+        // B526: Paste's clipboard read answered (the browser's is async)
+        #[cfg(target_arch = "wasm32")]
+        if dev == Dev::Keys && let Some((text, again)) = crate::web::clipboard_read() {
+            fx.push(Effect::Online(online::Fx::Clip(text, again)));
+        }
         if k == Press::default() && fx.is_empty() {
             continue;
         }

@@ -1616,7 +1616,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
         }
         None => {
             offer = new_offer(cx).await;
-            cx.say(Event::Status("Players scan this code, then you scan the one their screen shows (or paste it here).".into()));
+            cx.say(Event::Status("Players join with this lobby's link (Copy Link, send it: they open it or Paste it in Join by Code); then Paste the link they send back.".into()));
         }
     }
     let (gtx, mut guests) = amp::unbounded_channel::<Guest>();
@@ -1789,7 +1789,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
                 o => {
                     offer = o;
-                    cx.say(Event::Status("That code answers an older lobby code: they need to scan the one shown now.".into()));
+                    cx.say(Event::Status("That link answers an older one: send them this lobby's link again (Copy Link).".into()));
                 }
             },
             Some(g) = guests.recv() => match g {
@@ -2304,7 +2304,7 @@ fn short(id: &str) -> &str {
 async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -> Option<(Conn, Link, Inbox, String)> {
     let code = code.trim();
     if rtc::is_offer(code) {
-        // the browser's LAN: our answer shown for the host to scan, then wait for them (or a Leave)
+        // the browser's LAN: our answer shared back to the host (Copy Link), then wait for them (or a Leave)
         let (pending, answer) = match rtc::answer(code).await {
             Ok(p) => p,
             Err(e) => {
@@ -2315,7 +2315,7 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
         let me = pending.me();
         bevy::log::info!("LAN answer: {answer}");
         cx.say(Event::Code(answer));
-        cx.say(Event::Status("Now the host scans this code (or you send it to them to paste).".into()));
+        cx.say(Event::Status("Send this lobby's link back to the host (Copy Link): they Paste it in their lobby.".into()));
         let open = pending.open();
         n0_future::pin!(open);
         loop {

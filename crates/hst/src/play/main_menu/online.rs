@@ -102,6 +102,10 @@ pub enum Fx {
     /// Stop the network (back to the main menu, or the relay changed).
     Off,
     Paste,
+    /// B526: what the browser's clipboard read got (`web::read_clipboard`): its text, and whether the next tap reads it
+    /// again (refused outside a tap).
+    #[cfg(target_arch = "wasm32")]
+    Clip(Option<String>, bool),
     Copy,
     SaveCfg,
     /// Read `online.txt` (opening the Online screen).
@@ -136,6 +140,7 @@ fn row_rects(extra: f32) -> Vec<[f32; 4]> {
 /// no Vote button (B226 removes lobby voting).
 /// B213: "Public" is the host's Public/Private switch (labelled with what the lobby is).
 /// B370: "Code" is the invite box's code (OK copies the link, as Copy Link).
+/// B526: a browser's LAN lobby (`lan_host`) has "Paste" (a guest's link back) where "Public" is: it's listed nowhere.
 /// B396: in the side panel's invite box and the bottom bar; "Chat" (when chat's on) goes before Start / Ready; a
 /// player's own seat card is where they pick again (no Characters button).
 const HOST_BUTTONS: [&str; 5] = ["Code", "Copy Link", "Public", "Leave", "Start"];
@@ -287,12 +292,21 @@ impl Menu {
         if self.net.hosting && room.is_some() {
             let taken = |i: usize| room.is_some_and(|r| r.seats[i].is_some()) && !self.mine(i);
             let seats = (0..n).flat_map(|i| [Some(Item::Seat(i)), taken(i).then_some(Item::Remove(i))]).flatten();
-            seats.chain(lobby::SIDE).chain(with_chat(&HOST_BUTTONS)).collect()
+            let lan = self.lan_host();
+            seats.chain(lobby::SIDE).chain(with_chat(&HOST_BUTTONS)).map(|it| if lan && it == Item::Button("Public") { Item::Button("Paste") } else { it }).collect()
         } else if room.is_some() && !self.net.started && !self.net.pick_next {
             (0..n).filter(|&i| self.mine(i)).map(Item::Seat).chain(with_chat(&GUEST_BUTTONS)).collect()
+        } else if !self.net.hosting && crate::net::rtc::is_answer(&self.net.code) {
+            // B526: a browser's LAN guest waiting for the host: its answer goes back by Copy Link
+            vec![Item::Button("Copy Link"), Item::Button("Leave")]
         } else {
             vec![Item::Button("Leave")]
         }
+    }
+
+    /// B526: hosting a browser's LAN lobby (M2k): its code is a WebRTC offer, the guests' answers come back by Paste.
+    pub(super) fn lan_host(&self) -> bool {
+        self.net.hosting && crate::net::rtc::is_offer(&self.net.code)
     }
 
     /// B370: where `items` are drawn (640×448, `lobby::Geo`): a seat's card, a computer's ✕ on its corner, the top
@@ -463,6 +477,7 @@ impl Menu {
             Item::Button("Ready") if self.net.prepared => "Not Ready",
             Item::Button("Public") if self.net.room.as_ref().is_some_and(|r| r.private) => "Make Public",
             Item::Button("Public") => "Make Private",
+            Item::Button("Paste") => "Paste",
             Item::Button(b @ ("Start" | "Ready" | "Leave")) => b,
             Item::Button(_) => return None,
         })
@@ -1044,6 +1059,9 @@ impl Menu {
                     out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Private(p))), Effect::Online(Fx::SaveCfg)]);
                 } else if matches!(item, Item::Button("Code" | "Copy Link")) && shared(&self.net).is_some() {
                     out.extend([Sound(2), Effect::Online(Fx::Copy)]);
+                } else if item == Item::Button("Paste") {
+                    // B526: a guest's link back to this LAN lobby, off the clipboard
+                    out.extend([Sound(2), Effect::Online(Fx::Paste)]);
                 } else if matches!(item, Item::Button("Start" | "Ready")) && self.counting() > 0 {
                     // B215: stop the countdown for everyone
                     self.net.status.clear();
@@ -1228,7 +1246,7 @@ impl Menu {
             self.join_code(out);
         } else {
             self.net.status = if cfg!(target_arch = "wasm32") {
-                "Paste a lobby link or code on the page first (Ctrl+V), then choose Paste."
+                "Copy a lobby link or code first, then choose Paste (on a computer, Ctrl+V on the page works too)."
             } else {
                 "Copy a lobby link or code first, then choose Paste."
             }
@@ -1606,6 +1624,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             let status = match () {
                 _ if let Some(r) = room.filter(|r| r.wait > 0) => Some(waiting(r)),
                 _ if !m.net.status.is_empty() => Some(m.net.status.clone()),
+                // B526: a browser's LAN guest waiting for the host says how its answer gets there
+                _ if room.is_none() && shared(&m.net).is_some() => Some(GUEST_LAN.into()),
                 _ => None,
             };
             if !m.net.keep.is_empty() {
@@ -1636,7 +1656,14 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             if let Some(s) = &status {
                 d.info(s);
             }
-            // Leave, the one item: Back goes too
+            // B526: a LAN guest's answer, back to the host
+            if let Some(k) = m.items().iter().position(|it| *it == Item::Button("Copy Link")) {
+                let r = [250.0, 292.0, 140.0, 30.0];
+                d.pill_at(r, [super::INK, if m.sel == k { super::GOLD } else { WHITE }, [90.0, 104.0, 80.0]], 128.0);
+                d.label("Copy link", 320.0, r[1] + 6.0, 16.0, 120.0, super::INK);
+                d.hit(r, Act::Row(k, OK));
+            }
+            // Leave, the one item (but a LAN guest's Copy Link): Back goes too
             if let Some(k) = m.items().iter().position(|it| *it == Item::Button("Leave")) {
                 let r = [250.0, 330.0, 140.0, 30.0];
                 d.pill_at(r, [super::INK, if m.sel == k { super::GOLD } else { WHITE }, [90.0, 104.0, 80.0]], 128.0);
@@ -1749,7 +1776,7 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
         3 => "Type the host's 4-character code, or paste their link or code.".into(),
         4 => format!("Your name on your lobby seats (now {}).", cfg.name),
         _ if m.net.custom => "Advanced, for self-hosted relays: OK types your own iroh-relay's URL (kept in online.txt). Every player needs the same one.".into(),
-        _ if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (Custom...) for the internet; Off for this network only (no internet needed): codes are scanned both ways.".into(),
+        _ if cfg!(target_arch = "wasm32") => "Relay: n0's public relays or your own (Custom...) for the internet; Off for this network only (no internet needed): codes go by copied link both ways.".into(),
         _ => "The relay carries the match when players can't connect directly: n0's public relays, none, or your own (Custom...).".into(),
     };
     para(d, &words, x + 18.0, y + pic_h + 16.0, w - 36.0, 17.0, 4, INK);
@@ -1822,17 +1849,22 @@ fn failed(d: &mut Draw, y: f32, title: &str, line: &str) {
     panel(d, y, title, [128.0, 50.0, 40.0], line, false);
 }
 
-/// What the lobby's Copy Link shares: the short code's link, or the browser's LAN offer (nothing else reaches it). The long iroh ticket (B224: useless to type) only as a link while the short code can't be put
-/// online (B321, `ticket_only`).
+/// What the lobby's Copy Link shares: the short code's link, or the browser's LAN offer (nothing else reaches it) or a
+/// LAN guest's answer back (B526). The long iroh ticket (B224: useless to type) only as a link while the short code
+/// can't be put online (B321, `ticket_only`).
 fn shared(v: &View) -> Option<String> {
     if !v.short.is_empty() {
         Some(crate::net::link(&v.short))
     } else if ticket_only(v) {
         Some(crate::net::link(&v.code))
     } else {
-        crate::net::rtc::is_offer(&v.code).then(|| v.code.clone())
+        (crate::net::rtc::is_offer(&v.code) || crate::net::rtc::is_answer(&v.code)).then(|| v.code.clone())
     }
 }
+
+/// B526: how a browser's LAN lobby is joined: the host's open seats say it, a waiting guest's help line.
+pub(super) const HOST_LAN: &str = "Copy Link to players; they open it or Paste it. Then Paste the link they send back.";
+const GUEST_LAN: &str = "Copy Link and send it back to the host: they Paste it in their lobby.";
 
 /// B321: hosting, and the short code's put failed (it's retried): the code is the whole ticket, shared as a link.
 fn ticket_only(v: &View) -> bool {
@@ -2313,13 +2345,37 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
             }
         },
         Fx::Off => commands.remove_resource::<Net>(),
-        Fx::Paste => {
-            // ponytail: desktop clipboards answer at once; the browser's is async and would need polling
-            let text = clipboard.fetch_text().poll_result().and_then(Result::ok);
-            // the browser: what was pasted on the page, or the URL's `?code=`
-            #[cfg(target_arch = "wasm32")]
-            let text = text.or_else(crate::web::pasted);
-            menu.pasted(text, &mut out);
+        // desktop clipboards answer at once
+        #[cfg(not(target_arch = "wasm32"))]
+        Fx::Paste => menu.pasted(clipboard.fetch_text().poll_result().and_then(Result::ok), &mut out),
+        // the browser: Join by Code takes what was pasted on the page (Ctrl+V) or the URL's `?code=`; else (and the LAN
+        // host's Paste) the page reads the clipboard, its answer a frame or more later (B526: `Fx::Clip`; not Bevy's
+        // read, which would ask the browser a second time)
+        #[cfg(target_arch = "wasm32")]
+        Fx::Paste => match crate::web::take_pasted().filter(|_| menu.screen == Screen::Code) {
+            Some(t) => menu.pasted(Some(t), &mut out),
+            None => {
+                menu.net.status = "Reading the clipboard...".into();
+                crate::web::read_clipboard();
+            }
+        },
+        // B526: an answer goes to the hosting lobby (`web::paste`), anything else to Join by Code
+        #[cfg(target_arch = "wasm32")]
+        Fx::Clip(text, again) => {
+            let text = text.filter(|t| !t.trim().is_empty());
+            let answer = text.clone().is_some_and(crate::web::paste);
+            if !again && !answer && menu.screen == Screen::Code {
+                menu.pasted(text, &mut out);
+            } else {
+                menu.net.status = match (again, answer, text.is_some()) {
+                    (true, ..) => "Tap Paste again to let the game read the clipboard.",
+                    (_, true, _) => "Got their link: connecting...",
+                    (_, _, true) => "That isn't a player's link back: copy the one they sent, then choose Paste.",
+                    _ => "Copy the link they sent first, then choose Paste (on a computer, Ctrl+V on the page works too).",
+                }
+                .into();
+                out.push(Effect::Sound(if answer { 2 } else { 1 }));
+            }
         }
         Fx::Copy if !menu.net.short.is_empty() || ticket_only(&menu.net) => {
             let link = shared(&menu.net).unwrap_or_default();
@@ -2330,11 +2386,13 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
             };
         }
         Fx::Copy => {
-            // only the browser's LAN offer gets here (`shared`): the long iroh ticket is never offered (B224)
+            // only the browser's LAN offer or answer gets here (`shared`): the long iroh ticket is never offered (B224)
+            let back = !menu.net.hosting;
             menu.net.status = match copy(clipboard, &menu.net.code) {
-                Copied::Done => "Code copied: send it to the other players (they paste it in Join by Code).".into(),
-                Copied::Sheet => "Tap Copy or Share on the code's card to send it to the other players.".into(),
-                Copied::Failed => format!("Code: {}", menu.net.code),
+                Copied::Done if back => "Link copied: send it back to the host (they Paste it in their lobby).".into(),
+                Copied::Done => "Link copied: send it to the other players (they open it, or Paste it in Join by Code).".into(),
+                Copied::Sheet => "Tap Copy or Share on the link's card to send it.".into(),
+                Copied::Failed => menu.net.code.clone(),
             };
         }
         Fx::Load => {
@@ -2356,7 +2414,16 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
             }
         }
     }
-    out.into_iter().filter_map(|e| if let Effect::Sound(s) = e { Some(s) } else { None }).collect()
+    let mut sounds = Vec::new();
+    for e in out {
+        match e {
+            Effect::Sound(s) => sounds.push(s),
+            // B526: a Paste's join (`join_code`) goes on to the network
+            Effect::Online(fx) => sounds.extend(apply(fx, menu, commands, net, clipboard, iso)),
+            _ => {}
+        }
+    }
+    sounds
 }
 
 #[cfg(test)]
@@ -3348,5 +3415,29 @@ mod tests {
         // the same Start is the pad's OK
         m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         assert_eq!((m.screen, m.net.cfg.unwrap().name.as_str()), (Screen::Online, "SUNNY"), "saved without the hovered F");
+    }
+
+    /// B526: a browser's LAN host has Paste (a guest's link back) where Public is; a guest waiting on the host, Copy Link.
+    #[test]
+    fn a_lan_lobby_pastes_and_copies_links_back() {
+        use crate::net::rtc::{ANSWER, OFFER, Sig};
+        let dev = super::super::Dev::Keys;
+        let ok = Press { ok: true, ..default() };
+        let sig = Sig { ufrag: "abcd".into(), pwd: "p".repeat(22), fingerprint: [1; 32], ..default() };
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        (m.net.me, m.net.hosting, m.net.code) = ("host".into(), true, sig.code(OFFER));
+        let items = m.items();
+        assert!(items.contains(&Item::Button("Paste")) && !items.contains(&Item::Button("Public")), "{items:?}");
+        m.sel = items.iter().position(|i| *i == Item::Button("Paste")).unwrap();
+        assert_eq!(m.lobby_ok(), Some("Paste"));
+        assert!(m.step(dev, ok).contains(&Effect::Online(Fx::Paste)));
+        // the open seats' note fits its three lines
+        assert!(super::super::wrap(HOST_LAN, 30).len() <= 3);
+        // the guest's answer, before the host's room reaches it
+        let mut g = Menu { screen: Screen::Lobby, ..default() };
+        g.net.code = Sig { to: "abcd".into(), ..sig }.code(ANSWER);
+        assert_eq!(g.items(), vec![Item::Button("Copy Link"), Item::Button("Leave")]);
+        assert!(g.step(dev, ok).contains(&Effect::Online(Fx::Copy)));
     }
 }
