@@ -294,6 +294,12 @@ pub fn in_match(on: bool) {
 
 static IN_MATCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// P58: this frame came from the page's timer stand-in (`index.html`: a hidden tab, or an unfocused window the
+/// compositor gives no frames), so the wait before it was the page's, not a stall.
+pub fn timer_frame() -> bool {
+    js_sys::Reflect::get(&js_sys::global(), &"hstTimerFrame".into()).is_ok_and(|v| v.is_truthy())
+}
+
 /// B324: the best frame rate the game has held over a whole second, in fps × 10: [in the menus, in a match].
 static BEST_FPS: [std::sync::atomic::AtomicU32; 2] = [const { std::sync::atomic::AtomicU32::new(0) }; 2];
 

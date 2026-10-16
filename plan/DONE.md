@@ -721,6 +721,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B492** Release hardening (user 2026-10-16): audit for debug code, dev-only paths and diagnostics that should be off in release builds for stability — debug overlays/keys, HST_* debug env vars, census/trace logging, asserts/unwraps on user data, dev features in Cargo features/profiles (debug-assertions, bevy dev features, dynamic_linking), verbose log levels; gate or remove them, keep tests' hooks → Cargo.toml · crates/hst/src/main.rs · crates/hst/build.rs · tools/release.sh
 - [x] **P54** WebGL2: turn off the settings that blow up the pipeline count and stall it (user 2026-10-16): MSAA (hst-log 10: every mesh pipeline at samples 4), plus whatever else doubles variants there (prepass). Force them off on WebGL2 and hide/grey them in Options with a note; WebGPU and native keep them → crates/hst-base/src/graphics.rs, play/main_menu/options.rs
 - [x] **P56** Renderer auto-pick: Chrome 152 on Linux (RX 9070 XT) got WebGL2 under 'auto'. Check whether WebGPU was offered and fell back or never offered; if usable, prefer it; otherwise say on the settings page how to enable it → web/index.html
+- [x] **P58** Long rAF gaps with an idle main thread (hst-log 10: 24 s, 5 s, 2.6 s in the menu; 4 s just before the match's loading screen drops; no 'blocked' line, no visibility change): find out whether that's Chrome throttling an occluded window or its GPU process stuck behind shader links; if ours, fix → web/index.html, crates/hst-base/src/stall.rs
 
 
 ### Shots

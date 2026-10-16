@@ -284,8 +284,19 @@ if (fpsLog) {
     console[k] = (...a) => { keep(k, a); f(...a); };
   }
   let last = performance.now(), beat = last;
-  const raf = t => { if (t - last > 100) console.info(`hst: raf gap ${Math.round(t - last)} ms`); last = t; requestAnimationFrame(raf); };
-  requestAnimationFrame(raf);
+  // P58: whether the window had the focus all through a gap: an unfocused one may just not be on screen (Chrome on
+  // Wayland sends a covered window or one on another workspace no frames, the page still 'visible'); a focused one
+  // with no 'blocked' beside it points at the GPU process (first draws after new pipelines: stall.rs 'pipelines')
+  let away = !document.hasFocus();
+  addEventListener('blur', () => { away = true; console.info('hst: window blur'); });
+  addEventListener('focus', () => console.info('hst: window focus'));
+  const raf = t => {
+    if (t - last > 100) console.info(`hst: raf gap ${Math.round(t - last)} ms${away ? ' (window unfocused)' : ''}`);
+    last = t; away = !document.hasFocus(); frame(raf);
+  };
+  // the browser's own frames, not the timer stand-ins below (B260, P58)
+  const frame = requestAnimationFrame.bind(window);
+  frame(raf);
   setInterval(() => {
     const n = performance.now();
     if (n - beat > 250 && !document.hidden) console.info(`hst: blocked ${Math.round(n - beat - 50)} ms`);
@@ -501,11 +512,22 @@ addEventListener('unhandledrejection', e => {
 // tab is hidden and no match is on (`web.rs` sets hstMatch), a frame comes from a timer instead (the browser throttles
 // it to about one a second): store downloads and their queue, the lobby and its keep-alives go on. A match holds
 // while hidden (the others see "Waiting for …", `play/recover.rs`).
+// P58: a window the compositor doesn't show (another workspace, covered: Chrome on Wayland/Hyprland) gets no frames
+// at all while the page still says it's visible; such a window is unfocused, so there, outside a match, a frame that
+// hasn't come in 250 ms comes from a timer too. `hstTimerFrame` says which kind this one is (stall.rs doesn't count a
+// timer's wait as a stall).
 {
-  const raf = requestAnimationFrame.bind(window), caf = cancelAnimationFrame.bind(window);
+  const raf = requestAnimationFrame.bind(window), caf = cancelAnimationFrame.bind(window), late = new Map();
+  const real = f => t => { window.hstTimerFrame = false; f(t); }, timer = f => () => { window.hstTimerFrame = true; f(performance.now()); };
   // timer ids negated, so they never clash with a real frame's
-  window.requestAnimationFrame = f => document.hidden && !window.hstMatch ? -setTimeout(() => f(performance.now()), 100) : raf(f);
-  window.cancelAnimationFrame = id => id < 0 ? clearTimeout(-id) : caf(id);
+  window.requestAnimationFrame = f => {
+    if (window.hstMatch || !document.hidden && document.hasFocus()) return raf(real(f));
+    if (document.hidden) return -setTimeout(timer(f), 100);
+    const id = raf(t => { clearTimeout(late.get(id)); late.delete(id); real(f)(t); });
+    late.set(id, setTimeout(() => { late.delete(id); caf(id); timer(f)(); }, 250));
+    return id;
+  };
+  window.cancelAnimationFrame = id => { if (id < 0) return clearTimeout(-id); clearTimeout(late.get(id)); late.delete(id); caf(id); };
 }
 // web.rs: the game's first frames are on screen
 window.hstShown = () => { shown = true; clearTimeout(stuck); if (!boot.classList.contains('err')) boot.hidden = true; };
