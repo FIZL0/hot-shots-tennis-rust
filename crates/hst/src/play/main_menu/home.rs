@@ -299,7 +299,7 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Update if cfg!(target_arch = "wasm32") => vec![("Refresh", "Reloads this page".into()), ("Keeps", "Settings, mods, ISO".into())],
         Row::Update if crate::update::installs() => vec![("Update", "Download, check, restart".into()), ("Keeps", "Settings, mods, ISO".into())],
         Row::Update => vec![("Download", "GitHub release page".into()), ("Builds", "Linux, Windows".into())],
-        Row::Settings => vec![("Pages", options::tabs_shown().len().to_string()), ("Upscaled", on(m.settings.0[0])), ("Menu music", on(m.settings.0[1]))],
+        Row::Settings => vec![("Pages", options::tabs_shown().len().to_string()), ("Texture replacements", on(m.settings.0[0])), ("Menu music", on(m.settings.0[1]))],
         Row::Quit => vec![],
     };
     let n = facts.len().max(1) as f32;

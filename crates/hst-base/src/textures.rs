@@ -1,5 +1,7 @@
-//! Replaced textures from `mods/texture-replacements/` beside the ISO: key-named files over a PCSX2 pack's, over the disc.
-//! The folder is read once; with `HST_TEXTURE_RELOAD=1` mod files are re-read when they change while running.
+//! Replaced textures: the texture packs switched on (M5a, `mods_textures.rs`; the first in their order wins), then
+//! `mods/texture-replacements/` beside the ISO (key-named files over a PCSX2 pack's), over the disc. The Texture
+//! Replacements setting switches all of it. The folders are read once; with `HST_TEXTURE_RELOAD=1`
+//! `texture-replacements/` files are re-read when they change while running.
 
 use bevy::prelude::*;
 use bevy::render::render_resource::Extent3d;
@@ -8,11 +10,14 @@ use crate::character::Store;
 use hst_data::texhash::{self, Overrides, TEXA};
 use hst_data::{mtl, tim2};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 struct State {
     o: Overrides,
+    /// The packs' textures, the first pack's of a key (M5a), and the packs' folders, top first.
+    packs: HashMap<String, PathBuf>,
+    pack_dirs: Vec<PathBuf>,
     /// key -> (PCSX2 names, the images made from it)
     used: HashMap<String, (Vec<String>, Vec<AssetId<Image>>)>,
     /// replaced images: replacement size / disc size, for the UI's pixel rects
@@ -30,38 +35,77 @@ pub fn ours(id: AssetId<Image>, scale: Vec2) {
     OURS.lock().unwrap().get_or_insert_default().insert(id, scale);
 }
 
-pub fn init(iso: &str) {
-    let root = Path::new(iso)
+fn root(iso: &str) -> &Path {
+    Path::new(iso)
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let o = Overrides::scan(root);
+        .unwrap_or(Path::new("."))
+}
+
+pub fn init(iso: &str) {
+    let root = root(iso);
+    // B227: the browser has no texture-replacements folder (its files are the mods' in OPFS), only packs
+    let o = if cfg!(target_arch = "wasm32") { Overrides { root: root.into(), ..default() } } else { Overrides::scan(root) };
+    let (packs, pack_dirs) = packs(root);
     eprintln!(
-        "textures: {} PCSX2-named, {} key-named in mods/texture-replacements",
+        "textures: {} from {} texture packs, {} PCSX2-named, {} key-named in mods/texture-replacements",
+        packs.len(),
+        pack_dirs.len(),
         o.pack.len(),
         o.mods.len()
     );
     *STATE.lock().unwrap() = Some(State {
         o,
+        packs,
+        pack_dirs,
         used: HashMap::new(),
         scale: HashMap::new(),
     });
 }
 
-/// Replacements on or off (the menu's "upscaled textures" setting, per match; always off in the browser); on keeps
-/// what an earlier `init` read.
+/// The texture packs on under `root/mods` (`mods_textures::active`): each key's file from the first pack that has it,
+/// and their folders, top first.
+fn packs(root: &Path) -> (HashMap<String, PathBuf>, Vec<PathBuf>) {
+    packs_in(root, &crate::mods_textures::order())
+}
+
+fn packs_in(root: &Path, order: &crate::mods_textures::Order) -> (HashMap<String, PathBuf>, Vec<PathBuf>) {
+    let mods = root.join("mods");
+    let active = crate::mods_textures::arrange(&mods, crate::mods_textures::list(&mods), order);
+    let mut by_key = HashMap::new();
+    for p in &active {
+        for (k, f) in &p.textures {
+            by_key.entry(k.clone()).or_insert_with(|| f.clone());
+        }
+    }
+    (by_key, active.into_iter().map(|p| p.dir).collect())
+}
+
+/// Replacements on or off (the menu's "texture replacements" setting, per match); on keeps what an earlier `init`
+/// read but re-reads the texture packs, whose order or set may have changed since (it applies to what's added from
+/// then on: the next match's textures).
 pub fn set(iso: &str, on: bool) {
-    // B227: never in the browser (a phone's tab runs out of memory on 4K textures; mods there have no upscaled set)
-    if !on || cfg!(target_arch = "wasm32") {
+    if !on {
         *STATE.lock().unwrap() = None;
     } else if STATE.lock().unwrap().is_none() {
         init(iso);
+    } else {
+        let (packs, dirs) = packs(root(iso));
+        if let Some(s) = STATE.lock().unwrap().as_mut() {
+            (s.packs, s.pack_dirs) = (packs, dirs);
+        }
     }
 }
 
-/// Whether the "upscaled textures" setting is on (mods read their `textures/upscaled/` then).
+/// Whether the "texture replacements" setting is on outside the browser (mods read their `textures/upscaled/` then;
+/// the browser never has those, B227).
 pub fn on() -> bool {
-    STATE.lock().unwrap().is_some()
+    !cfg!(target_arch = "wasm32") && STATE.lock().unwrap().is_some()
+}
+
+/// The texture packs in use (on, top first); empty while the setting is off.
+pub fn packs_in_use() -> Vec<PathBuf> {
+    STATE.lock().unwrap().as_ref().map(|s| s.pack_dirs.clone()).unwrap_or_default()
 }
 
 pub fn plugin(app: &mut App) {
@@ -72,7 +116,8 @@ pub fn plugin(app: &mut App) {
     }
 }
 
-/// Add `img`, made from the texture with this key and these PCSX2 names, replaced if the mod folder or pack has it.
+/// Add `img`, made from the texture with this key and these PCSX2 names, replaced if a texture pack, the mod folder
+/// or a PCSX2 pack has it.
 pub fn add(
     images: &mut impl Store<Image>,
     mut img: Image,
@@ -80,7 +125,7 @@ pub fn add(
     names: Vec<String>,
 ) -> Handle<Image> {
     // the PNG decode runs unlocked: other threads' textures and the UI's `ui_rects` don't wait on it
-    let Some(files) = STATE.lock().unwrap().as_ref().map(|s| s.o.files(&key, &names)) else {
+    let Some(files) = STATE.lock().unwrap().as_ref().map(|s| s.files(&key, &names)) else {
         return images.add(img);
     };
     let disc = img.size_f32();
@@ -115,6 +160,27 @@ pub fn add_tim2(images: &mut impl Store<Image>, img: Image, p: &tim2::Picture) -
 
 type Pixels = (u32, u32, Vec<u8>);
 
+/// Where a texture's replacement is read from: a texture pack's file (on disk, or a browser mod file in memory), else
+/// `texture-replacements/`'s.
+struct Files {
+    pack: Option<PathBuf>,
+    rest: texhash::Files,
+}
+
+impl Files {
+    fn load(&self) -> Option<Pixels> {
+        // a pack file that won't read or decode falls through, as a broken `texture-replacements/` file does
+        let packed = self.pack.as_deref().and_then(|p| crate::modfs::read(p).map_err(|e| warn!("textures: {}: {e}", p.display())).ok());
+        packed.and_then(|b| texhash::decode_png(std::io::Cursor::new(b))).or_else(|| self.rest.load())
+    }
+}
+
+impl State {
+    fn files(&self, key: &str, names: &[String]) -> Files {
+        Files { pack: self.packs.get(key).cloned(), rest: self.o.files(key, names) }
+    }
+}
+
 /// Replacements [`prefetch`]ed, by key.
 static READY: Mutex<Option<HashMap<String, Pixels>>> = Mutex::new(None);
 
@@ -132,7 +198,7 @@ impl Drop for Prefetch {
 /// Decode the replacements of `mats`' textures on all cores now (Z1: one at a time they were most of a match's load,
 /// and most are added twice, lit and raw), for the [`add`]s while the guard lives; same pixels as decoding in `add`.
 pub fn prefetch(mats: &mtl::Mtl) -> Prefetch {
-    let want: Vec<(String, texhash::Files)> = {
+    let want: Vec<(String, Files)> = {
         let s = STATE.lock().unwrap();
         let Some(s) = s.as_ref() else { return Prefetch(vec![]) };
         let mut keys = std::collections::HashSet::new();
@@ -141,7 +207,7 @@ pub fn prefetch(mats: &mtl::Mtl) -> Prefetch {
             .filter(|t| !t.levels.is_empty())
             .map(|t| (t.gs(), t.width))
             .filter(|(g, _)| keys.insert(g.key()))
-            .map(|(g, w)| (g.key(), s.o.files(&g.key(), &g.pcsx2_names(w, TEXA))))
+            .map(|(g, w)| (g.key(), s.files(&g.key(), &g.pcsx2_names(w, TEXA))))
             .collect()
     };
     fetch(want)
@@ -156,13 +222,13 @@ pub fn prefetch_tim2<'a>(sheets: impl IntoIterator<Item = &'a [u8]>) -> Prefetch
         let mut keys = std::collections::HashSet::new();
         pics.iter()
             .filter(|p| keys.insert(p.gs().key()))
-            .map(|p| (p.gs().key(), s.o.files(&p.gs().key(), &texhash::tim2_names(p))))
+            .map(|p| (p.gs().key(), s.files(&p.gs().key(), &texhash::tim2_names(p))))
             .collect()
     };
     fetch(want)
 }
 
-fn fetch(want: Vec<(String, texhash::Files)>) -> Prefetch {
+fn fetch(want: Vec<(String, Files)>) -> Prefetch {
     let got: Vec<Option<Pixels>> = parallel(&want, |(_, f)| f.load());
     let mut r = READY.lock().unwrap();
     let r = r.get_or_insert_default();
@@ -232,7 +298,7 @@ fn reload(time: Res<Time>, mut next: Local<f32>, mut scan: Local<Option<Task<Sca
     let Some(s) = s.as_mut() else { return };
     let changed: Vec<String> = mods
         .iter()
-        .filter(|(k, v)| s.o.mods.get(*k) != Some(v))
+        .filter(|(k, v)| s.o.mods.get(*k) != Some(v) && !s.packs.contains_key(*k))
         .map(|(k, _)| k.clone())
         .collect();
     s.o.mods = mods;
@@ -290,5 +356,56 @@ fn ui_rects(mut commands: Commands, mut q: Query<(Entity, &mut ImageNode, Option
                 commands.entity(e).insert(Scaled { disc, out });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mods_textures::Order;
+    use texhash::write_png;
+
+    /// M5a: per texture the first pack in the order wins, then `texture-replacements/`, then the disc (`None`); a
+    /// pack switched off is skipped; the browser's in-memory pack files read as the disc's do.
+    #[test]
+    fn packs_over_replacements_over_disc() {
+        let root = std::env::temp_dir().join(format!("hst-texlayers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let png = |p: PathBuf, v: u8| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            write_png(&p, 2, 1, &[v; 8]).unwrap();
+        };
+        for (n, keys) in [("hi", &["0000000000000001"][..]), ("lo", &["0000000000000001", "0000000000000002"][..])] {
+            std::fs::create_dir_all(root.join("mods").join(n)).unwrap();
+            std::fs::write(root.join("mods").join(n).join("mod.json"), format!(r#"{{"standard": 1, "kind": "textures", "id": "{n}", "name": "{n}"}}"#)).unwrap();
+            for k in keys {
+                png(root.join(format!("mods/{n}/textures/COURT/t.0-{k}.png")), if n == "hi" { 10 } else { 20 });
+            }
+        }
+        for k in ["0000000000000001", "0000000000000002", "0000000000000003"] {
+            png(root.join(format!("mods/texture-replacements/A/t.0-{k}.png")), 30);
+        }
+        let state = |o: &Order| {
+            let (packs, pack_dirs) = packs_in(&root, o);
+            State { o: Overrides::scan(&root), packs, pack_dirs, used: HashMap::new(), scale: HashMap::new() }
+        };
+        let px = |s: &State, k: &str| s.files(k, &[]).load().map(|p| p.2[0]);
+        let s = state(&Order { order: vec!["hi".into(), "lo".into()], off: vec![] });
+        assert_eq!(s.pack_dirs, [root.join("mods/hi"), root.join("mods/lo")]);
+        assert_eq!([1, 2, 3, 4].map(|k| px(&s, &format!("{k:016x}"))), [Some(10), Some(20), Some(30), None]);
+        let s = state(&Order { order: vec!["lo".into(), "hi".into()], off: vec![] });
+        assert_eq!(px(&s, "0000000000000001"), Some(20), "the higher pack wins");
+        let s = state(&Order { order: vec![], off: vec!["lo".into()] });
+        assert_eq!([1, 2].map(|k| px(&s, &format!("{k:016x}"))), [Some(10), Some(30)]);
+        // a browser pack: its files only in memory
+        let mem = Path::new("t_texlayers/mods/web");
+        crate::modfs::add(&mem.join("mod.json"), br#"{"standard": 1, "kind": "textures", "id": "web", "name": "Web"}"#.to_vec().into());
+        write_png(&root.join("web.png"), 1, 1, &[40; 4]).unwrap();
+        crate::modfs::add(&mem.join("textures/x.0-0000000000000004.png"), std::fs::read(root.join("web.png")).unwrap().into());
+        let (packs, _) = packs_in(Path::new("t_texlayers"), &Order::default());
+        let s = State { o: Overrides::default(), packs, pack_dirs: vec![], used: HashMap::new(), scale: HashMap::new() };
+        assert_eq!(s.files("0000000000000004", &[]).load(), Some((1, 1, vec![40; 4])));
+        crate::modfs::remove(Path::new("t_texlayers"));
+        std::fs::remove_dir_all(&root).ok();
     }
 }

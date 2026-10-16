@@ -1,7 +1,7 @@
 //! The main menu's Settings screens over a paused match (B126, remaster-only by request): the pause menu's "Settings"
 //! opens them as the main menu draws them (same rows, art, input and `settings.txt`), Back on the Settings screen
 //! returns to the pause menu. Changes go live where the match can take them: the graphics, widescreen, match music and
-//! controls; upscaled textures and menu music take effect from the next match / the menu. The match stays paused
+//! controls; texture replacements and menu music take effect from the next match / the menu. The match stays paused
 //! underneath (its fixed clock held by `menu.rs`), so the sim and its RNG never see any of it.
 //!
 //! Mouse and touch (here and on the pause dialog): a click or tap on a row chooses it, the right button is Back.

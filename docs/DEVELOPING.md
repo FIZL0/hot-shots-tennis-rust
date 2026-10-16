@@ -34,9 +34,14 @@ page; no game data is hosted.
 
 ## Texture replacements
 
-Upscaled or edited textures are read at runtime from `mods/texture-replacements/` beside the ISO, which is not part
-of the repository. Each texture is taken from the first match:
+Upscaled or edited textures are read at runtime from texture packs and from `mods/texture-replacements/` beside the
+ISO, neither of which is part of the repository. Each texture is taken from the first match:
 
+0. **Texture packs** (M5a): mod folders or zips in `mods/` whose `mod.json` says `"kind": "textures"`, holding the same
+   key-named files under `textures/` (layout: opentennis-mods `standard/HST-TEXTURE-PACK-STANDARD.md`). They install
+   like character mods (desktop `mods/`, the browser's Add mod) and stack: by default a pack nobody has ordered is on
+   top, and settings.txt's `texture_packs = a, b` (top first) and `texture_packs_off = c` (folder names under
+   `mods/`) set the order and turn packs off. The browser reads packs only, never `texture-replacements/`.
 1. **Key-named files** (`<name>-<key>.png`, in any subfolder or flat): your own textures, edited or upscaled, at
    any size and with straight (0–255) alpha. A file is matched by the part of its name after the last `-`.
    With `HST_TEXTURE_RELOAD=1` changed files reload while the game runs (off by default: the folder is read once).
@@ -48,11 +53,13 @@ of the repository. Each texture is taken from the first match:
 Hot Shots Tennis (USA).iso
 mods/textures-src/...             (written by --dump-textures)
 mods/texture-replacements/...     (yours: upscaled/edited key-named files, and/or a PCSX2 pack)
+mods/<pack>/mod.json + textures/  (a texture pack: the same key-named files, shareable)
 ```
 
 **Making your own:** `hst <iso> --dump-textures` writes every disc texture, at its native size, to
 `mods/textures-src/` in readable folders (`COURT/05/...-<key>.png`). Edit or upscale those and put the results in
-`mods/texture-replacements/` under the same file names. A flat folder is fine, because only the key matters.
+`mods/texture-replacements/` (or a pack's `textures/`) under the same file names. A flat folder is fine, because only the
+key matters. The *Texture Replacements* setting is the master switch for all of them (the Original look turns it off too).
 
 To upscale them all at once, use the chaiNNer chain in `tools/chainner/upscale.chn`. It reads every PNG under
 `mods/textures-src/`, runs a 4× model and writes the results to `mods/texture-replacements/`. The file has no folders or model

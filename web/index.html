@@ -155,7 +155,7 @@
         <p>Written from scratch in Rust on the Bevy engine. The ball physics, shots, AI, rules and timing are ported from
           the original and checked against it running in an emulator, bit for bit and frame for frame. The same inputs
           give the same match.</p>
-        <p>The rendering is new: any resolution and aspect ratio, widescreen, upscaled textures and a high frame rate.</p>
+        <p>The rendering is new: any resolution and aspect ratio, widescreen, texture replacement packs and a high frame rate.</p>
         <div class="chips"><span class="chip">Bit-exact gameplay</span><span class="chip">Online play</span>
           <span class="chip">Up to 4 players</span><span class="chip">Mods</span><span class="chip">Widescreen</span></div>
       </div>
@@ -786,10 +786,13 @@ async function start() {
     const files = await walk(h, `mods/${id}/`, []);
     if (!files.some(f => f[0] === `mods/${id}/mod.json`)) { await mods.removeEntry(id, { recursive: true }).catch(() => {}); continue; }
     say(`Reading mod ${id}…`);
+    // M5a: a texture pack (mod.json kind "textures") is read in whole: the menu's own textures are replaced at the start
+    let pack = false;
+    try { pack = JSON.parse(await (await files.find(f => f[0] === `mods/${id}/mod.json`)[1].getFile()).text()).kind === 'textures'; } catch (e) {}
     // B336: only the manifests and select pictures now (modfs.rs small); models, textures and voices when the game wants the mod (hstModLoad)
     for (const [p, fh] of files) {
       const f = await fh.getFile();
-      if (!p.endsWith('.json') && !p.includes('/previews/')) { add_mod_lazy(p, f.size); continue; }
+      if (!pack && !p.endsWith('.json') && !p.includes('/previews/')) { add_mod_lazy(p, f.size); continue; }
       const b = new Uint8Array(await f.arrayBuffer());
       modBytes += b.length;
       add_mod_file(p, b);

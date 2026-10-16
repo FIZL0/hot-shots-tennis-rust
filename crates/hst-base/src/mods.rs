@@ -97,7 +97,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     let err = |m: String| format!("{}: {m}", at.display());
     let text = crate::modfs::read_to_string(&at).map_err(|e| err(e.to_string()))?;
     let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| err(format!("not JSON: {e}")))?;
-    if let k @ (Kind::Court | Kind::Umpire | Kind::Other(_)) = Kind::of(&j) {
+    if let k @ (Kind::Court | Kind::Umpire | Kind::Textures | Kind::Other(_)) = Kind::of(&j) {
         return Err(err(format!("`kind` is {k}: not a character mod")));
     }
     let num = |v: &serde_json::Value, what: &str, max: u64| v.as_u64().filter(|&n| n <= max).map(|n| n as usize).ok_or_else(|| err(format!("`{what}` must be a number 0..={max}")));
@@ -221,6 +221,7 @@ pub fn read_any(dir: &Path) -> Result<Mod, String> {
         Kind::Character => read(dir),
         Kind::Court => crate::mods_court::read(dir).map(|c| bare(c.id, c.name, c.source)),
         Kind::Umpire => crate::mods_umpire::read(dir).map(|u| bare(u.id, u.name, u.source)),
+        Kind::Textures => crate::mods_textures::read(dir).map(|t| bare(t.id, t.name, String::new())),
         k @ Kind::Other(_) => Err(format!("{}: `kind` is {k}: not a kind this game plays", dir.join("mod.json").display())),
     }
 }
@@ -246,13 +247,15 @@ pub fn retired(id: &str, source: &str) -> bool {
 }
 
 /// What a mod is (`mod.json` `kind`, M8f1; the mods repo's `standard/HST-COURT-UMPIRE-STANDARD.md` §1): absent or
-/// `character` a player, `court` a venue, `umpire` a chair umpire; any other value a kind this build doesn't know
+/// `character` a player, `court` a venue, `umpire` a chair umpire, `textures` a texture pack (M5a); any other value a kind this build doesn't know
 /// yet (skipped quietly, not broken).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Character,
     Court,
     Umpire,
+    /// M5a: a texture replacement pack (`mods_textures.rs`).
+    Textures,
     Other(String),
 }
 
@@ -264,6 +267,7 @@ impl Kind {
                 Some("character") => Kind::Character,
                 Some("court") => Kind::Court,
                 Some("umpire") => Kind::Umpire,
+                Some("textures") => Kind::Textures,
                 _ => Kind::Other(k.to_string().chars().take(64).collect()),
             },
         }
@@ -282,6 +286,7 @@ impl std::fmt::Display for Kind {
             Kind::Character => f.write_str("`character`"),
             Kind::Court => f.write_str("`court`"),
             Kind::Umpire => f.write_str("`umpire`"),
+            Kind::Textures => f.write_str("`textures`"),
             Kind::Other(k) => f.write_str(k),
         }
     }
@@ -1814,7 +1819,7 @@ mod tests {
     #[test]
     fn other_kinds_stay_off_the_roster() {
         let dir = std::env::temp_dir().join(format!("hst-kind-test-{}", std::process::id()));
-        for (k, want) in [("court", Kind::Court), ("umpire", Kind::Umpire), ("textures", Kind::Other("\"textures\"".into()))] {
+        for (k, want) in [("court", Kind::Court), ("umpire", Kind::Umpire), ("textures", Kind::Textures), ("shaders", Kind::Other("\"shaders\"".into()))] {
             std::fs::create_dir_all(dir.join(k)).unwrap();
             std::fs::write(dir.join(k).join("mod.json"), format!(r#"{{"standard": 1, "kind": "{k}", "id": "x_{k}", "name": "X"}}"#)).unwrap();
             assert_eq!(Kind::of_dir(&dir.join(k)), want);

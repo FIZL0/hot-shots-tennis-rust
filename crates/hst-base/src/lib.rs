@@ -24,6 +24,7 @@ pub mod mods;
 pub mod mods_online;
 pub mod mods_umpire;
 pub mod mods_court;
+pub mod mods_textures;
 pub mod court_mod;
 pub mod net;
 pub mod chat;
