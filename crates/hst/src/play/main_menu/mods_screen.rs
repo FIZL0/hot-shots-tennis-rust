@@ -31,6 +31,7 @@ use crate::modstore::{self, Entry, Event, Kind, Up};
 use crate::mods::Mod;
 
 mod grid;
+mod packs;
 
 /// B471: which of L1 / R1 (the Show tabs) do nothing on `v`: the legend dims their hint.
 pub(super) fn show_ends(v: &View) -> [bool; 2] {
@@ -66,6 +67,10 @@ pub(super) struct View {
     list: Vec<Mod>,
     courts: Vec<Mod>,
     umpires: Vec<Mod>,
+    /// M5b: the texture packs (`mods::read_any`'s headers), and as Installed's list has them: in their order, on or
+    /// off (`packs.rs`).
+    textures: Vec<Mod>,
+    packs: Vec<packs::Row>,
     /// The store's listing (None: not read yet).
     store: Option<Vec<Entry>>,
     /// M19: the player's own uploads (None: not read yet).
@@ -180,7 +185,9 @@ impl View {
         self.list = crate::mods::list(root());
         self.courts = crate::mods::list_kind(root(), &crate::mods::Kind::Court);
         self.umpires = crate::mods::list_kind(root(), &crate::mods::Kind::Umpire);
-        self.have = self.list.iter().chain(&self.courts).chain(&self.umpires).filter_map(|m| modstore::stamp(&m.dir).map(|s| (format!("{}/{}", s.author, m.id), (s.sha256, m.dir.clone())))).collect();
+        self.textures = crate::mods::list_kind(root(), &crate::mods::Kind::Textures);
+        self.packs = packs::read(root());
+        self.have = self.list.iter().chain(&self.courts).chain(&self.umpires).chain(&self.textures).filter_map(|m| modstore::stamp(&m.dir).map(|s| (format!("{}/{}", s.author, m.id), (s.sha256, m.dir.clone())))).collect();
         self.child = None;
         self.relist();
     }
@@ -190,7 +197,7 @@ impl View {
     /// select's drawing instead).
     pub(super) fn relist(&mut self) {
         let store = self.store.as_deref().unwrap_or_default();
-        let all = [(&self.list, Kind::Character), (&self.courts, Kind::Court), (&self.umpires, Kind::Umpire)];
+        let all = [(&self.list, Kind::Character), (&self.courts, Kind::Court), (&self.umpires, Kind::Umpire), (&self.textures, Kind::Textures)];
         self.inst = all
             .into_iter()
             .flat_map(|(l, k)| l.iter().map(move |m| (m, k)))
@@ -379,13 +386,14 @@ impl View {
             Kind::Character => &self.list,
             Kind::Court => &self.courts,
             Kind::Umpire => &self.umpires,
-            Kind::Textures | Kind::Other => &[],
+            Kind::Textures => &self.textures,
+            Kind::Other => &[],
         }
     }
 
     /// M8f9: every installed mod, of any kind (the Installed tab's count).
     fn installed_len(&self) -> usize {
-        self.list.len() + self.courts.len() + self.umpires.len()
+        self.list.len() + self.courts.len() + self.umpires.len() + self.textures.len()
     }
 
     /// B373: each kind tab's count on this page (by `mods_kind::KINDS`).
@@ -975,7 +983,7 @@ impl Menu {
             if !std::mem::replace(&mut self.add.busy, true) {
                 modstore::pick(root());
             }
-            self.add.status = "Choose a mod .zip file: a character, court or umpire.".into();
+            self.add.status = "Choose a mod .zip file: a character, court, umpire or texture pack.".into();
             out.push(Sound(2));
         } else if s == 1 {
             if let Err(e) = reload(self.add.app.0, out) {
@@ -1793,7 +1801,7 @@ fn browse_pictures(menu: &mut Menu, shelf: &mut Shelf, images: &mut Assets<Image
     if menu.add.store.is_none() {
         return;
     }
-    let l = grid::lay(&menu.grid);
+    let l = grid::lay_of(menu);
     for k in grid::evict(&mut menu.add, &l) {
         if let Some(h) = shelf.thumbs.get_mut(k as usize).and_then(Option::take) {
             images.remove(&h);
@@ -1847,6 +1855,9 @@ mod tests {
     fn word(m: &Menu, w: &str) -> usize {
         2 + m.add.words().iter().position(|x| *x == w).unwrap()
     }
+
+    /// Held by the tests that draw the grid and read where Add mod was last drawn (`grid::ADD_AT`) or draw a lot.
+    static DRAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Held by the tests that run `page`: it takes every store event, one test's outcomes included.
     static PAGE: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2100,6 +2111,7 @@ mod tests {
     /// land on the drawn tiles; the browser's file input sits on Installed's Add mod word.
     #[test]
     fn scrolls_and_taps() {
+        let _one = DRAWN.lock().unwrap_or_else(|e| e.into_inner());
         let mut m = Menu { screen: Screen::Mods, ..default() };
         m.add.list = (0..40).map(|i| a_mod(&format!("m{i}"), &format!("M{i}"))).collect();
         m.mods_page(Page::Upload, 0);
@@ -2496,6 +2508,7 @@ mod tests {
     /// character-only filters there.
     #[test]
     fn kind_tabs_filter_every_page() {
+        let _one = DRAWN.lock().unwrap_or_else(|e| e.into_inner());
         let e = |id: &str, kind: Kind| Entry { meta: Meta { id: id.into(), name: id.into(), author: "ann".into(), sha256: "1".repeat(64), size: 1, kind, ..Default::default() }, rev: "main".into(), verified: true };
         let mut m = Menu { screen: Screen::Mods, ..default() };
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
@@ -2507,8 +2520,8 @@ mod tests {
         let ids = |m: &Menu| m.add.items().iter().map(|e| e.meta.id.clone()).collect::<Vec<_>>();
         let r2 = Press { kind_next: true, ..default() };
         let l2 = Press { kind_prev: true, ..default() };
-        // B383: the one tab row: the kinds with mods (a pack in the store isn't installable yet: no Texture packs tab)
-        assert_eq!(m.add.kinds_shown(), [Kind::Character, Kind::Court, Kind::Umpire]);
+        // B383: the one tab row: the kinds with mods (M5b: the store's pack brings Texture packs')
+        assert_eq!(m.add.kinds_shown(), [Kind::Character, Kind::Court, Kind::Umpire, Kind::Textures]);
         for page in PAGES {
             m.mods_page(page, 0);
             m.add.relist();
@@ -2523,7 +2536,7 @@ mod tests {
                 assert_eq!(m.add.kind_counts(), [2, 1, 2, 0]);
             } else {
                 assert_eq!(names(&m), ["c1", "c2"], "{page:?}");
-                assert_eq!(m.add.kind_counts(), [2, 1, 1, 0], "a pack in the store isn't installable yet");
+                assert_eq!(m.add.kind_counts(), [2, 1, 1, 1]);
             }
             // R2 to Courts: the court only, installed or in the store; on the search box, not typing
             m.sel = 3;
@@ -2547,9 +2560,19 @@ mod tests {
                 Page::Upload => assert_eq!(m.add.local(m.add.acts() + 1).unwrap().id, "gag_ump01"),
                 _ => assert_eq!(names(&m), ["ump"], "{page:?}"),
             }
-            // B462: R2 on the last tab (Texture packs is hidden) stays, L2 back; a tap on Characters' tab
+            // M5b: and Texture packs (none installed here: the store's only)
             m.mods_step(r2, &mut out);
-            assert_eq!(m.add.kind, Kind::Umpire, "{page:?}: R2 doesn't wrap");
+            assert_eq!(m.add.kind, Kind::Textures);
+            assert!(!m.add.empty_kind());
+            match page {
+                Page::Installed => assert!(names(&m).is_empty()),
+                Page::Upload => assert_eq!(m.add.rows(), m.add.acts()),
+                _ => assert_eq!(names(&m), ["pack"], "{page:?}"),
+            }
+            // B462: R2 on the last tab stays, L2 back; a tap on Characters' tab
+            m.mods_step(r2, &mut out);
+            assert_eq!(m.add.kind, Kind::Textures, "{page:?}: R2 doesn't wrap");
+            m.mods_step(l2, &mut out);
             m.mods_step(l2, &mut out);
             assert_eq!(m.add.kind, Kind::Court);
             m.add.kind = Kind::Court;
@@ -2557,16 +2580,6 @@ mod tests {
             assert_eq!(super::super::pointer::tests::act_at(&m, tab[0] + 4.0, tab[1] + 4.0), Some(super::super::pointer::Act::Kind(0)));
             m.point(super::super::Dev::Keys, super::super::pointer::Act::Kind(0), true);
             assert_eq!(m.add.kind, Kind::Character);
-            // Texture packs (if it's ever chosen): nothing to choose, the empty state's words name M5
-            m.add.kind = Kind::Textures;
-            m.sel = 0;
-            assert_eq!(m.add.rows(), 0, "{page:?}");
-            assert!(info(&m).contains("Add mod"));
-            for k in [ok(), Press { down: true, ..default() }, Press { card: true, ..default() }] {
-                m.mods_step(k, &mut out);
-                assert_eq!((m.screen, m.add.kind, m.sel), (Screen::Mods, Kind::Textures, 0));
-            }
-            assert_eq!(m.add.kinds_shown(), [Kind::Character, Kind::Court, Kind::Umpire, Kind::Textures]);
         }
         // Download all by an uploader leaves the other kinds out
         m.add.page = Page::Browse;
@@ -2575,13 +2588,100 @@ mod tests {
         assert_eq!(m.add.entries().iter().map(|e| e.meta.id.as_str()).collect::<Vec<_>>(), ["c1", "c2"]);
         let acts = super::super::legend::acts(&m, super::super::Dev::Keys);
         assert!(acts.iter().any(|(a, l)| *a == super::super::legend::Act::Kind && l == "Kind"));
-        // ○ from an empty kind leaves for the main menu; its legend has no moves or ✕
+        // ○ from Texture packs leaves for the main menu
         m.add.by = None;
         m.add.kind = Kind::Textures;
-        let acts = super::super::legend::acts(&m, super::super::Dev::Keys);
-        assert_eq!(acts.iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), ["Kind", "Back"]);
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
+    }
+
+    /// M5b: Installed → Texture packs lists the packs in their order (not sorted), each row with its name, author, count
+    /// and size; ✕ switches the cursor's one, △ / □ move it (the cursor follows; at an end it stays, with a no), each
+    /// saved at once; a tap on a row's switch or arrows does the same; the legend and the panel name them; any aspect.
+    #[test]
+    fn texture_packs_list() {
+        let _one = DRAWN.lock().unwrap_or_else(|e| e.into_inner());
+        use super::super::pointer::{Act, OK, tests::{act_at, hits}};
+        let was = crate::mods_textures::order();
+        let row = |id: &str, name: &str, on: bool| packs::Row { dir: root().join(id), folder: id.into(), name: name.into(), author: "ann".into(), count: 3, bytes: 3 << 20, on };
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        m.add.textures = vec![a_mod("hi", "Zed HD"), a_mod("lo", "Alpha HD"), a_mod("ui", "Menu HD")];
+        m.add.packs = vec![row("hi", "Zed HD", true), row("lo", "Alpha HD", false), row("ui", "Menu HD", true)];
+        installed(&mut m);
+        m.add.kind = Kind::Textures;
+        m.add.relist();
+        let first = m.add.browse_acts();
+        let names = |m: &Menu| m.add.tiles().iter().map(|e| e.meta.id.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&m), ["hi", "lo", "ui"], "in pack order, not A-Z");
+        assert_eq!(grid::lay_of(&m).cols, 1);
+        // no sort or filter: ↑ from the top row is the Show tabs' Installed, ↓ back, ↓ the next row
+        assert_eq!(m.add.pills().len(), grid::SHOWS.len());
+        m.sel = first;
+        m.mods_step(Press { up: true, ..default() }, &mut Vec::new());
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(grid::SHOWS.iter().position(|s| *s == grid::Show::Installed).unwrap()));
+        m.mods_step(Press { down: true, ..default() }, &mut Vec::new());
+        assert_eq!(m.sel, first);
+        m.mods_step(Press { down: true, ..default() }, &mut Vec::new());
+        assert_eq!(m.sel, first + 1);
+        m.sel = first;
+        assert_eq!(m.add.pack_at(m.sel).unwrap().name, "Zed HD");
+        assert_eq!(m.add.pack_place(0), "On: 1st of 2 in use");
+        assert_eq!(m.add.pack_place(1), "Off: not used");
+        assert_eq!((packs::count(1), packs::count(320), packs::size(1500), packs::size(3 << 20)), ("1 texture".into(), "320 textures".into(), "2 KB".into(), "3.0 MB".into()));
+        // the legend names the pack's keys
+        let acts = super::super::legend::acts(&m, super::super::Dev::Keys);
+        for w in ["Turn off", "Move up", "Move down", "Remove"] {
+            assert!(acts.iter().any(|(_, l)| l == w), "{w}: {acts:?}");
+        }
+        // ✕ on the second (off) turns it on, saved
+        let mut out = Vec::new();
+        m.sel = first + 1;
+        m.mods_step(ok(), &mut out);
+        assert!(m.add.packs[1].on && out.contains(&Effect::SaveSettings), "{out:?}");
+        assert!(m.add.status.contains("Alpha HD is on: 2nd of 3"), "{}", m.add.status);
+        // △ moves it up, the cursor with it; △ again at the top stays
+        out.clear();
+        m.mods_step(Press { card: true, ..default() }, &mut out);
+        assert_eq!(names(&m), ["lo", "hi", "ui"]);
+        assert_eq!((m.sel, out.contains(&Effect::SaveSettings)), (first, true));
+        out.clear();
+        m.mods_step(Press { card: true, ..default() }, &mut out);
+        assert_eq!((names(&m), out), (vec!["lo".to_string(), "hi".into(), "ui".into()], vec![Effect::Sound(1)]));
+        // □ moves it down
+        m.mods_step(Press { page: true, ..default() }, &mut Vec::new());
+        assert_eq!((names(&m), m.sel), (vec!["hi".to_string(), "lo".into(), "ui".into()], first + 1));
+        // the saved order is the list's
+        let rows: Vec<_> = m.add.packs.iter().map(|r| (r.folder.clone(), r.on)).collect();
+        assert_eq!(crate::mods_textures::order_of(&rows).order, ["hi", "lo", "ui"]);
+        // taps: the third row's switch turns it off, its ▲ moves it up; any aspect, all on screen
+        for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 9.0 / 16.0] {
+            m.grid = super::super::Grid::fit(aspect);
+            let hs = hits(&m).0;
+            let slot = first + 2;
+            let of = |k: Press| hs.iter().find(|h| h.act == Act::Row(slot, k)).unwrap_or_else(|| panic!("{aspect} {k:?}")).rect;
+            let (share, vshare) = crate::widescreen::menu_shares(aspect, 1.0);
+            for k in [OK, Press { card: true, ..default() }, Press { page: true, ..default() }, Press::default()] {
+                let h = hs.iter().find(|h| h.act == Act::Row(slot, k)).unwrap();
+                // on screen (in % of the window), as wide as tall in mockup px whatever the window
+                let (x, w) = crate::widescreen::place(h.rect[0], h.rect[2], share, h.anchor);
+                let (y, hh) = crate::widescreen::vplace_in(h.rect[1], h.rect[3], vshare, h.anchor);
+                assert!(x >= 0.0 && y >= 0.0 && x + w <= 100.0 + 1e-3 && y + hh <= 100.0 + 1e-3, "{aspect} {k:?} {:?}", [x, y, w, hh]);
+                assert!(of(k)[2] > 0.0);
+            }
+        }
+        m.grid = super::super::Grid::fit(4.0 / 3.0);
+        let hs = hits(&m).0;
+        let slot = first + 2;
+        let r = hs.iter().find(|h| h.act == Act::Row(slot, OK)).unwrap().rect;
+        let a = act_at(&m, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0).unwrap();
+        assert_eq!(a, Act::Row(slot, OK));
+        m.point(super::super::Dev::Keys, a, true);
+        assert!(!m.add.packs[2].on);
+        let r = hs.iter().find(|h| h.act == Act::Row(slot, Press { card: true, ..default() })).unwrap().rect;
+        let a = act_at(&m, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0).unwrap();
+        m.point(super::super::Dev::Keys, a, true);
+        assert_eq!((names(&m), m.sel), (vec!["hi".to_string(), "ui".into(), "lo".into()], first + 1));
+        crate::mods_textures::set_order(was);
     }
 
     /// B372: the pictures asked for: every tile on view first, then one more screen the way the grid scrolled (nearest
