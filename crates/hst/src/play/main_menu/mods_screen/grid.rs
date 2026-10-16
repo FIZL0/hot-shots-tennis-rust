@@ -855,21 +855,35 @@ impl Menu {
         let v = &self.add;
         let n = v.locals().len();
         let lines = lines(&v.secs(), lay_of(self).cols);
-        let to = match self.sel.checked_sub(UP_TOP) {
-            None if k.left => 0,
-            None if k.right => 1,
-            None if k.down && n > 0 => UP_TOP + v.b.tile_at.min(n - 1),
-            None => self.sel,
-            Some(i) => match tile_step(&lines, i, k) {
+        // the strip: the kind tabs (after the tiles' slots), then Sign in and Upload all; `pill_at` 2.. a kind tab
+        let (k0, nk) = (UP_TOP + n, v.kinds_shown().len());
+        let strip = match v.b.pill_at {
+            p if p >= UP_TOP && nk > 0 => k0 + (p - UP_TOP).min(nk - 1),
+            p => p.min(1),
+        };
+        let tile = (n > 0).then(|| UP_TOP + v.b.tile_at.min(n - 1));
+        let to = match (v.up_kind(self.sel), self.sel.checked_sub(UP_TOP)) {
+            (Some(j), _) if k.left && j > 0 => self.sel - 1,
+            (Some(j), _) if k.right => if j + 1 < nk { self.sel + 1 } else { 0 },
+            (Some(_), _) if k.down => tile.unwrap_or(self.sel),
+            (Some(_), _) => self.sel,
+            (None, None) if k.left && self.sel == 0 && nk > 0 => k0 + nk - 1,
+            (None, None) if k.left => 0,
+            (None, None) if k.right => 1,
+            (None, None) if k.down => tile.unwrap_or(self.sel),
+            (None, None) => self.sel,
+            (None, Some(i)) => match tile_step(&lines, i, k) {
                 Some(j) => UP_TOP + j,
-                None if k.up => v.b.pill_at.min(1),
+                None if k.up => strip,
                 None => self.sel,
             },
         };
-        match (self.sel.checked_sub(UP_TOP), to.checked_sub(UP_TOP)) {
-            (Some(i), None) => self.add.b.tile_at = i,
-            (None, Some(_)) => self.add.b.pill_at = self.sel,
-            _ => {}
+        let tile_slot = |s: usize| s >= UP_TOP && s < k0;
+        if tile_slot(self.sel) && !tile_slot(to) {
+            self.add.b.tile_at = self.sel - UP_TOP;
+        } else if !tile_slot(self.sel) && tile_slot(to) {
+            // (a kind tab's slot kept past the tiles: UP_TOP + its index)
+            self.add.b.pill_at = self.add.up_kind(self.sel).map_or(self.sel, |j| UP_TOP + j);
         }
         to
     }
@@ -1619,7 +1633,9 @@ fn strip(d: &mut Draw, m: &Menu, l: &Lay) {
     }
     let room = if l.stack { w } else { rx - x - gap };
     let cursor = match v.slot(m.sel) {
-        Slot::Kind(j) if v.child.is_none() => Some(j),
+        _ if v.child.is_some() => None,
+        _ if v.page == Page::Upload => v.up_kind(m.sel),
+        Slot::Kind(j) => Some(j),
         _ => None,
     };
     mods_kind::row(d, [x, y, room], v.kind, v.kind_counts(), &v.kinds_shown(), cursor);
@@ -2138,6 +2154,7 @@ fn slot_text(m: &Menu) -> (String, String) {
     let v = &m.add;
     let about = super::info(m);
     let name = match v.page {
+        Page::Upload if let Some(j) = v.up_kind(m.sel) => mods_kind::name(v.kinds_shown()[j]).into(),
         Page::Upload => if m.sel == 0 { if v.account.is_some() { "Account" } else { "Sign in" } } else { "Upload all" }.to_string(),
         _ => match v.slot(m.sel) {
             Slot::Search => "Search".into(),
