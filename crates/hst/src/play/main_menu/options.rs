@@ -245,6 +245,29 @@ fn choices(o: Opt) -> Vec<String> {
     }
 }
 
+/// B498: rows with this many choices or more open a dropdown list on ✕ (fewer keep the ‹ › cycle).
+const LIST: usize = 5;
+
+/// B498: whether `o` opens a dropdown (a slider, a way in or the Renderer's switch never does).
+pub(super) fn listed(o: Opt) -> bool {
+    !locked(o) && !matches!(o, Volume(_) | Advanced | Renderer) && choices(o).len() >= LIST
+}
+
+/// B498: a dropdown choice's short hint (the presets'), so Low and Phone tell apart without the side panel.
+fn hint(o: Opt, c: &str) -> &'static str {
+    match (o, c) {
+        (Preset, "High") => "full quality, no speed-ups",
+        (Preset, "Default") => "High with speed-ups on",
+        (Preset, "Steam Deck") => "tuned for the Deck",
+        (Preset, "Low") => "less detail, more fps",
+        (Preset, "Lowest") => "half res, no shadows",
+        (Preset, "Phone") => "for phones and tablets",
+        (Preset, AUTO) => "picks and tunes itself",
+        (Preset, "Custom") => "your own mix",
+        _ => "",
+    }
+}
+
 /// B339: a Downloads at Once value's word (0 Auto).
 fn at_once_name(n: usize) -> String {
     if n == 0 { "Auto".into() } else { n.to_string() }
@@ -280,10 +303,7 @@ impl Settings {
             Preset => {
                 let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).chain([AUTO]).collect();
                 let n = cycle(&names, if g.auto { AUTO } else { g.preset() }, d);
-                *g = match Graphics::PRESETS.iter().find(|(m, _)| *m == n) {
-                    Some((_, p)) => Graphics { auto: false, ..g.keep(*p) },
-                    None => Graphics { windowed: g.windowed, show_fps: g.show_fps, ..super::auto_graphics() },
-                };
+                self.preset(n);
             }
             Scale => g.scale = cycle(&SCALES, g.scale, d),
             Shadows => g.shadows = cycle(&SHADOWS, g.shadows, d),
@@ -320,6 +340,36 @@ impl Settings {
             Mesh => g.mesh = cycle(&MESHES, g.mesh, d),
             Advanced => {}
         }
+    }
+
+    /// Preset `n` (one of `Graphics::PRESETS`' names, or Auto: the device's pick); the window and Show FPS stay.
+    fn preset(&mut self, n: &str) {
+        let g = &mut self.1;
+        *g = match Graphics::PRESETS.iter().find(|(m, _)| *m == n) {
+            Some((_, p)) => Graphics { auto: false, ..g.keep(*p) },
+            None => Graphics { windowed: g.windowed, show_fps: g.show_fps, ..super::auto_graphics() },
+        };
+    }
+
+    /// B498: set `o` to its `j`th choice ([`choices`]), as stepping to it would (Preset's Custom changes nothing).
+    pub(super) fn pick(&mut self, o: Opt, j: usize) {
+        let all = choices(o);
+        let Some(want) = all.get(j) else { return };
+        if self.value(o) == *want || o == Preset && want == "Custom" {
+            return;
+        }
+        if o == Preset {
+            self.preset(want);
+            return;
+        }
+        let was = *self;
+        for _ in 0..all.len() {
+            self.step(o, 1);
+            if self.value(o) == *want {
+                return;
+            }
+        }
+        *self = was;
     }
 
     /// The value shown beside `o` (a slider's is its number).
@@ -364,11 +414,17 @@ impl Menu {
     /// An options page (B326, as the confirm screen's Sets and Games): ✕ on a row picks it, ◀ ▶ then change it (applied
     /// and saved at once), ✕ keeps it, ○ puts back what it was; ◀ ▶ on a row not picked do nothing; L1 / R1 and ○ as
     /// [`Self::step_tabs`].
+    /// B498: a row with many choices ([`listed`]) opens a dropdown on ✕ instead ([`Self::step_list`]), and its ◀ ▶
+    /// change it at once, unopened.
     pub(super) fn step_page(&mut self, k: Press, out: &mut Vec<Effect>) {
         let o = page(self.screen).get(self.sel).copied().filter(|&o| !locked(o));
         // B411: Advanced is never picked (it opens its page)
         if o == Some(Advanced) {
             self.editing = None;
+        }
+        if let Some(j) = self.listing {
+            self.step_list(o, j, k, out);
+            return;
         }
         if let Some(was) = self.editing {
             let Some(o) = o else {
@@ -405,12 +461,53 @@ impl Menu {
             self.go(Screen::Advanced, out);
             return;
         }
+        if let Some(o) = o.filter(|&o| listed(o)) {
+            if k.ok {
+                self.editing = Some(self.settings);
+                self.listing = Some(choices(o).iter().position(|c| *c == self.settings.value(o)).unwrap_or(0));
+                out.push(Effect::Sound(2));
+                return;
+            }
+            if k.left || k.right {
+                let now = self.settings;
+                self.settings.step(o, if k.left { -1 } else { 1 });
+                if self.settings != now {
+                    out.extend([Effect::Sound(0), Effect::SaveSettings]);
+                }
+                return;
+            }
+        }
         if k.ok && o.is_some() {
             self.editing = Some(self.settings);
             out.push(Effect::Sound(2));
             return;
         }
         self.step_tabs(k, out);
+    }
+
+    /// B498: one press while row `o`'s dropdown is open on choice `j`: ↑ ↓ move (wrapping), ✕ picks it (applied and
+    /// saved) and closes, ○ closes it unchanged; nothing else.
+    fn step_list(&mut self, o: Option<Opt>, j: usize, k: Press, out: &mut Vec<Effect>) {
+        let Some(o) = o.filter(|&o| listed(o)) else {
+            (self.listing, self.editing) = (None, None);
+            return;
+        };
+        let n = choices(o).len();
+        if k.up || k.down {
+            self.listing = Some((j + if k.down { 1 } else { n - 1 }) % n);
+            out.push(Effect::Sound(0));
+        } else if k.ok {
+            (self.listing, self.editing) = (None, None);
+            let now = self.settings;
+            self.settings.pick(o, j);
+            out.push(Effect::Sound(2));
+            if self.settings != now {
+                out.push(Effect::SaveSettings);
+            }
+        } else if k.back {
+            (self.listing, self.editing) = (None, None);
+            out.push(Effect::Sound(1));
+        }
     }
 
     /// B327: the page reloads into a new renderer, so a press on Renderer asks first: the popup opens on the value the
@@ -527,12 +624,46 @@ fn zoom(g: &Grid) -> (bool, look::Zoom) {
 /// Row `i` of `n` in the list `list` (under its strip, over its footnote): pills 46 px apart, closer when they'd run
 /// past the footnote.
 pub(super) fn row(list: [f32; 4], n: usize, i: usize) -> [f32; 4] {
+    slot(list, n, 0.0, i as f32).0
+}
+
+/// Row `at` (a fractional place) of `n` rows and `more` rows' room besides in the list `list`; and the pitch.
+fn slot(list: [f32; 4], n: usize, more: f32, at: f32) -> ([f32; 4], f32) {
     let inset = look::RIM + look::PAD;
     let top = list[1] + (look::RIM + strip(list, n) + 2.5 + look::PAD) * PY;
     let room = list[1] + list[3] - (inset + FOOT) * PY - top;
-    let pitch = (room / n as f32).min(PITCH * PY);
+    let pitch = (room / (n as f32 + more)).min(PITCH * PY);
     let gap = (pitch * 0.12).min(look::ROW_GAP * PY);
-    [list[0] + inset * PX, top + pitch * i as f32, list[2] - 2.0 * inset * PX, pitch - gap]
+    ([list[0] + inset * PX, top + pitch * at, list[2] - 2.0 * inset * PX, pitch - gap], pitch)
+}
+
+/// B498: whether page `s`'s first row (Graphics' Preset) sits alone over the rest: its "Start here" label over it
+/// and a divider under it, half a row's room each.
+fn pinned(s: Screen) -> bool {
+    s == Screen::Graphics
+}
+
+/// Row `i` of page `s`'s `n` in the list `list` (B498: past a pinned first row's label and divider).
+pub(super) fn page_row(s: Screen, list: [f32; 4], n: usize, i: usize) -> [f32; 4] {
+    if !pinned(s) {
+        return row(list, n, i);
+    }
+    slot(list, n, 1.0, i as f32 + if i == 0 { 0.5 } else { 1.0 }).0
+}
+
+/// B498: a pinned first row's "START HERE" label over it and the dashed divider under it.
+fn pin_marks(d: &mut Draw, list: [f32; 4], n: usize) {
+    let ([x, y, w, h], pitch) = slot(list, n, 1.0, 0.5);
+    let soft = look::c(look::MUTED);
+    let hs = (11.0 * PY).min(pitch * 0.4);
+    d.text("START HERE", x + 16.0 * PX, y - pitch * 0.25 - hs / 2.0 - 1.0 * PY, hs, soft);
+    let ry = y + h + (pitch * 0.5 + pitch - h) / 2.0 - 1.0 * PY;
+    let (dash, step) = (10.0 * PX, 18.0 * PX);
+    let mut dx = x + 8.0 * PX;
+    while dx + dash <= x + w - 8.0 * PX {
+        d.q(Tex::Solid, [0.0; 4], [dx, ry, dash, 2.0 * PY], soft, 128.0);
+        dx += step;
+    }
 }
 
 /// B471: the page in the main menu's look: the wall, the blue title band with its "Settings" tab, the page tabs
@@ -637,9 +768,13 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     look::backdrop(d);
     let n0 = d.out.len();
     let (list, side) = chrome(d, m, opts.len(), page_name(m.screen), "");
+    if pinned(m.screen) {
+        pin_marks(d, list, opts.len());
+    }
     let mut edit = None;
+    let mut open = None;
     for (i, &o) in opts.iter().enumerate() {
-        let r @ [x, y, w, h] = row(list, opts.len(), i);
+        let r @ [x, y, w, h] = page_row(m.screen, list, opts.len(), i);
         let on = i == m.sel;
         let vh = (h - 10.0 * PY).min(26.0 * PY);
         let vw = 130.0f32.min(w * 0.4);
@@ -653,6 +788,13 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         if o == Advanced {
             // (a way in, not a value: no arrows)
             look::steps(d, vb, false, &value, size, false, [false; 2]);
+        } else if listed(o) {
+            // B498: a dropdown's pill: its value and a ▼ (▲ blue while its list is open)
+            let shown = on && m.listing.is_some();
+            drop_pill(d, vb, &value, size, shown);
+            if shown {
+                open = Some((o, r));
+            }
         } else if !editing {
             look::steps(d, vb, false, &value, size, value == "Off" || locked(o), [true; 2]);
         }
@@ -691,7 +833,10 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     // B326: only the picked row takes < >: its value pill filled (an arrow's gone at a slider's end), its value's
     // halves step it, the rest of the row keeps it, a tap off puts it back (as ○)
-    if let Some((i, o, r @ [_, y, _, h], vb, value, size)) = edit {
+    if let (Some((o, r)), Some(j)) = (open, m.listing) {
+        let bottom = (list[1] + list[3]).max(side[1] + side[3]);
+        drop_list(d, o, r, j, &m.settings.value(o), [list[1], bottom]);
+    } else if let Some((i, o, r @ [_, y, _, h], vb, value, size)) = edit {
         d.popup(Some(pointer::press(|k| k.back = true)));
         let [vx, vy, vw, vh] = vb;
         // B471: picked, the value pill blue with white words
@@ -714,6 +859,69 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     }
     z.apply(d, n0);
     switch_layout(d, m, hand_x);
+}
+
+/// B498: a dropdown row's value pill: white (blue with white words while open), its value and a ▼ (▲ open).
+fn drop_pill(d: &mut Draw, b @ [x, y, w, h]: [f32; 4], value: &str, size: f32, open: bool) {
+    look::outlined_pill(d, b, look::c(if open { look::BLUE } else { look::PAPER }), 2.0);
+    let ink = if open { WHITE } else { look::c(look::INK) };
+    let (tw, th) = (size * 0.7, size * 0.45);
+    super::roster::triangle(d, [x + w - 12.0 * PX - tw, y + (h - th) / 2.0, tw, th], !open, if open { WHITE } else { look::c(look::MUTED) });
+    let room = w - tw - 34.0 * PX;
+    let value = roster::ellipsis(d, value, size, room);
+    d.centred(&value, x + 10.0 * PX + room / 2.0, y + (h - size) / 2.0, size, ink);
+}
+
+/// B498: row `r`'s open dropdown of `o`'s choices (`now` the current one, a dot beside it; `j` highlighted, yellow),
+/// right under the row (over it when there's more room there), within `span` (top, bottom); choices closer together
+/// where they'd run past it. Each takes the pointer (hover highlights, a tap picks); a tap off it closes it.
+fn drop_list(d: &mut Draw, o: Opt, [x, y, w, h]: [f32; 4], j: usize, now: &str, [top, bottom]: [f32; 2]) {
+    d.popup(Some(pointer::press(|k| k.back = true)));
+    let all = choices(o);
+    let n = all.len() as f32;
+    // the Preset's Auto and Custom under a rule (not presets of their own)
+    let rule = if o == Preset { Graphics::PRESETS.len() } else { all.len() };
+    let (pad, sep) = (5.0 * PY, if rule < all.len() { 8.0 * PY } else { 0.0 });
+    let (below, above) = (bottom - (y + h + 2.0 * PY) - 6.0 * PY, y - 2.0 * PY - top - 6.0 * PY);
+    let room = below.max(above);
+    let ip = ((room - 2.0 * pad - sep) / n).min(28.0 * PY);
+    let bh = ip * n + 2.0 * pad + sep;
+    let by = if below >= bh || below >= above { y + h + 2.0 * PY } else { y - 2.0 * PY - bh };
+    let bw = if o == Preset { 330.0 } else { 200.0 } * PX;
+    let bw = bw.min(w - 8.0 * PX);
+    let bx = x + w - bw - 2.0 * PX;
+    // a hard dark shadow, the dark outline, the white body
+    rounded(d, [bx + 4.0 * PX, by + 5.0 * PY, bw, bh], 14.0, look::c(look::INK), 128.0);
+    roster::ringed(d, [bx, by, bw, bh], 14.0, 3.0, look::c(look::INK), WHITE);
+    let size = (ip * 0.55).min(15.0 * PY);
+    let hs = size * 0.78;
+    let mut iy = by + pad;
+    for (k, c) in all.iter().enumerate() {
+        if k == rule {
+            d.q(Tex::Solid, [0.0; 4], [bx + 12.0 * PX, iy + sep / 2.0 - 1.0 * PY, bw - 24.0 * PX, 2.0 * PY], look::c(look::RULE), 128.0);
+            iy += sep;
+        }
+        let b = [bx + 6.0 * PX, iy, bw - 12.0 * PX, ip];
+        if k == j {
+            rounded(d, b, 9.0, look::c(look::YELLOW), 128.0);
+        }
+        d.hit(b, pointer::Act::Row(k, pointer::OK));
+        let ty = iy + (ip - size) / 2.0;
+        let tx = b[0] + 10.0 * PX;
+        let end = b[0] + b[2] - 22.0 * PX;
+        let name = roster::ellipsis(d, c, size, end - tx);
+        d.text(&name, tx, ty, size, look::c(look::INK));
+        let hint = hint(o, c);
+        let hx = tx + d.width(&name, size) + 8.0 * PX;
+        if !hint.is_empty() && hx < end - 20.0 * PX {
+            let hint = roster::ellipsis(d, hint, hs, end - hx);
+            d.text(&hint, hx, ty + (size - hs) * 0.75, hs, look::c(look::MUTED));
+        }
+        if c == now {
+            rounded(d, [end + 6.0 * PX, iy + (ip - 7.0 * PY) / 2.0, 7.0 * PX, 7.0 * PY], 3.5, look::c(look::BLUE), 128.0);
+        }
+        iy += ip;
+    }
 }
 
 /// The Renderer switch's popup's pills (640×448): their tops, 40 px apart as the mods' Reload / Later popup's.
@@ -913,6 +1121,10 @@ mod tests {
                 continue;
             }
             let was = m.settings;
+            if listed(o) {
+                list_row(m, o);
+                continue;
+            }
             for k in [Press { right: true, ..default() }, Press { left: true, ..default() }] {
                 assert!(m.step(Dev::Keys, k).is_empty() && m.settings == was, "{o:?}");
             }
@@ -948,6 +1160,90 @@ mod tests {
         }
     }
 
+    /// B498: [`each_row`]'s checks of a dropdown row `o` (row `m.sel`): ◀ ▶ change it unopened and save (◀ undoing
+    /// ▶); ✕ opens its list on the current choice, ↑ ↓ move it (wrapping) and change nothing, L1 / R1 and ◀ ▶ do
+    /// nothing, ○ closes it unchanged; ✕ on a choice sets it and saves; every choice is reachable this way.
+    fn list_row(m: &mut Menu, o: Opt) {
+        let (was, at) = (m.settings, (m.screen, m.sel));
+        let fx = m.step(Dev::Keys, press(|k| &mut k.right));
+        assert!(fx.contains(&Effect::SaveSettings) && m.settings != was && m.editing.is_none(), "{o:?}");
+        m.step(Dev::Keys, press(|k| &mut k.left));
+        assert_eq!(m.settings, was, "{o:?}");
+        let all = choices(o);
+        let cur = all.iter().position(|c| *c == m.settings.value(o)).unwrap();
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert_eq!((m.listing, m.editing.is_some()), (Some(cur), true), "{o:?}");
+        m.step(Dev::Keys, press(|k| &mut k.down));
+        for k in [press(|k| &mut k.left), press(|k| &mut k.next), press(|k| &mut k.right)] {
+            assert!(m.step(Dev::Keys, k).is_empty(), "{o:?}");
+        }
+        assert_eq!((m.listing, (m.screen, m.sel), m.settings), (Some((cur + 1) % all.len()), at, was), "{o:?}");
+        assert_eq!(m.step(Dev::Keys, press(|k| &mut k.back)), [Effect::Sound(1)]);
+        assert_eq!((m.listing, m.editing, m.settings), (None, None, was), "{o:?}: ○ closes it unchanged");
+        for (j, c) in all.iter().enumerate() {
+            // (Preset's Auto is this device's pick; Custom leaves it as it is)
+            if o == Preset && (c == AUTO || c == "Custom") {
+                continue;
+            }
+            m.step(Dev::Keys, press(|k| &mut k.ok));
+            for _ in 0..(j + all.len() - m.listing.unwrap()) % all.len() {
+                m.step(Dev::Keys, press(|k| &mut k.down));
+            }
+            m.step(Dev::Keys, press(|k| &mut k.ok));
+            assert_eq!((m.settings.value(o), m.listing, m.editing), (c.clone(), None, None), "{o:?}");
+        }
+        m.settings = was;
+    }
+
+    /// B498: a dropdown's pick saves only a change; Preset's Custom changes nothing; the list draws inside the view
+    /// at any aspect (Preset's under its row, Frame Limit's over it where there's more room there) and a hover or a
+    /// tap on a choice highlights / picks it, a tap off it closes it.
+    #[test]
+    fn dropdowns() {
+        assert!(GRAPHICS.iter().filter(|&&o| listed(o)).eq([Preset, Scale, Fps].iter()));
+        assert!(listed(MenuSize) && listed(ButtonIcons) && listed(AtOnce) && !listed(Shadows) && !listed(Mesh) && !listed(Volume(0)));
+        assert!(choices(Preset).iter().all(|c| !hint(Preset, c).is_empty()));
+        let mut m = Menu { screen: Screen::Graphics, ..default() };
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert_eq!(m.step(Dev::Keys, press(|k| &mut k.ok)), [Effect::Sound(2)], "the same: no save");
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        (0..2).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.up)));
+        assert_eq!(m.listing, Some(choices(Preset).len() - 1));
+        assert_eq!(m.step(Dev::Keys, press(|k| &mut k.ok)), [Effect::Sound(2)], "Custom: no save");
+        assert_eq!(m.settings, Settings::default());
+        let t = super::super::pointer::tests::text_with_mods(0);
+        for a in [4.0, 21.0 / 9.0, 16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 0.4] {
+            for sel in [0, 4] {
+                let mut m = Menu { screen: Screen::Graphics, sel, grid: Grid::fit(a), ..default() };
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                let d = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0);
+                assert_eq!(d.outside, Some(pointer::press(|k| k.back = true)));
+                let n = choices(page(m.screen)[sel]).len();
+                let hits: Vec<_> = d.hits.iter().filter(|h| matches!(h.act, pointer::Act::Row(..))).collect();
+                assert_eq!(hits.len(), n, "{a} {sel}: only the choices take the pointer");
+                let (list, side) = boxes(&m.grid, GRAPHICS.len());
+                let r = page_row(m.screen, list, GRAPHICS.len(), sel);
+                for h in &hits {
+                    let [_, y, _, hh] = h.rect;
+                    assert!(y >= list[1] && y + hh <= (list[1] + list[3]).max(side[1] + side[3]) && hh >= 10.0, "{a} {sel}: {:?}", h.rect);
+                    assert!(y >= r[1] + r[3] || y + hh <= r[1], "{a} {sel}: off its row");
+                }
+                if sel == 0 {
+                    assert!(hits[0].rect[1] > r[1], "{a}: Preset's list under it");
+                }
+                // the second choice hovered, then tapped: picked
+                let want = choices(page(m.screen)[sel])[1].clone();
+                m.point(Dev::Keys, hits[1].act, false);
+                assert_eq!(m.listing, Some(1));
+                m.point(Dev::Keys, hits[1].act, true);
+                assert_eq!((m.listing, m.settings.value(page(m.screen)[sel])), (None, want));
+                m.step(Dev::Keys, press(|k| &mut k.ok));
+                m.point(Dev::Keys, pointer::press(|k| k.back = true), true);
+                assert!(m.listing.is_none() && m.editing.is_none());
+            }
+        }
+    }
+
     /// B411: Display keeps only display rows; the speed-up switches and Mesh are on Advanced, under Graphics, whose
     /// tab stays lit there and whose L1 / R1 go to Graphics' neighbours.
     #[test]
@@ -974,12 +1270,16 @@ mod tests {
                 let n = if s == Screen::Controls { controls::action_names().count() + 1 } else { page(s).len() };
                 let (list, side) = boxes(&grid, n);
                 assert!(side[2] >= 150.0 && side[3] >= 150.0 && list[0] + list[2] <= side[0] + side[2], "{a}: {list:?} {side:?}");
-                let r = row(list, n, n - 1);
+                let r = page_row(s, list, n, n - 1);
                 assert!(r[1] + r[3] <= list[1] + list[3] - 24.0 && r[3] >= 20.0, "{a} {s:?} {r:?} {list:?}");
                 for sel in 0..n {
-                    let m = Menu { screen: s, sel, grid, ..default() };
-                    let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0).out.len();
-                    assert!(q < super::super::pause::POOL_HERE, "{a} {s:?} {sel}: {q} quads");
+                    // B498: a dropdown row's list open too
+                    let open = page(s).get(sel).is_some_and(|&o| listed(o));
+                    for listing in [None, Some(0)].into_iter().take(1 + open as usize) {
+                        let m = Menu { screen: s, sel, grid, listing, editing: listing.map(|_| Settings::default()), ..default() };
+                        let q = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0).out.len();
+                        assert!(q < super::super::pause::POOL_HERE, "{a} {s:?} {sel} {listing:?}: {q} quads");
+                    }
                 }
             }
         }

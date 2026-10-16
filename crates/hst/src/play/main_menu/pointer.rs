@@ -116,6 +116,8 @@ impl Menu {
         let was = match self.screen {
             Screen::Main if self.add.ask.is_some() => self.add.ask.replace(i),
             _ if self.switch.is_some() => self.switch.as_mut().map(|s| std::mem::replace(&mut s.1, i)),
+            // B498: an open dropdown's choices
+            _ if self.listing.is_some() => self.listing.replace(i),
             _ if self.mod_asking() => Some(std::mem::replace(&mut self.net.ask_row, i)),
             Screen::Mode => Some(std::mem::replace(&mut self.doubles, i == 1) as usize),
             Screen::Mods => Some(std::mem::replace(self.mods_cursor(), i)),
@@ -501,13 +503,13 @@ pub(super) mod tests {
         m.point(Dev::Keys, a, true);
         assert_eq!(m.screen, Screen::Display);
         // B294: the Graphics tab, then its Anti-aliasing value's arrows
-        use super::super::options::{Opt, boxes, row, page};
+        use super::super::options::{Opt, boxes, row, page, page_row};
         let tab = hits(&m).0.into_iter().find(|h| h.act == Act::Tab(1)).unwrap().rect;
         tap(&mut m, tab[0] + tab[2] / 2.0, tab[1] + tab[3] / 2.0);
         assert_eq!(m.screen, Screen::Graphics);
         let v = m.settings.value(Opt::Msaa);
         let n = page(Screen::Graphics).len();
-        let [x, y, w, h] = row(boxes(&m.grid, n).0, n, 3);
+        let [x, y, w, h] = page_row(Screen::Graphics, boxes(&m.grid, n).0, n, 3);
         // B326: the first tap only picks the row; then its value's halves step it, the label keeps it
         tap(&mut m, x + w - 20.0, y + h / 2.0);
         assert_eq!((m.sel, m.settings.value(Opt::Msaa), m.editing.is_some()), (3, v.clone(), true));

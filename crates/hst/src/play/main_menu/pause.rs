@@ -494,11 +494,11 @@ mod tests {
     fn back_returns_to_pause() {
         let aspect = super::super::options::page(Screen::Display).iter().position(|o| *o == super::super::options::Opt::Aspect).unwrap();
         let mut m = Menu { screen: Screen::Display, sel: aspect, ..default() };
-        // B326: ✕ picks the row, → changes it, ✕ keeps it
+        // B498: ✕ opens Aspect Ratio's list, ↓ moves to the next, ✕ picks it
         m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
-        let fx = m.step(super::super::Dev::Keys, Press { right: true, ..default() });
+        m.step(super::super::Dev::Keys, Press { down: true, ..default() });
+        let fx = m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         assert!(m.settings.3 == 1 && fx.contains(&super::super::Effect::SaveSettings));
-        m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
         m.step(super::super::Dev::Keys, Press { back: true, ..default() });
         assert_eq!(m.screen, Screen::Main);
     }

@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327), graphics-list / graphics-fps = Graphics with Preset's / Frame Limit's dropdown open (B498)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -538,6 +538,8 @@ struct Menu {
     editing: Option<Settings>,
     /// B327: the Renderer switch's confirm popup is up: the renderer it would switch to and the chosen pill (0 Switch).
     switch: Option<(u8, usize)>,
+    /// B498: a many-choice Settings row's dropdown is open (row `sel`, `editing` set): the highlighted choice.
+    listing: Option<usize>,
     /// B369: the select's favorite characters (`favorites.txt`).
     favs: tabs::Favorites,
     /// B371: the players' names (`names.rs`).
@@ -589,6 +591,7 @@ impl Default for Menu {
             calls: 0,
             editing: None,
             switch: None,
+            listing: None,
             favs: default(),
             names: default(),
             court_pick: default(),
@@ -1966,7 +1969,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     let screen = std::env::var("HST_MENU").unwrap_or_default();
     menu.screen = match screen.as_str() {
         "settings" | "display" | "renderer" => Screen::Display,
-        "graphics" => Screen::Graphics,
+        "graphics" | "graphics-list" | "graphics-fps" => Screen::Graphics,
         "advanced" => Screen::Advanced,
         "sound" | "sound-edit" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
@@ -2008,6 +2011,12 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     // B327: the Renderer switch's popup up, on WebGL2
     if fresh && screen == "renderer" {
         menu.switch = Some((2, 0));
+    }
+    // B498: Graphics with Preset's / Frame Limit's dropdown open
+    if fresh && (screen == "graphics-list" || screen == "graphics-fps") {
+        menu.sel = if screen == "graphics-fps" { 4 } else { 0 };
+        menu.step(Dev::Keys, Press { ok: true, ..default() });
+        menu.step(Dev::Keys, Press { down: true, ..default() });
     }
     if !fresh && menu.screen != Screen::Lobby {
         menu.after_match();
