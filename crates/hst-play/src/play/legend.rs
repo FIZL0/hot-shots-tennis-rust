@@ -63,9 +63,8 @@ pub enum Act {
     Chat,
     /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab; B382: the character select's sections.
     Kind,
-    /// B422: the right stick up / down (keyboard R / F): the select's preview plays its win / loss.
-    Preview,
-    /// B463: the match's emote keys (1–4) and the right stick left / right: the select's preview plays an emote.
+    /// B463: the match's emote keys (1–4) and the right stick: the select's preview plays an emote (B475: its up / down
+    /// B422's win / loss, one hint).
     Emote,
 }
 
@@ -167,7 +166,6 @@ pub fn menu_keys(act: Act, bind: &Bindings, select: bool) -> Vec<String> {
         Act::Type => vec!["A-Z".into()],
         Act::Chat => vec!["T".into()],
         Act::Kind => vec!["1".into(), "3".into()],
-        Act::Preview => vec!["R".into(), "F".into()],
         Act::Key => vec![],
     }
     .into_iter()
@@ -395,8 +393,8 @@ pub enum Glyph {
     Shoulder(&'static str),
     /// Select / Start.
     Small(&'static str),
-    /// B422: the right stick, up / down (B463: `false` left / right).
-    Stick(bool),
+    /// B422: the right stick, arrows all four ways (B475).
+    Stick,
     /// The d-pad, arms lit: up, down, left, right.
     Dpad([bool; 4]),
     Slash,
@@ -427,8 +425,7 @@ pub fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Kind if sw => vec![Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")],
         Act::Kind if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("L2"), Glyph::Shoulder("R2")],
         Act::Kind => vec![Glyph::Shoulder("LT"), Glyph::Shoulder("RT")],
-        Act::Preview => vec![Glyph::Stick(true)],
-        Act::Emote => vec![Glyph::Stick(false)],
+        Act::Emote => vec![Glyph::Stick],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start | Act::Name => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
@@ -575,29 +572,31 @@ fn draw_glyph(g: &Glyph) -> Pixmap {
             }
             out
         }
-        Glyph::Stick(up) => {
-            // a thumbstick's cap with an R on it, arrows above and below (or either side)
-            let mut out = pixmap(if *up { 52.0 } else { 76.0 });
-            let x = if *up { 26.0 } else { 38.0 };
+        Glyph::Stick => {
+            // a thumbstick's cap with an R on it, arrows above, below and either side
+            let mut out = pixmap(76.0);
+            let x = 38.0;
             let p = tiny_skia::PathBuilder::from_circle(x, cy, 17.0).expect("cap");
             fill_rgb(&mut out, &p, DARK, Transform::identity());
             stroke_rgb(&mut out, &tiny_skia::PathBuilder::from_circle(x, cy, 16.0).expect("cap"), RIM, 2.0, Transform::identity());
             words(&mut out, "R", 20.0, x - text_w("R", 20.0) / 2.0, cy, WHITE);
             for dir in [-1.0, 1.0] {
-                let mut pb = tiny_skia::PathBuilder::new();
-                if *up {
-                    let tip = cy + dir * 31.0;
-                    pb.move_to(x, tip);
-                    pb.line_to(x + 7.0, tip - dir * 9.0);
-                    pb.line_to(x - 7.0, tip - dir * 9.0);
-                } else {
-                    let tip = x + dir * 36.0;
-                    pb.move_to(tip, cy);
-                    pb.line_to(tip - dir * 9.0, cy + 7.0);
-                    pb.line_to(tip - dir * 9.0, cy - 7.0);
+                for up in [true, false] {
+                    let mut pb = tiny_skia::PathBuilder::new();
+                    if up {
+                        let tip = cy + dir * 31.0;
+                        pb.move_to(x, tip);
+                        pb.line_to(x + 7.0, tip - dir * 9.0);
+                        pb.line_to(x - 7.0, tip - dir * 9.0);
+                    } else {
+                        let tip = x + dir * 36.0;
+                        pb.move_to(tip, cy);
+                        pb.line_to(tip - dir * 9.0, cy + 7.0);
+                        pb.line_to(tip - dir * 9.0, cy - 7.0);
+                    }
+                    pb.close();
+                    fill_rgb(&mut out, &pb.finish().expect("arrow"), WHITE, Transform::identity());
                 }
-                pb.close();
-                fill_rgb(&mut out, &pb.finish().expect("arrow"), WHITE, Transform::identity());
             }
             out
         }
