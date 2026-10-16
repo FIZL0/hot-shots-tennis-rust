@@ -399,7 +399,14 @@ fn start(argv: Vec<String>) {
     // Android: into hst-log.txt too (`android.rs`)
     #[cfg(target_os = "android")]
     let plugins = plugins.set(bevy::log::LogPlugin { fmt_layer: android::log_layer, ..default() });
+    // P62: a `--shot`/`HST_MENU` run reads no pad (not even gilrs') and no real key, only `HST_KEYS`
+    let quiet = args.shot.is_some() || std::env::var_os("HST_MENU").is_some();
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    let plugins = if quiet { plugins.disable::<bevy::gilrs::GilrsPlugin>() } else { plugins };
     app.add_plugins(plugins);
+    if quiet {
+        seats::ignore_input(&mut app);
+    }
     #[cfg(target_os = "ios")]
     app.add_systems(Last, ios::heartbeat);
     #[cfg(target_os = "android")]
