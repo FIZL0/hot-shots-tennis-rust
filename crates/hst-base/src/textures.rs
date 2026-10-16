@@ -245,7 +245,7 @@ fn fetch(want: Vec<(String, Files)>) -> Prefetch {
 
 /// `f` of each item, on scoped threads (one per core), in order.
 #[cfg(not(target_arch = "wasm32"))]
-fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub(crate) fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let n = std::thread::available_parallelism().map_or(4, |n| n.get()).min(items.len()).max(1);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<(usize, R)> = std::thread::scope(|sc| {
@@ -268,7 +268,7 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R>
 }
 
 #[cfg(target_arch = "wasm32")]
-fn parallel<T, R>(items: &[T], f: impl Fn(&T) -> R) -> Vec<R> {
+pub(crate) fn parallel<T, R>(items: &[T], f: impl Fn(&T) -> R) -> Vec<R> {
     items.iter().map(f).collect()
 }
 

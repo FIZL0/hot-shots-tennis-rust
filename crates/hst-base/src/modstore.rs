@@ -29,6 +29,8 @@ const CACHE_SECS: u64 = 3600;
 const CACHE: &str = "mods-store.json";
 /// The largest `mod.zip` taken (a stored zip of M16's biggest unpacked mod, plus its directory).
 const MAX_ZIP: u64 = modfs::MAX_TOTAL as u64 + (16 << 20);
+/// M5c: a texture pack's (`modfs::MAX_PACK`).
+const MAX_PACK_ZIP: u64 = modfs::MAX_PACK as u64 + (16 << 20);
 /// `meta.json` and `preview.png` caps.
 const MAX_META: u64 = 64 << 10;
 const MAX_PREVIEW: u64 = 4 << 20;
@@ -70,6 +72,9 @@ pub struct Meta {
     /// B488: the mod's `mod.json` has `upscale` false (HD textures already): Install never takes an upscaled set.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_upscale: bool,
+    /// M5c: a texture pack's count of textures. Absent in anything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub textures: Option<u32>,
 }
 
 /// B373: a mod's kind (`meta.json` / `mod.json` `"kind"`): absent is a character, so every older entry still reads;
@@ -90,6 +95,20 @@ pub enum Kind {
 impl Kind {
     pub fn is_character(&self) -> bool {
         *self == Kind::Character
+    }
+
+    /// M5c: the biggest `mod.zip` of this kind the store takes (a texture pack's is bigger).
+    pub fn max_zip(&self) -> u64 {
+        if *self == Kind::Textures { MAX_PACK_ZIP } else { MAX_ZIP }
+    }
+
+    /// M5c: how big an upload of this kind may be, as the Upload page says it (unpacked).
+    pub fn cap_words(&self) -> String {
+        let gb = |b: usize| format!("{} GB", b >> 30);
+        match self {
+            Kind::Textures => format!("A texture pack may be up to {} (other mods {}).", gb(modfs::MAX_PACK), gb(modfs::MAX_TOTAL)),
+            _ => format!("A mod may be up to {} (a texture pack {}).", gb(modfs::MAX_TOTAL), gb(modfs::MAX_PACK)),
+        }
     }
 
     /// M8f9: the store's word for a `mod.json`'s kind (`mods::Kind`).
@@ -278,7 +297,7 @@ fn plain_text(s: &str, n: usize) -> String {
 fn meta_of(b: &[u8], id: &str) -> Option<Meta> {
     let mut m: Meta = serde_json::from_slice(b).ok()?;
     let hex = m.sha256.len() == 64 && m.sha256.bytes().all(|c| c.is_ascii_hexdigit());
-    if m.id != id || !hex || m.size == 0 || m.size > MAX_ZIP {
+    if m.id != id || !hex || m.size == 0 || m.size > m.kind.max_zip() {
         return None;
     }
     m.sha256.make_ascii_lowercase();
@@ -291,6 +310,7 @@ fn meta_of(b: &[u8], id: &str) -> Option<Meta> {
     m.hand = m.hand.filter(|h| h.abs() == 1);
     m.costumes = m.costumes.filter(|&c| c < 1000);
     m.like = m.like.filter(|&c| c < 14);
+    m.textures = m.textures.filter(|_| m.kind == Kind::Textures);
     (!m.name.is_empty()).then_some(m)
 }
 
@@ -678,7 +698,7 @@ async fn whole(e: &Entry, root: &Path) -> Result<Mod, String> {
 #[cfg(not(target_arch = "wasm32"))]
 async fn download(e: &Entry, zip: &mut Zip) -> Result<(u64, String), String> {
     use n0_future::StreamExt;
-    let cap = e.meta.size.min(MAX_ZIP);
+    let cap = e.meta.size.min(e.meta.kind.max_zip());
     let r = answer(&file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id)), cap).await?;
     let total = r.content_length().unwrap_or(e.meta.size).max(1);
     let (mut got, mut hash, mut chunks) = (0u64, Sha256::new(), r.bytes_stream());
@@ -744,7 +764,7 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
     if len != e.meta.size {
         return Err(format!("the download is {len} bytes, the store says {}", e.meta.size));
     }
-    if len > MAX_ZIP {
+    if len > e.meta.kind.max_zip() {
         return Err("too big".into());
     }
     let (url, got) = (r.url().to_string(), std::sync::atomic::AtomicU64::new(0));
@@ -766,7 +786,8 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
             Ok(b.to_vec())
         }
     };
-    modfs::install_with(len, read, root, Some(&e.meta.id), Some(&e.meta.author), disk, false).await
+    // M5c: a texture pack's pictures are all it has: even ones under `textures/upscaled/` come
+    modfs::install_with(len, read, root, Some(&e.meta.id), Some(&e.meta.author), disk, e.meta.kind == Kind::Textures).await
 }
 
 /// Bytes `at..at + n` of `url` (the store's file, or where it redirected), asked for; `partial` checks they came.
@@ -804,7 +825,8 @@ pub fn pick(root: &Path) {
         };
         let got = (|| {
             let len = std::fs::metadata(&f).map_err(|e| e.to_string())?.len();
-            if len > MAX_ZIP {
+            // (a texture pack's cap: the kind is inside; Install checks it)
+            if len > MAX_PACK_ZIP {
                 return Err(format!("{len} bytes is bigger than a mod may be"));
             }
             keep(&modfs::install_file(&f, &root, None, None)?)
@@ -859,22 +881,29 @@ pub struct Package {
 }
 
 /// Mod `m` packaged for the store, after the checks Install runs on every player's machine; `stats` is its play
-/// style and △ grades as the select shows them, when the select has it.
-pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, String> {
+/// style and △ grades as the select shows them, when the select has it. M5c: a texture pack is checked against the
+/// disc `iso` too ([`pack_check`]).
+pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>, iso: &str) -> Result<Package, String> {
     let files = mod_files(&m.dir)?;
     let names: Vec<String> = files.iter().map(|f| f.0.clone()).collect();
     if let Some(bad) = names.iter().find(|n| !modfs::plain(n) || !modfs::EXTENSIONS.iter().any(|e| n.to_ascii_lowercase().ends_with(&format!(".{e}")))) {
         return Err(format!("`{bad}` can't be in a mod (only {} files)", modfs::EXTENSIONS.map(|e| format!(".{e}")).join(" ")));
     }
-    modfs::check_all(&m.dir, &names)?;
-    let zip = modfs::zip(&files.iter().map(|f| (f.0.as_str(), &f.1[..])).collect::<Vec<_>>(), true, 0o100644);
-    if zip.len() as u64 > MAX_ZIP || files.iter().map(|f| f.1.len()).sum::<usize>() > modfs::MAX_TOTAL {
-        return Err("too big for the store (1 GB unpacked at most)".into());
-    }
     let j: serde_json::Value = files.iter().find(|f| f.0 == "mod.json").and_then(|f| serde_json::from_slice(&f.1).ok()).unwrap_or_default();
     // M8f9: a court or umpire goes up with its kind and none of a character's card facts
     let kind = Kind::of(&crate::mods::Kind::of(&j));
     let player = kind == Kind::Character;
+    // M5c: a pack's cap is its own
+    let cap = modfs::max_total(&crate::mods::Kind::of(&j));
+    if files.iter().map(|f| f.1.len()).sum::<usize>() > cap {
+        return Err(format!("too big for the store ({} GB unpacked at most)", cap >> 30));
+    }
+    modfs::check_all(&m.dir, &names)?;
+    let pack = if kind == Kind::Textures { Some(pack_check(m, &files, iso)?) } else { None };
+    let zip = modfs::zip(&files.iter().map(|f| (f.0.as_str(), &f.1[..])).collect::<Vec<_>>(), true, 0o100644);
+    if zip.len() as u64 > kind.max_zip() {
+        return Err(format!("too big for the store ({} GB unpacked at most)", cap >> 30));
+    }
     let meta = Meta {
         id: m.id.clone(),
         name: plain_text(&m.name, 40),
@@ -891,10 +920,63 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, Stri
         like: player.then_some(m.donor as u8),
         kind,
         no_upscale: !m.upscale,
+        textures: pack.as_ref().map(|p| p.0),
     };
-    let preview = preview_of(&files, kind);
+    let preview = pack.and_then(|p| p.1).or_else(|| preview_of(&files, kind));
     Ok(Package { zip, meta, preview })
 }
+
+/// M5c: texture pack `m` (its `files`) against the disc `iso`: refused when any of its pictures is the disc's
+/// texture for its key unchanged (the same pixels, or them only scaled up by whole factors with nearest-neighbour:
+/// a pack mustn't ship the disc's textures), naming them; else its count of textures and its before/after picture
+/// (the largest texture it replaces, the disc's beside the pack's, [`before_after`]).
+fn pack_check(m: &Mod, files: &[(String, Vec<u8>)], iso: &str) -> Result<(u32, Option<Vec<u8>>), String> {
+    let pack = crate::mods_textures::read(&m.dir)?;
+    let mut disc = hst_data::iso::Iso::open(iso).map_err(|e| format!("can't read the disc to check the pack against: {e}"))?;
+    let (prints, big) = hst_data::texhash::disc_prints(&mut disc, &pack.textures.keys().cloned().collect());
+    let bytes: std::collections::HashMap<&str, &[u8]> = files.iter().map(|f| (f.0.as_str(), &f.1[..])).collect();
+    let rel = |p: &Path| p.strip_prefix(&m.dir).unwrap_or(p).to_string_lossy().replace('\\', "/");
+    let mut keys: Vec<(&String, String)> = pack.textures.iter().filter(|t| prints.contains_key(t.0)).map(|(k, p)| (k, rel(p))).collect();
+    keys.sort_by(|a, b| a.1.cmp(&b.1));
+    let decode = |f: &str| bytes.get(f).and_then(|b| hst_data::texhash::decode_png(std::io::Cursor::new(*b)));
+    // every picture decoded once more (`check_all` has), on every core
+    let same: Vec<bool> = crate::textures::parallel(&keys, |(k, f)| decode(f).is_some_and(|(w, h, rgba)| hst_data::texhash::is_disc_copy(w, h, &rgba, prints[*k])));
+    let copies: Vec<&str> = keys.iter().zip(&same).filter(|t| *t.1).map(|t| t.0.1.as_str()).collect();
+    if let Some(first) = copies.first() {
+        let more = match copies.len() {
+            1 => String::new(),
+            2..=5 => format!(", {}", copies[1..].join(", ")),
+            n => format!(", {} and {} more", copies[1..4].join(", "), n - 4),
+        };
+        let them = if copies.len() == 1 { "is the disc's texture" } else { "are the disc's textures" };
+        return Err(format!("{} of its pictures {them} unchanged (a pack mustn't ship them): {first}{more}", copies.len()));
+    }
+    let preview = big.and_then(|d| {
+        let after = decode(&rel(pack.textures.get(&d.key)?))?;
+        before_after((d.width, d.height, &d.rgba), (after.0, after.1, &after.2))
+    });
+    Ok((pack.textures.len() as u32, preview))
+}
+
+/// M5c: a texture's before/after PNG: the disc's (`before`, scaled up nearest-neighbour) on the left and the pack's
+/// (`after`) on the right, both [`PAIR`] tall at most, a gap between.
+fn before_after(before: (u32, u32, &[u8]), after: (u32, u32, &[u8])) -> Option<Vec<u8>> {
+    let img = |(w, h, rgba): (u32, u32, &[u8])| image::RgbaImage::from_raw(w, h, rgba.to_vec());
+    let (a, b) = (img(after)?, img(before)?);
+    let h = a.height().min(PAIR).max(1);
+    let fit = |i: &image::RgbaImage, f| image::imageops::resize(i, (i.width() as u64 * h as u64 / i.height().max(1) as u64).max(1) as u32, h, f);
+    let (b, a) = (fit(&b, image::imageops::FilterType::Nearest), fit(&a, image::imageops::FilterType::Lanczos3));
+    let gap = (h / 32).max(2);
+    let mut out = image::RgbaImage::new(b.width() + gap + a.width(), h);
+    image::imageops::replace(&mut out, &b, 0, 0);
+    image::imageops::replace(&mut out, &a, (b.width() + gap) as i64, 0);
+    let mut png = Vec::new();
+    out.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    Some(png)
+}
+
+/// M5c: a before/after picture's height at most.
+const PAIR: u32 = 512;
 
 /// M8f9: an upload's `preview.png` among its `files`: an umpire's `previews/umpire.png` (the standard's §3 picture,
 /// B400), a court's `previews/court.png`; else (and a character's) its first picture under `previews/`.
@@ -973,13 +1055,13 @@ pub type Upload = (Mod, Option<(usize, [u8; 5])>, Option<Vec<u8>>);
 
 /// B250: uploads `mods` one after another in the background as account `name` ([`Event::Upload`] for each: Uploading,
 /// then Done / Skipped / Failed): each is packaged and committed to the store as its own pull request, or, if `name`
-/// uploaded that id before, over that upload ([`plan`]).
-pub fn publish(mods: Vec<Upload>, name: String, token: String) {
+/// uploaded that id before, over that upload ([`plan`]). `iso` is the disc a texture pack is checked against.
+pub fn publish(mods: Vec<Upload>, name: String, token: String, iso: String) {
     spawn(async move {
         let mut own = None;
         for (m, stats, card) in mods {
             send(Event::Upload(m.dir.clone(), Up::Uploading));
-            let got = upload(&m, stats, card, &name, &token, &mut own).await;
+            let got = upload(&m, stats, card, &name, &token, &iso, &mut own).await;
             send(Event::Upload(m.dir.clone(), got.unwrap_or_else(Up::Failed)));
         }
         // the next Browse reads the store again, these uploads included
@@ -1019,8 +1101,9 @@ fn plan(old: Option<&Entry>, new: &Meta) -> Plan {
 }
 
 /// Mod `m` packaged and committed as `name`; `own` is `name`'s uploads, read once per batch.
-async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, name: &str, token: &str, own: &mut Option<Vec<Entry>>) -> Result<Up, String> {
-    let mut p = package(m, stats)?;
+#[allow(clippy::too_many_arguments)]
+async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, name: &str, token: &str, iso: &str, own: &mut Option<Vec<Entry>>) -> Result<Up, String> {
+    let mut p = package(m, stats, iso)?;
     // M19: the uploader's account, so My public mods finds it once merged (Browse shows a PR's author anyway)
     p.meta.author = plain_text(name, 40);
     if own.is_none() {
@@ -1327,12 +1410,12 @@ mod tests {
             return eprintln!("no mods in {mods} (skipped)");
         };
         let m = crate::mods::read(&dir).unwrap();
-        let p = package(&m, Some((2, [1, 2, 3, 4, 5]))).unwrap();
+        let p = package(&m, Some((2, [1, 2, 3, 4, 5])), "").unwrap();
         eprintln!("packed {} ({} bytes, {} files)", m.id, p.meta.size, mod_files(&m.dir).unwrap().len());
         assert_eq!(p.meta.id, m.id);
         // B488: a mod that skips upscaling says so in its meta (Install then never takes an upscaled set); a meta
         // without it, as every upload before, wants it
-        let hd = package(&crate::mods::Mod { upscale: false, ..m.clone() }, None).unwrap().meta;
+        let hd = package(&crate::mods::Mod { upscale: false, ..m.clone() }, None, "").unwrap().meta;
         assert!(hd.no_upscale && p.meta.no_upscale == !m.upscale);
         assert!(serde_json::from_slice::<Meta>(&serde_json::to_vec(&hd).unwrap()).unwrap().no_upscale);
         assert!(!serde_json::from_str::<Meta>(r#"{"id":"x","name":"X","size":1,"sha256":"00"}"#).unwrap().no_upscale);
@@ -1400,7 +1483,7 @@ mod tests {
         }
         for (src, kind, pic) in srcs {
             let m = crate::mods::read_any(&src).unwrap();
-            let p = package(&m, Some((2, [1, 2, 3, 4, 5]))).unwrap();
+            let p = package(&m, Some((2, [1, 2, 3, 4, 5])), "").unwrap();
             assert_eq!(p.meta.kind, Kind::of(&kind));
             assert_eq!((p.meta.style, p.meta.grades, p.meta.hand, p.meta.costumes, p.meta.like), (None, None, None, None, None), "{}", m.id);
             let j = serde_json::to_string(&p.meta).unwrap();
@@ -1423,6 +1506,73 @@ mod tests {
         let head = image::load_from_memory(&head_of(&png).unwrap()).unwrap().into_rgba8();
         assert_eq!(head.dimensions(), (36, 36));
         assert_eq!((head.get_pixel(18, 0)[3], head.get_pixel(18, 10)[3], head.get_pixel(1, 10)[3]), (0, 255, 0));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// M5c: a texture pack goes up with its kind, its count and a before/after picture, under its own bigger cap;
+    /// one shipping a disc texture unchanged (as is, or only scaled up nearest-neighbour) is refused, naming the
+    /// pictures. Skips without the ISO.
+    #[test]
+    fn texture_packs_go_up() {
+        let iso = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+        let Ok(mut disc) = hst_data::iso::Iso::open(iso) else { return eprintln!("no ISO, skipped") };
+        // three disc textures of at least 16×16
+        let mut picked = Vec::new();
+        hst_data::texhash::disc_textures(&mut disc, |t| {
+            if picked.len() < 3 && t.width >= 16 && t.height >= 16 && !picked.iter().any(|p: &hst_data::texhash::DiscTexture| p.key == t.key) {
+                picked.push(t);
+            }
+        });
+        let base = std::env::temp_dir().join(format!("hst-store-pack-{}", std::process::id()));
+        let src = base.join("src/hd_pack");
+        std::fs::create_dir_all(src.join("textures/a")).unwrap();
+        std::fs::write(src.join("mod.json"), r#"{"standard":1,"kind":"textures","id":"hd_pack","name":"HD pack","version":"2"}"#).unwrap();
+        let file = |i: usize| src.join(format!("textures/a/t{i}-{}.png", picked[i].key));
+        let twice = |t: &hst_data::texhash::DiscTexture, tint: bool| {
+            let (w, h) = (t.width * 2, t.height * 2);
+            let px = |x: u32, y: u32| {
+                let p = &t.rgba[((y / 2 * t.width + x / 2) * 4) as usize..][..4];
+                [if tint { p[0] ^ 0x40 } else { p[0] }, p[1], p[2], p[3]]
+            };
+            (w, h, (0..h).flat_map(|y| (0..w).flat_map(move |x| px(x, y))).collect::<Vec<u8>>())
+        };
+        let (w, h, rgba) = twice(&picked[0], true);
+        hst_data::texhash::write_png(&file(0), w, h, &rgba).unwrap();
+        let (w, h, rgba) = twice(&picked[1], false);
+        hst_data::texhash::write_png(&file(1), w, h, &rgba).unwrap();
+        hst_data::texhash::write_png(&file(2), picked[2].width, picked[2].height, &picked[2].rgba).unwrap();
+        let m = crate::mods::read_any(&src).unwrap();
+        let e = package(&m, None, iso).err().unwrap();
+        eprintln!("{e}");
+        assert!(e.starts_with("2 of its pictures are the disc's textures unchanged") && e.contains("textures/a/t1-") && e.contains("textures/a/t2-") && !e.contains("t0-"), "{e}");
+        std::fs::remove_file(file(1)).unwrap();
+        std::fs::remove_file(file(2)).unwrap();
+        // no disc to check against: not uploaded
+        assert!(package(&m, None, "no.iso").err().unwrap().contains("disc"));
+        let p = package(&m, None, iso).unwrap();
+        assert_eq!((p.meta.kind, p.meta.textures, p.meta.version.as_str()), (Kind::Textures, Some(1), "2"));
+        assert_eq!((p.meta.style, p.meta.hand, p.meta.costumes), (None, None, None));
+        // the disc's on the left, nearest-neighbour up to the pack's height, the pack's on the right
+        let pic = image::load_from_memory(p.preview.as_deref().unwrap()).unwrap().into_rgba8();
+        let (dw, dh) = (picked[0].width, picked[0].height);
+        let ph = (dh * 2).min(PAIR);
+        assert_eq!(pic.height(), ph);
+        assert_eq!(pic.width(), 2 * (dw as u64 * ph as u64 / dh as u64) as u32 + (ph / 32).max(2));
+        assert_eq!(pic.get_pixel(0, 0).0, picked[0].rgba[..4]);
+        let j = serde_json::to_vec(&p.meta).unwrap();
+        assert_eq!(meta_of(&j, "hd_pack").unwrap(), p.meta);
+        // its bigger cap: a pack's size past a character's is still listed, a character's isn't
+        let big = Meta { size: MAX_ZIP + 1, ..p.meta.clone() };
+        assert!(meta_of(&serde_json::to_vec(&big).unwrap(), "hd_pack").is_some());
+        assert!(meta_of(&serde_json::to_vec(&Meta { kind: Kind::Character, ..big.clone() }).unwrap(), "hd_pack").is_none());
+        assert!(meta_of(&serde_json::to_vec(&Meta { size: MAX_PACK_ZIP + 1, ..big }).unwrap(), "hd_pack").is_none());
+        // a character's meta never carries a count
+        assert_eq!(meta_of(&serde_json::to_vec(&Meta { kind: Kind::Character, ..p.meta.clone() }).unwrap(), "hd_pack").unwrap().textures, None);
+        assert!(Kind::Textures.cap_words().contains("2 GB") && Kind::Character.cap_words().contains("1 GB"));
+        // and installs as a pack
+        let root = base.join("mods");
+        let got = modfs::install(&p.zip, &root).unwrap();
+        assert_eq!(crate::mods_textures::read(&got.dir).unwrap().textures.len(), 1);
         let _ = std::fs::remove_dir_all(&base);
     }
 

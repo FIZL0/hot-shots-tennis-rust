@@ -51,6 +51,8 @@ const PAGES: [Page; 4] = [Page::Browse, Page::Installed, Page::Upload, Page::Min
 /// M114: how long the footer says "Uploaded N mods · waiting for review" before it goes back to the count installed.
 const UPPED_SECS: f32 = 4.0;
 const RULE: &str = "Only upload what you have the right to share: you're responsible for it. It goes live for everyone at once.";
+/// M5c: what a texture pack's upload checks first (`modstore::pack_check`).
+const PACK_CHECK: &str = "It's checked against your disc first: a picture that is the disc's texture unchanged stops the upload.";
 
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
 pub(super) enum Page {
@@ -882,14 +884,17 @@ impl Menu {
                     self.add.status = "No mods installed to upload.".into();
                     out.push(Sound(1));
                 } else if s == 1 {
-                    self.open_child(&["Upload all"], format!("{RULE} Upload all {} mods?", self.add.locals().len()), out);
+                    // M5c: packs say what they go through
+                    let (check, what) = if self.add.kind == Kind::Textures { (format!(" {PACK_CHECK}"), "texture packs") } else { (String::new(), "mods") };
+                    self.open_child(&["Upload all"], format!("{RULE}{check} Upload all {} {what}?", self.add.locals().len()), out);
                 } else {
                     let m = &self.add.locals()[s - UP_TOP];
                     if matches!(self.add.ups.get(&m.dir), Some(Up::Queued | Up::Uploading)) {
                         self.add.status = format!("{} is uploading already.", m.name);
                     } else {
                         let name = m.name.clone();
-                        self.open_child(&["Upload"], format!("{RULE} Upload {name}?"), out);
+                        let check = if self.add.kind == Kind::Textures { format!(" {PACK_CHECK}") } else { String::new() };
+                        self.open_child(&["Upload"], format!("{RULE}{check} Upload {name}?"), out);
                     }
                 }
             }
@@ -921,7 +926,7 @@ impl Menu {
             })
             .collect::<Vec<_>>();
         if !ups.is_empty() {
-            modstore::publish(ups, name, token);
+            modstore::publish(ups, name, token, v.iso.clone());
         }
     }
 
@@ -1312,7 +1317,9 @@ fn info(m: &Menu) -> String {
             None => "Sign in to Hugging Face once with a token. After that, the game uploads for you.".into(),
         },
         (Page::Upload, 1) => "Upload every installed mod in the background. Mods already on the store, unchanged, are skipped.".into(),
-        (Page::Upload, _) => RULE.into(),
+        // M5c: a pack's own cap, and the disc check it goes through
+        (Page::Upload, _) if v.kind == Kind::Textures => format!("{RULE} {} {PACK_CHECK}", v.kind.cap_words()),
+        (Page::Upload, _) => format!("{RULE} {}", v.kind.cap_words()),
     }
 }
 
@@ -1425,6 +1432,8 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
                     costumes: player.then_some(md.costumes.len() as u32),
                     like: player.then_some(md.donor as u8),
                     kind,
+                    // M5c: a pack's count
+                    textures: (kind == Kind::Textures).then(|| crate::mods_textures::read(&md.dir).map_or(0, |p| p.textures.len() as u32)),
                     ..Default::default()
                 };
                 Entry { meta, rev: if i % 3 == 0 { "main".into() } else { format!("refs/pr/{}", 100 - i) }, verified: i % 3 == 0 }
