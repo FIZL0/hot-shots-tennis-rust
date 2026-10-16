@@ -615,4 +615,39 @@ mod tests {
         assert!(mine.len() >= 2);
         assert!(mine.into_iter().all(|q| q.dst[1] + q.dst[3] <= gy + gh + 1e-3));
     }
+
+    /// B423: lines off view get a pill: "▼ N more: …" naming the sections below while the grid isn't at its end,
+    /// "▲ …" naming those above once scrolled; a tap on one pages that way (only for the column's own device).
+    #[test]
+    fn the_more_pills_page_the_grid() {
+        use super::super::pointer::Act;
+        let mut m = menu();
+        let t = super::super::pointer::tests::text_with_mods(m.mods.len());
+        let pages = |m: &Menu| super::super::drawn(m, &t, &super::super::Bindings::default(), &[], 0, 0.0).hits.iter().filter_map(|h| if let Act::Page(p, d) = h.act { Some((p, d)) } else { None }).collect::<Vec<_>>();
+        let c = m.columns();
+        let v = m.view(0);
+        assert!(v.end < v.lines.len(), "{v:?}");
+        let (above, more, below) = super::super::roster::off_view(&v, c.cols);
+        assert!(above.is_empty());
+        // every tile not wholly on view, and the sections it's in
+        let shown: usize = v.lines[v.top..v.end].iter().map(|&l| if let Line::Tiles(s, i) = l { v.secs[s].cells[i..].len().min(c.cols) } else { 0 }).sum();
+        assert_eq!(more + shown, v.secs.iter().map(|s| s.cells.len()).sum::<usize>());
+        assert_eq!(below.last(), Some(&(v.secs.len() - 1)));
+        assert_eq!(pages(&m), [(0, 1)]);
+        // another device doesn't page 1P's grid
+        let pad = Dev::Pad(bevy::prelude::Entity::from_raw_u32(9).unwrap());
+        assert!(m.point(pad, Act::Page(0, 1), true).is_empty() && m.scroll[0] == 0);
+        // hovering does nothing, a tap moves a page: the first line not wholly shown comes to the top
+        assert!(m.point(Dev::Keys, Act::Page(0, 1), false).is_empty() && m.scroll[0] == 0);
+        assert!(!m.point(Dev::Keys, Act::Page(0, 1), true).is_empty());
+        assert_eq!(m.scroll[0], v.end.min(c.last_top(&v.lines)));
+        let v2 = m.view(0);
+        let (above, ..) = super::super::roster::off_view(&v2, c.cols);
+        assert_eq!(above.first(), Some(&0));
+        assert!(pages(&m).contains(&(0, -1)));
+        while !m.point(Dev::Keys, Act::Page(0, 1), true).is_empty() {}
+        assert_eq!(pages(&m), [(0, -1)], "at the end: only the way back");
+        while !m.point(Dev::Keys, Act::Page(0, -1), true).is_empty() {}
+        assert_eq!(m.scroll[0], 0);
+    }
 }

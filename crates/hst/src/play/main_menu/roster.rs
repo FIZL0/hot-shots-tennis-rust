@@ -580,6 +580,8 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         cut(d, n0, foot);
         d.hit(hit, pointer::Act::Cell(p, k));
     }
+    // B423: lines off view: the grid's cut edge fades into the card, a pill names what's there (a tap pages)
+    peek(d, &v, c.cols, &s, at.grid, p);
     // the scroll bar: its thumb the lines on view over all of them
     let total = v.lines.len();
     let [bx, by, bw, bh] = at.bar;
@@ -606,6 +608,104 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let fs = 12.0 * PY;
     let lw = d.width(&line, fs).min(fw);
     d.label(&line, fx + lw / 2.0, fy + (fh - fs) / 2.0, fs, lw, s.soft);
+}
+
+/// B423: what's off `v`'s view with `cols` tiles a row: above, the sections with lines over the top; below, the
+/// tiles not wholly on view and the sections whose headings are past it (the next ones, not the one going on), in order.
+pub(super) fn off_view(v: &View, cols: usize) -> (Vec<usize>, usize, Vec<usize>) {
+    let mut above: Vec<usize> = Vec::new();
+    for &l in &v.lines[..v.top] {
+        let (Line::Head(s) | Line::Tiles(s, _)) = l;
+        if above.last() != Some(&s) {
+            above.push(s);
+        }
+    }
+    let below = v.lines[v.end..].iter().filter_map(|&l| if let Line::Head(s) = l { Some(s) } else { None }).collect();
+    let more = v.lines[v.end..].iter().map(|&l| if let Line::Tiles(s, i) = l { v.secs[s].cells[i..].len().min(cols) } else { 0 }).sum();
+    (above, more, below)
+}
+
+/// `lead` and `names` joined by commas in `max` wide at `size`: as many as fit whole, then "+n" for the rest; with
+/// none fitting, `lead` alone ("84 more", a bare "+4" says nothing).
+fn fit_names(d: &Draw, lead: &str, names: &[&str], size: f32, max: f32) -> String {
+    let join = |k: usize| {
+        let mut s = format!("{lead}{}", names[..k].join(", "));
+        if k < names.len() {
+            s += &format!("{}+{}", if k > 0 { ", " } else { "" }, names.len() - k);
+        }
+        s
+    };
+    let k = (1..=names.len()).rev().find(|&k| d.width(&join(k), size) <= max).unwrap_or(0);
+    let s = if k == 0 && !lead.is_empty() { lead.trim_end_matches(": ").to_string() } else { join(k) };
+    if d.width(&s, size) <= max { s } else { ellipsis(d, &join(1), size, max) }
+}
+
+/// The grid's fade at a cut edge, and the more pill's height (px).
+const PEEK_FADE: f32 = 30.0;
+const PEEK_PILL: f32 = 20.0;
+
+/// B423: player `p`'s grid `[x, y, w, h]` (`v` as scrolled, `cols` tiles a row) with lines off view: that edge fades
+/// into the card's tint and a pill over it says what's there: `▼ 12 more: Golf, Mods` centred at the foot (the sections
+/// still to come, as many as fit, then `+n`), `▲ Favorites` at the top's right (clear of a heading's name). A tap on it
+/// scrolls a page that way.
+fn peek(d: &mut Draw, v: &View, cols: usize, s: &Seat, [x, y, w, h]: [f32; 4], p: usize) {
+    let (above, more, below) = off_view(v, cols);
+    let fh = PEEK_FADE * PY;
+    let strips = 10;
+    let fade = |d: &mut Draw, top: bool| {
+        for i in 0..strips {
+            let sh = fh / strips as f32;
+            // the edge itself all but hidden, clear by `fh` in
+            let a = 118.0 * (1.0 - i as f32 / strips as f32);
+            let sy = if top { y + sh * i as f32 } else { y + h - sh * (i + 1) as f32 };
+            d.q(Tex::Solid, [0.0; 4], [x, sy, w, sh], s.bg, a);
+        }
+    };
+    let names = |list: &[usize]| list.iter().map(|&k| v.secs[k].name.as_str()).collect::<Vec<_>>();
+    let ph = PEEK_PILL * PY;
+    let size = 12.0 * PY;
+    let pill = |d: &mut Draw, head: &str, list: &[&str], down: bool| {
+        let tri = 8.0 * PX;
+        let lead = tri + 6.0 * PX;
+        // at most ¾ of the grid's width: the tiles stay readable round it
+        let max = (w * 0.75).min(w - 8.0 * PX) - lead - 20.0 * PX;
+        let words = fit_names(d, head, list, size, max.max(10.0));
+        let pw = d.width(&words, size) + lead + 20.0 * PX;
+        let px = if down { x + (w - pw) / 2.0 } else { x + w - pw - 4.0 * PX };
+        let py = if down { y + h - ph - 3.0 * PY } else { y + 3.0 * PY };
+        ringed(d, [px, py, pw, ph], PEEK_PILL / 2.0, 1.5, s.ring, s.well);
+        triangle(d, [px + 10.0 * PX, py + (ph - tri * PY / PX) / 2.0, tri, tri * PY / PX], down, s.ring);
+        d.text(&words, px + 10.0 * PX + lead, py + (ph - size) / 2.0, size, WHITE);
+        d.hit([px, py, pw, ph], pointer::Act::Page(p, if down { 1 } else { -1 }));
+    };
+    if !above.is_empty() {
+        // a heading on top is a clean edge: left as it is
+        if !matches!(v.lines.get(v.top), Some(Line::Head(_))) {
+            fade(d, true);
+        }
+        pill(d, "", &names(&above), false);
+    }
+    if more > 0 || !below.is_empty() {
+        fade(d, false);
+        let head = match (more, below.is_empty()) {
+            (0, _) => String::new(),
+            (n, true) => format!("{n} more"),
+            (n, false) => format!("{n} more: "),
+        };
+        pill(d, &head, &names(&below), true);
+    }
+}
+
+/// A solid triangle in `[x, y, w, h]` pointing down (else up), as thin rows.
+fn triangle(d: &mut Draw, [x, y, w, h]: [f32; 4], down: bool, rgb: [f32; 3]) {
+    let n = 8;
+    let rh = h / n as f32;
+    for i in 0..n {
+        // row `i` from the top: widest at the base
+        let k = if down { n - i } else { i + 1 } as f32 / n as f32;
+        let rw = w * k;
+        d.q(Tex::Solid, [0.0; 4], [x + (w - rw) / 2.0, y + rh * i as f32, rw, rh], rgb, 128.0);
+    }
 }
 
 /// B382: a section's heading in `[x, y, w, h]`: its name (a gold star before Favorites), its count, and a divider

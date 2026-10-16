@@ -28,6 +28,8 @@ pub(super) enum Act {
     Grid(usize),
     /// B368: player `p`'s column's grid scrolled `d` rows (sent by the wheel and drags, never hit-tested).
     Scroll(usize, i32),
+    /// B423: player `p`'s column's more-below (`1`) / above (`-1`) pill: a tap scrolls its grid a page that way.
+    Page(usize, i32),
     /// A court tile or umpire card in the confirm screen's picker: a tap hovers it, a tap on the hovered one keeps it.
     Pick(usize),
     /// A button: a tap is this press.
@@ -173,6 +175,14 @@ impl Menu {
                 }
             }
             Act::Grid(_) => {}
+            // B423: a page is the lines on view (the first cut one comes to the top)
+            Act::Page(p, d) if tap => {
+                let v = self.view(p);
+                if self.driven(dev) == Some(p) && self.scroll_by(p, d * (v.end - v.top).max(1) as i32) {
+                    out.push(Effect::Sound(0));
+                }
+            }
+            Act::Page(..) => {}
             Act::Pick(v) if tap => {
                 let court = self.sel == 1;
                 if v == if court { self.court } else { self.umpire as usize } {
@@ -299,7 +309,7 @@ pub(in crate::play) fn pointer(
     let mouse_hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..) | Act::Tile(_)));
     // B368: the select column under a point (its tiles or the grid round them): the wheel and drags scroll it
     let column = |a: Option<Act>| match a {
-        Some(Act::Cell(p, _) | Act::Grid(p) | Act::Section(p, _)) => Some(p),
+        Some(Act::Cell(p, _) | Act::Grid(p) | Act::Section(p, _) | Act::Page(p, _)) => Some(p),
         _ => None,
     };
     // touch
