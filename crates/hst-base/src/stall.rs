@@ -82,6 +82,9 @@ fn render_end(images: Res<RenderAssets<bevy::render::texture::GpuImage>>, meshes
         }
     }
     let now = Uploaded { images: images.iter().count(), bytes, meshes: meshes.iter().count(), ready };
+    if now.ready > last.ready {
+        *LAST_READY.lock().unwrap() = (Some(end), now.ready - last.ready);
+    }
     let [Some(t0), Some(t1), Some(t2), Some(t3), Some(t4), Some(t5)] = m else {
         *last = now;
         return;
@@ -139,6 +142,10 @@ pub fn since_start() -> f32 {
     start().elapsed().as_secs_f32()
 }
 
+/// When pipelines last went ready, and how many (P58: a long gap just after them, on the web, is the browser's GPU
+/// process compiling their first draws: the frame waits there, not in our code).
+static LAST_READY: Mutex<(Option<Instant>, usize)> = Mutex::new((None, 0));
+
 /// The game side's last frame: its start, its update's end, disc bytes read and entities by then.
 static GAME: Mutex<(Option<Instant>, Option<Instant>, u64, u32)> = Mutex::new((None, None, 0, 0));
 
@@ -152,8 +159,16 @@ fn game_start(world: &mut World) {
         let ms = |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
         let (game, gap) = (ms(start, end), ms(end, now));
         let watched = watched(0);
+        // P58: a frame from the page's timer (hidden or unseen window) waited on purpose
+        #[cfg(target_arch = "wasm32")]
+        let gap = if crate::web::timer_frame() { 0.0 } else { gap };
         if game > STALL || gap > STALL || watched {
-            diag!("game{}: update {game:.1} ms, then {gap:.1} ms to the next frame (extract, events, present); disc +{:.1} MB, entities {entities} ({:+}) at {:.2} s", if watched { "" } else { " stall" }, (read - g.2) as f32 / 1e6, entities as i64 - g.3 as i64, since_start());
+            // a gap of a second or more: how long ago pipelines last went ready
+            let ready = match *LAST_READY.lock().unwrap() {
+                (Some(at), n) if gap >= 1000.0 => format!("; {n} pipelines went ready {:.1} s before it", ms(at, end) / 1000.0),
+                _ => String::new(),
+            };
+            diag!("game{}: update {game:.1} ms, then {gap:.1} ms to the next frame (extract, events, present){ready}; disc +{:.1} MB, entities {entities} ({:+}) at {:.2} s", if watched { "" } else { " stall" }, (read - g.2) as f32 / 1e6, entities as i64 - g.3 as i64, since_start());
         }
     }
     *g = (Some(now), None, read, entities);
