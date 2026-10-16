@@ -166,15 +166,20 @@ struct By {
 impl View {
     /// B445: Remove all uploads' next take-down (`busy` while it's out), or, the last one back, what came of them all.
     fn wipe_next(&mut self) {
+        // a PR goes with the last of its mods in the queue (closing it is no commit); the others go with it, unasked
+        // (a delete commit each ran Hugging Face's commit rate limit dry)
+        while self.wiping.front().is_some_and(|e| modstore::pr_of(&e.rev).is_some() && self.wiping.iter().skip(1).any(|o| o.rev == e.rev)) {
+            let e = self.wiping.pop_front().unwrap();
+            self.mine.get_or_insert_default().retain(|o| o.meta.id != e.meta.id);
+            self.wiped.0 += 1;
+        }
         let (done, failed, all) = self.wiped;
         let token = modstore::account().map(|a| a.1);
         match (self.wiping.pop_front(), token) {
             (Some(e), Some(token)) => {
                 self.busy = true;
                 self.status = format!("Removing your uploads: {} ({}/{all})...", e.meta.name, done + failed + 1);
-                // the PR is closed with the last of its mods in the queue
-                let shared = self.wiping.iter().any(|o| o.rev == e.rev);
-                modstore::remove(&e, shared, token);
+                modstore::remove(&e, false, token);
             }
             (left, _) => {
                 let missed = failed + left.as_ref().map_or(0, |_| 1 + self.wiping.len());
@@ -2682,6 +2687,12 @@ mod tests {
             m.mods_step(ok(), &mut out);
             assert_eq!((m.add.wipe, m.add.busy, m.add.account.as_deref()), (None, false, None));
             assert!(m.add.status.starts_with("Signed out"), "{}", m.add.status);
+        }
+        // two mods on one PR: the first goes with the PR, no call of its own (here the PR's call is refused: no token)
+        if modstore::account().is_none() {
+            (m.add.wiping, m.add.wiped) = (VecDeque::from([e("a", "refs/pr/1"), e("b", "refs/pr/1")]), (0, 0, 2));
+            m.add.wipe_next();
+            assert_eq!(m.add.status, "Signed out: removed 1 of 2 uploads. Sign in again and Remove all uploads for the rest.");
         }
         // the last one back says what came of them all
         (m.add.wiping, m.add.wiped) = (VecDeque::new(), (1, 1, 2));
