@@ -922,6 +922,10 @@ pub enum Event {
     Me(String),
     /// Hosting: the short code that also finds the lobby (B104).
     Short(String),
+    /// B519 (M120): hosting, friends can join now: the short code is on the DHT, or (its put still retried) the
+    /// lobby's link carries a relay; a browser's LAN lobby once its first offer is out. Until then the code is shown
+    /// but goes nowhere.
+    Joinable,
     Found(Vec<Listing>),
     /// The lobby as it is now (host and joiners alike).
     Room(Room),
@@ -1673,6 +1677,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     bevy::log::info!("lobby link {}", link(&ticket));
                     let _ = ev.send(Event::Short(String::new()));
                     let _ = ev.send(Event::Code(ticket));
+                    let _ = ev.send(Event::Joinable);
                     // B467: the reason too, so a host whose friend can't find the lobby sees what's wrong
                     let _ = ev.send(Event::Status(format!("No short code yet (retrying: {why}): share the lobby's link meanwhile.")));
                     n0_future::time::sleep(pause).await;
@@ -1699,6 +1704,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
         }
         None => {
             offer = new_offer(cx).await;
+            cx.say(Event::Joinable);
             cx.say(Event::Status("Players join with this lobby's link (Copy Link, send it: they open it or Paste it in Join by Code); then Paste the link they send back.".into()));
         }
     }
@@ -2049,6 +2055,9 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 room.short = code.clone().unwrap_or_default();
                 broadcast(&joined, &Msg::Room(room.clone()));
                 cx.say(Event::Room(room.clone()));
+                if code.is_some() {
+                    cx.say(Event::Joinable);
+                }
                 cx.say(Event::Status(if code.is_some() { "Waiting for players..." } else { "No short code (no internet?): players on this network find the lobby with Find." }.into()));
                 dirty = true;
             }

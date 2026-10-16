@@ -21,7 +21,7 @@ pub(super) const PX: f32 = PY * 15.0 / 14.0;
 /// top, the section rail over the grid), the stats stack's width, a tile and its gap, the scroll bar, a section's
 /// heading (B382).
 const TOP_BAR: f32 = 60.0;
-const MARGIN: f32 = 24.0;
+pub(super) const MARGIN: f32 = 24.0;
 const GAP: f32 = 12.0;
 const PAD: f32 = 10.0;
 const ROW_GAP: f32 = 8.0;
@@ -85,9 +85,10 @@ pub(super) struct Columns {
     /// A tile's width and height (square on screen), and the gaps between them across and down.
     pub tile: [f32; 2],
     gap: [f32; 2],
-    /// The first column's box, and the step to the next.
+    /// A full column's box (the first's place), and each column's left and width (M120: online, another machine's
+    /// seats and open ones are compact cards, narrower than this machine's players' columns).
     first: [f32; 4],
-    step: f32,
+    xs: [[f32; 2]; 4],
     /// The pills on two rows (a narrow column).
     pub stack: bool,
     /// The preview row's height.
@@ -112,10 +113,30 @@ pub(super) struct Parts {
 
 /// The select's `n` player columns on `view` (left, top, right, bottom).
 pub(super) fn columns(view: [f32; 4], n: usize) -> Columns {
+    columns_mixed(view, n, [false; 4])
+}
+
+/// M120: a compact card's width (mockup px), at most an even share of the row.
+const COMPACT_W: f32 = 300.0;
+
+/// The select's `n` player columns on `view`, the `compact` ones (online: another machine's players, the open seats)
+/// as narrow cards, the rest sharing what's left.
+pub(super) fn columns_mixed(view: [f32; 4], n: usize, compact: [bool; 4]) -> Columns {
     let n = n.max(1);
     let [l, t, r, b] = view;
     let top = t + TOP_BAR * PY;
-    let w = (r - l - 2.0 * MARGIN * PX - GAP * PX * (n - 1) as f32) / n as f32;
+    let room = r - l - 2.0 * MARGIN * PX - GAP * PX * (n - 1) as f32;
+    let k = (0..n.min(4)).filter(|&p| compact[p]).count();
+    let even = room / n as f32;
+    let cw = if k < n { (COMPACT_W * PX).min(even) } else { even };
+    let w = if k < n { (room - k as f32 * cw) / (n - k) as f32 } else { even };
+    let mut xs = [[0.0; 2]; 4];
+    let mut x = l + MARGIN * PX;
+    for (p, c) in xs.iter_mut().enumerate().take(n.min(4)) {
+        let pw = if compact[p] { cw } else { w };
+        *c = [x, pw];
+        x += pw + GAP * PX;
+    }
     let h = b - top;
     let inner = w - 2.0 * PAD * PX;
     let stack = inner < PILLS_W * PX;
@@ -136,14 +157,14 @@ pub(super) fn columns(view: [f32; 4], n: usize) -> Columns {
     // what's left under the last row whole goes to the preview, up to twice its size
     let spare = room - preview - (rows as f32 * (th + gy) - gy);
     let preview = preview + spare.clamp(0.0, PREVIEW * PY);
-    Columns { n, cols, rows, tile: [tw, th], gap: [gx, gy], first: [l + MARGIN * PX, top, w, h], step: w + GAP * PX, stack, preview }
+    Columns { n, cols, rows, tile: [tw, th], gap: [gx, gy], first: [l + MARGIN * PX, top, w, h], xs, stack, preview }
 }
 
 impl Columns {
     /// Player `p`'s column.
     pub fn parts(&self, p: usize) -> Parts {
-        let [x0, top, w, h] = self.first;
-        let x = x0 + self.step * p as f32;
+        let [_, top, _, h] = self.first;
+        let [x, w] = self.xs[p.min(3)];
         let (ix, iw) = (x + PAD * PX, w - 2.0 * PAD * PX);
         let head = [x, top, w, BAND * PY];
         let mut y = top + (BAND + PAD) * PY;
@@ -401,10 +422,15 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     }
     let humans = m.humans() + (0..m.players()).filter(|&p| m.seats[p].is_none() && m.remote(p).is_some_and(|s| s.human())).count();
     let who = if humans > 1 { format!("{humans} players, each browses on their own") } else { "1 player".into() };
+    // M120: online, the lobby's code (or how its connecting goes) in the corner by the mode
+    let right = if m.online() { super::online::corner(d, m, mx - 12.0 * PX, my, 30.0 * PY, l + 40.0 + d.width(title, size)) - 12.0 * PX } else { mx - 12.0 * PX };
     let ws = 14.0 * PY;
-    let ww = d.width(&who, ws).min(mx - 12.0 * PX - (l + 40.0 + d.width(title, size)));
+    let ww = d.width(&who, ws).min(right - (l + 40.0 + d.width(title, size)));
     if ww > 20.0 {
-        d.outlined(|d| d.label(&who, mx - 12.0 * PX - ww / 2.0, my + 8.0 * PY, ws, ww, WHITE));
+        d.outlined(|d| d.label(&who, right - ww / 2.0, my + 8.0 * PY, ws, ww, WHITE));
+    }
+    if m.online() {
+        super::online::band(d, m, l + MARGIN * PX, t + TOP_BAR * PY, r - l - 2.0 * MARGIN * PX);
     }
     let c = m.columns();
     let pointer_p = m.driven(pointer::device(m, pads));
@@ -431,6 +457,11 @@ fn is_active(m: &Menu, n: usize, p: usize) -> bool {
 /// the middle over "Press ✕ to join" (`join`: a device here can take it; the keyboard's Enter works but isn't shown,
 /// the keyboard being 1P's if anyone's), else "Waiting for a player".
 fn open_seat(d: &mut Draw, s: &Seat, card: [f32; 4], p: usize, join: bool) {
+    open_seat_saying(d, s, card, p, join, "Waiting for a player");
+}
+
+/// [`open_seat`] with its own words for "Waiting for a player" (wrapped to the card).
+fn open_seat_saying(d: &mut Draw, s: &Seat, card: [f32; 4], p: usize, join: bool, wait: &str) {
     let [x, y, w, h] = card;
     rounded(d, card, 14.0, s.tile, 100.0);
     dashed(d, card, 14.0, 2.0, s.soft, s.tile);
@@ -443,7 +474,11 @@ fn open_seat(d: &mut Draw, s: &Seat, card: [f32; 4], p: usize, join: bool) {
     if join {
         home::press_hint(d, " to join", x + w / 2.0, cy + 8.0 * PY, 17.0 * PY, w - 24.0 * PX, hex(look::INK));
     } else {
-        d.label("Waiting for a player", x + w / 2.0, cy + 8.0 * PY, 17.0 * PY, w - 24.0 * PX, hex(look::INK));
+        let size = 17.0 * PY;
+        let cols = ((w - 24.0 * PX) / (size * 0.55)).max(6.0) as usize;
+        for (i, l) in super::wrap(wait, cols).iter().enumerate() {
+            d.label(l, x + w / 2.0, cy + 8.0 * PY + size * 1.3 * i as f32, size, w - 24.0 * PX, hex(look::INK));
+        }
     }
     d.out[start..].iter_mut().for_each(|q| q.alpha = 110.0);
 }
@@ -456,6 +491,10 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let s = seat(p);
     let pl = m.players[p];
     let at = c.parts(p);
+    // M120: another machine's seat (or an open one) online: a compact card, no roster
+    if m.compact(p) {
+        return compact_card(d, m, text, &s, at.card, p);
+    }
     let active = is_active(m, n, p);
     let human = matches!(m.seats[p], Some(Dev::Keys | Dev::Pad(_))) || m.remote(p).is_some_and(|s| s.human());
     // an unjoined seat: an empty card, dashed and dim, its number and the join prompt in the middle; B434: a seat held
@@ -539,6 +578,10 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
             let rh = rw / k;
             d.q(Tex::Preview(p), [0.0; 4], [px + (area - rw) / 2.0, py + (ph - rh) / 2.0, rw, rh], WHITE, 128.0);
         }
+    }
+    if online && active && m.seats[p].is_some() {
+        // M95 (M120): online, this machine's platform and input in the well's corner, as the other players' cards
+        device_pill(d, *crate::device::CURRENT.lock().unwrap_or_else(|e| e.into_inner()), px + area, py, &s);
     }
     let style_of = |w: Who| match w {
         Who::Mod(i) => text.mods[i].0,
@@ -633,6 +676,119 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let line = if d.width(&long, fs) <= fw { long } else { short };
     let lw = d.width(&line, fs).min(fw);
     d.label(&line, fx + lw / 2.0, fy + (fh - fs) / 2.0, fs, lw, s.soft);
+}
+
+/// M120: seat `p`'s compact card online (another machine's player or the computer's; an open seat is the open card):
+/// the header band (the player's name over "Online" and their ping), the figure full width with their platform and
+/// input (M95) in its corner, the character's name, hand and costume, then the roster card's own style bar and stats
+/// list where a local card has its grid, and along the foot what it is and where they are.
+fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p: usize) {
+    let Some(f) = m.card_facts(text, p) else {
+        // B519: nobody can take it till the relay's up
+        let line = if super::online::reach(&m.net) == super::online::Reach::Up { "Waiting for a player" } else { "Not open yet: friends can join once the relay is up" };
+        return open_seat_saying(d, s, card, p, false, line);
+    };
+    let [x, y, w, h] = card;
+    let com = f.rank.is_some();
+    if com {
+        rounded(d, card, 14.0, s.bg, 128.0);
+        dashed(d, card, 14.0, look::RIM, hex(look::INK), s.bg);
+    } else {
+        ringed(d, card, 14.0, look::RIM, hex(look::INK), s.bg);
+    }
+    let pl = m.players[p];
+    let who = m.who(p);
+    let name = match who {
+        _ if pl.random => "Random".to_string(),
+        Who::Mod(i) => m.mods[i].name.clone(),
+        Who::Disc(ch) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[ch]).to_string(),
+    };
+    let sub = match f.ping {
+        Some(ms) => format!("Online - {ms} ms"),
+        None if com => "Computer".into(),
+        None => "Online".into(),
+    };
+    let side = if p < (m.players() / 2).max(1) { "Near" } else { "Far" };
+    band(d, s, [x, y, w, BAND * PY], !com, p, &f.owner, &sub, side, None, false);
+    let (ix, iw) = (x + PAD * PX, w - 2.0 * PAD * PX);
+    let mut cy = y + (BAND + PAD) * PY;
+    let foot_h = 30.0 * PY;
+    let foot_y = y + h - PAD * PY - foot_h;
+    let body = foot_y - cy;
+    // the figure, full width, the seat's number faint behind it
+    let ph = (body * 0.4).max(60.0 * PY);
+    rounded(d, [ix, cy, iw, ph], 10.0, s.tile, 128.0);
+    let num = format!("{}P", p + 1);
+    let big = (ph * 0.78).min(iw * 0.9 * 32.0 / d.width(&num, 32.0));
+    let start = d.out.len();
+    d.centred(&num, ix + iw / 2.0, cy + (ph - big) / 2.0, big, s.ring);
+    d.out[start..].iter_mut().for_each(|q| q.alpha = 26.0);
+    if pl.random {
+        let fw = (iw - 8.0 * PX).min((ph - 8.0 * PY) * 92.0 / 68.0);
+        d.q(C02, RANDOM_TILE, [ix + (iw - fw) / 2.0, cy + (ph - fw * 68.0 / 92.0) / 2.0, fw, fw * 68.0 / 92.0], WHITE, 128.0);
+    } else {
+        let k = 0.8 * PX / PY;
+        let rw = iw.min(ph * k);
+        let rh = rw / k;
+        d.q(Tex::Preview(p), [0.0; 4], [ix + (iw - rw) / 2.0, cy + (ph - rh) / 2.0, rw, rh], WHITE, 128.0);
+    }
+    if let Some(dev) = f.device {
+        device_pill(d, dev, ix + iw, cy, s);
+    }
+    cy += ph + ROW_GAP * PY;
+    // the character's name, its hand and costume under it
+    let ns = 24.0 * PY;
+    d.text(&ellipsis(d, &name, ns, iw), ix, cy, ns, hex(look::INK));
+    cy += ns + 2.0 * PY;
+    let hand = if pl.random { "Hand ?" } else if m.hand(text, p) < 0.0 { "Left" } else { "Right" };
+    let costume = if pl.random { "Costume ?".to_string() } else { format!("Costume {}", pl.costume + 1) };
+    let hs = 14.0 * PY;
+    d.text(&ellipsis(d, &format!("{hand} - {costume}"), hs, iw), ix, cy, hs, s.soft);
+    cy += hs + ROW_GAP * PY;
+    // a mod this machine lacks: what happens about it
+    if let Some(note) = m.remote_mod_note(p) {
+        let ns = 12.0 * PY;
+        d.label(&ellipsis(d, &note, ns, iw), ix + iw / 2.0, cy, ns, iw, hex(look::INK));
+        cy += ns + ROW_GAP * PY;
+    }
+    // the roster card's style bar and stats list
+    let style_of = |w: Who| match w {
+        Who::Mod(i) => text.mods[i].0,
+        Who::Disc(ch) => text.style[ch],
+    };
+    let sh = 24.0 * PY;
+    rounded(d, [ix, cy, iw, sh], 8.0, hex(look::INK), 128.0);
+    let style = if pl.random { "?" } else { STYLE_NAMES[style_of(who).min(3)] };
+    d.label(style, ix + iw / 2.0, cy + 5.0 * PY, 14.0 * PY, iw - 10.0 * PX, hex(0xffd23f));
+    cy += sh + 4.0 * PY;
+    stats(d, if pl.random { None } else { Some(grades_of(text, who)) }, [ix, cy, iw, (foot_y - ROW_GAP * PY - cy).max(0.0)]);
+    // the foot: what it is on the left, where they are in a pill on the right
+    let what = match (&f.rank, who) {
+        (Some(rank), _) => format!("COM - {rank}"),
+        (None, Who::Mod(_)) => "Mod".to_string(),
+        (None, Who::Disc(_)) if m.remote_mod_name(p).is_some() => "Mod".to_string(),
+        (None, Who::Disc(_)) => "Disc character".to_string(),
+    };
+    let (fill, ink) = match f.state {
+        "Ready" => (hex(0x3f9d2e), WHITE),
+        "Picking..." => (hex(look::INK), WHITE),
+        _ => (s.well, hex(look::INK)),
+    };
+    let ps = 14.0 * PY;
+    let pw = (d.width(f.state, ps) + 20.0 * PX).min(iw * 0.55);
+    rounded(d, [ix + iw - pw, foot_y, pw, foot_h], 15.0, fill, 128.0);
+    d.label(f.state, ix + iw - pw / 2.0, foot_y + (foot_h - ps) / 2.0, ps, pw - 12.0 * PX, ink);
+    let ws = 13.0 * PY;
+    let what = ellipsis(d, &what, ws, iw - pw - 8.0 * PX);
+    d.text(&what, ix, foot_y + (foot_h - ws) / 2.0, ws, s.soft);
+}
+
+/// M95: a player's platform and input in a navy pill in the top right corner of the well ending at `right` from `top`.
+fn device_pill(d: &mut Draw, dev: crate::device::Device, right: f32, top: f32, s: &Seat) {
+    let navy = super::frame::NAVY;
+    let pill = [right - 6.0 * PX - 61.0 * PX, top + 6.0 * PY, 61.0 * PX, 22.0 * PY];
+    rounded(d, pill, 11.0, navy, 128.0);
+    super::frame::device_icons(d, dev, pill[0] + pill[2] - 10.0 * PX, pill[1] + pill[3] / 2.0, (PX, PY), s.ring, navy);
 }
 
 /// B481: the button art on computer player `p`'s join bar, if an unseated pad can take the seat: on a local roster
@@ -1157,6 +1313,34 @@ mod tests {
                     assert_eq!((at.head[0], at.head[1], at.head[2]), (at.card[0], at.card[1], at.card[2]), "{a} {n}");
                     assert!(at.head[1] + at.head[3] < at.pills[1], "{a} {n}");
                     assert!(inside(at.rail, at.card) && at.preview[1] + at.preview[3] <= at.rail[1] + 1e-3 && at.rail[1] + at.rail[3] <= at.grid[1] + 1e-3, "{a} {n} {p}");
+                }
+            }
+        }
+    }
+
+    /// M120: online, the other machines' compact cards no wider than `COMPACT_W` and never wider than a full column;
+    /// every column side by side inside the view, at every aspect and mix.
+    #[test]
+    fn compact_cards_leave_the_rest_to_the_rosters() {
+        for a in [0.4, 9.0 / 16.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
+            let g = super::super::Grid::fit(a);
+            let [l, _, r, _] = g.view;
+            for n in 2..=4 {
+                for mask in 1..(1u8 << n) - 1 {
+                    let compact = std::array::from_fn(|p| mask >> p & 1 == 1);
+                    let c = columns_mixed(g.view, n, compact);
+                    let mut x = l;
+                    for p in 0..n {
+                        let [cx, _, cw, _] = c.parts(p).card;
+                        assert!(cx >= x - 1e-3 && cw > 0.0, "{a} {n} {mask} {p}");
+                        if compact[p] {
+                            assert!(cw <= COMPACT_W * PX + 1e-3 && cw <= c.first[2] + 1e-3, "{a} {n} {mask} {p}");
+                        } else {
+                            assert!((cw - c.first[2]).abs() < 1e-3, "{a} {n} {mask} {p}");
+                        }
+                        x = cx + cw;
+                    }
+                    assert!(x <= r + 1e-3, "{a} {n} {mask}");
                 }
             }
         }

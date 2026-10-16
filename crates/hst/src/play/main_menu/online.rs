@@ -100,6 +100,22 @@ pub struct View {
     /// and the lobby item to go back to; the prompt's cursor is `sel`).
     pub grab: Option<usize>,
     pub kick: Option<(usize, usize)>,
+    /// B519 (M120): hosting, friends can join now (`Event::Joinable`): until then the code is greyed and not copied.
+    pub joinable: bool,
+    /// M120: a guest's players all ready on the select before the lobby's first line-up came: their picks go to the
+    /// host as it comes (`poll`).
+    pub early: bool,
+}
+
+/// M120: another machine's seat on the select's compact card: its player's name and ping (none for the computer's),
+/// where they are (Picking..., Not ready, Ready), a computer's rank.
+pub(super) struct Facts {
+    pub owner: String,
+    pub ping: Option<u32>,
+    pub state: &'static str,
+    pub rank: Option<String>,
+    /// M95: a human's platform and input.
+    pub device: Option<crate::device::Device>,
 }
 
 /// What an Online press asks of the app.
@@ -548,6 +564,31 @@ impl Menu {
         Some((s.peer.clone(), name_of(r, &s.peer)))
     }
 
+    /// M120: on the online select, seat `p` is a compact card (another machine's player, the computer's or an open
+    /// seat), not a roster column: only this machine's players (and a computer the host picks for) browse there.
+    pub(super) fn compact(&self, p: usize) -> bool {
+        self.online() && p < 4 && self.seats[p].is_none() && self.net.edit != Some(p)
+    }
+
+    /// M120: who has seat `p` on its compact card: `None` for an open seat (or no lobby yet).
+    pub(super) fn card_facts(&self, text: &super::Text, p: usize) -> Option<Facts> {
+        let r = self.net.room.as_ref()?;
+        let st = self.remote(p)?;
+        if !st.human() {
+            let rank = super::com_rank(&text.ranks, st.pick.char, st.pick.costume, r.doubles);
+            let rank = super::RANK_NAMES.get(rank).copied().unwrap_or("COM").trim_start_matches("Tennis ");
+            return Some(Facts { owner: "Computer".into(), ping: None, state: "Ready", rank: Some(rank.to_string()), device: None });
+        }
+        let me = if self.net.hosting { "host" } else { self.net.me.as_str() };
+        let ping = if st.peer == "host" { r.ping.get(me) } else { r.ping.get(&st.peer) }.copied();
+        let state = match lobby::state(r, p) {
+            lobby::State::Picking => "Picking...",
+            lobby::State::Waiting => "Not ready",
+            lobby::State::Open | lobby::State::Ready => "Ready",
+        };
+        Some(Facts { owner: seat_name(self, r, p, &st.peer), ping, state, rank: None, device: r.devices.get(&st.peer).copied() })
+    }
+
     /// B201: lobby seat `p` when another peer's player or the computer has it (this machine's players are in their
     /// own seats' panels on the select, `align`).
     pub(super) fn remote(&self, p: usize) -> Option<&Seat> {
@@ -854,7 +895,10 @@ impl Menu {
         self.net.pick_next = true;
         self.net.fail = None;
         (self.net.me, self.net.sent) = (if go == Go::Host { "host".into() } else { String::new() }, None);
-        self.go(Screen::Lobby, out);
+        // M120: Host and every join go straight to the lobby's select (the code, or how the joining goes, comes into its
+        // corner meanwhile)
+        self.go(Screen::Chars, out);
+        (self.net.first, self.net.joinable, self.net.early) = (true, false, false);
         let cmd = match go {
             Go::Host => {
                 // ponytail: std's per-call hasher keys as the dice for a random court (not the match's RNG)
@@ -872,8 +916,14 @@ impl Menu {
 
     /// Every one of this machine's players ready on the lobby's character select: their picks into the held seats.
     pub(super) fn online_ready(&mut self, out: &mut Vec<Effect>) {
+        // M120: a guest still joining stays on the select, its picks held until the lobby's line-up comes
+        if self.net.room.is_none() && !self.net.hosting {
+            self.net.early = true;
+            return;
+        }
         self.go(Screen::Lobby, out);
-        if self.net.room.is_some() {
+        // M120: the host's picks queue behind its Host while the lobby still opens
+        if self.net.room.is_some() || self.net.hosting {
             out.push(Effect::Online(Fx::Net(Cmd::Picks(self.picks()))));
         }
     }
@@ -1282,6 +1332,7 @@ impl Menu {
         self.net.room = None;
         (self.net.hosting, self.net.prepared, self.net.pick_next, self.net.fit, self.net.first) = (false, false, false, 0, false);
         (self.net.me, self.net.sent, self.net.edit) = (String::new(), None, None);
+        (self.net.joinable, self.net.early) = (false, false);
         self.screen = Screen::Online;
         out.push(Effect::Sound(1));
     }
@@ -1438,6 +1489,7 @@ impl Menu {
             Event::Me(me) => v.me = me,
             Event::Code(c) => v.code = c,
             Event::Short(c) => v.short = c,
+            Event::Joinable => v.joinable = true,
             Event::Found(l) => {
                 v.finding = v.finding.saturating_sub(1);
                 v.why.clear();
@@ -1461,10 +1513,9 @@ impl Menu {
                     v.short = r.short.clone();
                 }
                 v.room = Some(r);
-                // seated (or the lobby open): on to its character select, the seats held meanwhile
-                if v.pick_next && self.screen == Screen::Lobby {
-                    (v.pick_next, v.first) = (false, true);
-                    (self.screen, self.sel) = (Screen::Chars, 0);
+                // M120: the host and a guest are already on the select (or done picking): they stay where they are
+                if v.pick_next {
+                    (v.pick_next, v.first) = (false, self.screen == Screen::Chars);
                 }
                 self.align();
             }
@@ -1962,6 +2013,163 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
     d.info(if m.net.status.is_empty() { &words } else { &m.net.status });
 }
 
+/// B519 (M120): whether friends can reach this lobby yet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Reach {
+    Connecting,
+    Up,
+    Offline,
+}
+
+pub(super) fn reach(v: &View) -> Reach {
+    match () {
+        _ if v.room.is_none() && v.fail.is_some() => Reach::Offline,
+        _ if !v.hosting => if v.room.is_some() { Reach::Up } else { Reach::Connecting },
+        _ if v.joinable => Reach::Up,
+        _ if v.cfg.as_ref().is_some_and(|c| c.relay == Relay::Off) => Reach::Offline,
+        _ => Reach::Connecting,
+    }
+}
+
+impl Reach {
+    /// The chip's words, its fill, rim, dot and ink (mockup colours).
+    fn chip(self, hosting: bool) -> (&'static str, [u32; 4]) {
+        match self {
+            Reach::Connecting if hosting => ("Relay: connecting...", [0xfff3c4, 0xd99a00, 0xf0b400, 0x4a3300]),
+            Reach::Connecting => ("Joining...", [0xfff3c4, 0xd99a00, 0xf0b400, 0x4a3300]),
+            Reach::Up => ("Online, joinable", [0xdff3d2, 0x3f7d2e, 0x3f9d2e, 0x1f4a14]),
+            Reach::Offline => ("Offline", [0xf8d7d7, 0xb8343f, 0xd0404a, 0x5a1218]),
+        }
+    }
+}
+
+/// B519: the plain line under the code while friends can't join (None once they can).
+pub(super) fn reach_line(v: &View) -> Option<(&'static str, String)> {
+    let why = |dflt: &str| if v.status.is_empty() { dflt.to_string() } else { v.status.clone() };
+    match reach(v) {
+        Reach::Up => None,
+        Reach::Offline if v.room.is_none() => Some(("Offline", why("Couldn't open the lobby."))),
+        Reach::Offline => Some(("Relay off: only players on this network can join", "Turn the relay on in Options → Online for friends elsewhere. Pick your player meanwhile.".into())),
+        Reach::Connecting if v.hosting => Some((
+            "Connecting to the relay: friends can't join yet",
+            if v.status.starts_with("Waiting") { v.status.clone() } else { "The code goes live when it's up, usually a few seconds. Pick your player meanwhile.".into() },
+        )),
+        Reach::Connecting => Some((if v.go == Some(Go::Quick) { "Finding a lobby..." } else { "Joining the lobby..." }, why("Pick your player meanwhile: your picks go in as you get there."))),
+    }
+}
+
+/// A padlock, `h` high, its left edge at `x`, centred on `cy`.
+pub(super) fn lock(d: &mut Draw, x: f32, cy: f32, h: f32, rgb: [f32; 3]) {
+    let (w, t) = (h * 0.72, (h * 0.1).max(1.0));
+    let y = cy - h / 2.0;
+    super::frame::ringed(d, [x + w * 0.2, y, w * 0.6, h * 0.7], w * 0.3, t, rgb, None);
+    super::frame::rounded(d, [x, y + h * 0.42, w, h * 0.58], h * 0.1, rgb, 128.0);
+}
+
+/// B519: the status chip (`h` high, from `x`, centred on `cy`): a dot and its words. Returns its width.
+pub(super) fn chip(d: &mut Draw, v: &View, x: f32, cy: f32, h: f32, measure: bool) -> f32 {
+    use super::frame::hex;
+    let (words, [fill, rim, dot, ink]) = reach(v).chip(v.hosting);
+    let size = h * 0.52;
+    let w = h * 0.4 + h * 0.36 + h * 0.3 + d.width(words, size) + h * 0.45;
+    if measure {
+        return w;
+    }
+    let y = cy - h / 2.0;
+    super::frame::rounded(d, [x, y, w, h], h / 2.0, hex(rim), 128.0);
+    super::frame::rounded(d, [x + 1.5, y + 1.5, w - 3.0, h - 3.0], h / 2.0 - 1.5, hex(fill), 128.0);
+    // the dot pulses while it connects
+    let a = if reach(v) == Reach::Connecting { 80.0 + 48.0 * (v.spin * 4.0).sin() } else { 128.0 };
+    let r = h * 0.18;
+    super::frame::rounded(d, [x + h * 0.4, cy - r, 2.0 * r, 2.0 * r], r, hex(dot), a);
+    d.text(words, x + h * 0.4 + h * 0.36 + h * 0.3, cy - size / 2.0, size, hex(ink));
+    w
+}
+
+/// M120/B519: the online select's corner pill, right-aligned to `right` at `y`, `h` high, no further left than `min`:
+/// a lock while friends can't join, CODE and the lobby's code (greyed until it's live), the relay chip. Returns its
+/// left edge.
+pub(super) fn corner(d: &mut Draw, m: &Menu, right: f32, y: f32, h: f32, min: f32) -> f32 {
+    use super::frame::hex;
+    let v = &m.net;
+    let up = reach(v) == Reach::Up;
+    let caption = if !v.hosting { "LOBBY" } else if v.room.as_ref().is_some_and(|r| r.private) { "PRIVATE" } else if ticket_only(v) { "LINK" } else { "CODE" };
+    let value = match () {
+        _ if !v.short.is_empty() => v.short.clone(),
+        _ if ticket_only(v) => "Ready to share".into(),
+        _ if !v.hosting => v.room.as_ref().map(|r| r.name.clone()).unwrap_or_else(|| "...".into()),
+        _ => "----".into(),
+    };
+    let (cs, vs, pad) = (h * 0.36, h * 0.6, h * 0.4);
+    let lw = if up { 0.0 } else { h * 0.5 + pad * 0.5 };
+    let ch = h * 0.72;
+    let cw = chip(d, v, 0.0, 0.0, ch, true);
+    let want = pad + lw + d.width(caption, cs) + pad * 0.6 + d.width(&value, vs) + pad * 0.6 + cw + pad * 0.5;
+    let w = want.min(right - min).max(0.0);
+    if w < h * 2.0 {
+        return right;
+    }
+    let x = right - w;
+    super::frame::rounded(d, [x, y, w, h], h / 2.0, WHITE, 128.0);
+    super::frame::rounded(d, [x + 2.0, y + 2.0, w - 4.0, h - 4.0], h / 2.0 - 2.0, hex(0x1d2a44), 128.0);
+    let grey = hex(0x6f6b85);
+    let mut tx = x + pad;
+    if !up {
+        lock(d, tx, y + h / 2.0, h * 0.5, grey);
+        tx += lw;
+    }
+    d.text(caption, tx, y + (h - cs) / 2.0, cs, [110.0; 3]);
+    tx += d.width(caption, cs) + pad * 0.6;
+    let cx = x + w - pad * 0.5 - cw;
+    super::left(d, &value, tx, y + (h - vs) / 2.0, vs, (cx - pad * 0.6 - tx).max(1.0), if up { WHITE } else { grey });
+    chip(d, v, cx, y + h / 2.0, ch, false);
+    x
+}
+
+/// B519 (M120): the select's notice band while friends can't join, `w` wide: its title's and line's wrapped lines
+/// (sizes [`BAND_SIZES`]); None once they can.
+pub(super) fn band_lines(m: &Menu, w: f32) -> Option<(Vec<String>, Vec<String>)> {
+    if !m.online() {
+        return None;
+    }
+    let (title, line) = reach_line(&m.net)?;
+    // ponytail: a glyph's advance taken as 0.55 em (wide glyphs squeeze in `left`)
+    let py = super::roster::PY;
+    let cols = |size: f32| ((w - 2.0 * BAND_PAD * py) / (size * py * 0.55)).max(8.0) as usize;
+    Some((super::wrap(title, cols(BAND_SIZES[0])), super::wrap(&line, cols(BAND_SIZES[1]))))
+}
+
+const BAND_SIZES: [f32; 2] = [17.0, 13.0];
+const BAND_PAD: f32 = 12.0;
+
+/// The band's height (and the gap under it) for `w`, 0 without one.
+pub(super) fn band_h(m: &Menu, w: f32) -> f32 {
+    let py = super::roster::PY;
+    band_lines(m, w).map_or(0.0, |(a, b)| (2.0 * 8.0 + a.len() as f32 * BAND_SIZES[0] * 1.25 + b.len() as f32 * BAND_SIZES[1] * 1.3 + 8.0) * py)
+}
+
+/// The band across `[x, y, w]`: amber while it connects, red offline, an icon at the left.
+pub(super) fn band(d: &mut Draw, m: &Menu, x: f32, y: f32, w: f32) {
+    use super::frame::hex;
+    let Some((title, line)) = band_lines(m, w) else { return };
+    let py = super::roster::PY;
+    let h = band_h(m, w) - 8.0 * py;
+    let (fill, rim, ink) = if reach(&m.net) == Reach::Offline { (0xf8d7d7, 0xb8343f, 0x5a1218) } else { (0xfff3c4, 0xd99a00, 0x4a3300) };
+    super::frame::rounded(d, [x, y, w, h], 10.0 * py, hex(rim), 128.0);
+    super::frame::rounded(d, [x + 2.0, y + 2.0, w - 4.0, h - 4.0], 10.0 * py - 2.0, hex(fill), 128.0);
+    let mut ty = y + 8.0 * py;
+    let tx = x + BAND_PAD * py;
+    let max = w - 2.0 * BAND_PAD * py;
+    for l in &title {
+        super::left(d, l, tx, ty, BAND_SIZES[0] * py, max, hex(ink));
+        ty += BAND_SIZES[0] * 1.25 * py;
+    }
+    for l in &line {
+        super::left(d, l, tx, ty, BAND_SIZES[1] * py, max, hex(ink));
+        ty += BAND_SIZES[1] * 1.3 * py;
+    }
+}
+
 /// `s` word-wrapped to `w` at `size` from (x, y), at most `lines` lines (as the home card's).
 fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, lines: usize, rgb: [f32; 3]) {
     let mut out: Vec<String> = Vec::new();
@@ -2017,7 +2225,10 @@ fn failed(d: &mut Draw, y: f32, title: &str, line: &str) {
 /// LAN guest's answer back (B526). The long iroh ticket (B224: useless to type) only as a link while the short code
 /// can't be put online (B321, `ticket_only`).
 fn shared(v: &View) -> Option<String> {
-    if !v.short.is_empty() {
+    // B519: a host's code goes nowhere until friends can join
+    if v.hosting && !v.joinable {
+        None
+    } else if !v.short.is_empty() {
         Some(crate::net::link(&v.short))
     } else if ticket_only(v) {
         Some(crate::net::link(&v.code))
@@ -2129,6 +2340,14 @@ pub(super) fn poll(
         }
         // B201: everyone's places on the select into its panels, and this machine's out when they move
         menu.align();
+        // M120: a guest that readied while still joining: in now, its picks to the host
+        if menu.net.early && menu.net.room.is_some() && menu.screen == Screen::Chars {
+            menu.net.early = false;
+            if (0..menu.players()).all(|q| menu.seats[q].is_none() || menu.players[q].ready) {
+                (menu.screen, menu.sel) = (Screen::Lobby, 0);
+                net.send(Cmd::Picks(menu.picks()));
+            }
+        }
         if let Some(p) = menu.vanilla_repick() {
             net.send(Cmd::Picks(p));
         }
@@ -2361,6 +2580,14 @@ pub(super) fn sample(m: &mut Menu) {
         m.ask_kick(1, &mut vec![]);
     }
     m.net.short = "K7QX".into();
+    // B519: friends can join (but the relay samples, its code still going up)
+    m.net.joinable = !matches!(menu.as_str(), "chars-relay" | "lobby-relay");
+    if menu == "chars-relay" {
+        let r = m.net.room.as_mut().unwrap();
+        r.seats = vec![r.seats[0].clone(), None, None, None];
+        (m.net.me, m.net.go, m.seats[0]) = ("host".into(), Some(Go::Host), Some(super::Dev::Keys));
+        m.align();
+    }
     if !m.net.naming {
         m.net.entry = "K7".into();
     }
@@ -2399,6 +2626,13 @@ pub(super) fn sample(m: &mut Menu) {
             }
             r.courts.insert(peers[1].into(), ids.iter().enumerate().filter(|(i, _)| i % 3 != 2).map(|(_, x)| x.clone()).collect());
             m.pick_venue(0, &mut Vec::new());
+        }
+        // M120: Host pressed, the lobby still opening: its select already up, the code to come in the corner
+        "chars-hosting" => {
+            (m.net.room, m.net.short, m.net.go, m.net.hosting, m.net.me) = (None, String::new(), Some(Go::Host), true, "host".into());
+            (m.net.pick_next, m.net.first, m.doubles) = (true, true, false);
+            m.net.status = "Opening the lobby...".into();
+            m.seats[0] = Some(super::Dev::Keys);
         }
         _ => {}
     }
@@ -2568,6 +2802,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
                 out.push(Effect::Sound(if answer { 2 } else { 1 }));
             }
         }
+        Fx::Copy if shared(&menu.net).is_none() => {}
         Fx::Copy if !menu.net.short.is_empty() || ticket_only(&menu.net) => {
             let link = shared(&menu.net).unwrap_or_default();
             menu.net.status = match copy(clipboard, &link) {
@@ -2672,7 +2907,7 @@ mod tests {
         m.step(dev, Press { down: true, ..default() });
         m.doubles = true;
         let fx = m.step(dev, ok);
-        assert_eq!((m.screen, m.net.go), (Screen::Lobby, Some(Go::Host)), "no singles/doubles or controllers screens");
+        assert_eq!((m.screen, m.net.go), (Screen::Chars, Some(Go::Host)), "M120: straight to the lobby's select");
         let Some(Effect::Online(Fx::Net(Cmd::Host(r)))) = fx.into_iter().find(|e| matches!(e, Effect::Online(_))) else { panic!() };
         assert_eq!((r.doubles, r.open(), r.picking.contains("host")), (false, 1, true));
         // B392: on the lobby's select the host's □ swaps it (the lobby's room comes back doubles); a guest's doesn't
@@ -2737,7 +2972,33 @@ mod tests {
         m.pasted(Some("hello".into()), &mut out);
         assert_eq!(m.screen, Screen::Online);
         m.pasted(Some(iroh::SecretKey::generate().public().to_string()), &mut out);
-        assert_eq!((m.screen, m.net.go), (Screen::Lobby, Some(Go::Code)));
+        assert_eq!((m.screen, m.net.go), (Screen::Chars, Some(Go::Code)), "M120: straight onto the select");
+    }
+
+    /// B519 (M120): a host's code is greyed and not shared until the relay's up (`Event::Joinable`); relay off says
+    /// offline; a guest ready before the lobby's line-up came stays on the select, its picks held (`early`).
+    #[test]
+    fn the_code_waits_for_the_relay() {
+        let mut m = Menu { screen: Screen::Chars, ..default() };
+        sample(&mut m);
+        (m.net.hosting, m.net.joinable) = (true, false);
+        assert_eq!(reach(&m.net), Reach::Connecting);
+        assert_eq!(shared(&m.net), None, "not copied before it's live");
+        assert!(reach_line(&m.net).is_some_and(|(t, _)| t.contains("can't join")));
+        m.heard(Event::Joinable);
+        assert_eq!(reach(&m.net), Reach::Up);
+        assert!(shared(&m.net).is_some() && reach_line(&m.net).is_none());
+        let mut off = m.clone();
+        off.net.joinable = false;
+        off.net.cfg = Some(Online { relay: Relay::Off, ..Online::default() });
+        assert_eq!(reach(&off.net), Reach::Offline);
+        // a guest ready while it still joins
+        let mut g = Menu { screen: Screen::Chars, ..default() };
+        (g.net.go, g.net.hosting) = (Some(Go::Code), false);
+        let mut out = Vec::new();
+        g.online_ready(&mut out);
+        assert!(g.net.early && out.is_empty() && g.screen == Screen::Chars);
+        assert_eq!(reach(&g.net), Reach::Connecting);
     }
 
     #[test]
@@ -2762,12 +3023,12 @@ mod tests {
             m.step(dev, ok);
         }
         assert_eq!((m.net.entry.as_str(), m.sel), ("K7QX", KEYS + 2), "full: on Join");
-        // B225 / B392: no singles/doubles or controllers, straight into the lobby
+        // B225 / B392: no singles/doubles or controllers; M120: straight onto the lobby's select
         let fx = m.step(dev, ok);
-        assert_eq!((m.screen, m.net.go), (Screen::Lobby, Some(Go::Code)));
+        assert_eq!((m.screen, m.net.go), (Screen::Chars, Some(Go::Code)));
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
+        assert_eq!(reach(&m.net), Reach::Connecting);
         // the lobby's mode, whatever this machine had: a singles lobby's select is singles
-        assert_eq!(m.screen, Screen::Lobby);
         m.heard(Event::Room(Room { doubles: false, seats: vec![None; 2], ..Default::default() }));
         assert_eq!((m.screen, m.doubles, m.players()), (Screen::Chars, false, 2));
         // B322: the guest shows the host's short code and its link once the host's code is online
@@ -2783,11 +3044,11 @@ mod tests {
         // a pasted link joins its code
         let mut out = Vec::new();
         m.pasted(Some(crate::net::link("K7QX")), &mut out);
-        assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Lobby, "K7QX"));
+        assert_eq!((m.screen, m.net.paste.as_str()), (Screen::Chars, "K7QX"));
         // B392: a lobby link's start: the first device to press anything joins it, no controllers screen
         let mut m = Menu { screen: Screen::Assign, doubles: true, net: View { paste: "K7QX".into(), go: Some(Go::Code), ..default() }, ..default() };
         let fx = m.step(dev, Press { down: true, ..default() });
-        assert_eq!((m.screen, m.seats), (Screen::Lobby, [Some(dev), None, None, None]));
+        assert_eq!((m.screen, m.seats), (Screen::Chars, [Some(dev), None, None, None]));
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
     }
 
