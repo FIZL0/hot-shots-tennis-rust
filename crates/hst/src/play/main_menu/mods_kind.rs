@@ -76,11 +76,12 @@ pub(super) fn seat_of(k: Kind) -> usize {
 /// kind's colour): the current tab a white pill in a dark outline, the others translucent dark; B462: on the first
 /// tab L2's dims, on the last R2's. The buttons go while there's only one kind to show. The row shrinks as one where
 /// it doesn't fit; returns its right end.
-pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind]) -> f32 {
+/// `cursor`: the tab the cursor is on (`grid::Slot::Kind`).
+pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind], cursor: Option<usize>) -> f32 {
     let idx: Vec<usize> = shown.iter().filter_map(|k| KINDS.iter().position(|q| q == k)).collect();
     let words: Vec<String> = idx.iter().map(|&i| format!("{} {}", name(KINDS[i]), counts[i])).collect();
     let on = idx.iter().position(|&i| KINDS[i] == at);
-    look::tabs(d, [x, top, room], &words, look::Tabs::Strip, on, None, Some((0, 1)), ends(at, shown), |j| pointer::Act::Kind(idx[j]))
+    look::tabs(d, [x, top, room], &words, look::Tabs::Strip, on, cursor, Some((0, 1)), ends(at, shown), |j| pointer::Act::Kind(idx[j]))
 }
 
 /// The empty state of a kind the store doesn't carry yet, in the page's column `[x, y, w, h]`.

@@ -2397,7 +2397,7 @@ mod tests {
         // the menu stays usable meanwhile: My uploads and back
         m.add.mine = Some(Vec::new());
         m.mods_show(grid::Show::Mine, &mut out);
-        assert_eq!((m.add.page, m.add.slot(m.sel)), (Page::Mine, grid::Slot::Pill(3)));
+        assert_eq!((m.add.page, m.add.slot(m.sel)), (Page::Mine, grid::Slot::Pill(4)));
         m.mods_tab(2, &mut out);
         assert_eq!(m.add.page, Page::Upload);
         super::super::pointer::tests::hits(&m);
@@ -2737,6 +2737,39 @@ mod tests {
         assert!(modstore::newer("1.10", "1.9") && !modstore::newer("1.0", "1") && !modstore::newer("", "1") && modstore::newer("2", ""));
     }
 
+    /// The kind tabs are cursor stops in the panel's strip (touch has no L2 / R2): ← from Sort reaches the last, ✕
+    /// opens one with the cursor staying on it, → from the last is Sort again, ↑ the Show tabs, ↓ the tiles.
+    #[test]
+    fn kind_tabs_take_the_cursor() {
+        let e = |id: &str, kind: Kind| Entry { meta: Meta { id: id.into(), name: id.into(), kind, ..Default::default() }, rev: "main".into(), verified: true };
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        m.add.store = Some(vec![e("c1", Kind::Character), e("court", Kind::Court), e("ump", Kind::Umpire)]);
+        m.mods_page(Page::Browse, 0);
+        m.add.relist();
+        let mut out = Vec::new();
+        let go = |m: &mut Menu, p: Press| m.mods_step(p, &mut Vec::new());
+        let sort = grid::SHOWS.len();
+        m.sel = 2 + m.add.words().len() + sort;
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(sort));
+        go(&mut m, Press { left: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(2));
+        go(&mut m, Press { left: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(1));
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.kind, m.add.slot(m.sel)), (Kind::Court, grid::Slot::Kind(1)));
+        assert_eq!(m.add.items().iter().map(|e| e.meta.id.as_str()).collect::<Vec<_>>(), ["court"]);
+        go(&mut m, Press { down: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Tile(0));
+        go(&mut m, Press { up: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(1), "the strip remembers the tab");
+        go(&mut m, Press { right: true, ..default() });
+        go(&mut m, Press { right: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(sort));
+        go(&mut m, Press { left: true, ..default() });
+        go(&mut m, Press { up: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(0), "Browse's Show tab");
+    }
+
     /// B373: the kind tabs filter every page (a court in the store shows on Courts only, never on Characters), L2 /
     /// R2 and a tap switch them on every page, and a kind the store doesn't carry yet is an empty page naming its task
     /// where only the tabs and ○ do anything; the legend lists L2 / R2. M8f9: courts and umpires are carried: their
@@ -2850,11 +2883,16 @@ mod tests {
         let names = |m: &Menu| m.add.tiles().iter().map(|e| e.meta.id.clone()).collect::<Vec<_>>();
         assert_eq!(names(&m), ["hi", "lo", "ui"], "in pack order, not A-Z");
         assert_eq!(grid::lay_of(&m).cols, 1);
-        // no sort or filter: ↑ from the top row is the Show tabs' Installed, ↓ back, ↓ the next row
+        // no sort or filter: ↑ from the top row is the kind tab, ↑ the Show tabs' Installed, ↓↓ back, ↓ the next row
         assert_eq!(m.add.pills().len(), grid::SHOWS.len());
         m.sel = first;
         m.mods_step(Press { up: true, ..default() }, &mut Vec::new());
+        let tab = m.add.kinds_shown().iter().position(|k| *k == Kind::Textures).unwrap();
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(tab));
+        m.mods_step(Press { up: true, ..default() }, &mut Vec::new());
         assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(grid::SHOWS.iter().position(|s| *s == grid::Show::Installed).unwrap()));
+        m.mods_step(Press { down: true, ..default() }, &mut Vec::new());
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(tab));
         m.mods_step(Press { down: true, ..default() }, &mut Vec::new());
         assert_eq!(m.sel, first);
         m.mods_step(Press { down: true, ..default() }, &mut Vec::new());
