@@ -142,15 +142,16 @@ def log(msg):
 def tasks():
     """Open tasks in plan/TODO.md order: (id, section, files)."""
     lines = git('show', 'main:plan/TODO.md').stdout.splitlines()
-    open_ids = {m.group(1) for l in lines if (m := TASK.match(l))}
+    # [ ] and [~] (blocked) both count as not done: a split parent runs only once its subtasks are all ticked
+    open_ids = {m.group(1) for l in lines if (m := re.match(r'- \[[ ~]\] \*\*([^*\s]+)\*\*', l))}
     out, section = [], ''
     for l in lines:
         if l.startswith('### '):
             section = l[4:]
-        elif (m := TASK.match(l)) and not section.startswith('Stretch') and '(split into' not in l:
+        elif (m := TASK.match(l)) and not section.startswith('Stretch'):
             if any(o != m.group(1) and o.startswith(m.group(1)) and o[len(m.group(1))].isdigit() != m.group(1)[-1].isdigit()
                    for o in open_ids):
-                continue  # a parent: its open subtasks run instead
+                continue  # a parent: its open/blocked subtasks come first
             after = re.search(r'\(after (\S+?)\)', l)
             if after and after.group(1) in open_ids:
                 continue
