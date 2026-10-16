@@ -13,15 +13,16 @@
 use super::{Pads, SlotPad, stick_byte};
 use bevy::prelude::*;
 use hst_sim::replay::Pad;
+use hst_sim::shot::kind;
 use std::collections::VecDeque;
 
-const TRIANGLE: u16 = 0x1000;
-const CROSS: u16 = 0x2000;
-const CIRCLE: u16 = 0x4000;
-const SQUARE: u16 = 0x8000;
+const TRIANGLE: u16 = Pad::TRIANGLE;
+const CROSS: u16 = Pad::CROSS;
+const CIRCLE: u16 = Pad::CIRCLE;
+const SQUARE: u16 = Pad::SQUARE;
 /// Up, right, down, left (`loco::pad_dir`).
 const DPAD: u16 = 0xf0;
-const SHOTS: [(u16, i32); 3] = [(CROSS, 0), (CIRCLE, 1), (TRIANGLE, 3)];
+const SHOTS: [(u16, i32); 3] = [(CROSS, kind::TOPSPIN), (CIRCLE, kind::SLICE), (TRIANGLE, kind::LOB)];
 pub const IDLE: Pad = Pad { buttons: 0, rx: 0x80, ry: 0x80, lx: 0x80, ly: 0x80 };
 
 /// This tick's pads and the last tick's (for the presses).

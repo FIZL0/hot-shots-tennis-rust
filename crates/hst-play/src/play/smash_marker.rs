@@ -32,6 +32,7 @@ pub(super) fn receivers(g: &Game, who: usize, lob: bool) -> Vec<[f32; 2]> {
 mod tests {
     use super::super::*;
     use crate::{Args, GameSpace};
+    use hst_sim::shot::{class, kind};
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
 
@@ -82,7 +83,7 @@ mod tests {
             }
             let mut s = SmashSearch::new(&[g.smash_heights[(g.last_hitter as usize + 1) & 1]]);
             s.search(&path);
-            let lob = g.shot.class == 1 && g.shot.kind == 3;
+            let lob = g.shot.class == class::STROKE && g.shot.kind == kind::LOB;
             assert_eq!(s.at().is_some(), lob, "shot {shots} (class {}, kind {}) marker {:?}", g.shot.class, g.shot.kind, s.at());
             lobs += lob as u32;
         }
@@ -126,7 +127,7 @@ mod tests {
                 continue;
             }
             shots = g.shots;
-            let lob = g.shot.class == 1 && g.shot.kind == 3;
+            let lob = g.shot.class == class::STROKE && g.shot.kind == kind::LOB;
             if g.last_hitter == 0 {
                 assert_eq!(g.marks.smash.is_some(), lob, "shot {shots}: 1P's shot (lob {lob}) and its smash search");
                 own += 1;
