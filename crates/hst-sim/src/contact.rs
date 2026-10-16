@@ -4,6 +4,18 @@
 use crate::ps2::{F, f};
 use crate::vu0::{self, V4};
 
+/// The sweep's tolerances, in ball radii (the game's own constants; `tests::tolerances_are_the_games` pins the bits).
+/// A step ending farther than `SKIN` radii out of the plane misses it; a start nearer than `SKIN` counts as inside.
+pub(crate) const SKIN: f32 = 1.005;
+/// The most a step may move away from the plane and still meet it.
+pub(crate) const APPROACH: f32 = 0.005;
+/// A step starting nearer the plane than this (the ball already sunk into it) never meets it.
+pub(crate) const SUNK: f32 = 0.98;
+/// How far before the hit `contact_point` holds the ball back, at most, and the share of the hit fraction it keeps
+/// at least.
+const HOLD_BACK: f32 = 0.005;
+const HOLD_SHARE: f32 = 0.95;
+
 /// Result of a sweep: fraction along the move (0..1), penetration (negative = start was inside the skin),
 /// the contact centre and the plane normal.
 #[derive(Clone, Copy, Debug)]
@@ -18,7 +30,7 @@ pub struct Hit {
 /// (pointing into the solid side, as the game passes it). `best` is the closest hit so far.
 pub fn sweep(start: V4, end: V4, radius: f32, point: V4, normal: V4, best: f32) -> Option<Hit> {
     let r = F(radius);
-    let skin = f(f32::from_bits(0x3f80_a3d7)) * r; // 1.005
+    let skin = f(SKIN) * r;
     let de: V4 = std::array::from_fn(|k| (F(end[k]) - point[k]).0);
     let d_end = F(vu0::dot3(normal, de));
     if !(d_end <= skin) {
@@ -30,7 +42,7 @@ pub fn sweep(start: V4, end: V4, radius: f32, point: V4, normal: V4, best: f32) 
         return None;
     }
     let travel = d_end - d_start;
-    if !(travel <= f(f32::from_bits(0x3ba3_d70a)) * r) {
+    if !(travel <= f(APPROACH) * r) {
         return None;
     }
     if r < d_end && r < d_start {
@@ -39,7 +51,7 @@ pub fn sweep(start: V4, end: V4, radius: f32, point: V4, normal: V4, best: f32) 
     if !(-r <= d_end) && !(-r <= d_start) {
         return None;
     }
-    if d_start < f(f32::from_bits(0x3f7a_e148)) * r {
+    if d_start < f(SUNK) * r {
         return None;
     }
     let mut t = if r < d_start {
@@ -85,8 +97,8 @@ pub fn contact_point(hit: Option<&Hit>, start: V4, end: V4, radius: f32) -> V4 {
         let dx = F(end[0]) - start[0];
         let dz = F(end[2]) - start[2];
         let len = (F::ZERO + (F::ZERO + dy * dy).madd(dx, dx)).madd(dz, dz).sqrt();
-        let back = f(f32::from_bits(0x3ba3_d70a)) * radius / len; // 0.005·r
-        let floor = f(f32::from_bits(0x3f73_3333)) * hit.t; // 0.95
+        let back = f(HOLD_BACK) * radius / len;
+        let floor = f(HOLD_SHARE) * hit.t;
         let mut held = F(hit.t) - back;
         if held <= floor {
             held = floor;
@@ -105,4 +117,15 @@ pub fn contact_point(hit: Option<&Hit>, start: V4, end: V4, radius: f32) -> V4 {
     };
     out[3] = 1.0;
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tolerances_are_the_games() {
+        let bits = [SKIN, APPROACH, SUNK, HOLD_BACK, HOLD_SHARE].map(f32::to_bits);
+        assert_eq!(bits, [0x3f80_a3d7, 0x3ba3_d70a, 0x3f7a_e148, 0x3ba3_d70a, 0x3f73_3333]);
+    }
 }

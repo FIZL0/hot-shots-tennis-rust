@@ -6,6 +6,7 @@ use crate::mesh::{self, World};
 use crate::world::{self, IDENTITY};
 use hst_data::iso::Iso;
 use hst_data::xb::Archive;
+use hst_data::layout::category;
 use hst_data::{exe, layout, mdl, mtl};
 
 /// The game's collision material table as ball responses, by material id.
@@ -28,7 +29,6 @@ fn nodes(m: &mdl::Model, root: world::M4) -> Vec<world::M4> {
 
 /// A disc model as collision geometry.
 fn collision_model(m: &mdl::Model, mt: &mtl::Mtl) -> mesh::Model {
-    let u16_at = |h: &[u8], o: usize| u16::from_le_bytes([h[o], h[o + 1]]) as i32;
     mesh::Model {
         tris: m
             .colliding(mt)
@@ -41,13 +41,13 @@ fn collision_model(m: &mdl::Model, mt: &mtl::Mtl) -> mesh::Model {
             .map(|(mat, &wrap)| mesh::Material {
                 two_sided: mat.two_sided,
                 textured: mat.texture.is_some(),
-                wrap,
+                wrap: wrap.map(mesh::Wrap::from_mode),
                 map: mat.attributes.map(|a| {
                     let a = &mt.attributes[a];
                     mesh::AttributeMap {
-                        width: u16_at(&a.header, 2),
-                        height: u16_at(&a.header, 4),
-                        stride: u16_at(&a.header, 0x14),
+                        width: a.width(),
+                        height: a.height(),
+                        stride: a.stride(),
                         texels: a.texels.clone(),
                         table: a.table,
                     }
@@ -58,12 +58,19 @@ fn collision_model(m: &mdl::Model, mt: &mtl::Mtl) -> mesh::Model {
     }
 }
 
+/// The umpire's creature (`npc15`) among the plant records.
+const UMPIRE_CREATURE: i16 = 15;
+
+/// Categories placed as collision props, in the order the game creates them; 15 has no model directory, so none of
+/// its records places anything.
+const COLLIDING: [u8; 5] = [15, category::TREE, category::PROP, category::STRUCTURE, category::BILLBOARD];
+
 /// The umpire's chair on disc court `n` (1..11): her plant record (creature `npc15`), hole 1.
 pub fn umpire_chair(iso: &mut Iso, n: u32) -> Option<[f32; 3]> {
     let data = iso.read(&format!("COURT/{n:02}/HOL01.XB")).ok()?;
     let a = Archive::parse(&data).ok()?;
     let e = a.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("plant_c{n:02}_h01_0.dat")))?;
-    layout::plants(&a.read(e).ok()?).ok()?.into_iter().find(|p| p.category == 23 && p.index == 15).map(|p| p.pos)
+    layout::plants(&a.read(e).ok()?).ok()?.into_iter().find(|p| p.category == category::CREATURE && p.index == UMPIRE_CREATURE).map(|p| p.pos)
 }
 
 /// Disc court `n` (1..11), hole 1: the court model at the origin and the colliding props in the game's list order
@@ -100,7 +107,7 @@ pub fn world(iso: &mut Iso, n: u32) -> World {
     let court = mesh::Object { model: 0, scale: 1.0, to_model: IDENTITY, nodes: nodes(&cm, world::mat_mul(&cm.node_local[0], &IDENTITY)), center: cm.center, radius: cm.radius };
 
     let mut created = Vec::new();
-    for cat in [15, 17, 18, 19, 20] {
+    for cat in COLLIDING {
         for p in plants.iter().filter(|p| p.category == cat && p.scale != 0.0) {
             let Some(e) = layout::resolve(&list, p, 0) else { continue };
             let (m, _) = &files[&e.stem];

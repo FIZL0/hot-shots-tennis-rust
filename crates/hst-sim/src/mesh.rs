@@ -5,6 +5,7 @@
 //! where the game uses each.
 #![deny(clippy::float_arithmetic)]
 
+use crate::contact::{APPROACH, SKIN, SUNK};
 use crate::ps2::{F, f};
 use crate::vu0::{self, V4, Vf};
 use crate::world::{self, M4};
@@ -14,6 +15,20 @@ use crate::world::{self, M4};
 pub const GHOST: u32 = 32;
 /// Material of a triangle whose material has no attribute map.
 const UNMAPPED: u32 = 4;
+/// The attribute map's "no material" id: such a hit is dropped (the ball's hit record defaults to it).
+const NO_MATERIAL: u32 = 0;
+
+/// How far outside an edge (m, model space) the sphere's centre may touch a face and still count as inside it.
+const EDGE_SLACK: f32 = -0.0005;
+/// Where an edge or corner hit starts the step already touching, the ball is pushed out this many radii and the
+/// hit reports this penetration (in radii).
+const PUSH_OUT: f32 = 0.005;
+const PUSH_OUT_PENETRATION: f32 = -PUSH_OUT;
+/// A corner already nearer the start than 0.98 radii is skipped: (0.98 r)² as the game stores it, one ulp above
+/// 0.9604.
+const CORNER_CLEAR: f32 = f32::from_bits(0x3f75_dcc7);
+/// After a hit, later triangles are only tested against the step up to 10% past it.
+const LOOK_PAST: f32 = 1.1;
 
 /// What a sweep found, in the layout the game's hit record has.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,7 +74,7 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
     let r = F(r);
     let one = F::ONE;
     let n = vu0::normalize(vu0::cross(sub3(v[1], v[0]), sub3(v[2], v[1])));
-    let skin = f(f32::from_bits(0x3f80_a3d7)) * r; // 1.005
+    let skin = f(SKIN) * r;
     let d_end = F(vu0::dot3(n, sub3(end, v[0])));
     if !(d_end <= skin) {
         return false;
@@ -69,7 +84,7 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
         return false;
     }
     let travel = d_end - d_start;
-    if !(travel <= f(f32::from_bits(0x3ba3_d70a)) * r) {
+    if !(travel <= f(APPROACH) * r) {
         return false;
     }
     if r < d_end && r < d_start {
@@ -79,7 +94,7 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
         return false;
     }
     // the face: the sphere touches the plane inside all three edges
-    if !(d_start < f(f32::from_bits(0x3f7a_e148)) * r) {
+    if !(d_start < f(SUNK) * r) {
         let t = if r < d_start {
             let t = (r - d_start) / travel;
             if t <= 0.0 { F::ZERO } else if t <= one { t } else { one }
@@ -98,7 +113,7 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
             let inside = [(0, 2), (1, 0), (2, 1)].iter().all(|&(a, b)| {
                 let edge = vsub(v[a], v[b]);
                 let to = vsub(v[b], centre);
-                !(vu0::dot3(vu0::normalize(vu0::cross(inward, edge)), to) < f32::from_bits(0xba03_126f)) // −0.0005
+                !(vu0::dot3(vu0::normalize(vu0::cross(inward, edge)), to) < EDGE_SLACK)
             });
             if inside {
                 if t < 0.0 || !(skin <= d_start) {
@@ -134,7 +149,7 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
         }
         let ds = sub3(start, a);
         let d_start = (F::ZERO + (F::ZERO + F(bx[1]) * ds[1]).madd(bx[0], ds[0])).madd(bx[2], ds[2]);
-        if d_start < f(f32::from_bits(0x3f7a_e148)) * reach {
+        if d_start < f(SUNK) * reach {
             continue;
         }
         let mut t = if d_end == d_start {
@@ -152,13 +167,13 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
             (F(ax[2]) * off + F(bx[2]) * reach).0,
             one.0,
         ]);
-        let centre = if t <= 0.0 { push(start, nn, f(f32::from_bits(0x3ba3_d70a)) * r) } else { vu0::lerp(end, start, t.0) };
+        let centre = if t <= 0.0 { push(start, nn, f(PUSH_OUT) * r) } else { vu0::lerp(end, start, t.0) };
         if vu0::dot3(e, sub3(centre, a)) < 0.0 || !(vu0::dot3(e, sub3(centre, b)) <= 0.0) {
             continue;
         }
         found = true;
         if t <= 0.0 {
-            hit.penetration = f32::from_bits(0xbba3_d70a); // −0.005
+            hit.penetration = PUSH_OUT_PENETRATION;
             t = F::ZERO;
         }
         hit.t = t.0;
@@ -177,8 +192,8 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
     // the corners
     let dir = vu0::normalize(m);
     let r2 = r * r;
-    let back = f(f32::from_bits(0x3ba3_d70a)) * r;
-    let clear = f(f32::from_bits(0x3f75_dcc7)) * r2; // 0.9604 r² = (0.98 r)²
+    let back = f(PUSH_OUT) * r;
+    let clear = f(CORNER_CLEAR) * r2;
     for &c in v {
         let d_end = F(vu0::dot3(dir, sub3(end, c)));
         if d_end < -r {
@@ -221,7 +236,7 @@ pub fn triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4, r: f32) -> bool 
             t = F::ZERO;
             let p = push(start, nn, back);
             hit.centre = [p[0], p[1], p[2], 1.0];
-            hit.penetration = f32::from_bits(0xbba3_d70a);
+            hit.penetration = PUSH_OUT_PENETRATION;
         }
         hit.t = t.0;
     }
@@ -235,7 +250,7 @@ pub fn ray_triangle(v: &[V4; 3], hit: &mut Hit, start: V4, end: V4) -> bool {
     let d = sub4(end, start);
     for (a, b) in [(v[0], v[2]), (v[1], v[0]), (v[2], v[1])] {
         let side = vu0::normalize(vu0::cross(d, vsub(a, b)));
-        if vu0::dot3(side, vsub(b, start)) < f32::from_bits(0xba03_126f) {
+        if vu0::dot3(side, vsub(b, start)) < EDGE_SLACK {
             return false;
         }
     }
@@ -271,19 +286,52 @@ pub struct AttributeMap {
     pub table: [u8; 16],
 }
 
+impl AttributeMap {
+    /// The 4-bit texel at column `u`, row `w`: two to a byte, the even column in the low nibble. The byte index
+    /// halves the texel index rounding toward zero, as the game's signed divide does.
+    fn texel(&self, u: i32, w: i32) -> u8 {
+        let i = u + w * self.stride;
+        let i = if i < 0 { i + 1 } else { i } >> 1;
+        // ponytail: a texel outside the map reads memory past it in the game; never seen, treated as id 0
+        let byte = usize::try_from(i).ok().and_then(|i| self.texels.get(i)).copied().unwrap_or(0);
+        if u & 1 != 0 { byte >> 4 } else { byte & 0xf }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Material {
     /// Collides from both sides.
     pub two_sided: bool,
     /// Has a texture: the texture coordinate is used (otherwise texel 0).
     pub textured: bool,
-    /// Wrap mode along u and v (0 repeat, 1 clamp, 2 region clamp, 3 region repeat).
-    pub wrap: [u8; 2],
+    /// Wrap mode along u and v.
+    pub wrap: [Wrap; 2],
     pub map: Option<AttributeMap>,
 }
 
+/// How a texture coordinate outside 0..1 finds its texel (the GS's wrap modes, as the model file numbers them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wrap {
+    Repeat,
+    Clamp,
+    RegionClamp,
+    RegionRepeat,
+}
+
+impl Wrap {
+    /// The model file's mode number (0..3; any other number reads as region clamp).
+    pub fn from_mode(mode: u8) -> Wrap {
+        match mode {
+            0 => Wrap::Repeat,
+            1 => Wrap::Clamp,
+            3 => Wrap::RegionRepeat,
+            _ => Wrap::RegionClamp,
+        }
+    }
+}
+
 /// A texture coordinate (0..1 across the texture) to a texel index along an axis of `size` texels.
-fn texel(f: f32, size: i32, mode: u8) -> i32 {
+fn texel(f: f32, size: i32, mode: Wrap) -> i32 {
     let x = (F(f) * size as f32).0;
     let n = size as f64;
     // the game's libm fmod: double precision, not the FPU
@@ -295,10 +343,10 @@ fn texel(f: f32, size: i32, mode: u8) -> i32 {
         if v == size { size - 1 } else { v }
     };
     match mode {
-        0 => fold(x),
-        3 => size, // region repeat with the game's (0, size) region: always the region's upper bound
-        1 => (if x <= 0.0 { 0 } else { x as i32 }).min(size - 1),
-        _ => (if x <= 0.0 { 0 } else { x as i32 } as u32).min((size - 1) as u32) as i32,
+        Wrap::Repeat => fold(x),
+        Wrap::RegionRepeat => size, // with the game's (0, size) region: always the region's upper bound
+        Wrap::Clamp => (if x <= 0.0 { 0 } else { x as i32 }).min(size - 1),
+        Wrap::RegionClamp => (if x <= 0.0 { 0 } else { x as i32 } as u32).min((size - 1) as u32) as i32,
     }
 }
 
@@ -368,12 +416,7 @@ pub fn material(point: V4, v: &[V4; 3], uv: &[V4; 3], mat: &Material) -> u32 {
     } else {
         (0, 0)
     };
-    let i = u + w * map.stride;
-    let i = if i < 0 { i + 1 } else { i } >> 1;
-    // ponytail: a texel outside the map reads memory past it in the game; never seen, treated as id 0
-    let byte = usize::try_from(i).ok().and_then(|i| map.texels.get(i)).copied().unwrap_or(0) as i32;
-    let nibble = if u & 1 != 0 { byte >> 4 } else { byte };
-    map.table[(nibble & 0xf) as usize] as u32
+    map.table[map.texel(u, w) as usize] as u32
 }
 
 /// A collision triangle in model space.
@@ -386,6 +429,14 @@ pub struct Tri {
     pub uv: [V4; 3],
     /// Box (min, max) the sweep's box must overlap for the triangle to be tested.
     pub bounds: [V4; 2],
+}
+
+impl Tri {
+    /// Stored the other way round: the face is on the side of `pos` in reverse order. The model file flags it with
+    /// the sign of the third texture coordinate's w (negative, or NaN).
+    pub fn reversed(&self) -> bool {
+        !(0.0 <= self.uv[2][3])
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -467,7 +518,7 @@ impl Object {
             let local = &model.node_from_model[tri.node];
             let (s, e) = (vu0::transform(local, start), vu0::transform(local, end));
             let mut uv = tri.uv;
-            let mut reversed = !(0.0 <= tri.uv[2][3]);
+            let mut reversed = tri.reversed();
             for _ in 0..if mat.two_sided { 2 } else { 1 } {
                 let v = if reversed { [tri.pos[2], tri.pos[1], tri.pos[0]] } else { tri.pos };
                 let before = *hit;
@@ -475,9 +526,8 @@ impl Object {
                     if reversed {
                         uv.swap(0, 2);
                     }
-                    // id 0 falls back to the hit record's default material, which is 0 for the ball
                     let id = material(hit.point, &v, &uv, mat);
-                    if id == 0 || ignore.contains(&id) {
+                    if id == NO_MATERIAL || ignore.contains(&id) {
                         *hit = before;
                     } else {
                         any = true;
@@ -487,7 +537,7 @@ impl Object {
                         hit.point = vu0::transform(node, hit.point);
                         hit.normal = vu0::normalize(vu0::transform(node, [hit.normal[0], hit.normal[1], hit.normal[2], 0.0]));
                         if 0.0 < hit.t {
-                            let ahead = f(f32::from_bits(0x3f8c_cccd)) * hit.t; // 1.1
+                            let ahead = f(LOOK_PAST) * hit.t;
                             let ahead = if ahead <= 1.0 { ahead } else { F::ONE };
                             bounds = sweep_box(start, rs, vu0::lerp(end, start, ahead.0), re);
                         }
@@ -517,8 +567,8 @@ impl World {
         let mut hit = Hit::NONE;
         self.court.sweep(&self.models, &mut hit, start, end, r, ignore);
 
-        let half = f32::from_bits(0x3f00_0000);
-        let grow = f32::from_bits(0x3f8c_cccd); // 1.1
+        let half = 0.5;
+        let grow = 1.1; // the reach and the move's box, 10% larger
         let mid: V4 = std::array::from_fn(|k| ((F(start[k]) + end[k]) * half).0);
         let d = sub4(end, start);
         let reach = grow * (F(r) + (F(d[0]) * d[0] + F(d[1]) * d[1]).madd(d[2], d[2]).sqrt() / 2.0);

@@ -11,6 +11,14 @@ const TWO_R: f32 = 2.0 * R;
 const R2: f32 = R * R;
 /// R² − (0.9R)², the fade's width.
 const RIM: f32 = R * R - 0.81 * R * R;
+/// `rand()` draws per cloud.
+const DRAWS: usize = 5;
+/// A draw keeps its top bits (the game's float conversion of the 31-bit value) and scales by 2⁻³¹ into 0..1.
+const DRAW_BITS: u32 = 0xffff_f800;
+const DRAW_SCALE: f32 = 4.656_613e-10;
+/// A tick drifts the clouds the wind speed / `DRIFT` cloud units, ×`CLOUD_SCALE` into metres.
+const DRIFT: f32 = 600.0;
+const CLOUD_SCALE: f32 = 40.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Cloud {
@@ -27,12 +35,12 @@ pub struct Cloud {
 /// (`lo + (hi − lo)·2⁻³¹·t`); `y` is the lowest and highest y in game units. Kept sorted by y (the game inserts each
 /// before the first higher one).
 pub fn spawn(draws: &[u32], models: usize, y: [f32; 2]) -> Vec<Cloud> {
-    let unit = |t: u32| ps2::utof(t & 0xffff_f800);
-    let at = |lo: f32, hi: f32, t: u32| (F::ZERO + lo).madd(4.656_613e-10 * (F(hi) - lo), unit(t)).0;
+    let unit = |t: u32| ps2::utof(t & DRAW_BITS);
+    let at = |lo: f32, hi: f32, t: u32| (F::ZERO + lo).madd(DRAW_SCALE * (F(hi) - lo), unit(t)).0;
     let mut v: Vec<Cloud> = draws
-        .chunks_exact(5)
+        .chunks_exact(DRAWS)
         .map(|d| Cloud {
-            yaw: (6.283_185_5 * (4.656_613e-10 * F(unit(d[0])))).0,
+            yaw: (crate::world::TWO_PI * (DRAW_SCALE * F(unit(d[0])))).0,
             pos: [at(NEG_R, R, d[3]), at(y[0], y[1], d[2]), at(NEG_R, R, d[1])],
             model: d[4] as usize % models.max(1),
         })
@@ -44,7 +52,7 @@ pub fn spawn(draws: &[u32], models: usize, y: [f32; 2]) -> Vec<Cloud> {
 /// One 60 Hz tick: drift towards `degrees` at `speed`, wrapping x and z into ±R.
 pub fn tick(clouds: &mut [Cloud], degrees: f32, speed: f32) {
     let (s, c) = musl::sincosf(degrees.to_radians());
-    let step = F(speed) / 600.0 * 40.0;
+    let step = F(speed) / DRIFT * CLOUD_SCALE;
     let wrap = |v: F| if v > R { v - TWO_R } else if v < NEG_R { v + TWO_R } else { v }.0;
     for k in clouds {
         k.pos[0] = wrap(k.pos[0] + step * s);

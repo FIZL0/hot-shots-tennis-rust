@@ -76,6 +76,11 @@ pub struct Material {
     pub sound: u8,
 }
 
+/// Bounce effect kinds (`Material::effect`, 1..=15; 0 none) with rules of their own: the net's, and grass the ball
+/// rolls on.
+pub const EFFECT_NET: u8 = 2;
+pub const EFFECT_GRASS: u8 = 5;
+
 /// The court plane.
 pub const COURT: Material = Material { court: true, special: false, restitution: 0.0, spin_loss: 0.0, id: 1, effect: 0, sound: 0 };
 
@@ -83,9 +88,26 @@ pub const COURT: Material = Material { court: true, special: false, restitution:
 // ponytail: the live ball queries the court collision mesh (`step_world`); this flat net is the predictor's view.
 pub const NET_TOP: f32 = 0.91;
 pub const NET_HALF_WIDTH: f32 = 6.4;
-pub const NET: Material = Material { court: false, special: true, restitution: 0.18, spin_loss: 0.95, id: 2, effect: 2, sound: 2 };
+pub const NET: Material = Material { court: false, special: true, restitution: 0.18, spin_loss: 0.95, id: 2, effect: EFFECT_NET, sound: 2 };
 /// After touching the net the ball is pushed this much per frame away from it so it cannot stick.
 const NET_PUSH: f32 = 0.003;
+
+/// Shot classes (`Shot::class`) and kinds (`Shot::kind`) the bounce reads: ground strokes and volleys, sliced or
+/// dropped.
+const STROKE: u8 = 1;
+const VOLLEY: u8 = 2;
+const SLICE: i32 = 1;
+const DROP: i32 = 4;
+
+/// The court plane for the sweep: a point on it and its normal into the ground (game space is Y-down).
+const ORIGIN: V4 = [0.0, 0.0, 0.0, 1.0];
+const INTO_GROUND: V4 = [-0.0, -1.0, -0.0, -0.0];
+/// A frame is swept in at most this many sub-steps, and stops once no more than `k::MIN_REMAINDER` of it is left.
+const MAX_SUBSTEPS: i32 = 30;
+/// The game's predicted path: steps filled at the hit, then each frame, and the contacts that end it.
+const PATH_FIRST_STEPS: u32 = 14;
+const PATH_STEPS: u32 = 15;
+const PATH_CONTACTS: i32 = 2;
 
 /// Everything decided when the ball is struck.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -103,7 +125,8 @@ pub struct Shot {
     pub first_bounce_spin: f32,
     /// Restitution multiplier for the first bounce (0 = none).
     pub first_bounce_restitution: f32,
-    /// Shot class and kind; kinds 1 and 4 of classes 1–2 soften the first bounce's spin kick.
+    /// Shot class (0 serve, 1 stroke, 2 volley, 3 smash) and kind (0 topspin, 1 slice, 2 flat, 3 lob, 4 drop); a
+    /// sliced or dropped stroke or volley softens the first bounce's spin kick.
     pub class: u8,
     pub kind: i32,
     /// Turn of the velocity's heading (radians) at the first bounce (+0x1b0; some characters' serves).
@@ -253,8 +276,8 @@ pub struct Flight {
 /// Turns `d` by `pitch` and `yaw` (radians), keeping its length: pitch clamped to ±π/2, heading wrapped to ±π.
 fn turn(d: V4, pitch: f32, yaw: f32) -> V4 {
     use crate::{libm::atan2f, world};
-    const HALF_PI: F = F(f32::from_bits(0x3fc9_0fdb));
-    let (pi, two_pi) = (F(f32::from_bits(0x4049_0fdb)), F(f32::from_bits(0x40c9_0fdb)));
+    const HALF_PI: F = F(world::HALF_PI);
+    let (pi, two_pi) = (F(world::PI), F(world::TWO_PI));
     let d = fs(d);
     let p = F(atan2f((-d[1]).0, (d[2] * d[2]).madd(d[0], d[0]).sqrt().0)) + pitch;
     let p = if p < -HALF_PI { -HALF_PI } else if p <= HALF_PI { p } else { HALF_PI };
@@ -298,10 +321,10 @@ mod k {
     pub const ROLL_SPIN_TO_SPEED: f32 = 0.0;
     pub const TURN_BASE: f32 = 1.0;
     pub const TURN_CAP: f32 = 1.0;
-    pub const KIND1_KICK: f32 = 0.5;
-    pub const KIND4_KICK: f32 = 0.1;
-    pub const KIND1_RESTITUTION: f32 = 1.0;
-    pub const KIND4_RESTITUTION: f32 = 1.0;
+    pub const SLICE_KICK: f32 = 0.5;
+    pub const DROP_KICK: f32 = 0.1;
+    pub const SLICE_RESTITUTION: f32 = 1.0;
+    pub const DROP_RESTITUTION: f32 = 1.0;
     pub const MIN_REMAINDER: f32 = 0.1;
     pub const UP: [f32; 4] = [0.0, 1.0, 0.0, 0.0];
 }
@@ -322,8 +345,8 @@ impl Flight {
     pub fn predicted_contacts(&self, shot: &Shot, surface: &Surface, t: u32) -> i32 {
         let mut f = *self;
         f.net = false;
-        for _ in 0..15 * (t + 1) - 1 {
-            if f.contacts >= 2 {
+        for _ in 0..PATH_FIRST_STEPS + PATH_STEPS * t {
+            if f.contacts >= PATH_CONTACTS {
                 break;
             }
             f.step(shot, surface);
@@ -337,13 +360,13 @@ impl Flight {
     pub fn step(&mut self, shot: &Shot, surface: &Surface) {
         let (r, net) = (shot.params.radius, self.net);
         self.advance(shot, surface, |pos, target, _| {
-            let ground = crate::contact::sweep(pos, target, r, [0.0, 0.0, 0.0, 1.0], [-0.0, -1.0, -0.0, -0.0], f32::MAX);
+            let ground = crate::contact::sweep(pos, target, r, ORIGIN, INTO_GROUND, f32::MAX);
             let mut hit = ground.map(|h| (h, [h.centre[0], 0.0, h.centre[2]], COURT, false));
             if net {
                 let side = if pos[2] > 0.0 { 1.0 } else if pos[2] < 0.0 { -1.0 } else { 0.0 };
                 if side != 0.0 {
                     let best = hit.map_or(f32::MAX, |(h, ..)| h.t);
-                    if let Some(h) = crate::contact::sweep(pos, target, r, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, side, 0.0], best) {
+                    if let Some(h) = crate::contact::sweep(pos, target, r, ORIGIN, [0.0, 0.0, side, 0.0], best) {
                         if h.centre[1] > -F(NET_TOP) && h.centre[0].abs() <= NET_HALF_WIDTH {
                             hit = Some((h, [h.centre[0], h.centre[1], 0.0], NET, false));
                         }
@@ -462,7 +485,7 @@ impl Flight {
                 }
             }
             remaining = remaining * (1.0 - F(h.t));
-            if remaining <= k::MIN_REMAINDER || contacts >= 30 {
+            if remaining <= k::MIN_REMAINDER || contacts >= MAX_SUBSTEPS {
                 break;
             }
         }
@@ -594,20 +617,20 @@ impl Flight {
         });
         let mut kick = F(if special_first { k::SPECIAL_KICK } else { s.spin_kick });
         if self.bounces == 1 {
-            if matches!(shot.class, 1 | 2) {
+            if matches!(shot.class, STROKE | VOLLEY) {
                 match shot.kind {
-                    1 => e = e * k::KIND1_RESTITUTION,
-                    4 => e = e * k::KIND4_RESTITUTION,
+                    SLICE => e = e * k::SLICE_RESTITUTION,
+                    DROP => e = e * k::DROP_RESTITUTION,
                     _ => {}
                 }
             }
             if shot.first_bounce_restitution != 0.0 {
                 e = e * shot.first_bounce_restitution;
             }
-            if matches!(shot.class, 1 | 2) {
+            if matches!(shot.class, STROKE | VOLLEY) {
                 match shot.kind {
-                    1 => kick = kick * k::KIND1_KICK,
-                    4 => kick = kick * k::KIND4_KICK,
+                    SLICE => kick = kick * k::SLICE_KICK,
+                    DROP => kick = kick * k::DROP_KICK,
                     _ => {}
                 }
             }

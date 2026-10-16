@@ -118,9 +118,25 @@ fn msub_w(acc: Vf, dot: Vf) -> Vf {
     acc.msub(dot, dot)
 }
 
+/// The micro program's arctan polynomial: π/4, then the coefficients of u¹, u³ … u¹⁵ (≈ 1, −1/3, 1/5, −1/7 …,
+/// fitted; exact bit patterns).
+const ATAN: [f32; 9] = [
+    f32::from_bits(0x3f49_0fdb),
+    f32::from_bits(0x3f7f_fff5),
+    f32::from_bits(0xbeaa_a61c),
+    f32::from_bits(0x3e4c_40a6),
+    f32::from_bits(0xbe0e_6c63),
+    f32::from_bits(0x3dc5_77df),
+    f32::from_bits(0xbd65_01c4),
+    f32::from_bits(0x3cb3_1652),
+    f32::from_bits(0xbb84_d7e7),
+];
+
+/// Its sine polynomial: the coefficients of x³, x⁵, x⁷, x⁹ (≈ −1/3!, 1/5!, −1/7!, 1/9!; x¹'s is 1).
+const SIN: [f32; 4] = [f32::from_bits(0xbe2a_aaa4), f32::from_bits(0x3c08_873e), f32::from_bits(0xb94f_b21f), f32::from_bits(0x362e_9c14)];
+
 /// θ = π/4 + atan(u), the micro program's odd polynomial in u (terms u¹ … u¹⁵).
 fn atan_poly(u: Vf) -> Vf {
-    let f = |b: u32| f32::from_bits(b);
     let u2 = u * u;
     let u3 = u2 * u;
     let u4 = u2 * u2;
@@ -130,14 +146,14 @@ fn atan_poly(u: Vf) -> Vf {
     let u11 = u7 * u4;
     let u13 = u9 * u4;
     let u15 = u11 * u4;
-    let acc = add0(f(0x3f49_0fdb)).madd(u, f(0x3f7f_fff5));
-    let acc = acc.madd(u3, f(0xbeaa_a61c));
-    let acc = acc.madd(u5, f(0x3e4c_40a6));
-    let acc = acc.madd(u7, f(0xbe0e_6c63));
-    let acc = acc.madd(u9, f(0x3dc5_77df));
-    let acc = acc.madd(u11, f(0xbd65_01c4));
-    let acc = acc.madd(u13, f(0x3cb3_1652));
-    acc.madd(u15, f(0xbb84_d7e7))
+    let acc = add0(ATAN[0]).madd(u, ATAN[1]);
+    let acc = acc.madd(u3, ATAN[2]);
+    let acc = acc.madd(u5, ATAN[3]);
+    let acc = acc.madd(u7, ATAN[4]);
+    let acc = acc.madd(u9, ATAN[5]);
+    let acc = acc.madd(u11, ATAN[6]);
+    let acc = acc.madd(u13, ATAN[7]);
+    acc.madd(u15, ATAN[8])
 }
 
 fn add0(x: f32) -> Vf {
@@ -146,7 +162,6 @@ fn add0(x: f32) -> Vf {
 
 /// sin(x) as the micro program's odd polynomial (x¹ … x⁹).
 fn sin_poly(x: Vf) -> Vf {
-    let f = |b: u32| f32::from_bits(b);
     let x2 = x * x;
     let x3 = x2 * x;
     let x4 = x2 * x2;
@@ -154,8 +169,8 @@ fn sin_poly(x: Vf) -> Vf {
     let x7 = x4 * x3;
     let x9 = x5 * x4;
     let acc = x * 1.0;
-    let acc = acc.madd(x3, f(0xbe2a_aaa4));
-    let acc = acc.madd(x5, f(0x3c08_873e));
-    let acc = acc.madd(x7, f(0xb94f_b21f));
-    acc.madd(x9, f(0x362e_9c14))
+    let acc = acc.madd(x3, SIN[0]);
+    let acc = acc.madd(x5, SIN[1]);
+    let acc = acc.madd(x7, SIN[2]);
+    acc.madd(x9, SIN[3])
 }

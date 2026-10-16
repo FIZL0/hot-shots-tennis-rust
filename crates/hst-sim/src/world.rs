@@ -6,6 +6,7 @@
 
 use crate::ps2::F;
 use crate::vu0::{self, V4, Vf};
+use hst_data::layout::category;
 
 pub type M4 = [V4; 4];
 
@@ -63,8 +64,13 @@ pub fn inverse(m: &M4) -> M4 {
 /// A plant-record code character as a number: '0'–'9', then 'A'… = 10… (signed byte, as the game reads it).
 fn digit(c: u8) -> f32 {
     let c = c as i8 as i32;
-    (if c < 0x3a { c - 0x30 } else { c - 0x37 }) as f32
+    (if c <= b'9' as i32 { c - b'0' as i32 } else { c - b'A' as i32 + 10 }) as f32
 }
+
+/// The code digits' angle steps: a tilt of n·π/36 (5°), a turn of n·2π/36 (10°).
+const STEPS: f32 = 36.0;
+/// A tree standing within this distance (m, horizontally) of the origin is the net post.
+const NET_POST_REACH: f32 = 1.0;
 
 /// World matrix of a placed prop: translation `pos`, turned by `yaw`; trees, props and structures (categories
 /// 17–19) also take a tilt about X from code byte 1 (n·π/36, folded to ≤ π/2) and an extra turn from code byte 0
@@ -75,16 +81,16 @@ pub fn place(category: u8, pos: [f32; 3], yaw: f32, code: [u8; 4]) -> (M4, bool)
     let mut m = IDENTITY;
     m[3] = [pos[0], pos[1], pos[2], 1.0];
     m = mat_mul(&mat_mul(&IDENTITY, &rot_y(yaw)), &m);
-    if (17..=19).contains(&category) {
+    if (category::TREE..=category::STRUCTURE).contains(&category) {
         if code[1] != 0 {
-            let mut a = F(PI) * digit(code[1]) / 36.0;
+            let mut a = F(PI) * digit(code[1]) / STEPS;
             if a > HALF_PI {
                 a = a + NEG_PI;
             }
             m = mat_mul(&mat_mul(&IDENTITY, &rot_x(a.0)), &m);
         }
         if code[0] != 0 {
-            let mut a = F(TWO_PI) * digit(code[0]) / 36.0;
+            let mut a = F(TWO_PI) * digit(code[0]) / STEPS;
             if a > PI {
                 a = a - TWO_PI;
             } else if a < NEG_PI {
@@ -93,7 +99,7 @@ pub fn place(category: u8, pos: [f32; 3], yaw: f32, code: [u8; 4]) -> (M4, bool)
             m = mat_mul(&mat_mul(&IDENTITY, &rot_y(a.0)), &m);
         }
     }
-    if category == 17 && (F(m[3][2]) * m[3][2]).madd(m[3][0], m[3][0]).sqrt() < 1.0 {
+    if category == category::TREE && (F(m[3][2]) * m[3][2]).madd(m[3][0], m[3][0]).sqrt() < NET_POST_REACH {
         return (IDENTITY, true);
     }
     (m, false)

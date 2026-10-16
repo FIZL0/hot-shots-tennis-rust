@@ -12,6 +12,15 @@ use crate::{libm, world};
 
 type V4 = [f32; 4];
 
+/// A shot leaving the racket at this speed (km/h) or more starts the tornado.
+const START_KMH: f32 = 90.0;
+/// It grows to this many times the ball's launch speed (m per frame).
+const GROWTH: f32 = 8.0;
+/// Its UV animation runs this much faster than the launch speed.
+const UV_EXTRA: f32 = 1.5;
+/// Full alpha.
+const OPAQUE: f32 = 128.0;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Tornado {
     pub on: bool,
@@ -35,17 +44,17 @@ impl Tornado {
         let [x, y, z, _] = vel.map(F);
         let speed = (x * x).madd(y, y).madd(z, z).sqrt();
         let kmh = speed * 60.0 * 3600.0 / 1000.0;
-        *self = Tornado { on: kmh >= 90.0, t: 0.0, end: (speed * 8.0 + 0.0 + 0.0).0, speed: speed.0, fade, ..*self };
+        *self = Tornado { on: kmh >= START_KMH, t: 0.0, end: (speed * GROWTH + 0.0 + 0.0).0, speed: speed.0, fade, ..*self };
     }
 
     /// The UV animation's speed (frames a frame).
     pub fn uv_speed(&self) -> f32 {
-        (F(self.speed) + 1.5).0
+        (F(self.speed) + UV_EXTRA).0
     }
 
     /// The model's material alpha (1 opaque).
     pub fn opacity(&self) -> f32 {
-        if self.end <= self.t { (F(self.alpha) / 128.0).0 } else { 1.0 }
+        if self.end <= self.t { (F(self.alpha) / OPAQUE).0 } else { 1.0 }
     }
 
     /// A slow-motion in-between frame, `frac` (0..1] of the way from the last [`Tornado::tick`] to the next, as the
@@ -67,7 +76,7 @@ impl Tornado {
         }
         self.aim(pos, vel);
         if self.end <= scale {
-            let a = F(128.0) * (F(self.fade as f32) - frac) / fade as f32;
+            let a = F(OPAQUE) * (F(self.fade as f32) - frac) / fade as f32;
             self.alpha = if a < floor as f32 { floor as f32 } else { a.0 };
         }
         (scale.0, uv.0)
@@ -94,7 +103,7 @@ impl Tornado {
         }
         self.aim(pos, vel);
         if self.end <= self.t {
-            self.alpha = ((self.fade << 7) / fade) as f32;
+            self.alpha = ((self.fade * OPAQUE as i32) / fade) as f32;
             self.fade -= 1;
             self.on = self.fade >= 0;
         }

@@ -27,6 +27,17 @@ pub const CATEGORY_DIRS: [Option<&str>; 24] = {
     t
 };
 
+/// Category ids of placed objects.
+pub mod category {
+    /// Path markers (NPC walks).
+    pub const PATH_MARKER: u8 = 14;
+    pub const TREE: u8 = 17;
+    pub const PROP: u8 = 18;
+    pub const STRUCTURE: u8 = 19;
+    pub const BILLBOARD: u8 = 20;
+    pub const CREATURE: u8 = 23;
+}
+
 /// One line of the entry list: model stem (lower-case, no extension) and its directory.
 #[derive(Clone, Debug)]
 pub struct Entry {
