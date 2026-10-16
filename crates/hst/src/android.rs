@@ -447,19 +447,47 @@ pub fn haptic() {
     });
 }
 
-/// B454: the TLS settings of the app's HTTPS (mod store, short codes, update check). reqwest checks certificates with
-/// the platform's verifier, which on Android has to be set up from Java (`rustls-platform-verifier`'s JNI init and its
-/// Kotlin classes, neither in this NativeActivity app) and panics in the request's task otherwise: the store list never
-/// came. Here certificates are checked against Mozilla's root list (`webpki-roots`, the one iroh's relays use) instead.
+/// B418: whether `rustls-platform-verifier` is set up (`init_tls`), so [`tls`] can check certificates the phone's way.
+static PLATFORM_TLS: AtomicBool = AtomicBool::new(false);
+
+/// B418: hands the activity to `rustls-platform-verifier` (its JNI init: the VM, the activity as the context, and the
+/// activity's class loader, which finds the verifier's Java classes `tools/apk.sh` bundles). Before any HTTPS; call
+/// in `android_main` once `ANDROID_APP` is set.
+pub fn init_tls() {
+    let Some(app) = bevy::android::ANDROID_APP.get() else { return };
+    // SAFETY: the activity's VM pointer, valid for the process
+    let vm = unsafe { jni22::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let r = vm.attach_current_thread(|env| -> jni22::errors::Result<()> {
+        // SAFETY: the NativeActivity's global reference, alive as long as the activity (the init takes its own)
+        let activity = unsafe { jni22::objects::JObject::from_raw(env, app.activity_as_ptr().cast()) };
+        rustls_platform_verifier::android::init_with_env(env, activity)
+    });
+    match r {
+        Ok(()) => PLATFORM_TLS.store(true, Ordering::Relaxed),
+        Err(e) => eprintln!("android: platform certificate check unavailable ({e}), using the bundled roots"),
+    }
+}
+
+/// B454/B418: the TLS settings of the app's HTTPS (mod store, short codes, update check). Certificates are checked by
+/// the phone (`rustls-platform-verifier`: Android's trust store, user-installed CAs and revocation included) once
+/// [`init_tls`] has set it up; reqwest's own default would reach for the same verifier but panics in the request's
+/// task if it isn't. Should the init fail, Mozilla's root list (`webpki-roots`, the one iroh's relays use) instead.
 pub fn tls() -> rustls::ClientConfig {
     static TLS: OnceLock<rustls::ClientConfig> = OnceLock::new();
     TLS.get_or_init(|| {
-        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-        let mut c = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
             .with_safe_default_protocol_versions()
-            .expect("ring's protocol versions")
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+            .expect("ring's protocol versions");
+        let platform = PLATFORM_TLS.load(Ordering::Relaxed).then(|| rustls_platform_verifier::Verifier::new(provider)).and_then(|v| {
+            v.map_err(|e| eprintln!("android: platform certificate check: {e}, using the bundled roots")).ok()
+        });
+        let mut c = match platform {
+            Some(v) => builder.dangerous().with_custom_certificate_verifier(Arc::new(v)).with_no_client_auth(),
+            None => builder
+                .with_root_certificates(rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() })
+                .with_no_client_auth(),
+        };
         c.alpn_protocols = vec![b"http/1.1".to_vec()];
         c
     })

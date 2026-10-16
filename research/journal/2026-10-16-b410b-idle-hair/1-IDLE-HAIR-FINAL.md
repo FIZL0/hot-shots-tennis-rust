@@ -27,7 +27,8 @@ Also, OOB's stiffness, applied per 60 Hz step, rings at ~7 Hz with its 0.83 damp
   off the pose at the chain's end).
 - `tools/check.sh -p hst`: 468 passed.
 - Side by side with task/B435's rewrite (unmerged), in CPU-vs-CPU matches with Sophie: the user chose this one.
-  B435 is closed as superseded.
+  The runner merged B435 meanwhile; this merge puts back B410b's `spring.rs` and the pre-B435 `mods.rs` (B435's
+  reaction-track filter and earring/last-link records went with it). Its journal stays as a reference.
 
 ## Not 1:1
 Out of Bounds' own solver is still not ported. `SOFT` and the 3° cap were picked by eye.
