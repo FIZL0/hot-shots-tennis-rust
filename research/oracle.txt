@@ -65,8 +65,11 @@ plane_sweep 328ed0
 contact_point 12fc30
 # Matrix → quaternion (a0 out, a1 matrix), quaternion → re-orthonormalized matrix (a0 out, a1 quat):
 # hst_sim::quat::from_matrix / to_matrix; slerp (f12 t, a0 out, a1 from, a2 to) and its bare VU0 micro call
-# (same arguments; hooked, the interpreter has no VU0 micro mode): hst_sim::quat::slerp / micro_slerp
+# (same arguments, `vcallms` of the micro program at 0x51 × 8): hst_sim::quat::slerp / micro_slerp
 quat_from_matrix 12d620
 quat_to_matrix 12d340
 quat_slerp 12d860
 quat_micro_slerp 175d80
+# T3: the VIF0 DMA chain (refe tag → MPG of 251 instructions at 0) the boot code starts at boot to fill VU0's micro
+# memory; hst_oracle::hst runs it so `vcallms` finds the programs (data address, not a function)
+vu0_boot_chain 1beb00
