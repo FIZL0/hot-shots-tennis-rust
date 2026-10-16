@@ -302,6 +302,39 @@ fn seat(doc: &gltf::Document, singles: bool) -> Option<[f32; 3]> {
     Some((space.inverse() * worlds[n.index()]).w_axis.truncate().to_array())
 }
 
+/// B477: what of `court.glb` stands in the way, as triangles in the layout court's game space: every mesh drawn in a
+/// match of this kind at rest, leaving out the light pools and rays (`@add` / `@sub` materials) and other primitives
+/// than triangle lists. Empty when the file can't be read.
+pub fn solid(c: &Court, singles: bool) -> Vec<[Vec3; 3]> {
+    let Ok((doc, blob)) = crate::mods::open(&c.dir.join("court.glb")).inspect_err(|e| warn!("court mod {}: {e}", c.id)) else { return Vec::new() };
+    let worlds = worlds(&doc);
+    let space = doc.nodes().find(|n| n.name() == Some("game_space")).map_or(Mat4::IDENTITY, |n| worlds[n.index()]);
+    let to_game = space.inverse();
+    let skip = |n: &gltf::Node| n.name().is_some_and(|m| m.ends_with(if singles { "__doubles" } else { "__singles" }));
+    let mut out = Vec::new();
+    let Some(scene) = doc.default_scene().or_else(|| doc.scenes().next()) else { return out };
+    let mut stack: Vec<gltf::Node> = scene.nodes().collect();
+    while let Some(n) = stack.pop() {
+        if skip(&n) {
+            continue;
+        }
+        stack.extend(n.children());
+        let Some(mesh) = n.mesh() else { continue };
+        let m = to_game * worlds[n.index()];
+        for p in mesh.primitives().filter(|p| p.mode() == gltf::mesh::Mode::Triangles) {
+            if p.material().name().is_some_and(|m| m.ends_with("@add") || m.ends_with("@sub")) {
+                continue;
+            }
+            let r = p.reader(|_| Some(&blob[..]));
+            let Some(pos) = r.read_positions() else { continue };
+            let pos: Vec<Vec3> = pos.map(|v| m.transform_point3(Vec3::from(v))).collect();
+            let idx: Vec<u32> = r.read_indices().map_or_else(|| (0..pos.len() as u32).collect(), |i| i.into_u32().collect());
+            out.extend(idx.chunks_exact(3).filter_map(|t| Some([*pos.get(t[0] as usize)?, *pos.get(t[1] as usize)?, *pos.get(t[2] as usize)?])));
+        }
+    }
+    out
+}
+
 /// Each node's world matrix in the file.
 fn worlds(doc: &gltf::Document) -> Vec<Mat4> {
     let mut parent = vec![None; doc.nodes().len()];
