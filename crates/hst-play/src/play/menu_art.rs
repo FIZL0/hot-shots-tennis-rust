@@ -369,10 +369,11 @@ const STATS: &[Label<'static>] = &[
     (113, 5, 14, 17, "7"),
     (129, 5, 14, 18, "8"),
     (145, 5, 15, 18, "9"),
-    (162, 15, 8, 7, "."),
+    // B508: the point and the units' ink boxes, measured on the disc (the dot one px left of the disc's, so its 8-px cell keeps the whole ring)
+    (161, 15, 7, 7, "."),
     (4, 27, 39, 17, "mph"),
-    (75, 29, 17, 15, "%"),
-    (92, 28, 23, 16, "pts"),
+    (76, 29, 17, 16, "%"),
+    (97, 29, 18, 17, "pts"),
     (38, 69, 85, 29, "Stats"),
     (23, 107, 115, 18, "Fastest Serve"),
     (32, 131, 96, 18, "Points Won"),
@@ -1308,6 +1309,9 @@ pub(crate) fn text_path(font: &ab_glyph::FontRef, s: &str) -> Option<tiny_skia::
 
 /// Set a label in its box at `K`×: the words' fill fitted inside the outline's width, outline then fill.
 fn label(out: &mut Pixmap, font: &ab_glyph::FontRef, &(x, y, w, h, s): &Label, st: &Style, shadow: bool) {
+    if s == "." {
+        return dot(out, [x, y, w, h].map(f32::from), st);
+    }
     let Some(path) = text_path(font, s) else { return };
     let k = K as f32;
     let e = st.width * k;
@@ -1336,6 +1340,18 @@ fn label(out: &mut Pixmap, font: &ab_glyph::FontRef, &(x, y, w, h, s): &Label, s
         tiny_skia::Shader::SolidColor(rgb(st.rows[0].1))
     };
     out.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+}
+
+/// B508: a decimal point as the disc draws it, a small round fill in a ring about as wide (3 px each in a 7-px box),
+/// not the font's full stop stretched over the box: too short for [`Style::sample`] to see its ring, that was a
+/// solid square.
+fn dot(out: &mut Pixmap, [x, y, w, h]: [f32; 4], st: &Style) {
+    let r = w.min(h) / 2.0 - 0.5;
+    let (cx, cy) = (x + r, y + h / 2.0);
+    let c = st.rows[st.rows.len() / 2].1.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
+    let t = Transform::from_scale(K as f32, K as f32);
+    fill_rgb(out, &PathBuilder::from_circle(cx, cy, r).expect("dot"), st.edge.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8), t);
+    fill_rgb(out, &PathBuilder::from_circle(cx, cy, r / 2.0).expect("dot"), c, t);
 }
 
 #[cfg(test)]
@@ -1449,6 +1465,33 @@ mod tests {
         assert!(minx >= 8 * K - 2 && maxx <= 56 * K + 2, "fits its box: {minx}..{maxx}");
         assert!(inked.iter().any(|&(x, y)| px(x, y).red() > 240), "white fill");
         assert!(inked.iter().any(|&(x, y)| px(x, y).red() < 20), "black ring");
+    }
+
+    /// B508: the stats sheet's point and units lie inside the cells `match_stats` cuts them from, and the point is
+    /// a small white dot in a dark ring, not a solid box.
+    #[test]
+    fn stats_units_fit_their_cells() {
+        let cells = [(".", 160, 168), ("%", 72, 96), ("pts", 96, 120), ("mph", 0, 48)];
+        for (s, l, r) in cells {
+            let &(x, _, w, ..) = STATS.iter().find(|b| b.4 == s).unwrap();
+            assert!(x >= l && x + w <= r, "{s}: {x}..{} outside {l}..{r}", x + w);
+        }
+        let (w, h) = (16u32, 16u32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 4..11 {
+            for x in 4..11 {
+                let fill = (6..9).contains(&x) && (6..9).contains(&y);
+                rgba[((y * w + x) * 4) as usize..][..4].copy_from_slice(&if fill { [255, 255, 255, 255] } else { [0, 0, 0, 255] });
+            }
+        }
+        let out = rebuild(w as usize, h as usize, &rgba, &[], &[(4, 4, 7, 7, ".")], HEAVY, false);
+        let px = |x: u32, y: u32| out.pixel(x, y).unwrap().demultiply();
+        let k = K;
+        assert!(px(7 * k + k / 2, 7 * k + k / 2).red() > 240, "white middle");
+        assert!(px(5 * k, 7 * k + k / 2).red() < 40 && px(5 * k, 7 * k + k / 2).alpha() > 200, "dark ring");
+        assert_eq!(px(4 * k + 1, 4 * k + 1).alpha(), 0, "round: the corner is clear");
+        let white = (0..h * k).flat_map(|y| (0..w * k).map(move |x| (x, y))).filter(|&(x, y)| px(x, y).red() > 200 && px(x, y).alpha() > 200).count();
+        assert!(white < (9 * k * k) as usize, "a small fill: {white} px");
     }
 
     /// B141a: a stamp inks only inside its cell; the digit cells don't overlap; the meter icons ink their rects.
