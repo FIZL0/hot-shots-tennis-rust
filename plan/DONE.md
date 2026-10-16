@@ -1011,3 +1011,4 @@ Oldest entries first (full text as they were in the old TODO.md):
 
 ### Match basics
 - [x] **C3a** C3 for ball and world: same rules as C3 (types/enums/named constants for raw offsets, packed words, byte flags; behaviour-preserving only, proven as in plan/C2.md: tests bit-exact, `hash_trace` unchanged) → hst-sim/src/contact.rs · mesh.rs · world.rs · quat.rs · bodyhit.rs · tornado.rs · clouds.rs · weather.rs · noise.rs · court_anim.rs · ball.rs · court.rs
+- [x] **C3b** C3 for shots and match: same rules as C3 (types/enums/named constants for raw offsets, packed words, byte flags; behaviour-preserving only, proven as in plan/C2.md: tests bit-exact, `hash_trace` unchanged) → hst-sim/src/params.rs · shot.rs · swing.rs · serve.rs · aim.rs · instant.rs · judge.rs · flow.rs · score.rs

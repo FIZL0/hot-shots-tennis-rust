@@ -7,7 +7,7 @@
 //! the game sometimes spends several vsyncs on one tick while it loads, and those don't count.
 #![deny(clippy::float_arithmetic)]
 
-use crate::judge::Rally;
+use crate::judge::{Rally, verdict};
 use crate::ps2::F;
 use crate::score::{Event, Score};
 use hst_data::exe::ScoreboardTiming;
@@ -19,6 +19,21 @@ const PAUSE: i32 = 30;
 /// Ticks the umpire's call sprite holds once settled, and its fade-out.
 const CALL_HOLD: i32 = 29;
 const CALL_FADE: i32 = 5;
+
+/// The score show's stages (`ShowState::stage`).
+pub mod stage {
+    pub const FADE_IN: u8 = 0;
+    /// The score rolls (games and sets: rise then drop).
+    pub const ROLL: u8 = 1;
+    /// The new score flashes in.
+    pub const FLASH: u8 = 2;
+    pub const SETTLE: u8 = 3;
+    /// Settled: held until the fade-out.
+    pub const HOLD: u8 = 4;
+}
+
+/// The doubles formation with both players back (`ai::AiParams::formation`, defensive).
+const DEFENSIVE: u8 = 2;
 
 /// Where the match goes when the point-over phase ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +78,7 @@ enum Board {
 /// held, faded out.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct CallShow {
-    /// The judge's call (1 out, 2 fault, 3 double fault, 4 let, 5 out after net).
+    /// The judge's call (`judge::verdict`, out to out after the net).
     call: u8,
     /// Frames the model has played, and its animation's length (0: no animation).
     frames: i32,
@@ -95,14 +110,14 @@ impl PostPoint {
         PostPoint { tick: 0, event: Some(event), board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None, calling_match: false }
     }
 
-    /// The point ended on the judge's `call` (1 out, 2 fault, 3 double fault, 4 let, 5 out after net, 6
-    /// illegal hit; 0 none): `event` what it did to the score, `None` for no point. Calls 1..5 show the umpire's
+    /// The point ended on the judge's `call` (`judge::verdict`): `event` what it did to the score, `None` for no
+    /// point. Calls out to out after the net (not a plain point or an illegal hit) show the umpire's
     /// call sprite first (its countdown from `t.call_wait`); out, out after net and double fault then chain into
     /// the score show, a fault or let ends the phase.
     pub fn called(event: Option<Event>, call: u8, t: &ScoreboardTiming) -> Self {
         let mut p = PostPoint { tick: 0, event, board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None, calling_match: false };
-        if (1..=5).contains(&call) {
-            let chain = matches!(call, 1 | 3 | 5);
+        if (verdict::OUT..=verdict::NET_OUT).contains(&call) {
+            let chain = matches!(call, verdict::OUT | verdict::DOUBLE_FAULT | verdict::NET_OUT);
             p.board = Board::Call(CallShow { call, frames: 0, anim_end: 0.0, chain, countdown: t.call_wait[call as usize], settled: false, held: 0, fade: -1 });
         }
         p
@@ -221,7 +236,7 @@ impl PostPoint {
             Board::Done => Board::Done,
         };
         self.shown |= match self.board {
-            Board::Show(s) => s.step >= 1 || matches!(s.event, Event::Game | Event::Set),
+            Board::Show(s) => s.step >= stage::ROLL || matches!(s.event, Event::Game | Event::Set),
             Board::Done => true,
             _ => false,
         };
@@ -231,7 +246,7 @@ impl PostPoint {
 }
 
 /// What the score show is drawing this tick (after `PostPoint::step`), for the pop-ups: the show's stage
-/// (0 fade in, 1 roll, 2 flash, 3 settle, 4 hold), its countdown `t` and roll step `n`, and whether it is fading out.
+/// (`stage`), its countdown `t` and roll step `n`, and whether it is fading out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShowState {
     pub event: Event,
@@ -285,7 +300,7 @@ impl PostPoint {
 impl Show {
     fn new(event: Event) -> Self {
         let t = if matches!(event, Event::Game | Event::Set) { 14 } else { 5 };
-        Show { event, step: 0, t, n: 0, fading_out: false, settled: false, held: 0 }
+        Show { event, step: stage::FADE_IN, t, n: 0, fading_out: false, settled: false, held: 0 }
     }
 
     /// One frame of the show; true when it is over.
@@ -301,42 +316,42 @@ impl Show {
         } else {
             let deuce = score.deuce;
             match (self.event, self.step) {
-                (_, 0) => {
+                (_, stage::FADE_IN) => {
                     self.t -= 1;
                     if self.t < 0 {
-                        self.step = 1;
+                        self.step = stage::ROLL;
                         self.n = 0;
                     }
                 }
-                (Event::Game | Event::Set, 1) => {
+                (Event::Game | Event::Set, stage::ROLL) => {
                     self.n += 1;
                     if self.n > tm.game_rise {
-                        self.step = 2;
+                        self.step = stage::FLASH;
                         self.n = tm.game_drop;
                     }
                 }
-                (Event::Game | Event::Set, 2) => {
+                (Event::Game | Event::Set, stage::FLASH) => {
                     self.n -= 1;
                     if self.n < 0 {
-                        self.step = 4;
+                        self.step = stage::HOLD;
                     }
                 }
-                (Event::Point, 1) => {
+                (Event::Point, stage::ROLL) => {
                     self.n += 1;
                     if self.n > if deuce { 2 } else { 4 } {
-                        self.step = 2;
+                        self.step = stage::FLASH;
                         self.n = if deuce { 3 } else { 0 };
                     }
                 }
-                (Event::TiebreakPoint, 1) => {
+                (Event::TiebreakPoint, stage::ROLL) => {
                     self.n += 1;
                     if !deuce && self.n > 7 {
-                        (self.step, self.t) = (2, 3);
+                        (self.step, self.t) = (stage::FLASH, 3);
                     } else if deuce && self.n >= 3 {
-                        (self.step, self.n) = (2, 3);
+                        (self.step, self.n) = (stage::FLASH, 3);
                     }
                 }
-                (_, 2) => {
+                (_, stage::FLASH) => {
                     let to_settle = if deuce {
                         self.n -= 1;
                         self.n < 1
@@ -350,18 +365,18 @@ impl Show {
                         self.t < 0
                     };
                     if to_settle {
-                        (self.step, self.t) = (3, 15);
+                        (self.step, self.t) = (stage::SETTLE, 15);
                     }
                 }
-                (_, 3) => {
+                (_, stage::SETTLE) => {
                     self.t -= 1;
                     if self.t < 0 {
-                        self.step = 4;
+                        self.step = stage::HOLD;
                     }
                 }
                 _ => {}
             }
-            self.settled |= self.step == 4;
+            self.settled |= self.step == stage::HOLD;
         }
         if self.settled {
             self.held += 1;
@@ -374,8 +389,8 @@ impl Show {
     }
 }
 
-/// Baseline depth of the server and (first serve) the receiver.
-const BASELINE: f32 = 12.25;
+/// Depth of the server and (first serve) the receiver: just behind the baseline.
+const SERVE_DEPTH: f32 = 12.25;
 /// Where a player is put when the next serve is set up (entering the serve or change-ends phase), in game space.
 /// `facing` is +1 for players looking toward +z (even players at the start, before ends change), else -1; the
 /// player stands on the −`facing` half.
@@ -385,7 +400,7 @@ const BASELINE: f32 = 12.25;
 /// - The receiver waits at 3.0 off centre on the baseline, 1.25 m inside it for a second serve.
 /// - Everyone else (doubles partners — and the singles receiver on the ad side, whose receiver index names an
 ///   absent player) stands 2.7425 off centre on the other half: the server's partner 3.2 m from the net, the
-///   receiver's 5.2 m, both 7.9 m when their formation is 2 (back).
+///   receiver's 5.2 m, both 7.9 m in the defensive formation (both back).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
     pub pos: [f32; 3],
@@ -393,17 +408,17 @@ pub struct Placement {
 }
 
 /// `player` 0..3 (even = first team), `faults` this point's faults so far, `formation` the player's doubles
-/// formation (2 = both back), `swapped` the teams' ends have changed.
+/// formation (`DEFENSIVE`: both back), `swapped` the teams' ends have changed.
 pub fn serve_placement(player: i32, s: &Score, faults: i32, stance: f32, formation: u8, swapped: bool) -> Placement {
     let facing = F(if (player & 1 == 0) != swapped { 1.0 } else { -1.0 });
-    let court = F(if s.side == 0 { 1.0 } else { -1.0 });
-    let deep = if formation == 2 { -7.9 } else { 0.0 };
+    let court = F(if s.side == crate::score::DEUCE_COURT { 1.0 } else { -1.0 });
+    let deep = if formation == DEFENSIVE { -7.9 } else { 0.0 };
     let (x, z) = if player == s.server {
-        (court * stance * facing, facing * -F(BASELINE))
+        (court * stance * facing, facing * -F(SERVE_DEPTH))
     } else if s.server & 1 == player & 1 {
         (facing * -2.7425 * court, facing * if deep != 0.0 { deep } else { -3.2 })
     } else if player == s.receiver {
-        (facing * 3.0 * court, facing * if faults == 0 { -F(BASELINE) } else { F(-11.0) })
+        (facing * 3.0 * court, facing * if faults == 0 { -F(SERVE_DEPTH) } else { F(-11.0) })
     } else {
         (facing * -2.7425 * court, facing * if deep != 0.0 { deep } else { -5.2 })
     };

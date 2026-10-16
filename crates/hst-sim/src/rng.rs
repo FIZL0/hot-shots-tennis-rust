@@ -66,6 +66,16 @@ impl Mt {
     }
 }
 
+/// `Mt::r15`, `Mt::bit` and `Mt::unit`'s scale for a word drawn elsewhere (the ports that take a `roll` closure).
+pub fn r15(word: u32) -> u32 {
+    word >> 16 & 0x7fff
+}
+pub fn coin(word: u32) -> bool {
+    word >> 16 & 1 != 0
+}
+/// 2⁻³².
+pub const TWO_POW_M32: f32 = 2.328_306_4e-10;
+
 /// The match seed: `rand()`'s state as the setup finds it and the shared generator's seed. Every generator follows
 /// from these two (the AI's from shared draws, the court's and the sound manager's from `rand()`), so online the host
 /// picks it and the peers take it.

@@ -30,6 +30,14 @@ pub struct Pad {
     pub ly: u8,
 }
 
+impl Pad {
+    /// The face buttons in `buttons`.
+    pub const TRIANGLE: u16 = 0x1000;
+    pub const CROSS: u16 = 0x2000;
+    pub const CIRCLE: u16 = 0x4000;
+    pub const SQUARE: u16 = 0x8000;
+}
+
 #[derive(Clone, Copy)]
 pub struct Frame<'a>(pub &'a [u8]);
 

@@ -6,9 +6,58 @@
 #![deny(clippy::float_arithmetic)]
 
 use crate::ai::AiParams;
+use crate::lines::{BASELINE, DEG, SERVICE_LINE, SINGLES_SIDELINE};
 use crate::position::zone_in;
 use crate::ps2::{F, utof};
+use crate::rng::{TWO_POW_M32, coin, r15};
 use crate::{vu0, world};
+
+/// The plans an aim comes with (`Aim::plan`), and the button each presses (`button`).
+pub mod plan {
+    /// Ground strokes: topspin (✕), slice (○), lob (△; also the special return).
+    pub const TOPSPIN: u8 = 7;
+    pub const SLICE: u8 = 8;
+    pub const LOB: u8 = 10;
+    /// Volleys: ✕, ○, △, and the drop volley (○).
+    pub const VOLLEY: u8 = 0xc;
+    pub const VOLLEY_SLICE: u8 = 0xd;
+    pub const VOLLEY_LOB: u8 = 0xf;
+    pub const VOLLEY_DROP: u8 = 0x10;
+    /// The smash (✕).
+    pub const SMASH: u8 = 0x11;
+    /// The serve's tosses: weak (○), strong (✕), underhand (△).
+    pub const TOSS_WEAK: u8 = 0;
+    pub const TOSS_STRONG: u8 = 1;
+    pub const TOSS_UNDER: u8 = 2;
+    /// The serve's swings: ✕, ○, △ (after an underhand toss).
+    pub const SWING_CROSS: u8 = 3;
+    pub const SWING_CIRCLE: u8 = 4;
+    pub const SWING_UNDER: u8 = 6;
+}
+
+/// The shot buttons a plan presses.
+pub mod button {
+    pub const CROSS: u8 = 1;
+    pub const CIRCLE: u8 = 2;
+    pub const TRIANGLE: u8 = 4;
+}
+
+/// The contact the AI found (`Look::kind`, `Pair::kind`).
+pub mod contact {
+    /// Ground strokes: from the tiered search, at reach.
+    pub const TIERED: u8 = 0;
+    pub const REACH: u8 = 1;
+    pub const VOLLEY: u8 = 2;
+    pub const SMASH: u8 = 3;
+    pub const DIVE: u8 = 4;
+}
+
+/// The opponent's last shot kind when it smashed (`Look::opp_kind`).
+const OPP_SMASH: i32 = 3;
+/// A third, two thirds and five sixths, as the game's literals (the stick length bands).
+const THIRD: f32 = f32::from_bits(0x3eaa_aaab);
+const TWO_THIRDS: f32 = f32::from_bits(0x3f2a_aaab);
+const FIVE_SIXTHS: f32 = f32::from_bits(0x3f55_5555);
 
 /// `fmodf`: its result is exact, so IEEE `%` is the game's.
 #[allow(clippy::float_arithmetic)]
@@ -33,9 +82,9 @@ pub struct Look {
     pub side: f32,
     /// The court half width it plays to: singles, else doubles.
     pub singles: bool,
-    /// The contact it found: 0/1 ground stroke, 2 volley, 3 smash, 4 dive.
+    /// The contact it found (`contact`).
     pub kind: u8,
-    /// The opponent's last shot kind (3 smash).
+    /// The opponent's last shot kind (`OPP_SMASH`).
     pub opp_kind: i32,
     /// The opponent plays left-handed.
     pub opp_lefty: bool,
@@ -58,7 +107,7 @@ const RALLY_DEPTH: [i32; 18] = [80, 0, 80, 0, 100, 0, 50, 50, 50, 50, 50, 50, 35
 const VOLLEY_SHORT: [i32; 4] = [30, 20, 10, 5];
 
 fn percent(roll: &mut impl FnMut() -> u32) -> i32 {
-    ((roll() >> 16 & 0x7fff) % 100) as i32
+    (r15(roll()) % 100) as i32
 }
 
 fn chance(roll: &mut impl FnMut() -> u32, p: i32) -> bool {
@@ -67,16 +116,16 @@ fn chance(roll: &mut impl FnMut() -> u32, p: i32) -> bool {
 
 /// The MT word as a fraction of 2³².
 fn uniform(roll: &mut impl FnMut() -> u32) -> f32 {
-    (F(2.3283064e-10) * utof(roll())).0
+    (F(TWO_POW_M32) * utof(roll())).0
 }
 
 fn width(singles: bool) -> f32 {
-    if singles { 4.115 } else { 5.485 }
+    crate::lines::sideline(!singles)
 }
 
 /// Whether a point is on the court (within the baseline and the half width).
 fn on_court(p: [f32; 2], w: f32) -> bool {
-    p[1].abs() <= 11.885 && p[0].abs() <= w
+    p[1].abs() <= BASELINE && p[0].abs() <= w
 }
 
 /// Pick 2, 1 or 0 from a cumulative mix.
@@ -110,7 +159,7 @@ pub fn fine_zone(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> 
         let band = [1.7308334, 3.4616668, 5.1925, 6.9233336, 8.654167].iter().take_while(|&&b| b < d).count();
         return (col, band as u8);
     };
-    let mut roll = || (F::ZERO + 0.0).madd(1.0, F(2.3283064e-10) * utof(roll())).0;
+    let mut roll = || (F::ZERO + 0.0).madd(1.0, F(TWO_POW_M32) * utof(roll())).0;
     let q = (F(w) * 2.0 / 6.0 / 4.0).0;
     let x = (F::ZERO + w).madd(p[0], s).0;
     let mut col = 5;
@@ -149,7 +198,7 @@ impl AiParams {
     /// `key_level` mix (the middle zone: up to a third), turned by `side` (the AI's side sign).
     pub fn aim(&self, zone: (u8, u8), side: f32, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
         let (angle, lo, hi) = if zone == (1, 1) {
-            ((F::ZERO + -180.0).madd(360.0, uniform(roll)).0, 0.0, f32::from_bits(0x3eaa_aaab))
+            ((F::ZERO + -180.0).madd(360.0, uniform(roll)).0, 0.0, THIRD)
         } else {
             let base = match zone {
                 (1, 0) => 0.0,
@@ -165,20 +214,18 @@ impl AiParams {
             let angle = (base + (F::ZERO + -F(aw)).madd(F(aw) - -F(aw), uniform(roll))).0;
             let r = percent(roll);
             let k = &self.key_level;
-            let (third, two) = (f32::from_bits(0x3eaa_aaab), f32::from_bits(0x3f2a_aaab));
-            let five = f32::from_bits(0x3f55_5555);
             let band = if r < k[0] {
-                (third, 0.5)
+                (THIRD, 0.5)
             } else if r < k[0] + k[1] {
-                (0.5, two)
+                (0.5, TWO_THIRDS)
             } else if r < k[0] + k[1] + k[2] {
-                (two, five)
+                (TWO_THIRDS, FIVE_SIXTHS)
             } else {
-                (five, 1.0)
+                (FIVE_SIXTHS, 1.0)
             };
             (angle, band.0, band.1)
         };
-        let mut rad = (F(f32::from_bits(0x3c8e_fa35)) * angle).0;
+        let mut rad = (F(DEG) * angle).0;
         if rad > world::PI {
             rad = (fmod(F(world::PI) + rad, world::TWO_PI) - world::PI).0;
         } else if rad < -F(world::PI) {
@@ -192,7 +239,7 @@ impl AiParams {
 
     /// The singles NET rally routine's aim (its shots and dives; once taken for the aim at a return of serve).
     pub fn receive_aim(&self, l: &Look, roll: &mut impl FnMut() -> u32) -> Aim {
-        if l.kind == 2 {
+        if l.kind == contact::VOLLEY {
             return self.volley_aim(l, roll);
         }
         let w = width(l.singles);
@@ -201,10 +248,10 @@ impl AiParams {
         let s = if 0.0 <= l.opp[1] { -1.0 } else { 1.0 };
         let u = percent(roll);
         let away = if 0.0 < (F(l.opp[0]) * s).0 { 0 } else { 2 };
-        if l.kind == 3 {
+        if l.kind == contact::SMASH {
             if md == 0 && od == 0 && chance(roll, 50) {
                 if let Some(stick) = body(l) {
-                    return Aim { stick, plan: 0x11 };
+                    return Aim { stick, plan: plan::SMASH };
                 }
             }
             let mut d = match od {
@@ -217,20 +264,20 @@ impl AiParams {
             if md == 2 && d == 0 {
                 d = reroll(roll);
             }
-            return Aim { stick: self.aim((away, d), l.side, roll), plan: 0x11 };
+            return Aim { stick: self.aim((away, d), l.side, roll), plan: plan::SMASH };
         }
         if chance(roll, self.special_return_rate) {
             let x = self.lane_away(ox, roll);
-            return Aim { stick: self.aim((x, 2), l.side, roll), plan: 10 };
+            return Aim { stick: self.aim((x, 2), l.side, roll), plan: plan::LOB };
         }
         let t = &RECEIVE_DEPTH[self.base_pick(roll) * 6..];
         let k = 2 * (2 - od as usize);
         let d = pick(u, t[k], t[k + 1]);
         let plan = match (od, d) {
-            (0, 2) => 10,
-            (0, _) => 7,
-            (_, 0) => 8,
-            _ => 7,
+            (0, 2) => plan::LOB,
+            (0, _) => plan::TOPSPIN,
+            (_, 0) => plan::SLICE,
+            _ => plan::TOPSPIN,
         };
         Aim { stick: self.aim((away, d), l.side, roll), plan }
     }
@@ -238,8 +285,8 @@ impl AiParams {
     /// The aim in a rally (`short`: the AI's flag that its last pick was a short ball, cleared and maybe set again).
     pub fn rally_aim(&self, l: &Look, short: &mut bool, roll: &mut impl FnMut() -> u32) -> Aim {
         match l.kind {
-            2 => return self.volley_aim(l, roll),
-            1 => return self.low_aim(l, roll),
+            contact::VOLLEY => return self.volley_aim(l, roll),
+            contact::REACH => return self.low_aim(l, roll),
             _ => {}
         }
         let was = std::mem::take(short);
@@ -250,10 +297,10 @@ impl AiParams {
         let s = if 0.0 <= l.opp[1] { -1.0 } else { 1.0 };
         let u = percent(roll);
         let near = ((F(l.opp[1]) - l.mark[1]) * s).0 <= 1.5;
-        let low = 0.2 <= if l.kind < 2 { (F(l.contact_y) - l.heights[1]).0 } else { 0.0 };
+        let low = 0.2 <= if l.kind <= contact::REACH { (F(l.contact_y) - l.heights[1]).0 } else { 0.0 };
         let by_fine = if fine < 3 { 2 } else { 0 };
-        let (x, d, plan) = if l.opp_kind == 3 && l.kind != 4 {
-            (by_fine, 2, 0xc)
+        let (x, d, plan) = if l.opp_kind == OPP_SMASH && l.kind != contact::DIVE {
+            (by_fine, 2, plan::VOLLEY)
         } else {
             let x = match ox {
                 0 => 2,
@@ -262,35 +309,35 @@ impl AiParams {
                 _ => 0,
             };
             match l.kind {
-                4 => match od {
-                    0 => (by_fine, 2, 0xf),
-                    1 => (by_fine, 2, 0xd),
-                    _ => (by_fine, 0, 0xd),
+                contact::DIVE => match od {
+                    0 => (by_fine, 2, plan::VOLLEY_LOB),
+                    1 => (by_fine, 2, plan::VOLLEY_SLICE),
+                    _ => (by_fine, 0, plan::VOLLEY_SLICE),
                 },
-                3 => {
+                contact::SMASH => {
                     let mut d = if od != 0 { if u < 80 { 2 } else { 0 } } else { 2 };
                     if md == 2 && d == 0 {
                         d = reroll(roll);
                     }
-                    (x, d, 0x11)
+                    (x, d, plan::SMASH)
                 }
-                _ if chance(roll, self.special_return_rate) => (self.lane_away(ox, roll), 2, 10),
+                _ if chance(roll, self.special_return_rate) => (self.lane_away(ox, roll), 2, plan::LOB),
                 _ => {
                     let t = &RALLY_DEPTH[self.base_pick(roll) * 6..];
-                    let soft = if low { 7 } else { 10 };
+                    let soft = if low { plan::TOPSPIN } else { plan::LOB };
                     if od == 0 {
                         (x, pick(u, t[4], t[5]), soft)
                     } else if was {
-                        let plan = if (2..=3).contains(&fine) && u <= 49 && !low { 10 } else { 7 };
+                        let plan = if (2..=3).contains(&fine) && u <= 49 && !low { plan::LOB } else { plan::TOPSPIN };
                         (if fine > 2 { 0 } else { 2 }, 2, plan)
                     } else if near || u > 49 {
                         let k = if od == 2 { 0 } else { 2 };
                         match pick(u, t[k], t[k + 1]) {
                             0 => {
                                 *short = true;
-                                (x, 0, 8)
+                                (x, 0, plan::SLICE)
                             }
-                            d => (x, d, 7),
+                            d => (x, d, plan::TOPSPIN),
                         }
                     } else {
                         (x, 2, soft)
@@ -332,14 +379,14 @@ impl AiParams {
         let (mx, md) = zone_in(l.me, w, None);
         let high = l.contact_y < l.heights[0];
         let (x, d, plan) = match l.volley_level {
-            3 => (self.lane_away(ox, roll), 0, 0x10),
-            1 => (self.lane_away(ox, roll), 2, if fd > 2 && high { 0xd } else { 0xc }),
+            3 => (self.lane_away(ox, roll), 0, plan::VOLLEY_DROP),
+            1 => (self.lane_away(ox, roll), 2, if fd > 2 && high { plan::VOLLEY_SLICE } else { plan::VOLLEY }),
             0 => {
                 let (x, _) = zone_in(l.mark, w, Some(&mut *roll));
                 if od == 0 && chance(roll, 30) {
-                    (x, if chance(roll, VOLLEY_SHORT[l.level as usize & 3]) { 1 } else { 2 }, 0xf)
+                    (x, if chance(roll, VOLLEY_SHORT[l.level as usize & 3]) { 1 } else { 2 }, plan::VOLLEY_LOB)
                 } else {
-                    (x, 2, 0xc)
+                    (x, 2, plan::VOLLEY)
                 }
             }
             2 => {
@@ -352,20 +399,20 @@ impl AiParams {
                 };
                 if fd < 3 && od == 0 {
                     if !matches!((mx, ox), (0, 2) | (2, 0) | (1, 1)) {
-                        (x, d, 0xc)
+                        (x, d, plan::VOLLEY)
                     } else if chance(roll, 10) {
-                        (x, 2, 0xf)
+                        (x, 2, plan::VOLLEY_LOB)
                     } else if bold(10, 5, roll) {
-                        (ox, 0, 0x10)
+                        (ox, 0, plan::VOLLEY_DROP)
                     } else {
-                        (x, d, 0xc)
+                        (x, d, plan::VOLLEY)
                     }
                 } else if fd > 2 && high {
-                    (x, d, 0xd)
+                    (x, d, plan::VOLLEY_SLICE)
                 } else if md == 0 && od == 2 && bold(30, 15, roll) {
-                    (x, 0, 0x10)
+                    (x, 0, plan::VOLLEY_DROP)
                 } else {
-                    (x, d, 0xc)
+                    (x, d, plan::VOLLEY)
                 }
             }
             _ => (0, 0, 0),
@@ -373,14 +420,14 @@ impl AiParams {
         Aim { stick: self.aim((x, d), l.side, roll), plan }
     }
 
-    /// The aim of a kind-1 contact in a rally, by its high-ball level pick.
+    /// The aim of a reach contact (`contact::REACH`) in a rally, by its high-ball level pick.
     fn low_aim(&self, l: &Look, roll: &mut impl FnMut() -> u32) -> Aim {
         let w = width(l.singles);
         let (ox, _) = zone_in(l.opp, w, Some(&mut *roll));
         let (mx, _) = zone_in(l.me, w, None);
         if chance(roll, self.special_return_rate) {
             let x = self.lane_away(ox, roll);
-            return Aim { stick: self.aim((x, 2), l.side, roll), plan: 10 };
+            return Aim { stick: self.aim((x, 2), l.side, roll), plan: plan::LOB };
         }
         let (x, d) = match l.high_level {
             2 => (if ox == 1 { if chance(roll, 50) { 0 } else { 2 } } else { ox }, 2),
@@ -388,13 +435,13 @@ impl AiParams {
             0 => (self.lane_away(ox, roll), 2),
             _ => (0, 0),
         };
-        Aim { stick: self.aim((x, d), l.side, roll), plan: 7 }
+        Aim { stick: self.aim((x, d), l.side, roll), plan: plan::TOPSPIN }
     }
 
     /// Whether the AI lets a ball go whose first bounce `at` (x, z) is out by at least its line margin: past the
     /// singles or doubles court in a rally, the service box (either half) for a serve.
     pub fn lets_go(&self, at: [f32; 2], serve: bool, singles: bool) -> bool {
-        let (w, l) = if serve { (4.115, 6.4) } else { (width(singles), 11.885) };
+        let (w, l) = if serve { (SINGLES_SIDELINE, SERVICE_LINE) } else { (width(singles), BASELINE) };
         let out = at[0].abs() > w || at[1].abs() > l;
         out && self.line_margin <= out_by(at, w, l)
     }
@@ -410,14 +457,17 @@ pub struct Pair {
     /// Its side sign.
     pub side: f32,
     pub singles: bool,
-    /// The contact it found (0/1 ground stroke, 2 volley, 3 smash, 4 dive), its volley level pick and its level.
+    /// The contact it found (`contact`), its volley level pick and its level.
     pub kind: u8,
     pub volley_level: u8,
     pub level: u8,
-    /// Its formation (2: both up) and the smash-third flag.
+    /// Its formation (`DEFENSIVE`: both back) and the smash-third flag.
     pub formation: u8,
     pub smash_third: bool,
 }
+
+/// The defensive doubles formation (both players back; `ai::AiParams::formation`).
+const DEFENSIVE: u8 = 2;
 
 /// The lanes (0..=2) neither opponent stands in, and how many.
 fn open_lanes(a: u8, b: u8) -> ([u8; 3], usize) {
@@ -433,7 +483,7 @@ fn open_lanes(a: u8, b: u8) -> ([u8; 3], usize) {
 
 /// One of the open lanes, at random.
 fn any_open(open: ([u8; 3], usize), roll: &mut impl FnMut() -> u32) -> u8 {
-    open.0[((roll() >> 16 & 0x7fff) as usize) % open.1]
+    open.0[(r15(roll()) as usize) % open.1]
 }
 
 /// Of three lanes, `a`, `b` or else `c` by two coin flips weighted `p`: `a` when the roll is under `p`.
@@ -465,10 +515,10 @@ impl AiParams {
     pub fn aim_at(&self, me: [f32; 2], at: [f32; 2], side: f32, singles: bool, roll: &mut impl FnMut() -> u32) -> [f32; 4] {
         let w = width(singles);
         let d = toward(me, at);
-        let reach = ((F(11.885) + me[1].abs()) / d[1].abs()).0;
+        let reach = ((F(BASELINE) + me[1].abs()) / d[1].abs()).0;
         let mut x = (F::ZERO + me[0]).madd(d[0], reach).0;
         let depth = if x.abs() <= w {
-            11.885
+            BASELINE
         } else {
             x = if d[0] < 0.0 { (-F(w)).0 } else { w };
             ((F(x) - me[0]) / d[0] * d[1].abs()).0
@@ -490,7 +540,7 @@ impl AiParams {
         let len = (F::ZERO + lo).madd(F(hi) - lo, uniform(roll)).0;
         let v = [(F(x0) * inv * len).0, 0.0, (F(z0) * inv * len).0, 0.0];
         let aw = self.angle_width;
-        let mut rad = (f32::from_bits(0x3c8e_fa35) * (F::ZERO + -F(aw)).madd(F(aw) - -F(aw), uniform(roll))).0;
+        let mut rad = (DEG * (F::ZERO + -F(aw)).madd(F(aw) - -F(aw), uniform(roll))).0;
         if rad > world::PI {
             rad = (fmod(F(world::PI) + rad, world::TWO_PI) - world::PI).0;
         } else if rad < -F(world::PI) {
@@ -513,7 +563,7 @@ impl AiParams {
         };
         if l.volley_level == 3 {
             let x = any_open(open_lanes(z1.0, z2.0), roll);
-            return Aim { stick: aim((x, 0), roll), plan: 0x10 };
+            return Aim { stick: aim((x, 0), roll), plan: plan::VOLLEY_DROP };
         }
         let half = |a: f32, b: f32| ((F(a) + b) * 0.5).0;
         let mid = [half(l.opp[0][0], l.opp[1][0]), half(l.opp[0][1], l.opp[1][1])];
@@ -534,10 +584,10 @@ impl AiParams {
         };
         if open && chance(roll, 30) {
             let x = if mx == 1 { lane_or(roll, 50, 0, 2) } else { line };
-            return Aim { stick: aim((x, 0), roll), plan: 0xc };
+            return Aim { stick: aim((x, 0), roll), plan: plan::VOLLEY };
         }
         if dot < 0.8660254 && 2.5 <= gap && chance(roll, 60) {
-            return Aim { stick: self.aim_at(l.me, mid, l.side, l.singles, roll), plan: 0xc };
+            return Aim { stick: self.aim_at(l.me, mid, l.side, l.singles, roll), plan: plan::VOLLEY };
         }
         // the nearer opponent (to the net) and the other one
         let (near, far, zn, zf) = if l.opp[1][1].abs() < l.opp[0][1].abs() {
@@ -545,17 +595,17 @@ impl AiParams {
         } else {
             (l.opp[0], l.opp[1], z1.0, z2.0)
         };
-        if 6.4 < near[1].abs() {
+        if SERVICE_LINE < near[1].abs() {
             let x = any_open(open_lanes(z1.0, z2.0), roll);
             let d = if x == mx && mx != 1 { 0 } else { (!chance(roll, 80)) as u8 };
             let stick = aim((x, d), roll);
-            let plan = if d == 0 && chance(roll, 10) { 0xd } else { 0xc };
+            let plan = if d == 0 && chance(roll, 10) { plan::VOLLEY_SLICE } else { plan::VOLLEY };
             return Aim { stick, plan };
         }
-        let top = if far[1].abs() <= 6.4 { 70 } else { 90 };
+        let top = if far[1].abs() <= SERVICE_LINE { 70 } else { 90 };
         let u = percent(roll);
         if u < 60 {
-            return Aim { stick: self.aim_at(l.me, near, l.side, l.singles, roll), plan: 0xc };
+            return Aim { stick: self.aim_at(l.me, near, l.side, l.singles, roll), plan: plan::VOLLEY };
         }
         if top <= u {
             let x = if zn != zf {
@@ -567,7 +617,7 @@ impl AiParams {
                     _ => lane_or(roll, 50, 0, 1),
                 }
             };
-            return Aim { stick: aim((x, 2), roll), plan: 0xf };
+            return Aim { stick: aim((x, 2), roll), plan: plan::VOLLEY_LOB };
         }
         let x = match (mx, zn) {
             (1, 1) => lane_or(roll, 50, 2, 0),
@@ -582,7 +632,7 @@ impl AiParams {
         };
         let d = (!chance(roll, 80)) as u8;
         let stick = aim((x, d), roll);
-        let plan = if d == 0 && chance(roll, 10) { 0xd } else { 0xc };
+        let plan = if d == 0 && chance(roll, 10) { plan::VOLLEY_SLICE } else { plan::VOLLEY };
         Aim { stick, plan }
     }
 
@@ -601,49 +651,49 @@ impl AiParams {
         let beside = |roll: &mut dyn FnMut() -> u32, skip: bool| {
             let i = (n as i32 + 1) % 3;
             let pair = [(i % 3) as u8, ((i + 1) % 3) as u8];
-            let k = (roll() >> 16 & 1) as usize;
+            let k = coin(roll()) as usize;
             if skip && pair[k] == line { pair[(k + 1) & 1] } else { pair[k] }
         };
         let mut r = || roll();
-        let (x, d, plan) = if l.formation == 2 && !l.smash_third {
+        let (x, d, plan) = if l.formation == DEFENSIVE && !l.smash_third {
             if free(line) && chance(&mut r, lvl * 15 + 30) {
-                (line, 2, 7)
+                (line, 2, plan::TOPSPIN)
             } else if chance(&mut r, lvl * 10 + 30) {
                 let i = (f as i32 + 1) % 3;
                 let pair = [(i % 3) as u8, ((i + 1) % 3) as u8];
-                (pair[(r() >> 16 & 1) as usize], 2, 10)
+                (pair[coin(r()) as usize], 2, plan::LOB)
             } else if chance(&mut r, lvl * 10 + 30) {
-                (any_open(open, &mut r), 2, 7)
+                (any_open(open, &mut r), 2, plan::TOPSPIN)
             } else if chance(&mut r, lvl * 10 + 30) {
                 let x = beside(&mut r, true);
-                (x, 2, if chance(&mut r, 60) { 7 } else { 8 })
+                (x, 2, if chance(&mut r, 60) { plan::TOPSPIN } else { plan::SLICE })
             } else {
-                let x = ((r() >> 16 & 0x7fff) % 3) as u8;
+                let x = (r15(r()) % 3) as u8;
                 let u = percent(&mut r);
                 let d = if u < 40 { 0 } else if u < 80 { 2 } else { 1 };
-                (x, d, if chance(&mut r, 50) { 7 } else { 8 })
+                (x, d, if chance(&mut r, 50) { plan::TOPSPIN } else { plan::SLICE })
             }
         } else if md != 2 {
             if free(line) && chance(&mut r, lvl * 10 + 30) {
-                (line, 2, 7)
+                (line, 2, plan::TOPSPIN)
             } else if chance(&mut r, lvl * 15 + 30) {
                 let x = beside(&mut r, true);
-                (x, (!chance(&mut r, lvl * 5 + 55)) as u8, 7)
+                (x, (!chance(&mut r, lvl * 5 + 55)) as u8, plan::TOPSPIN)
             } else {
-                let x = ((r() >> 16 & 0x7fff) % 3) as u8;
+                let x = (r15(r()) % 3) as u8;
                 let u = percent(&mut r);
                 let d = if u < 40 { 0 } else if u < 80 { 2 } else { 1 };
-                (x, d, if chance(&mut r, 60) { 7 } else { 8 })
+                (x, d, if chance(&mut r, 60) { plan::TOPSPIN } else { plan::SLICE })
             }
         } else if free(line) && chance(&mut r, lvl * 15 + 30) {
-            (line, 2, 7)
+            (line, 2, plan::TOPSPIN)
         } else if chance(&mut r, lvl * 10 + 30) {
-            (any_open(open, &mut r), 2, 7)
+            (any_open(open, &mut r), 2, plan::TOPSPIN)
         } else if chance(&mut r, lvl * 10 + 30) {
-            (beside(&mut r, false), 2, 7)
+            (beside(&mut r, false), 2, plan::TOPSPIN)
         } else {
-            let x = ((r() >> 16 & 0x7fff) % 3) as u8;
-            (x, 2, if chance(&mut r, 60) { 7 } else { 8 })
+            let x = (r15(r()) % 3) as u8;
+            (x, 2, if chance(&mut r, 60) { plan::TOPSPIN } else { plan::SLICE })
         };
         Aim { stick: self.aim((x, d), l.side, roll), plan }
     }
@@ -655,7 +705,7 @@ impl AiParams {
         let me_in = on_court(l.me, w);
         let u = percent(roll);
         let (x, mut d, mut plan);
-        if l.formation == 2 && !l.smash_third {
+        if l.formation == DEFENSIVE && !l.smash_third {
             // the nearer opponent (to the net) and the other one, both zones blurred
             let (near, far) = if l.opp[1][1].abs() < l.opp[0][1].abs() { (l.opp[1], l.opp[0]) } else { (l.opp[0], l.opp[1]) };
             let (zn, _) = zone_in(near, w, Some(&mut *roll));
@@ -665,33 +715,33 @@ impl AiParams {
             if avoid(cross) {
                 x = cross;
                 d = 2;
-                plan = 7;
-            } else if near[1].abs() <= 6.4 && !(6.4 < far[1].abs() && chance(roll, 30)) {
+                plan = plan::TOPSPIN;
+            } else if near[1].abs() <= SERVICE_LINE && !(SERVICE_LINE < far[1].abs() && chance(roll, 30)) {
                 x = match zf {
                     0 => lane_or(roll, 50, 1, 2),
                     1 => lane_or(roll, 50, 0, 2),
                     _ => (!chance(roll, 50)) as u8,
                 };
                 d = 2;
-                plan = 10;
-            } else if near[1].abs() <= 6.4 {
+                plan = plan::LOB;
+            } else if near[1].abs() <= SERVICE_LINE {
                 x = match zn {
                     0 => 2,
                     2 => 0,
                     _ => lane_or(roll, 50, 0, 2),
                 };
                 d = (!chance(roll, 70)) as u8;
-                plan = 7;
+                plan = plan::TOPSPIN;
             } else {
                 x = if mx == 1 { lane_or(roll, 50, 0, 2) } else { mx };
                 d = (!chance(roll, 80)) as u8;
-                plan = 7;
+                plan = plan::TOPSPIN;
             }
         } else if l.formation == 0 && u < 30 && !l.smash_third {
             let (a, _) = zone_in(l.opp[0], w, Some(&mut *roll));
             let (b, _) = zone_in(l.opp[1], w, Some(&mut *roll));
             x = any_open(open_lanes(a, b), roll);
-            return Aim { stick: self.aim((x, 2), l.side, roll), plan: 10 };
+            return Aim { stick: self.aim((x, 2), l.side, roll), plan: plan::LOB };
         } else {
             x = match mx {
                 0 => if u < 70 { 0 } else { 2 },
@@ -701,15 +751,15 @@ impl AiParams {
                 }
             };
             d = 2;
-            plan = 7;
+            plan = plan::TOPSPIN;
             let base = if u < 70 { 20 } else { 30 };
             let p = if me_in { base } else { base + 10 } + if mate_in { 0 } else { 10 };
             if chance(roll, p) {
-                plan = 8;
+                plan = plan::SLICE;
             }
         }
         let mut stick = self.aim((x, d), l.side, roll);
-        if l.kind == 3 {
+        if l.kind == contact::SMASH {
             if md == 2 && d == 0 {
                 match percent(roll) {
                     u if u < 50 => d = 1,
@@ -717,7 +767,7 @@ impl AiParams {
                     _ => {}
                 }
             }
-            plan = 0x11;
+            plan = plan::SMASH;
             stick = self.aim((x, d), l.side, roll);
         }
         Aim { stick, plan }
@@ -744,11 +794,11 @@ fn body(l: &Look) -> Option<[f32; 4]> {
         x = ((F(dx) + l.opp[0].abs()) * sx).0;
         z = (F(gap) * (if l.opp[1] < 0.0 { -1.0 } else { 1.0 })).0;
     }
-    if x.abs() > 4.115 {
+    if x.abs() > SINGLES_SIDELINE {
         return None;
     }
     let a8 = ((F(z.abs()) - 7.4425) / 4.4425).0;
-    let a0 = (F(x) / 4.115).0;
+    let a0 = (F(x) / SINGLES_SIDELINE).0;
     let m = if a0.abs() <= a8.abs() { a8.abs() } else { a0.abs() };
     let inv = (1.0 / (F(a8) * a8).madd(a0, a0).sqrt()).0;
     let mut v = [(F(a0) * inv).0, 0.0, (F(a8) * inv).0, 0.0];
@@ -768,11 +818,11 @@ fn reroll(roll: &mut impl FnMut() -> u32) -> u8 {
     }
 }
 
-/// The button an aim's plan presses: 1 ✕, 2 ○, 4 △. The serve's plans use it too: toss 1 strong (✕), 0 weak (○),
-/// 2 underhand (△); swing 3 ✕, 4 ○, 6 △.
+/// The button (`button`) an aim's plan (`plan`, the serve's too) presses.
 pub fn button(plan: u8) -> u8 {
-    const BUTTONS: [u8; 19] = [2, 1, 4, 1, 2, 1, 4, 1, 2, 1, 4, 2, 1, 2, 1, 4, 2, 1, 4];
-    BUTTONS.get(plan as usize).copied().unwrap_or(1)
+    use button::{CIRCLE as O, CROSS as X, TRIANGLE as T};
+    const BUTTONS: [u8; 19] = [O, X, T, X, O, X, T, X, O, X, T, O, X, O, X, T, O, X, T];
+    BUTTONS.get(plan as usize).copied().unwrap_or(X)
 }
 
 /// A stick value through the pad's byte (1..=255 about 0x80) and back, unsigned.
@@ -792,15 +842,15 @@ impl AiParams {
     /// right after △ turned ✕), else ○ may turn ✕ (`[4]`). Each chance is drawn only when its button is held.
     pub fn lock_button(&self, button: u8, roll: &mut impl FnMut() -> u32) -> u8 {
         let mut b = button;
-        if b == 4 && chance(roll, self.kind_lock[2]) {
-            b = 1;
+        if b == button::TRIANGLE && chance(roll, self.kind_lock[2]) {
+            b = button::CROSS;
         }
-        if b == 1 {
+        if b == button::CROSS {
             if chance(roll, self.kind_lock[3]) {
-                b = 2;
+                b = button::CIRCLE;
             }
-        } else if b == 2 && chance(roll, self.kind_lock[4]) {
-            b = 1;
+        } else if b == button::CIRCLE && chance(roll, self.kind_lock[4]) {
+            b = button::CROSS;
         }
         b
     }
@@ -816,9 +866,9 @@ impl AiParams {
         let bend = |k: f32| if x == 0.0 { 0.0 } else { pad_step((F(side) * pad_abs(x) * k).0) };
         let z = if len <= 0.0 {
             z
-        } else if kept == 2 && -F(along(z)) >= std::f32::consts::FRAC_1_SQRT_2 && chance(roll, self.kind_lock[1]) {
+        } else if kept == button::CIRCLE && -F(along(z)) >= std::f32::consts::FRAC_1_SQRT_2 && chance(roll, self.kind_lock[1]) {
             bend(-0.96568877)
-        } else if kept == 1 && along(z) >= 0.5 && chance(roll, self.kind_lock[0]) {
+        } else if kept == button::CROSS && along(z) >= 0.5 && chance(roll, self.kind_lock[0]) {
             bend(0.55430907)
         } else {
             z
@@ -829,19 +879,19 @@ impl AiParams {
     /// The serve's toss plan: strong on a first serve; on a second serve strong `second_rate` % of the time (the
     /// character's), else weak; at serve level 0 one in ten tosses underhand instead.
     pub fn serve_toss(second: bool, second_rate: i32, level: u8, roll: &mut impl FnMut() -> u32) -> u8 {
-        let toss = if !second || chance(roll, second_rate) { 1 } else { 0 };
-        if level == 0 && chance(roll, 10) { 2 } else { toss }
+        let toss = if !second || chance(roll, second_rate) { plan::TOSS_STRONG } else { plan::TOSS_WEAK };
+        if level == 0 && chance(roll, 10) { plan::TOSS_UNDER } else { toss }
     }
 
     /// The serve's swing plan, drawn as it presses: △ for an underhand toss, else ✕ `serve_kind[1]` % of the time,
     /// ○ otherwise.
     pub fn serve_swing(&self, toss: u8, roll: &mut impl FnMut() -> u32) -> u8 {
-        if toss == 2 {
-            6
+        if toss == plan::TOSS_UNDER {
+            plan::SWING_UNDER
         } else if chance(roll, self.serve_kind[1]) {
-            3
+            plan::SWING_CROSS
         } else {
-            4
+            plan::SWING_CIRCLE
         }
     }
 
@@ -874,7 +924,7 @@ impl AiParams {
         let (zone, wide, follow) = self.serve_zone(level, swing, ad, lefty, roll);
         let mut spot = None;
         if follow && (self.style == 1 || self.style == 3 && chance(roll, 80)) {
-            let x = F(if swing == 3 { 0.0 } else { 1.3716666 }).madd(1.3716666, F(2.3283064e-10) * utof(roll())).0;
+            let x = F(if swing == plan::SWING_CROSS { 0.0 } else { 1.3716666 }).madd(1.3716666, F(TWO_POW_M32) * utof(roll())).0;
             spot = Some([(F(x) * (if ad { 1.0 } else { -1.0 }) * side).0, (-F(reach) * side).0]);
         }
         let dash = chance(roll, self.net_dash_rate) || spot.is_some();
@@ -884,8 +934,8 @@ impl AiParams {
     /// The serve's zone, whether it is the wide one, and whether a singles net player follows it in.
     fn serve_zone(&self, level: u8, swing: u8, ad: bool, lefty: bool, roll: &mut impl FnMut() -> u32) -> ((u8, u8), bool, bool) {
         let away = if lefty { 0 } else { 2 };
-        let draw = |roll: &mut dyn FnMut() -> u32| roll() >> 16 & 0x7fff;
-        let ((x, z), wide) = match (level, swing == 3) {
+        let draw = |roll: &mut dyn FnMut() -> u32| r15(roll());
+        let ((x, z), wide) = match (level, swing == plan::SWING_CROSS) {
             (0, _) => ((1, 1), false),
             (1, true) if chance(roll, self.serve_kind[0]) => ((if ad { 2 } else { 0 }, 2), true),
             (1, true) => ((if ad { (!chance(roll, 50)) as u8 } else { 2 - chance(roll, 50) as u8 }, 1), false),
@@ -897,7 +947,7 @@ impl AiParams {
             }
             _ => ((away, (draw(roll) % 3) as u8), false),
         };
-        let follow = level >= 2 && (wide && x == if ad { 2 } else { 0 } || swing != 3 && x == if ad { 0 } else { 2 });
+        let follow = level >= 2 && (wide && x == if ad { 2 } else { 0 } || swing != plan::SWING_CROSS && x == if ad { 0 } else { 2 });
         ((x, z), wide, follow)
     }
 

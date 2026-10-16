@@ -4,6 +4,17 @@
 
 /// Cap on the deuce counter (game data value; only shown by the scoreboard).
 const DEUCE_COUNT_CAP: i32 = 99;
+/// The point index of 40.
+const FORTY: i32 = 3;
+/// A tiebreak's points to win (by two, unless deuce is off).
+const TIEBREAK_TO: i32 = 7;
+/// Ends change every this many tiebreak points.
+const TIEBREAK_ENDS: i32 = 6;
+/// Sets the result board keeps (a best of five).
+const MAX_SETS: i32 = 5;
+/// The court side being served from (`Score::side`).
+pub const DEUCE_COURT: i32 = 0;
+pub const AD_COURT: i32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Rules {
@@ -38,7 +49,7 @@ pub struct Score {
     pub advantage: bool,
     pub deuce_count: i32,
     pub tiebreak: bool,
-    /// Tiebreak points played + 1; the server changes when it turns even, ends every 6 points.
+    /// Tiebreak points played + 1; the server changes when it turns even, ends every `TIEBREAK_ENDS` points.
     pub tiebreak_count: i32,
     /// Server rotation counter; the server is `rotation % players`.
     pub rotation: i32,
@@ -52,7 +63,7 @@ pub struct Score {
     /// Rotation and ends when the current tiebreak began (to pick the next set's server).
     pub tiebreak_start: Option<(i32, bool)>,
     pub server: i32,
-    /// 0 = deuce court, 1 = ad court.
+    /// `DEUCE_COURT` or `AD_COURT`.
     pub side: i32,
     pub receiver: i32,
     /// The pending serve is a second serve (fault on the first): no rotation.
@@ -62,7 +73,7 @@ pub struct Score {
     /// The set being played, 0-based (counts on past the last set won; the scoreboard's result board reads it).
     pub set: i32,
     /// Each team's games in each set, as the result board shows them (a tiebreak set as 7-6).
-    pub set_games: [[i32; 5]; 2],
+    pub set_games: [[i32; MAX_SETS as usize]; 2],
 }
 
 impl Score {
@@ -82,9 +93,9 @@ impl Score {
             }
             self.points[winner] += 1;
             let p = self.points[winner];
-            let more = if r.no_deuce { p < 7 } else { p < 7 || (p - self.points[loser]).abs() < 2 };
+            let more = if r.no_deuce { p < TIEBREAK_TO } else { p < TIEBREAK_TO || (p - self.points[loser]).abs() < 2 };
             if more && !self.deuce && !self.advantage {
-                if p == self.points[loser] && p == 7 {
+                if p == self.points[loser] && p == TIEBREAK_TO {
                     self.deuce = true;
                     self.deuce_count = (self.deuce_count + 1).min(DEUCE_COUNT_CAP);
                 }
@@ -114,15 +125,15 @@ impl Score {
             if self.sets[winner] < r.sets {
                 self.tiebreak = false;
                 let e = self.win_set(r, winner);
-                self.set_games[winner][(self.set - 1).min(4) as usize] += 1;
+                self.set_games[winner][(self.set - 1).min(MAX_SETS - 1) as usize] += 1;
                 return Some(e);
             }
         }
         if !r.one_point_games {
             let p = self.points[winner];
-            if p < 3 {
+            if p < FORTY {
                 self.points[winner] += 1;
-                if !r.no_deuce && self.points[winner] == self.points[loser] && self.points[winner] == 3 {
+                if !r.no_deuce && self.points[winner] == self.points[loser] && self.points[winner] == FORTY {
                     self.deuce = true;
                     self.deuce_count = (self.deuce_count + 1).min(DEUCE_COUNT_CAP);
                 }
@@ -154,7 +165,7 @@ impl Score {
         self.games_played += 1;
         self.deuce_count = 0;
         self.games[winner] += 1;
-        self.set_games[winner][self.set.min(4) as usize] = self.games[winner];
+        self.set_games[winner][self.set.min(MAX_SETS - 1) as usize] = self.games[winner];
         let (g, o) = (self.games[winner], self.games[loser]);
         if g < r.games {
             return Some(Event::Game);
@@ -162,7 +173,7 @@ impl Score {
         if g - o < 2 && !self.tiebreak && !r.no_deuce {
             if g == o {
                 self.tiebreak = true;
-                self.side = 1;
+                self.side = AD_COURT;
                 self.tiebreak_count = 1;
             }
             return Some(Event::Game);
@@ -176,7 +187,7 @@ impl Score {
 
     fn win_set(&mut self, r: &Rules, winner: usize) -> Event {
         self.sets[winner] += 1;
-        self.set = (self.set + 1).min(5);
+        self.set = (self.set + 1).min(MAX_SETS);
         self.deuce_count = 0;
         if self.sets[winner] == r.sets {
             self.match_over = true;
@@ -213,11 +224,11 @@ impl Score {
         if self.game_changed {
             self.server = self.rotation % r.players;
             self.game_changed = false;
-            self.side = if !self.tiebreak { 0 } else { (self.side == 0) as i32 };
+            self.side = if !self.tiebreak { DEUCE_COURT } else { (self.side == DEUCE_COURT) as i32 };
             let first_team = self.server == 0 || self.server == 2;
             self.receiver = match (self.side, first_team) {
-                (0, true) => 1,
-                (0, false) => 0,
+                (DEUCE_COURT, true) => 1,
+                (DEUCE_COURT, false) => 0,
                 (_, true) => 3,
                 (_, false) => 2,
             } % r.players;
@@ -237,7 +248,7 @@ impl Score {
                 if self.game_changed && self.games_played % 2 != 0 {
                     self.swapped = !self.swapped;
                 }
-            } else if (self.tiebreak_count - 1) % 6 == 0 && self.tiebreak_count != 1 {
+            } else if (self.tiebreak_count - 1) % TIEBREAK_ENDS == 0 && self.tiebreak_count != 1 {
                 self.swapped = !self.swapped;
             }
         }
@@ -251,13 +262,14 @@ impl Score {
         }
         let p = self.points[team];
         if !self.tiebreak {
-            p > if self.advantage { 3 } else { 2 }
+            p > if self.advantage { FORTY } else { FORTY - 1 }
         } else if self.advantage {
-            p == 8
+            p == TIEBREAK_TO + 1
         } else if r.no_deuce {
-            p == 6
+            p == TIEBREAK_TO - 1
         } else {
-            p == 6 && self.points[team ^ 1] < 6 || p == 7 && self.points[team ^ 1] < 7
+            let o = self.points[team ^ 1];
+            p == TIEBREAK_TO - 1 && o < TIEBREAK_TO - 1 || p == TIEBREAK_TO && o < TIEBREAK_TO
         }
     }
 
