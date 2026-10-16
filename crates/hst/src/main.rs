@@ -447,6 +447,8 @@ fn start(argv: Vec<String>) {
     }
     if crate::fps_log() {
         app.add_systems(Last, (log_fps, log_assets)).add_plugins(stall::plugin);
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Last, web::heap_growth);
     }
     if std::env::var_os("HST_KEYS").is_some() {
         app.add_systems(PreUpdate, scripted_keys.after(bevy::input::InputSystems));
