@@ -2397,22 +2397,25 @@ mod tests {
         m.mods_tab(2, &mut out);
         assert_eq!(m.add.page, Page::Upload);
         super::super::pointer::tests::hits(&m);
-        // each mod's outcome lands beside it (here both fail packing), the last one said in the status bar
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.init_asset::<Image>().init_resource::<Shelf>().init_resource::<super::super::previews::ModCard>();
-        app.insert_resource(m);
-        app.add_systems(Update, page);
+        // each mod's outcome lands beside it (here both fail packing), the last one said in the status bar. B499: read
+        // here, not by `page`: the suite's other tests start store reads (Browse, the main menu's store column) whose
+        // events land in the same queue and say their own words over ours
         // ponytail: up to 30 s for the packing threads, which run late when the whole suite shares the CPU
         for _ in 0..3000 {
-            app.update();
-            let v = &app.world().resource::<Menu>().add;
+            for e in modstore::take() {
+                if let modstore::Event::Upload(dir, u) = e
+                    && m.add.list.iter().any(|x| x.dir == dir)
+                {
+                    m.add.uploaded(dir, u);
+                }
+            }
+            let v = &m.add;
             if v.list.iter().all(|x| matches!(v.ups.get(&x.dir), Some(Up::Failed(_)))) {
                 return assert!(v.status.starts_with("Not uploaded:"), "{}", v.status);
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("no outcomes: {:?}", app.world().resource::<Menu>().add.ups);
+        panic!("no outcomes: {:?}", m.add.ups);
     }
 
     /// M114: uploads in the footer's status on any page, over the last action's words, after the downloads when
