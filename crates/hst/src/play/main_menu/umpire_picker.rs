@@ -3,7 +3,7 @@
 //! the players' area (the screen stays up around it): row 1 the disc's five, Random first; row 2 the umpire mods, only
 //! when any are installed. Each row scrolls sideways on its own ("< a–b of N >" and a scroll bar; ←→ walk it, L1 / R1
 //! a page); ↑↓ change rows, each row keeping its place. A card is the umpire's round face, her name and where she's
-//! from; a mod that ships its own calls carries a "△ voice" tag, and △ plays one of the chosen umpire's calls
+//! from; △ on a mod that ships its own calls plays one of the chosen umpire's calls
 //! (Preview Voice; a disc umpire's or such a mod's, B431). ✕ keeps the pick, ○ puts the old one back.
 
 use bevy::prelude::Entity;
@@ -228,7 +228,7 @@ fn words(m: &Menu, text: &Text, u: usize) -> (String, String) {
     }
 }
 
-/// One umpire's card: her round face in its well, a mod's "△ voice" tag on it, her name and where she's from under it;
+/// One umpire's card: her round face in its well, her name and where she's from under it;
 /// gold-rimmed while she's the chosen card of the row in use (the other row's chosen card dimly).
 fn card(d: &mut Draw, m: &Menu, text: &Text, u: usize, [x, y, w, h]: [f32; 4], on: bool, live: bool) {
     let rim = match (on, live) {
@@ -243,9 +243,6 @@ fn card(d: &mut Draw, m: &Menu, text: &Text, u: usize, [x, y, w, h]: [f32; 4], o
     d.out.last_mut().unwrap().round = [5.0; 4];
     let size = (well[3] - 6.0).min(well[2] - 6.0);
     face(d, m, u, [well[0] + well[2] / 2.0, well[1] + well[3] / 2.0], size);
-    if u > UMPIRES && m.umpire_voiced(u) {
-        voice_tag(d, [well[0] + well[2] - 2.0, well[1] + 2.0]);
-    }
     let ty = well[1] + well[3] + 2.0;
     let (name, sub) = words(m, text, u);
     super::left(d, &name, x + 5.0, ty, 10.0, w - 10.0, NAVY);
@@ -266,20 +263,6 @@ fn face(d: &mut Draw, m: &Menu, u: usize, [x, y]: [f32; 2], size: f32) {
         let fw = size * 46.0 / 44.0;
         d.q(C00, [63.0 + 48.0 * donor as f32, 272.0, 46.0, 44.0], [x - fw / 2.0, y - size / 2.0, fw, size], WHITE, 128.0);
     }
-}
-
-/// The "△ voice" tag, its top-right corner at `[r, t]`: the legend's △ art (the last device's) and the word on a dark
-/// chip.
-fn voice_tag(d: &mut Draw, [r, t]: [f32; 2]) {
-    let style = legend::last_style();
-    let (gh, size) = (9.0, 7.5);
-    let gw = gh * legend::glyph_aspect(style, 3);
-    let w = 3.0 + gw + 2.0 + d.width("voice", size) + 4.0;
-    let chip = [r - w, t, w, gh + 3.0];
-    d.q(Tex::Solid, [0.0; 4], chip, [16.0, 18.0, 26.0], 120.0);
-    d.out.last_mut().unwrap().round = [(gh + 3.0) / 2.0; 4];
-    d.q(Tex::Glyph(style, 3), [0.0; 4], [chip[0] + 3.0, t + 1.5, gw, gh], WHITE, 128.0);
-    d.text("voice", chip[0] + 3.0 + gw + 2.0, t + 1.5 + (gh - size) / 2.0, size, WHITE);
 }
 
 #[cfg(test)]
