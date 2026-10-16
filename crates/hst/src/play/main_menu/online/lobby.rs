@@ -180,7 +180,7 @@ fn remove_rect([x, y, w, _]: [f32; 4]) -> [f32; 4] {
 
 /// The lobby screen; `help` is what the chosen item's buttons do.
 pub(in super::super) fn draw(d: &mut Draw, m: &Menu, hand_x: f32, help: &str) {
-    d.frame(6, 8);
+    frame::navy_frame(d, 6, 8);
     let room = m.net.room.as_ref();
     let items = m.items();
     let rects = m.lobby_rects();

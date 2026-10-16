@@ -17,11 +17,12 @@ const PINK: [f32; 3] = [122.5, 69.0, 96.0];
 const RULE: [f32; 3] = [127.5, 97.0, 111.5];
 const GRADE: [[f32; 3]; 6] = [[67.0, 71.0, 75.0], [78.0, 27.0, 90.5], [14.0, 63.0, 107.0], [23.5, 79.0, 34.0], [107.0, 25.5, 54.0], [120.0, 70.0, 0.0]];
 const STATS: [&str; 5] = ["Serve", "Stroke", "Volley", "Impact", "Footwork"];
-/// The board's navy (VS, words on light boxes), the dark green over the wall, the grey pills, the ready chip's green,
+/// The board's navy (VS, words on light boxes), the soft blue-grey over the background (B448: was a dark green over
+/// the grid paper), the grey pills, the ready chip's green,
 /// the light boxes' cream and their soft caption; a chosen pill's gold fill.
 pub(super) const NAVY: [f32; 3] = [14.5, 21.5, 34.5];
-pub(super) const LEAF: [f32; 3] = [15.5, 29.0, 11.5];
-const LEAF_RULE: [f32; 3] = [55.5, 87.0, 45.0];
+pub(super) const LEAF: [f32; 3] = [84.3, 90.4, 100.4];
+const LEAF_RULE: [f32; 3] = [21.0, 29.0, 44.0];
 pub(super) const SLATE: [f32; 3] = [54.0, 55.5, 71.0];
 const READY: [f32; 3] = [23.5, 84.0, 48.0];
 pub(super) const PAPER: [f32; 3] = [125.5, 123.5, 117.0];
@@ -107,6 +108,15 @@ pub(super) fn dotted(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32,
     for q in &mut d.out[start..] {
         q.dst[0] = x0 + (q.dst[0] - x0) * k;
         q.dst[2] *= k;
+    }
+}
+
+/// B448: `d.frame(title, wall)` with the character select's navy for the wall (no grid paper).
+pub(super) fn navy_frame(d: &mut Draw, title: usize, wall: usize) {
+    let n0 = d.out.len();
+    d.frame(title, wall);
+    if let Some(q) = d.out.get_mut(n0) {
+        (q.tex, q.tile, q.rgb) = (Tex::Solid, false, super::roster::hex(super::roster::BG));
     }
 }
 

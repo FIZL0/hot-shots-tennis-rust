@@ -78,7 +78,7 @@ pub(super) fn rects(m: &Menu) -> [[f32; 4]; super::CONFIRM_ROWS] {
 
 /// The confirm screen (the pickers open over it as their own screens).
 pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
-    d.frame(4, 8);
+    frame::navy_frame(d, 4, 8);
     let g = m.confirm_geo();
     let [l, t, r, _] = m.grid.reach();
     // the top line: the match beside the title's tab, where it's played at the right

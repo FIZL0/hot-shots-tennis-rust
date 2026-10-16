@@ -52,6 +52,7 @@ mod child;
 mod confirm;
 mod frame;
 mod home;
+mod look;
 mod names;
 mod online;
 mod options;
@@ -2409,21 +2410,6 @@ fn mode_bar(d: &mut Draw, i: usize, on: bool, [x, y, w, h]: [f32; 4], words: &st
     }
 }
 
-/// The △ card as the original draws it over panel `p`: the title box in the player's colour with the play style,
-/// the five stat labels and each grade's letter (A at grade 5, F at 0); top-left at `[x, y]`, `s` times the
-/// original's size (144 × 160).
-fn attribute_card(d: &mut Draw, p: usize, style: usize, grades: &[u8; 5], [x, y]: [f32; 2], s: f32) {
-    const TINT: [[f32; 3]; 4] = [[100.0, 39.0, 39.0], [82.0, 63.0, 27.0], [23.0, 69.0, 79.0], [67.0, 72.0, 25.0]];
-    let at = |dx: f32, dy: f32, w: f32, h: f32| [x + dx * s, y + dy * s, w * s, h * s];
-    d.q(ATTRS, [0.0, 0.0, 144.0, 40.0], at(0.0, 2.0, 144.0, 40.0), TINT[p], 128.0);
-    d.q(ATTRS, [0.0, 40.0, 144.0, 40.0], at(0.0, 2.0, 144.0, 40.0), WHITE, 128.0);
-    d.q(ATTRS, [0.0, 80.0 + 40.0 * style as f32, 144.0, 40.0], at(0.0, 2.0, 144.0, 40.0), WHITE, 128.0);
-    d.q(ATTRS, [0.0, 248.0, 112.0, 120.0], at(14.0, 40.0, 112.0, 120.0), WHITE, 128.0);
-    for (k, &g) in grades.iter().enumerate() {
-        d.q(ATTRS, [232.0, 24.0 * (5 - g.min(5)) as f32, 24.0, 24.0], at(102.0, 40.0 + 24.0 * k as f32, 24.0, 24.0), WHITE, 128.0);
-    }
-}
-
 /// B347: a pick's △ grades: the disc character's from the MENU overlay, a mod's from its TParam.csv row (`mod_grades`).
 fn grades_of(text: &Text, w: Who) -> [u8; 5] {
     match w {
@@ -2432,10 +2418,8 @@ fn grades_of(text: &Text, w: Who) -> [u8; 5] {
     }
 }
 
-/// B296: the roster panel's cream and its cells' fills (ours, after the redesign's mockup).
+/// B296: the roster panel's cream (ours, after the redesign's mockup).
 const CREAM: [f32; 3] = [126.0, 122.0, 114.0];
-const CELL_FILL: [f32; 3] = [128.0, 126.0, 120.0];
-const CELL_ON: [f32; 3] = [128.0, 108.0, 38.0];
 /// Words on the cream panels.
 const BROWN: [f32; 3] = [22.0, 15.0, 8.0];
 

@@ -5,7 +5,8 @@
 //! strip's keys only); laid out on the whole view at any aspect (the select's [`Grid`] says how far it reaches).
 
 use super::super::widescreen::{ASPECTS, aspect_choices};
-use super::{BROWN, CHAT, UPDATE_CHECK, VIBRATION, CELL_FILL, CELL_ON, CREAM, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::roster::{self, PX, PY, Seat, rounded};
+use super::{look, CHAT, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::default;
@@ -466,168 +467,160 @@ impl Menu {
     }
 }
 
-/// Words' purple-grey (the mockup's #7a4a5c): footnotes and headings.
-pub(super) const MUTED: [f32; 3] = [61.0, 37.0, 46.0];
-
 /// B294: the Settings pages' list (of `n` rows) and side panel on the view `g` fits (the side panel under the list in a portrait
-/// window), from under the tabs down to the legend strip.
+/// window), from under the top bar down to the legend strip. B448: as the Mods page's columns (`look`), on the view a
+/// portrait window draws larger (`zoom`).
 pub(super) fn boxes(g: &Grid, n: usize) -> ([f32; 4], [f32; 4]) {
-    let [l, y, w, _] = g.strip;
-    let bottom = g.detail[1] + g.detail[3] + 32.0;
-    if g.detail[0] <= g.strip[0] {
-        // portrait: the list as tall as the page's `n` rows want, the panel the rest
-        let h = 30.0 + 32.0 * n as f32;
-        ([l, y, w, h], [l, y + h + 8.0, w, bottom - y - h - 8.0])
+    let (portrait, zoom) = zoom(g);
+    let [l, t, r, b] = zoom.inner(g.view);
+    let (x0, x1) = (l + look::MARGIN * PX, r - look::MARGIN * PX);
+    let w = x1 - x0;
+    let top = t + look::TOP_BAR * PY;
+    let h = b - top;
+    let gap = look::GAP;
+    if portrait {
+        // the list as tall as the page's `n` rows want, the panel the rest
+        let lh = (HEAD + FOOT + 2.0 * look::PAD) * PY + PITCH * PY * n as f32;
+        let lh = lh.min(h - 160.0 - gap * PY);
+        ([x0, top, w, lh], [x0, top + lh + gap * PY, w, h - lh - gap * PY])
     } else {
-        let dw = 220.0f32.min(w * 0.4);
-        ([l, y, w - dw - 8.0, bottom - y], [l + w - dw, y, dw, bottom - y])
+        let dw = (340.0 * PX).min(w * 0.4);
+        ([x0, top, w - dw - gap * PX, h], [x1 - dw, top, dw, h])
     }
 }
 
-/// Row `i` of `n` in the list `list`: 36 apart, closer when they'd run past the footnote.
+/// B448: a list's header (the page's name and its count), its foot (the footnote) and a row's pitch, mockup px.
+const HEAD: f32 = 34.0;
+const FOOT: f32 = 30.0;
+const PITCH: f32 = 46.0;
+
+/// B448: the Settings pages' colour set (the select's 3P blue).
+fn seat() -> Seat {
+    roster::seat(2)
+}
+
+/// Whether `g` is a portrait view, and the zoom its page draws with (`look::Zoom`).
+fn zoom(g: &Grid) -> (bool, look::Zoom) {
+    let portrait = g.detail[0] <= g.strip[0];
+    (portrait, look::Zoom::of(g.view, portrait))
+}
+
+/// Row `i` of `n` in the list `list` (under its header, over its footnote): tiles 46 px apart, closer when they'd run
+/// past the footnote.
 pub(super) fn row(list: [f32; 4], n: usize, i: usize) -> [f32; 4] {
-    let pitch = ((list[3] - 30.0) / n as f32).min(36.0);
-    [list[0] + 8.0, list[1] + 8.0 + pitch * i as f32, list[2] - 16.0, pitch - 4.0]
+    let top = list[1] + (look::PAD + HEAD) * PY;
+    let room = list[1] + list[3] - (look::PAD + FOOT) * PY - top;
+    let pitch = (room / n as f32).min(PITCH * PY);
+    let gap = (pitch * 0.12).min(look::ROW_GAP * PY);
+    [list[0] + look::PAD * PX, top + pitch * i as f32, list[2] - 2.0 * look::PAD * PX, pitch - gap]
 }
 
-/// The tabs across the title band, right of the title's tab (shrunk to fit a narrow window); a tap opens one.
-fn tabs(d: &mut Draw, m: &Menu) {
-    let tabs = tabs_shown();
-    let words: Vec<&str> = tabs.iter().map(|t| t.0).collect();
-    tab_row(d, m, 1, &words, tabs.iter().position(|t| t.1 == TABS[tab(m.screen)].1));
-}
-
-/// Pills `words` across the title band, right of title `title`'s tab (shrunk to fit a narrow window), `on` dark; a
-/// tap on one is `Act::Tab(i)` (Settings, the Mods page).
-pub(super) fn tab_row(d: &mut Draw, m: &Menu, title: usize, words: &[&str], on: Option<usize>) {
-    // right of the title's tab (`Draw::frame`), to the window's right edge (the strip spans the view less 12 a side)
-    let x0 = d.width(super::TITLES[title].0, 30.0) + 88.0;
-    let room = m.grid.strip[2] + 24.0 - x0 - 8.0;
-    let ws: Vec<f32> = words.iter().map(|l| d.width(l, 15.0) + 22.0).collect();
-    let k = (room / (ws.iter().sum::<f32>() + 6.0 * (words.len() - 1) as f32)).min(1.0);
-    // in the centred screen's units from the view's top-left (`Span` would stretch a tab past 640 to the edge)
-    let (mut x, top) = (x0 + m.grid.strip[0] - 12.0, m.grid.strip[1] - 46.0);
-    for (i, (words, w)) in words.iter().zip(&ws).enumerate() {
-        let on = on == Some(i);
-        let b = [x, top + 3.0, w * k, 24.0];
-        d.pill_at(b, [INK, if on { INK } else { [90.0; 3] }, if on { BROWN } else { CELL_FILL }], 128.0);
-        d.label(words, x + w * k / 2.0, top + 7.5, 15.0, (w - 18.0) * k, if on { WHITE } else { BROWN });
-        d.hit(b, pointer::Act::Tab(i));
-        x += (w + 6.0) * k;
-    }
-}
-
-/// `s` broken at spaces to lines `w` wide at `size` from (x, y), `gap` px apart; the y under its last line.
-pub(super) fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, gap: f32, rgb: [f32; 3]) -> f32 {
-    let mut lines: Vec<String> = Vec::new();
-    for word in s.split_whitespace() {
-        match lines.last_mut() {
-            Some(l) if d.width(&format!("{l} {word}"), size) <= w => *l = format!("{l} {word}"),
-            _ => lines.push(word.into()),
-        }
-    }
-    for (i, l) in lines.iter().enumerate() {
-        d.text(l, x, y + gap * i as f32, size, rgb);
-    }
-    y + gap * lines.len() as f32
-}
-
-/// The frame, tabs, list panel and side panel every page shares; the list box.
-fn chrome(d: &mut Draw, m: &Menu, n: usize) -> ([f32; 4], [f32; 4]) {
-    d.frame(1, 6);
-    tabs(d, m);
+/// B448: the page: the navy background, "< Settings" and the page tabs between L1 / R1 (a tap opens one) in the top
+/// bar, the list column with the page's name and count over its rows and its footnote under them, and the side
+/// column; the list box and the side box. The caller draws the rows and the side column's words.
+fn chrome(d: &mut Draw, m: &Menu, s: &Seat, n: usize, name: &str, foot: &str) -> ([f32; 4], [f32; 4]) {
     let (list, side) = boxes(&m.grid, n);
+    let view = zoom(&m.grid).1.inner(m.grid.view);
+    let x = look::title(d, view, "Settings");
+    let tabs = tabs_shown();
+    let words: Vec<String> = tabs.iter().map(|t| t.0.to_string()).collect();
+    let on = tabs.iter().position(|t| t.1 == TABS[tab(m.screen)].1);
+    let ty = view[1] + (look::TOP_BAR - look::PILL) / 2.0 * PY;
+    look::tabs(d, [x, ty, side[0] + side[2] - x], &words, &[seat()], on, Some((5, 6)), pointer::Act::Tab);
     for b in [list, side] {
-        d.box3(b, 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
+        look::column(d, b, s);
     }
+    // the page's name and its count of rows
+    let (ix, iw) = (list[0] + 2.0 * look::PAD * PX, list[2] - 4.0 * look::PAD * PX);
+    let hs = 20.0 * PY;
+    let hy = list[1] + look::PAD * PY + (HEAD * PY - hs) / 2.0 - 2.0 * PY;
+    d.text(name, ix, hy, hs, WHITE);
+    let count = format!("{n} {}", if m.screen == Screen::Controls { "actions" } else if n == 1 { "option" } else { "options" });
+    let cs = 13.0 * PY;
+    d.text(&count, ix + iw - d.width(&count, cs), hy + (hs - cs) / 2.0, cs, s.soft);
+    let fs = 12.5 * PY;
+    d.text(foot, ix, list[1] + list[3] - (look::PAD + FOOT) * PY + (FOOT * PY - fs) / 2.0 + 2.0 * PY, fs, s.soft.map(|c| c * 0.8));
     (list, side)
 }
 
-/// The chosen row's highlight and the hand beside it.
-pub(super) fn chosen(d: &mut Draw, r: [f32; 4], hand_x: f32) {
-    d.box3(r, 10.0, [Some(INK), None, Some(CELL_ON)], 128.0);
-    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [r[0] - 16.0 + hand_x, r[1] + r[3] / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
-}
-
-/// The side panel: a name, what it does, its choices as chips (the current one dark) and a footnote.
-fn side_panel(d: &mut Draw, side: [f32; 4], name: &str, about: &str, heading: &str, chips: &[String], now: Option<&str>, note: &str) {
+/// The side column: a name, what it does, a rule headed `heading` (CHOICES) over its choices as pills (the current
+/// one filled) and a footnote.
+#[allow(clippy::too_many_arguments)]
+fn side_panel(d: &mut Draw, s: &Seat, side: [f32; 4], name: &str, about: &str, heading: &str, chips: &[String], now: Option<&str>, note: &str) {
     let [x, y, w, _] = side;
-    let (x, w) = (x + 14.0, w - 28.0);
-    let mut y = para(d, name, x, y + 12.0, w, 22.0, 26.0, BROWN) + 4.0;
-    y = para(d, about, x, y, w, 14.0, 18.0, BROWN) + 10.0;
+    let (x, w) = (x + 16.0 * PX, w - 32.0 * PX);
+    let mut y = look::para(d, name, [x, y + 14.0 * PY], w, 24.0 * PY, 28.0 * PY, 2, WHITE) + 6.0 * PY;
+    y = look::para(d, about, [x, y], w, 14.0 * PY, 19.0 * PY, 8, s.soft) + 14.0 * PY;
     if !chips.is_empty() {
-        d.text(heading, x, y, 12.0, MUTED);
-        y += 18.0;
+        // the rule: its heading in small capitals, a line on to the edge
+        let hs = 11.0 * PY;
+        let head = heading.to_uppercase();
+        d.text(&head, x, y, hs, s.soft.map(|c| c * 0.8));
+        let hx = x + d.width(&head, hs) + 8.0 * PX;
+        d.q(Tex::Solid, [0.0; 4], [hx, y + hs / 2.0 - 1.0 * PY, x + w - hx, 2.0 * PY], s.well, 128.0);
+        y += hs + 10.0 * PY;
+        let (ph, cs) = (26.0 * PY, 13.0 * PY);
         let mut cx = x;
         for c in chips {
-            let cw = d.width(c, 13.0) + 16.0;
+            let cw = (d.width(c, cs) + 24.0 * PX).min(w);
             if cx + cw > x + w && cx > x {
-                (cx, y) = (x, y + 24.0);
+                (cx, y) = (x, y + ph + 6.0 * PY);
             }
-            let on = now == Some(c.as_str());
-            d.pill_at([cx, y, cw, 20.0], [INK, if on { INK } else { [90.0; 3] }, if on { BROWN } else { CELL_FILL }], 128.0);
-            d.centred(c, cx + cw / 2.0, y + 3.5, 13.0, if on { WHITE } else { BROWN });
-            cx += cw + 5.0;
+            look::word_pill(d, [cx, y, cw, ph], s, now == Some(c.as_str()), c, cs);
+            cx += cw + 6.0 * PX;
         }
-        y += 32.0;
+        y += ph + 14.0 * PY;
     }
-    para(d, note, x, y, w, 12.0, 16.0, MUTED);
+    look::para(d, note, [x, y], w, 12.5 * PY, 17.0 * PY, 5, s.soft.map(|c| c * 0.8));
 }
 
-/// An options page: the rows in the list, each label on the left and its value on the right (a tap picks the row;
-/// picked, its value between ◀ ▶, B326), a volume as a bar beside its number; the chosen one's name, description and
-/// choices in the side panel.
+/// A page's name as its header says it (B411: Advanced's under Graphics).
+fn page_name(s: Screen) -> &'static str {
+    if s == Screen::Advanced { "Graphics > Advanced" } else { TABS[tab(s)].0 }
+}
+
+/// An options page: the rows in the list as tiles (the chosen one the selected colour, a ring inset), each label on the
+/// left and its value in a "< value >" pill on the right (a tap picks the row; picked, the pill filled and its halves
+/// step it, B326), a volume as a bar beside it; the chosen one's name, description and choices in the side column.
 pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let opts = page(m.screen);
-    let (list, side) = chrome(d, m, opts.len());
+    let s = seat();
+    let z = zoom(&m.grid).1;
+    look::backdrop(d);
+    let n0 = d.out.len();
+    let (list, side) = chrome(d, m, &s, opts.len(), page_name(m.screen), "Changes apply right away");
+    let mut edit = None;
     for (i, &o) in opts.iter().enumerate() {
         let r @ [x, y, w, h] = row(list, opts.len(), i);
         let on = i == m.sel;
-        if on {
-            chosen(d, r, hand_x);
-        }
-        let ink = if locked(o) { [80.0; 3] } else { BROWN };
-        let size = (h * 0.6).min(18.0);
-        let vw = 130.0f32.min(w * 0.36);
-        let vx = x + w - vw - 4.0;
-        d.text(label(o), x + 14.0, y + (h - size) / 2.0, size, ink);
+        look::tile(d, r, &s, on);
+        let ink = if locked(o) { s.soft.map(|c| c * 0.6) } else { WHITE };
+        let size = (h * 0.42).min(15.0 * PY);
+        let vh = (h - 10.0 * PY).min(26.0 * PY);
+        let vw = 130.0f32.min(w * 0.4);
+        let vb = [x + w - vw - 4.0, y + (h - vh) / 2.0, vw, vh];
+        d.text(&roster::ellipsis(d, label(o), size, vb[0] - x - 30.0 * PX), x + 14.0 * PX, y + (h - size) / 2.0, size, ink);
         if m.editing.is_none() {
-            d.hit([x, y, w, h], pointer::Act::Row(i, pointer::OK));
+            d.hit(r, pointer::Act::Row(i, pointer::OK));
         }
-        d.box3([vx, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
         let value = m.settings.value(o);
-        d.label(&value, vx + vw / 2.0, y + (h - size) / 2.0, size, vw - 40.0, if value == "Off" { MUTED } else { ink });
-        if let Volume(s) = o {
+        let editing = on && m.editing.is_some() && !locked(o);
+        if o == Advanced {
+            // (a way in, not a value: no arrows)
+            look::word_pill(d, vb, &s, false, &value, size);
+        } else if !editing {
+            look::steps(d, vb, &s, false, &value, size, value == "Off" || locked(o));
+        }
+        if let Volume(k) = o {
             let sw = 110.0f32.min(w * 0.22);
-            let bar = [vx - sw - 12.0, y + h / 2.0 - 3.0, sw, 6.0];
-            d.box3(bar, 3.0, [None, None, Some([118.0, 105.0, 110.0])], 128.0);
-            d.box3([bar[0], bar[1], (sw * m.settings.2 .0[s] as f32 / 10.0).max(6.0), 6.0], 3.0, [None, None, Some([109.0, 58.0, 72.0])], 128.0);
+            let bar = [vb[0] - sw - 12.0 * PX, y + h / 2.0 - 3.0 * PY, sw, 6.0 * PY];
+            rounded(d, bar, 3.0, s.well, 128.0);
+            rounded(d, [bar[0], bar[1], (sw * m.settings.2 .0[k] as f32 / 10.0).max(6.0 * PX), bar[3]], 3.0, s.ring, 128.0);
         }
-        // B326: only the picked row takes ◀ ▶: its value blue between them (a slider's gone at its ends), its value's
-        // halves step it, the rest of the row keeps it, a tap off puts it back (as ○)
-        if locked(o) || !(on && m.editing.is_some()) {
-            continue;
+        if editing {
+            edit = Some((i, o, r, vb, value, size));
         }
-        d.popup(Some(pointer::press(|k| k.back = true)));
-        d.box3([vx, y + 3.0, vw, h - 6.0], 8.0, [Some(INK), None, Some([40.0, 90.0, 128.0])], 128.0);
-        d.label(&value, vx + vw / 2.0, y + (h - size) / 2.0, size, vw - 40.0, WHITE);
-        let ends = match o {
-            Volume(s) => (m.settings.2 .0[s] > 0, m.settings.2 .0[s] < 10),
-            _ => (true, true),
-        };
-        if ends.0 {
-            d.text("<", vx + 8.0, y + (h - size) / 2.0, size, WHITE);
-        }
-        if ends.1 {
-            d.text(">", vx + vw - 8.0 - d.width(">", size), y + (h - size) / 2.0, size, WHITE);
-        }
-        d.hit([x, y, w, h], pointer::Act::Row(i, pointer::OK));
-        d.hit([vx, y, vw / 2.0, h], pointer::Act::Row(i, Press { left: true, ..default() }));
-        d.hit([vx + vw / 2.0, y, vw / 2.0, h], pointer::Act::Row(i, Press { right: true, ..default() }));
     }
-    // B411: Advanced says where it is (its tab is Graphics')
-    let foot = if m.screen == Screen::Advanced { "Graphics > Advanced: changes apply right away" } else { "Changes apply right away" };
-    d.text(foot, list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
     if let Some(&o) = opts.get(m.sel) {
         let preset = matches!(o, Scale | Shadows | Msaa | Fps | Vsync | Original | Mesh | FewerShadows | Cull);
         let note = if preset {
@@ -644,8 +637,31 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         let reach: Option<String> = None;
         let note = reach.as_deref().unwrap_or(note);
         let now = m.settings.value(o);
-        side_panel(d, side, label(o), about(o), "Choices", &choices(o), Some(&now), note);
+        side_panel(d, &s, side, label(o), about(o), "Choices", &choices(o), Some(&now), note);
     }
+    // B326: only the picked row takes < >: its value pill filled (an arrow's gone at a slider's end), its value's
+    // halves step it, the rest of the row keeps it, a tap off puts it back (as ○)
+    if let Some((i, o, r @ [_, y, _, h], vb, value, size)) = edit {
+        d.popup(Some(pointer::press(|k| k.back = true)));
+        let [vx, vy, vw, vh] = vb;
+        look::pill(d, vb, &s, true, false);
+        let ink = s.ink;
+        d.label(&value, vx + vw / 2.0, vy + (vh - size) / 2.0, size, vw - 40.0 * PX, ink);
+        let ends = match o {
+            Volume(k) => (m.settings.2 .0[k] > 0, m.settings.2 .0[k] < 10),
+            _ => (true, true),
+        };
+        if ends.0 {
+            d.text("<", vx + 9.0 * PX, vy + (vh - size) / 2.0, size, ink);
+        }
+        if ends.1 {
+            d.text(">", vx + vw - 9.0 * PX - d.width(">", size), vy + (vh - size) / 2.0, size, ink);
+        }
+        d.hit(r, pointer::Act::Row(i, pointer::OK));
+        d.hit([vx, y, vw / 2.0, h], pointer::Act::Row(i, Press { left: true, ..default() }));
+        d.hit([vx + vw / 2.0, y, vw / 2.0, h], pointer::Act::Row(i, Press { right: true, ..default() }));
+    }
+    z.apply(d, n0);
     switch_layout(d, m, hand_x);
 }
 
@@ -702,62 +718,68 @@ fn webgl2_reach(fps: f64, play: bool, refresh: Option<f64>) -> String {
     }
 }
 
-/// The Controls page: each action with its keys and its pad buttons in two columns (✕ rebinds: the next key or
-/// button pressed replaces that column's); the chosen one's bindings in the side panel.
-pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings, hand_x: f32) {
+/// The Controls page: each action with its keys and its pad buttons in two columns of pills (✕ rebinds: the next key
+/// or button pressed replaces that column's); the chosen one's bindings in the side column.
+pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings, _hand_x: f32) {
     let names: Vec<String> = controls::action_names().map(|n| n[..1].to_uppercase() + &n[1..].replace('_', " ")).collect();
-    let (list, side) = chrome(d, m, names.len() + 1);
+    let n = names.len() + 1;
+    let s = seat();
+    let z = zoom(&m.grid).1;
+    look::backdrop(d);
+    let n0 = d.out.len();
+    let (list, side) = chrome(d, m, &s, n, "Controls", "Saved to controls.txt");
     let body = controls_body(list);
     let waiting = m.rebinding.is_some();
     let col = |r: [f32; 4], c: usize| {
         let vw = r[2] * 0.3;
         [r[0] + r[2] - 4.0 - (2 - c) as f32 * vw - (1 - c) as f32 * 6.0, vw]
     };
-    let [_, _, _, h0] = row(body, names.len() + 1, 0);
-    for (c, head) in ["Keyboard", "Controller"].into_iter().enumerate() {
-        let [cx, vw] = col(row(body, names.len() + 1, 0), c);
-        d.centred(head, cx + vw / 2.0, list[1] + 8.0, (h0 * 0.45).min(13.0), MUTED);
+    let r0 = row(body, n, 0);
+    let hs = 11.0 * PY;
+    for (c, head) in ["KEYBOARD", "CONTROLLER"].into_iter().enumerate() {
+        let [cx, vw] = col(r0, c);
+        d.centred(head, cx + vw / 2.0, r0[1] - hs - 5.0 * PY, hs, s.soft.map(|c| c * 0.8));
     }
-    for (i, n) in names.iter().enumerate() {
-        let r @ [x, y, _, h] = row(body, names.len() + 1, i);
+    for (i, nm) in names.iter().enumerate() {
+        let r @ [x, y, _, h] = row(body, n, i);
         let on = i == m.sel;
-        if on {
-            chosen(d, r, hand_x);
-        }
-        let size = (h * 0.6).min(18.0);
-        d.text(n, x + 14.0, y + (h - size) / 2.0, size, BROWN);
+        look::tile(d, r, &s, on);
+        let size = (h * 0.42).min(15.0 * PY);
+        let vh = (h - 10.0 * PY).min(26.0 * PY);
+        d.text(&roster::ellipsis(d, nm, size, col(r, 0)[0] - x - 20.0 * PX), x + 14.0 * PX, y + (h - size) / 2.0, size, WHITE);
         let (pads, keys): (Vec<String>, Vec<String>) = bind.names(i).into_iter().partition(|n| n.starts_with("Pad"));
         for (c, v) in [keys, pads].into_iter().enumerate() {
             let [cx, vw] = col(r, c);
-            let s = if on && waiting { "press...".to_string() } else if v.is_empty() { "-".to_string() } else { v.iter().map(|n| shown(n)).collect::<Vec<_>>().join("  ") };
-            d.box3([cx, y + 3.0, vw, h - 6.0], 8.0, [None, None, Some(if on { WHITE } else { [123.0, 115.0, 118.0] })], 128.0);
-            d.label(&s, cx + vw / 2.0, y + (h - size * 0.85) / 2.0, size * 0.85, vw - 16.0, if on && waiting || v.is_empty() { MUTED } else { BROWN });
+            let t = if on && waiting { "press...".to_string() } else if v.is_empty() { "-".to_string() } else { v.iter().map(|n| shown(n)).collect::<Vec<_>>().join("  ") };
+            let b = [cx, y + (h - vh) / 2.0, vw, vh];
+            look::pill(d, b, &s, on && waiting, false);
+            let ink = if on && waiting { s.ink } else if v.is_empty() { s.soft.map(|c| c * 0.75) } else { WHITE };
+            d.label(&t, cx + vw / 2.0, b[1] + (vh - size * 0.9) / 2.0, size * 0.9, vw - 16.0 * PX, ink);
         }
         d.hit(r, pointer::Act::Row(i, pointer::OK));
     }
     {
         // the last row: Reset to defaults
         let i = names.len();
-        let r @ [x, y, _, h] = row(body, names.len() + 1, i);
-        if i == m.sel {
-            chosen(d, r, hand_x);
-        }
-        d.text("Reset to defaults", x + 14.0, y + (h - (h * 0.6).min(18.0)) / 2.0, (h * 0.6).min(18.0), BROWN);
+        let r @ [x, y, _, h] = row(body, n, i);
+        look::tile(d, r, &s, i == m.sel);
+        let size = (h * 0.42).min(15.0 * PY);
+        d.text("Reset to defaults", x + 14.0 * PX, y + (h - size) / 2.0, size, WHITE);
         d.hit(r, pointer::Act::Row(i, pointer::OK));
     }
-    d.text("Saved to controls.txt", list[0] + 16.0, list[1] + list[3] - 22.0, 12.0, MUTED);
-    if let Some(n) = names.get(m.sel) {
+    if let Some(nm) = names.get(m.sel) {
         let about = if waiting { "Press the new key or button for it (Escape cancels). A key replaces its keys, a button its buttons." } else { "Choose it to rebind it: the next key or button you press." };
         let chips: Vec<String> = bind.names(m.sel).iter().map(|n| shown(n).to_string()).collect();
-        side_panel(d, side, n, about, "Bound to", &chips, None, "");
+        side_panel(d, &s, side, nm, about, "Bound to", &chips, None, "");
     } else {
-        side_panel(d, side, "Reset to defaults", "Puts every key and button back as it was first.", "", &[], None, "");
+        side_panel(d, &s, side, "Reset to defaults", "Puts every key and button back as it was first.", "", &[], None, "");
     }
+    z.apply(d, n0);
 }
 
 /// The Controls page's rows' box: the list less the column headings on top.
 pub(super) fn controls_body(list: [f32; 4]) -> [f32; 4] {
-    [list[0], list[1] + 18.0, list[2], list[3] - 18.0]
+    [list[0], list[1] + 16.0 * PY, list[2], list[3] - 16.0 * PY]
 }
 
 /// A binding's name as the page shows it: `KeyW` W, `Digit1` 1, `PadDPadUp` DPadUp (controls.txt keeps the full ones).

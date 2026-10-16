@@ -26,7 +26,7 @@ use bevy::window::PrimaryWindow;
 use super::super::widescreen;
 use super::child::{Child, Got};
 use super::mods_kind;
-use super::{BROWN, CARD_FILL, CELL_FILL, CHAR_NAMES, CREAM, Draw, Effect, GOLD, INK, Menu, Press, Screen, Tex, WHITE, attribute_card};
+use super::{CARD_FILL, Draw, Effect, GOLD, INK, Menu, Press, Screen, Tex, WHITE};
 use crate::modstore::{self, Entry, Event, Kind, Up};
 use crate::mods::Mod;
 
@@ -50,9 +50,6 @@ const TOP: usize = 3;
 const UP_TOP: usize = 2;
 /// The tabs across the title band, in Q/E order.
 const PAGES: [Page; 4] = [Page::Browse, Page::Installed, Page::Upload, Page::Mine];
-/// A mod card's height and pitch in the list.
-const CARD_H: f32 = 40.0;
-const CARD_PITCH: f32 = 45.0;
 
 const RULE: &str = "Only upload what you have the right to share: you're responsible for it. It goes live for everyone at once.";
 
@@ -424,31 +421,6 @@ fn who(author: &str) -> &str {
     if author.is_empty() { "unknown uploader" } else { author }
 }
 
-/// Where a move from row `sel` goes (`acts` pills side by side in a row over the list, `n` rows in all): ←→ between
-/// the pills, ↓ from them to the first mod, ↑ from the first mod back to them; ↑↓ wrap round the whole page.
-fn nav(sel: usize, acts: usize, n: usize, k: Press) -> usize {
-    let mods = n > acts;
-    if sel < acts {
-        if k.left || (k.up && !mods) {
-            (sel + acts - 1) % acts
-        } else if k.right || (k.down && !mods) {
-            (sel + 1) % acts
-        } else if k.down {
-            acts
-        } else if k.up {
-            n - 1
-        } else {
-            sel
-        }
-    } else if k.down {
-        if sel + 1 < n { sel + 1 } else { 0 }
-    } else if k.up {
-        if sel == acts { 0 } else { sel - 1 }
-    } else {
-        sel
-    }
-}
-
 fn mb(n: u64) -> String {
     format!("{} MB", n.div_ceil(1 << 20))
 }
@@ -527,12 +499,12 @@ impl Menu {
         // B383: the search box (not typing into it) after every switch; another kind's games are another list
         self.sel = 0;
         let b = &mut self.add.b;
-        (b.focus, b.tile_at, b.rail_at, b.game) = (false, 0, 0, None);
+        (b.focus, b.tile_at, b.pill_at, b.game, b.filter) = (false, 0, 0, None, 0);
         out.push(Effect::Sound(0));
     }
 
-    /// B383: Show `s` in the rail: Everything, Updates and Saved mods filter the store's mods, Installed and My
-    /// uploads are their own grids; a filter keeps the cursor on its option, another page puts it on the search box.
+    /// B383: Show `s`: Everything, Updates and Saved mods filter the store's mods, Installed and My uploads are their
+    /// own grids.
     fn mods_show(&mut self, s: grid::Show, out: &mut Vec<Effect>) {
         let to = match s {
             grid::Show::Installed => Page::Installed,
@@ -552,10 +524,10 @@ impl Menu {
             self.add.wish();
         }
         (self.add.top, self.add.b.tile_at) = (0, 0);
-        if let Some(i) = self.add.rail().iter().position(|o| *o == grid::Opt::Show(s)) {
-            // another page (Installed, My uploads, back to the store's) starts on the search box like a kind switch
-            self.sel = if page { 0 } else { 2 + self.add.words().len() + i };
-            self.add.b.rail_at = i;
+        // B448: the cursor stays on the pill (every grid page has the pills; another page's words may be more)
+        if let Some(i) = self.add.pills().iter().position(|p| *p == grid::Pill::Show(s)) {
+            self.sel = 2 + self.add.words().len() + i;
+            self.add.b.pill_at = i;
         }
         out.push(Effect::Sound(0));
     }
@@ -651,21 +623,12 @@ impl Menu {
         }
         let n = self.add.rows();
         self.sel = self.sel.min(n.max(1) - 1);
-        if self.add.grid() && n > 0 {
-            // B383: the search box types only while it was pressed and the cursor is on it
-            if self.add.slot(self.sel) != grid::Slot::Search {
-                self.add.b.focus = false;
-            }
-            return self.browse_scroll();
+        // B383: the search box types only while it was pressed and the cursor is on it
+        if self.add.grid() && n > 0 && self.add.slot(self.sel) != grid::Slot::Search {
+            self.add.b.focus = false;
         }
-        // the mods scroll under the pills; `top` is the first mod drawn
-        let shown = shown(&self.grid);
-        let v = &mut self.add;
-        let acts = v.acts();
-        if let Some(i) = self.sel.checked_sub(acts) {
-            v.top = v.top.min(i).max((i + 1).saturating_sub(shown));
-        }
-        v.top = v.top.min((n - acts).saturating_sub(shown));
+        // B448: Upload's tiles scroll as the grids' do
+        self.browse_scroll();
     }
 
     /// B202: opens the child buttons `opts` (and Cancel) on the chosen row, saying `status`.
@@ -805,7 +768,8 @@ impl Menu {
     /// The list's own press (no child open).
     fn list_step(&mut self, k: Press, n: usize, out: &mut Vec<Effect>) {
         use Effect::Sound;
-        let to = nav(self.sel, self.add.acts(), n, k);
+        let _ = n;
+        let to = self.upload_move(k);
         if to != self.sel {
             self.sel = to;
             if !matches!(self.add.page, Page::Upload | Page::Mine) && !self.add.busy {
@@ -1188,80 +1152,6 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     d.said = "Mod changes take effect after a restart. Reload restarts the game now; Later carries on without them.".into();
 }
 
-/// The list box and the side panel on the view `g` fits, from under the title band down to the legend strip: the
-/// panel right of the list (under it in a portrait window), as Settings' pages (`options::boxes`).
-fn boxes(g: &super::Grid) -> ([f32; 4], [f32; 4]) {
-    let [l, _, w, _] = g.strip;
-    // B383: under the header's row on a narrow view (Upload and the downloads' pill), as the grid's
-    let y = grid::lay(g).rail[1];
-    let bottom = g.detail[1] + g.detail[3] + 32.0;
-    // a portrait view: the detail panel spans the width
-    if g.detail[2] >= g.strip[2] {
-        let h = ((bottom - y) * 0.55).max(150.0);
-        ([l, y, w, h], [l, y + h + 8.0, w, bottom - y - h - 8.0])
-    } else {
-        let dw = 290.0f32.min(w * 0.47);
-        ([l, y, w - dw - 8.0, bottom - y], [l + w - dw, y, dw, bottom - y])
-    }
-}
-
-/// The pills' row and the first card's top in the list box.
-const PILLS_Y: f32 = 10.0;
-const CARDS_Y: f32 = 50.0;
-
-/// The mod cards the list shows at once (the rest scroll).
-fn shown(g: &super::Grid) -> usize {
-    let (list, _) = boxes(g);
-    (((list[3] - CARDS_Y - 8.0 + CARD_PITCH - CARD_H) / CARD_PITCH) as usize).max(1)
-}
-
-/// Row `r`'s rect: a pill in the row over the list, or a mod's card (None: scrolled off).
-fn row_rect(v: &View, list: [f32; 4], shown: usize, r: usize) -> Option<[f32; 4]> {
-    let [x, y, w, _] = list;
-    let pills = pill_ws(v);
-    if r < v.acts() {
-        let x = x + 12.0 + pills[..r].iter().map(|pw| pw + 8.0).sum::<f32>();
-        return Some([x, y + PILLS_Y, pills[r], 30.0]);
-    }
-    let k = (r - v.acts()).checked_sub(v.top).filter(|k| *k < shown)?;
-    Some([x + 22.0, y + CARDS_Y + CARD_PITCH * k as f32, w - 40.0, CARD_H])
-}
-
-/// The pills' widths.
-fn pill_ws(v: &View) -> &'static [f32] {
-    match v.page {
-        Page::Installed => &[100.0, 84.0, 110.0],
-        Page::Browse if v.by.is_some() => &[140.0, 110.0],
-        Page::Browse | Page::Mine => &[110.0],
-        Page::Upload => &[170.0, 120.0],
-    }
-}
-
-/// The page's pills over its list.
-fn pill_words(v: &View) -> Vec<String> {
-    match v.page {
-        Page::Installed => vec!["Add mod".into(), "Reload".into(), "Remove all".into()],
-        Page::Browse if v.by.is_some() => vec!["Download all".into(), "All mods".into()],
-        Page::Browse | Page::Mine => vec!["Refresh".into()],
-        Page::Upload => vec![v.account.as_ref().map_or("Sign in".into(), |a| format!("Signed in: {}", short(a, 14))), "Upload all".into()],
-    }
-}
-
-/// What a card shows: its face, name, the line under it, its chips (words, colour) and play style (its fill).
-struct Card {
-    face: Option<(Tex, [f32; 4])>,
-    name: String,
-    sub: String,
-    chips: Vec<(&'static str, [f32; 3])>,
-    style: Option<usize>,
-}
-
-/// The chips' words' colours (on white, the lobby's): Verified and Uploaded green, Update orange, Error red.
-const GREEN: [f32; 3] = [30.0, 61.0, 15.0];
-const ORANGE: [f32; 3] = [90.0, 48.0, 3.0];
-const RED: [f32; 3] = [100.0, 15.0, 15.0];
-const GREY: [f32; 3] = [55.0; 3];
-
 /// Installed mod `md`'s face in the select's roster (built at startup: one added since has none yet); M8f9/B400:
 /// an umpire mod's head from its `previews/umpire.png`, as the umpire select's card has it.
 fn face_of(m: &Menu, dir: &Path) -> Option<(Tex, [f32; 4])> {
@@ -1275,167 +1165,15 @@ fn mod_of(m: &Menu, dir: &Path) -> Option<usize> {
     m.mods.iter().position(|x| bare(&x.dir) == bare(dir))
 }
 
-/// The faces of the installed mods the list shows now, top first: what `previews.rs` bakes and reads first while
-/// this page is up, so its cards fill in without a select visit.
+/// The faces of the installed mods on the tiles on view, top first: what `previews.rs` bakes and reads first while
+/// this page is up, so its tiles fill in without a select visit.
 pub(super) fn faces(m: &Menu) -> Vec<super::Who> {
-    let v = &m.add;
-    if v.grid() {
-        return grid::faces(m);
-    }
-    let shown = shown(&m.grid);
-    (v.acts() + v.top..v.rows().min(v.acts() + v.top + shown))
-        .filter_map(|r| match v.local(r) {
-            Some(md) => mod_of(m, &md.dir),
-            None => v.hovered(r).and_then(|e| v.installed(e)).and_then(|(_, dir)| mod_of(m, dir)),
-        })
-        .map(super::Who::Mod)
-        .collect()
+    grid::faces(m)
 }
 
-fn card_of(m: &Menu, r: usize) -> Option<Card> {
-    let v = &m.add;
-    if let Some(md) = v.local(r) {
-        let style = v.stats.get(&md.dir).map(|s| s.0);
-        let mut sub = if md.source.is_empty() { format!("Folder {}", md.folder()) } else { format!("From {}", md.source) };
-        if let Some(s) = style {
-            sub = format!("{sub} - {}", super::STYLE_NAMES[s.min(3)]);
-        }
-        let chips = match v.ups.get(&md.dir).filter(|_| v.page == Page::Upload) {
-            Some(u) => vec![up_tag(u)],
-            None => modstore::stamp(&md.dir).map(|_| vec![("From store", GREY)]).unwrap_or_default(),
-        };
-        return Some(Card { face: face_of(m, &md.dir), name: md.name.clone(), sub, chips, style });
-    }
-    let e = v.hovered(r)?;
-    let mt = &e.meta;
-    // (who uploaded it is its heading's, or the author's list's title)
-    let sub = if mt.source.is_empty() { String::new() } else { format!("From {}", mt.source) };
-    let mut chips = Vec::new();
-    if e.verified {
-        chips.push(("Verified", GREEN));
-    }
-    match v.jobs.get(&e.key()).map(|j| j.0).or_else(|| v.state(e)) {
-        Some(t @ "Update") => chips.push((t, ORANGE)),
-        Some(t @ "Error") => chips.push((t, RED)),
-        Some(t) => chips.push((t, GREY)),
-        None => {}
-    }
-    let face = v.installed(e).and_then(|(_, dir)| face_of(m, dir));
-    Some(Card { face, name: mt.name.clone(), sub, chips, style: mt.style.map(usize::from) })
-}
-
-/// A mod's card (the lobby's seat rows, `seat_row`): filled its play style's colour, gold-ringed when chosen, its
-/// face (or its initial), name and line, its chips at the right end.
-fn card(d: &mut Draw, [x, y, w, h]: [f32; 4], c: &Card, on: bool) {
-    let fill = c.style.map_or([56.0, 56.0, 67.0], |s| CARD_FILL[s.min(3)]);
-    d.box3([x, y, w, h], 12.0, [Some(INK), Some(if on { GOLD } else { WHITE }), Some(fill)], 128.0);
-    let fx = x + h / 2.0 + 2.0;
-    match c.face {
-        Some(f) => super::face_frame(d, f, fx, y + h / 2.0, h - 6.0, WHITE),
-        None => {
-            let r = (h - 6.0) / 2.0;
-            for (src, dst) in super::super::menu_art::pill_quads(0, [fx - r, y + h / 2.0 - r, 2.0 * r, 2.0 * r]) {
-                d.q(Tex::Pill, src, dst, [40.0; 3], 128.0);
-            }
-            let initial: String = c.name.chars().take(1).collect();
-            d.centred(&initial.to_uppercase(), fx, y + h / 2.0 - 10.0, 20.0, WHITE);
-        }
-    }
-    let mut cx = x + w - 6.0;
-    for (words, rgb) in c.chips.iter().rev() {
-        let cw = d.width(words, 12.0) + 16.0;
-        cx -= cw;
-        d.pill_at([cx, y + (h - 18.0) / 2.0, cw, 18.0], [[60.0; 3], WHITE, WHITE], 128.0);
-        d.label(words, cx + cw / 2.0, y + (h - 12.0) / 2.0, 12.0, cw - 6.0, *rgb);
-        cx -= 4.0;
-    }
-    let (tx, tw) = (fx + h / 2.0 + 4.0, cx - fx - h / 2.0 - 8.0);
-    // too long for the room left by the chips: smaller, never squeezed
-    let fit = |d: &Draw, s: &str, size: f32| size * (tw / d.width(s, size).max(1.0)).min(1.0);
-    let (ns, ss) = (fit(d, &c.name, 17.0), fit(d, &c.sub, 11.0));
-    super::left(d, &c.name, tx, y + 3.0 + (17.0 - ns) / 2.0, ns, tw, WHITE);
-    super::left(d, &c.sub, tx, y + 22.0 + (11.0 - ss) / 2.0, ss, tw, [118.0; 3]);
-}
-
-
+/// B448: the page (`grid.rs` draws every page in the select's look).
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
-    let v = &m.add;
-    d.frame(5, 6);
-    if v.grid() && !v.empty_kind() {
-        // B372: the picture grid (B383: Browse, Installed and My uploads; it draws the header too)
-        grid::layout(d, m, hand_x);
-        if v.child.is_some() {
-            side_panel(d, m, grid::lay(&m.grid).detail, hand_x);
-        }
-        if let Some(r) = v.nophone {
-            nophone(d, if r == 0 { "Add mod" } else { "Upload my mod" });
-        }
-        if let Some(a) = v.wipe {
-            wipe_popup(d, v, a, hand_x);
-        }
-        return;
-    }
-    // B383: the header (the kinds, Upload, the downloads), then Upload's list or a kind still to come
-    grid::header(d, m, &grid::lay(&m.grid));
-    let (list, side) = boxes(&m.grid);
-    for b in [list, side] {
-        d.box3(b, 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
-    }
-    let shown = shown(&m.grid);
-    let words = pill_words(v);
-    let pills = pill_ws(v);
-    let mut hand = None;
-    for r in 0..v.rows() {
-        let Some(rect) = row_rect(v, list, shown, r) else { continue };
-        let on = r == m.sel;
-        if r < v.acts() {
-            // B208: Add mod can't pick a file on a phone
-            let off = v.phone && v.page == Page::Installed && r == 0;
-            super::side_button(d, rect, &words[r], on && !off, false);
-            if off {
-                d.box3(rect, 15.0, [None, None, Some([40.0; 3])], 80.0);
-            }
-        } else if let Some(c) = card_of(m, r) {
-            card(d, rect, &c, on);
-        }
-        d.hit(rect, super::pointer::Act::Row(r, super::pointer::OK));
-        if on {
-            hand = Some(rect);
-        }
-    }
-    if let Some(b) = v.by.as_ref().filter(|_| v.page == Page::Browse) {
-        // B255: whose mods these are, beside the pills
-        let x = list[0] + 12.0 + pills.iter().map(|w| w + 8.0).sum::<f32>() + 4.0;
-        super::left(d, &format!("Mods by {}", b.author), x, list[1] + PILLS_Y + 7.0, 16.0, list[0] + list[2] - x - 12.0, BROWN);
-    }
-    let mods = v.rows() - v.acts();
-    if mods_kind::coming(v.kind).is_some() {
-        mods_kind::empty(d, v.kind, list);
-    } else if mods == 0 {
-        let none = match v.page {
-            Page::Installed | Page::Upload => "No mods installed yet: install one from the store first.",
-            Page::Browse if v.busy => "Reading the mod store...",
-            Page::Browse => "Nobody has shared a mod yet.",
-            Page::Mine if v.account.is_none() => "Sign in to see your uploads: Upload (top right), then Sign in.",
-            Page::Mine if v.busy => "Reading your uploads...",
-            Page::Mine => "None of your mods are on the store.",
-        };
-        super::options::para(d, none, list[0] + 22.0, list[1] + CARDS_Y + 4.0, list[2] - 44.0, 15.0, 19.0, super::options::MUTED);
-    } else if mods > shown {
-        // the scroll bar
-        let (ty, th) = (list[1] + CARDS_Y, CARD_PITCH * shown as f32 - (CARD_PITCH - CARD_H));
-        let tx = list[0] + list[2] - 12.0;
-        d.box3([tx, ty, 5.0, th], 2.5, [None, None, Some([110.0, 104.0, 100.0])], 128.0);
-        let (k, at) = (shown as f32 / mods as f32, v.top as f32 / mods as f32);
-        d.box3([tx, ty + th * at, 5.0, (th * k).max(10.0)], 2.5, [None, None, Some([70.0, 60.0, 64.0])], 128.0);
-    }
-    if let Some(r) = hand {
-        d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [r[0] - 18.0 + hand_x, r[1] + r[3] / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
-    }
-    side_panel(d, m, side, hand_x);
-    if let Some(r) = v.nophone {
-        nophone(d, if r == 0 { "Add mod" } else { "Upload my mod" });
-    }
+    grid::layout(d, m, hand_x);
 }
 
 /// What the chosen row does, or the last action's outcome.
@@ -1459,171 +1197,15 @@ fn info(m: &Menu) -> String {
     }
 }
 
-/// The side panel: the chosen mod's picture and △ card, its name, a line of who and where, its facts as chips and
-/// what a press does; on a pill, its name and what it does. An open child's buttons stack at its foot (the rest
-/// dims and takes no input).
-fn side_panel(d: &mut Draw, m: &Menu, side: [f32; 4], hand_x: f32) {
-    let v = &m.add;
-    let [x, y, w, h] = side;
-    let (tx, tw) = (x + 14.0, w - 28.0);
-    let mut ty = y + 12.0;
-    let wide = w > 2.0 * h;
-    let mut chips: Vec<String> = Vec::new();
-    let mut name = String::new();
-    let mut meta = String::new();
-    let mut stats = None;
-    if let Some(e) = v.hovered(m.sel) {
-        let mt = &e.meta;
-        name = mt.name.clone();
-        meta = [
-            (!mt.author.is_empty()).then(|| format!("by {}", mt.author)),
-            Some(format!("v{}", if mt.version.is_empty() { "1" } else { &mt.version })),
-            Some(mb(mt.size)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" - ");
-        chips = facts(&mt.source, mt.hand.map(f32::from), mt.costumes.map(|c| c as usize), mt.like.map(usize::from));
-        chips.push(if e.verified { "Verified".into() } else { "Not reviewed yet".into() });
-        stats = mt.style.map(usize::from).zip(mt.grades);
-    } else if let Some(md) = v.local(m.sel) {
-        name = md.name.clone();
-        meta = format!("Folder {}", md.folder());
-        chips = if v.kind == Kind::Character { facts(&md.source, Some(md.hand), Some(md.costumes.len()), Some(md.donor)) } else { facts(&md.source, None, None, None) };
-        stats = v.stats.get(&md.dir).copied();
-        // B250: its upload's outcome (the pull request's link, or why not)
-        if let Some(u) = v.ups.get(&md.dir).filter(|_| v.page == Page::Upload) {
-            let t = up_tag(u).0;
-            meta = match u {
-                Up::Done(s) | Up::Skipped(s) | Up::Failed(s) => format!("{t}: {}", s.rsplit(' ').next().filter(|w| w.starts_with("https://")).unwrap_or(s)),
-                _ => t.into(),
-            };
-        }
-    }
-    let child = v.child.as_ref();
-    let foot = child.map_or(0.0, |c| 34.0 * c.opts.len() as f32 + 8.0);
-    if !name.is_empty() && child.is_none() {
-        // the picture (as the select's) and the △ card beside it; in a wide short panel, text right of them
-        let ph = 160.0f32.min(h - 24.0);
-        let aspect = v.shot_aspect.unwrap_or(super::previews::CARD_W);
-        let pic = [x + 12.0, ty, (ph * aspect).min(w - 174.0).max(60.0), ph];
-        d.box3(pic, 8.0, [None, None, Some([122.0, 108.0, 115.0])], 128.0);
-        if v.shot {
-            // B402: the bake's 4:5 on screen (M8f9: a court's or umpire's own shape), as big as the box allows
-            let pw = pic[2].min(ph * aspect);
-            let phh = pw / aspect;
-            d.q(Tex::Shelf, [0.0, 0.0, 1.0, 1.0], [pic[0] + (pic[2] - pw) / 2.0, pic[1] + (ph - phh) / 2.0, pw, phh], WHITE, 128.0);
-        } else {
-            d.centred("No picture", pic[0] + pic[2] / 2.0, pic[1] + ph / 2.0 - 7.0, 13.0, super::options::MUTED);
-        }
-        let ax = pic[0] + pic[2] + 6.0;
-        let card = !wide || w >= 560.0;
-        match stats.filter(|_| card) {
-            Some((style, grades)) if ph >= 150.0 => attribute_card(d, 2, style, &grades, [ax, ty - 4.0], 1.0),
-            Some((style, _)) => super::left(d, super::STYLE_NAMES[style.min(3)], ax, ty + 4.0, 13.0, 144.0, BROWN),
-            None => d.text("No stats", ax + 40.0, ty + ph / 2.0 - 7.0, 13.0, super::options::MUTED),
-        }
-        if wide {
-            ty = y + 12.0;
-            let x2 = if card { ax + 156.0 } else { ax + 8.0 };
-            return side_text(d, m, [x2, ty, x + w - 14.0 - x2, y + h - 12.0 - foot], &name, &meta, &chips);
-        }
-        ty += ph + 8.0;
-    }
-    if let Some(c) = child {
-        // B202: the child's buttons (Cancel last) over the panel's foot, the rest dimmed
-        if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
-            d.out.remove(i);
-        }
-        d.popup(Some(super::pointer::press(|k| k.back = true)));
-        d.anchor = super::Anchor::Span;
-        d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 50.0);
-        d.anchor = super::Anchor::Centre;
-        d.box3(side, 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
-        let what = if name.is_empty() { pill_words(v).get(c.row).cloned().unwrap_or_default() } else { name.clone() };
-        let ty = super::options::para(d, &what, tx, y + 12.0, tw, 22.0, 26.0, BROWN) + 4.0;
-        super::options::para(d, &info(m), tx, ty, tw, 14.0, 18.0, BROWN);
-        for (k, (r, word)) in child_rects(c, side).into_iter().zip(&c.opts).enumerate() {
-            super::side_button(d, r, word, k == c.at, false);
-            d.hit(r, super::pointer::Act::Row(k, super::pointer::OK));
-            if k == c.at {
-                d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [r[0] - 18.0 + hand_x, r[1] + r[3] / 2.0 - 9.0, 36.0, 18.0], WHITE, 128.0);
-            }
-        }
-        return;
-    }
-    if name.is_empty() && mods_kind::coming(v.kind).is_some() {
-        // B373: a kind the store doesn't carry yet: what it is and how it behaves online
-        name = mods_kind::name(v.kind).into();
-        meta = mods_kind::online(v.kind).into();
-    } else if name.is_empty() {
-        // a pill: its name and what it does
-        name = pill_words(v).get(m.sel).cloned().unwrap_or_default();
-    }
-    side_text(d, m, [tx, ty, tw, y + h - 12.0 - ty], &name, &meta, &chips);
-}
-
-/// B202: the open child's buttons, a column at the side panel's foot.
-fn child_rects(c: &Child, [x, y, w, h]: [f32; 4]) -> Vec<[f32; 4]> {
-    let n = c.opts.len();
-    (0..n).map(|k| [x + 22.0, y + h - 12.0 - 34.0 * (n - k) as f32, w - 36.0, 30.0]).collect()
-}
-
-/// The side panel's words in `[x, y, w, h]`: the name, the who-and-where line, the facts as chips, what a press does.
-fn side_text(d: &mut Draw, m: &Menu, [x, y, w, h]: [f32; 4], name: &str, meta: &str, chips: &[String]) {
-    use super::options::{MUTED, para};
-    let mut y = y;
-    super::left(d, name, x, y, 22.0, w, BROWN);
-    y += 26.0;
-    if !meta.is_empty() {
-        super::left(d, meta, x, y, 12.0, w, MUTED);
-        y += 18.0;
-    }
-    let mut cx = x;
-    for c in chips {
-        let cw = (d.width(c, 12.0) + 14.0).min(w);
-        if cx + cw > x + w && cx > x {
-            (cx, y) = (x, y + 22.0);
-        }
-        d.pill_at([cx, y, cw, 18.0], [INK, [90.0; 3], CELL_FILL], 128.0);
-        d.label(c, cx + cw / 2.0, y + 3.0, 12.0, cw - 8.0, BROWN);
-        cx += cw + 4.0;
-    }
-    if !chips.is_empty() {
-        y += 26.0;
-    }
-    let _ = h;
-    para(d, &info(m), x, y, w, 12.0, 16.0, MUTED);
-}
-
-/// B250: an upload's chip, and its words' colour.
-fn up_tag(u: &Up) -> (&'static str, [f32; 3]) {
+/// B250: an upload's tag.
+fn up_tag(u: &Up) -> &'static str {
     match u {
-        Up::Queued => ("Queued", GREY),
-        Up::Uploading => ("Uploading", GREY),
-        Up::Done(_) => ("Uploaded", GREEN),
-        Up::Skipped(_) => ("Skipped", GREY),
-        Up::Failed(_) => ("Failed", RED),
+        Up::Queued => "Queued",
+        Up::Uploading => "Uploading",
+        Up::Done(_) => "Uploaded",
+        Up::Skipped(_) => "Skipped",
+        Up::Failed(_) => "Failed",
     }
-}
-
-/// A mod's facts as chips: where it's from, its hand, costumes and the disc character it plays like.
-fn facts(source: &str, hand: Option<f32>, costumes: Option<usize>, like: Option<usize>) -> Vec<String> {
-    let mut l = Vec::new();
-    if !source.is_empty() {
-        l.push(format!("From {source}"));
-    }
-    if let Some(h) = hand {
-        l.push(format!("{}-handed", if h < 0.0 { "Left" } else { "Right" }));
-    }
-    if let Some(c) = costumes {
-        l.push(format!("{c} costume{}", if c == 1 { "" } else { "s" }));
-    }
-    if let Some(name) = like.and_then(|c| CHAR_NAMES.get(c)) {
-        l.push(format!("Plays like {name}"));
-    }
-    l
 }
 
 /// B445: Remove all uploads' warning over a dimmed page, in B205's popup style: what goes, that it can't be undone,
@@ -2178,11 +1760,6 @@ mod tests {
         Press { ok: true, ..default() }
     }
 
-    /// Row `r`'s drawn rect (a pill, or a card while on screen).
-    fn rect(m: &Menu, r: usize) -> [f32; 4] {
-        row_rect(&m.add, boxes(&m.grid).0, shown(&m.grid), r).unwrap()
-    }
-
     /// B383: the Installed grid (Show → Installed) on the mods put in `list`; its first tile's cursor slot.
     fn installed(m: &mut Menu) -> usize {
         m.mods_page(Page::Installed, 0);
@@ -2257,7 +1834,7 @@ mod tests {
         m.mods_step(ok(), &mut out);
         // the pointer: only the child's buttons, a tap elsewhere is Back
         let at = |m: &Menu, x: f32, y: f32| super::super::pointer::tests::act_at(m, x, y);
-        let r = child_rects(m.add.child.as_ref().unwrap(), grid::lay(&m.grid).detail);
+        let r = grid::child_rects(m.add.child.as_ref().unwrap(), grid::lay(&m.grid).detail);
         let p = grid::lay(&m.grid).search;
         assert_eq!(at(&m, p[0] + 10.0, p[1] + 5.0), None);
         assert_eq!(at(&m, r[1][0] + 10.0, r[1][1] + 5.0), Some(super::super::pointer::Act::Row(1, super::super::pointer::OK)));
@@ -2322,7 +1899,7 @@ mod tests {
         }
         m.add.list = vec![a_mod("t_all1", "A"), a_mod("t_all2", "B")];
         installed(&mut m);
-        assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Add mod", "Reload", "Remove all"]);
+        assert_eq!(m.add.words(), ["Add mod", "Reload", "Remove all"]);
         m.sel = word(&m, "Remove all");
         let mut out = Vec::new();
         m.mods_step(ok(), &mut out);
@@ -2332,10 +1909,10 @@ mod tests {
         assert!(m.add.status.starts_with("Removed every mod") && m.add.changed, "{}", m.add.status);
     }
 
-    /// B372: Browse's grid: Newest (pull requests newest first, merged ones after), A-Z and Uploader sorts; the search
-    /// matches names, uploaders and games in any case; each rail option counts what it would leave (the other groups'
-    /// filters applied) and filters the tiles; ← from the grid's first column goes into the rail and → back to the
-    /// tile it left, ↑ from the top row to the sort word, ↑ again the search box.
+    /// B372: Browse's grid: Newest (pull requests newest first, merged ones after), A-Z and Uploader sorts, B448: under
+    /// a heading per game (per uploader by Uploader); the search matches names, uploaders and games in any case; the
+    /// filter pill's Select picks Game, Plays like or Hand and ✕ / L1 / R1 step its value; ↑↓ go row to row keeping
+    /// the column, ↑ off the top to the pills, ↑ again the search box, ↓ back where they were.
     #[test]
     fn grid_sorts_filters_and_moves() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
@@ -2354,115 +1931,117 @@ mod tests {
         m.add.have = [("bob/Kent".to_string(), ("old".to_string(), "mods/kent".into()))].into();
         m.mods_page(Page::Browse, 0);
         let names = |m: &Menu| m.add.tiles().iter().map(|e| e.meta.name.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&m), ["Alma", "Carol", "Mia", "Kent", "Zed"]);
+        assert_eq!(names(&m), ["Alma", "Zed", "Carol", "Kent", "Mia"]);
+        let heads = |m: &Menu| m.add.secs().iter().map(|s| (s.name.clone(), s.len)).collect::<Vec<_>>();
+        assert_eq!(heads(&m), [("Fore!".into(), 2), ("Get a Grip".into(), 2), ("Tekken".into(), 1)]);
         m.add.b.sort = grid::Sort::Az;
-        assert_eq!(names(&m), ["Alma", "Carol", "Kent", "Mia", "Zed"]);
+        assert_eq!(names(&m), ["Alma", "Zed", "Carol", "Kent", "Mia"]);
         m.add.b.sort = grid::Sort::Uploader;
         assert_eq!(names(&m), ["Carol", "Mia", "Kent", "Zed", "Alma"]);
+        assert_eq!(heads(&m), [("ann".into(), 2), ("bob".into(), 1), ("cal".into(), 1), ("Unknown uploader".into(), 1)]);
         m.add.b.search = "GRIP".into();
         assert_eq!(names(&m), ["Carol", "Kent"]);
         m.add.b.search = "an".into();
         assert_eq!(names(&m), ["Carol", "Mia"]);
         m.add.b.search.clear();
-        // the rail: games by how many mods (one each: Other only past six), Left-handed, Updates
-        let rail = m.add.rail();
+        // the Game filter's options: games by how many mods (one each: Other only past six)
+        let games = m.add.options(0);
         let label = |o: &grid::Opt| format!("{o:?}");
-        assert!(label(&rail[1]).contains("Fore!") && label(&rail[2]).contains("Get a Grip") && label(&rail[3]).contains("Tekken"), "{rail:?}");
-        let left = rail.iter().position(|o| *o == grid::Opt::Left(true)).unwrap();
-        let upd = rail.iter().position(|o| *o == grid::Opt::Show(grid::Show::Updates)).unwrap();
-        assert_eq!((m.add.count_of(&rail[1]), m.add.count_of(&rail[left]), m.add.count_of(&rail[upd])), (2, 2, 1));
-        let r0 = 2 + m.add.words().len();
+        assert!(label(&games[1]).contains("Fore!") && label(&games[2]).contains("Get a Grip") && label(&games[3]).contains("Tekken"), "{games:?}");
+        assert_eq!(games.len(), 4);
+        // the filter pill: Select to Hand, ✕ Left-handed; Select round to Game, ✕ Fore! (both apply); L1 back
         let mut out = Vec::new();
-        m.sel = r0 + left;
+        let p0 = 2 + m.add.words().len();
+        m.sel = p0 + 6;
+        let hand = Press { hand: true, ..default() };
+        m.mods_step(hand, &mut out);
+        m.mods_step(hand, &mut out);
         m.mods_step(ok(), &mut out);
+        assert_eq!((names(&m), m.add.filter_words()), (vec!["Carol".to_string(), "Zed".into()], "Hand: Left-handed".to_string()));
+        m.mods_step(hand, &mut out);
+        m.mods_step(ok(), &mut out);
+        assert_eq!((names(&m), m.add.filter_words()), (vec!["Zed".to_string()], "Game: Fore! +1".to_string()));
+        m.mods_step(Press { prev: true, ..default() }, &mut out);
         assert_eq!(names(&m), ["Carol", "Zed"]);
-        // the Game counts now count left-handers only: Fore! has one
-        assert_eq!(m.add.count_of(&rail[1]), 1);
-        m.sel = r0 + 1;
-        m.mods_step(ok(), &mut out);
-        assert_eq!(names(&m), ["Zed"]);
-        m.add.b.game = None;
+        assert_eq!(m.sel, p0 + 6);
         m.add.b.left = false;
-        // moves: the second tile ← → the first, ← into the rail (on the option left last), → back to the tile
-        let t0 = m.add.browse_acts();
-        // five a row on a 16:9 view, three on 4:3
-        assert_eq!(grid::lay(&super::super::Grid::fit(16.0 / 9.0)).cols, 5);
-        let cols = grid::lay(&m.grid).cols;
-        assert_eq!(cols, 3);
-        let (l, r, u, d) = (Press { left: true, ..default() }, Press { right: true, ..default() }, Press { up: true, ..default() }, Press { down: true, ..default() });
-        m.sel = t0 + 1;
-        m.mods_step(l, &mut out);
-        assert_eq!(m.sel, t0);
-        m.mods_step(l, &mut out);
-        assert_eq!(m.sel, r0);
-        m.mods_step(d, &mut out);
-        m.mods_step(r, &mut out);
-        assert_eq!(m.sel, t0);
-        // ↑ to the chosen sort's word (Uploader), ↑ to the search box, ↓ back to the sort word, ↓ into the grid
-        m.mods_step(u, &mut out);
-        assert_eq!(m.sel, 2 + 2);
-        m.mods_step(u, &mut out);
-        assert_eq!(m.sel, 0);
-        m.mods_step(d, &mut out);
-        m.mods_step(d, &mut out);
-        assert_eq!(m.sel, t0);
-        // B383: → from the search box to Upload, ↓ from it to the heading's last word, ← back
-        m.sel = 0;
-        m.mods_step(r, &mut out);
-        assert_eq!((m.sel, m.add.slot(1)), (1, grid::Slot::Upload));
-        m.mods_step(d, &mut out);
-        assert_eq!(m.sel, 2 + m.add.words().len() - 1);
-        m.sel = 1;
-        m.mods_step(l, &mut out);
-        assert_eq!(m.sel, 0);
-        // a sort word's press sorts
-        m.sel = 3;
+        // Show's Updates pill: the installed mod with another zip
+        m.sel = p0 + 2;
         m.mods_step(ok(), &mut out);
-        assert_eq!((m.add.b.sort, names(&m)[0].as_str()), (grid::Sort::Az, "Alma"));
-        // the legend says what a tile's buttons do; one kind of mod: no kind switch (B383)
-        m.sel = t0 + 2;
-        let l = grid::legend(&m).into_iter().map(|x| x.1).collect::<Vec<_>>();
-        assert_eq!(l, ["Move", "Update", "More by", "Save", "Back"]);
-        // Upload: Sign in and Upload all side by side, then the mods
-        m.mods_page(Page::Upload, 0);
-        m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
-        let mut go = |k: Press| {
+        assert_eq!((names(&m), m.sel), (vec!["Kent".to_string()], p0 + 2));
+        m.sel = p0;
+        m.mods_step(ok(), &mut out);
+        assert_eq!(names(&m).len(), 5);
+        let t0 = m.add.browse_acts();
+        // more tiles a row on a 16:9 view than on 4:3
+        let cols = grid::lay(&m.grid).cols;
+        assert!(grid::lay(&super::super::Grid::fit(16.0 / 9.0)).cols > cols && cols >= 2, "{cols}");
+        // moves, by Uploader (ann: Carol, Mia; bob: Kent; cal: Zed; Alma): ← → along, ↓ the next heading's row, off
+        // the foot the footer's words, ↑ back to the tile, ↑ off the top the pills, ↑ the search box
+        let (l, r, u, d) = (Press { left: true, ..default() }, Press { right: true, ..default() }, Press { up: true, ..default() }, Press { down: true, ..default() });
+        let mut go = |m: &mut Menu, k: Press| {
             m.mods_step(k, &mut Vec::new());
             m.sel
         };
+        m.sel = t0 + 1;
+        assert_eq!([go(&mut m, l), go(&mut m, l), go(&mut m, r), go(&mut m, d), go(&mut m, d), go(&mut m, d)], [t0, t0, t0 + 1, t0 + 2, t0 + 3, t0 + 4]);
+        assert_eq!([go(&mut m, d), go(&mut m, u)], [2, t0 + 4]);
+        m.sel = t0 + 1;
+        assert_eq!([go(&mut m, u), go(&mut m, r), go(&mut m, u), go(&mut m, d), go(&mut m, d)], [p0, p0 + 1, 0, p0 + 1, t0 + 1]);
+        // B383: → from the search box to Upload, ↓ from it to the pills, ← back
+        m.sel = 0;
+        assert_eq!([go(&mut m, r), go(&mut m, d)], [1, p0 + 1]);
+        m.sel = 1;
+        assert_eq!(go(&mut m, l), 0);
+        // the sort pill: ✕ the next, L1 the one before
+        m.add.b.sort = grid::Sort::Newest;
+        m.sel = p0 + 5;
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.b.sort, names(&m)[0].as_str()), (grid::Sort::Az, "Alma"));
+        m.mods_step(Press { prev: true, ..default() }, &mut out);
+        assert_eq!(m.add.b.sort, grid::Sort::Newest);
+        // the legend says what a tile's buttons do; one kind of mod: no kind switch (B383)
+        m.sel = t0 + names(&m).iter().position(|n| n == "Kent").unwrap();
+        let l = grid::legend(&m).into_iter().map(|x| x.1).collect::<Vec<_>>();
+        assert_eq!(l, ["Move", "Update", "More by", "Save", "Back"]);
+        // Upload: Sign in and Upload all side by side, then the mods' tiles (two: one row)
+        m.mods_page(Page::Upload, 0);
+        m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
         let (l, r, u, d) = (Press { left: true, ..default() }, Press { right: true, ..default() }, Press { up: true, ..default() }, Press { down: true, ..default() });
-        assert_eq!([go(r), go(r), go(l), go(d), go(d), go(u), go(u), go(u)], [1, 0, 1, UP_TOP, UP_TOP + 1, UP_TOP, 0, UP_TOP + 1]);
-        // no mods under the pills: ↑↓ go between them
-        assert_eq!((nav(0, 2, 2, d), nav(1, 2, 2, d), nav(0, 2, 2, u)), (1, 0, 1));
+        assert_eq!([go(&mut m, r), go(&mut m, r), go(&mut m, l), go(&mut m, d), go(&mut m, r), go(&mut m, d), go(&mut m, u), go(&mut m, u), go(&mut m, d)], [1, 1, 0, UP_TOP, UP_TOP + 1, UP_TOP + 1, 0, 0, UP_TOP + 1]);
+        // no mods under the pills: ↓ stays
+        m.add.list.clear();
+        m.sel = 1;
+        assert_eq!(go(&mut m, d), 1);
     }
 
-    /// Upload's long list scrolls to keep the cursor on screen, and taps land on the drawn rows; the browser's file
-    /// input sits on Installed's Add mod word.
+    /// B448: Upload's tiles scroll as the grids' do, keeping the cursor's row (and its heading) on screen, and taps
+    /// land on the drawn tiles; the browser's file input sits on Installed's Add mod word.
     #[test]
     fn scrolls_and_taps() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
-        m.add.list = (0..20).map(|i| a_mod(&format!("m{i}"), &format!("M{i}"))).collect();
+        m.add.list = (0..40).map(|i| a_mod(&format!("m{i}"), &format!("M{i}"))).collect();
         m.mods_page(Page::Upload, 0);
         let mut out = Vec::new();
-        for _ in 0..9 {
-            m.mods_step(Press { down: true, ..default() }, &mut out);
-        }
-        // the cursor's mod (the 9th) is the last card shown
-        let n = shown(&m.grid);
-        assert!(n < 9);
-        assert_eq!((m.sel, m.add.top), (UP_TOP + 8, 9 - n));
+        let lay = grid::lay(&m.grid);
+        let down = |m: &mut Menu, n: usize| (0..n).for_each(|_| m.mods_step(Press { down: true, ..default() }, &mut Vec::new()));
+        down(&mut m, 9);
+        let i = m.sel - UP_TOP;
+        assert!(i >= lay.cols * 4, "{i}");
+        let lines = grid::lines(&m.add.secs(), lay.cols);
+        let (_, tiles) = lay.laid(&lines, m.add.top);
+        assert!(m.add.top > 0);
+        let r = tiles.iter().find(|t| t.0 == i).expect("the cursor's tile on view").1;
         let at = |m: &Menu, x: f32, y: f32| super::super::pointer::tests::act_at(m, x, y);
-        let r = rect(&m, UP_TOP + 8);
-        assert_eq!(at(&m, r[0] + 10.0, r[1] + 5.0), Some(super::super::pointer::Act::Row(UP_TOP + 8, super::super::pointer::OK)));
-        assert!(row_rect(&m.add, boxes(&m.grid).0, n, UP_TOP + 9).is_none());
-        // the gap between two cards goes to the nearer one
-        let first = rect(&m, UP_TOP + m.add.top);
-        assert_eq!(at(&m, first[0] + 10.0, first[1] + CARD_H + 1.0), Some(super::super::pointer::Act::Row(UP_TOP + m.add.top, super::super::pointer::OK)));
-        (0..9).for_each(|_| m.mods_step(Press { up: true, ..default() }, &mut out));
+        assert_eq!(at(&m, r[0] + 10.0, r[1] + 5.0), Some(super::super::pointer::Act::Tile(m.sel)));
+        // to the last row and back up: the heading shows again at the top
+        down(&mut m, 20);
+        assert_eq!(m.add.top, lay.last_top(&lines));
+        (0..20).for_each(|_| m.mods_step(Press { up: true, ..default() }, &mut out));
         assert_eq!((m.sel, m.add.top), (0, 0));
         // B383: the header's Upload button is lit here; a tap on it goes back to the grid
         assert!(add_rect(&m, 4.0 / 3.0, 1.0).is_none());
-        let u = grid::lay(&m.grid).upload;
+        let u = lay.upload;
         assert_eq!(at(&m, u[0] + 10.0, u[1] + 5.0), Some(super::super::pointer::Act::Tab(0)));
         // 4:3 fills the window: Add mod's own place (as last drawn)
         installed(&mut m);
@@ -2497,7 +2076,8 @@ mod tests {
         assert!(m.add.child.is_none());
         // the pointer: a tap on a tile chooses it, a tap on it again presses ✕ (the third tile: it queues)
         use super::super::pointer::{Act, tests::act_at};
-        let c = grid::lay(&m.grid).cell(2);
+        let l = grid::lay(&m.grid);
+        let c = l.laid(&grid::lines(&m.add.secs(), l.cols), 0).1[2].1;
         assert_eq!(act_at(&m, c[0] + 10.0, c[1] + 10.0), Some(Act::Tile(t0 + 2)));
         (m.settings.8, m.add.doing) = (1, vec![e("zz", "z")]);
         m.point(super::super::Dev::Keys, Act::Tile(t0 + 2), true);
@@ -2607,7 +2187,7 @@ mod tests {
         // the menu stays usable meanwhile: My uploads and back
         m.add.mine = Some(Vec::new());
         m.mods_show(grid::Show::Mine, &mut out);
-        assert_eq!((m.add.page, m.sel), (Page::Mine, 0));
+        assert_eq!((m.add.page, m.add.slot(m.sel)), (Page::Mine, grid::Slot::Pill(3)));
         m.mods_tab(2, &mut out);
         assert_eq!(m.add.page, Page::Upload);
         super::super::pointer::tests::hits(&m);
@@ -2678,8 +2258,8 @@ mod tests {
         m.mods_show(grid::Show::Mine, &mut out);
         m.add.account = Some("me".into());
         let t0 = m.add.browse_acts();
-        assert_eq!((m.add.page, m.add.b.show, m.sel, m.add.rows(), m.add.busy), (Page::Mine, grid::Show::Mine, 0, t0 + 2, false));
-        assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Refresh", "Remove all uploads"]);
+        assert_eq!((m.add.page, m.add.b.show, m.sel, m.add.rows(), m.add.busy), (Page::Mine, grid::Show::Mine, t0 - 4, t0 + 2, false));
+        assert_eq!(m.add.words(), ["Refresh", "Remove all uploads"]);
         m.sel = t0;
         m.mods_step(ok(), &mut out);
         assert!(m.add.child.as_ref().is_some_and(|c| c.row == t0 && c.opts[0] == "Take down") && m.add.status.contains("closes its pull request"));
@@ -2776,7 +2356,7 @@ mod tests {
         let t0 = m.add.browse_acts();
         assert_eq!((ids(m.add.entries()), m.sel, m.add.rows()), (vec!["a1".to_string(), "a2".into(), "a3".into(), "a4".into()], t0, t0 + 4));
         assert_eq!(m.add.status, "4 mods by ann.");
-        assert_eq!(m.add.words(), ["Newest", "A-Z", "Uploader", "Download all", "All mods"]);
+        assert_eq!(m.add.words(), ["Download all", "All mods"]);
         // △ again in the author's list says so; □ saves one (its Show filter then lists it)
         m.mods_step(Press { card: true, ..default() }, &mut out);
         assert!(m.add.status.starts_with("These are all ann's"), "{}", m.add.status);
@@ -2856,7 +2436,8 @@ mod tests {
                 _ => assert_eq!(names(&m), ["court"], "{page:?}"),
             }
             if page == Page::Browse {
-                assert!(m.add.rail().iter().all(|o| !matches!(o, grid::Opt::Style(_) | grid::Opt::Left(_))));
+                assert_eq!(m.add.groups(), 1);
+                assert!(m.add.options(0).iter().all(|o| !matches!(o, grid::Opt::Style(_) | grid::Opt::Left(_))));
             }
             // and Umpires
             m.mods_step(r2, &mut out);
@@ -2907,19 +2488,14 @@ mod tests {
     /// row first), at most `cap` fetching at once; one back (`got`) frees a turn; far-off loaded ones go past KEEP.
     #[test]
     fn pictures_on_view_then_ahead() {
-        assert_eq!(grid::plan(30, 5, 0, 2, true), (0..20).collect::<Vec<_>>());
-        assert_eq!(grid::plan(23, 5, 2, 2, true), (10..23).collect::<Vec<_>>());
-        // scrolled up: the screen above, its lowest row first
-        let up = grid::plan(40, 5, 4, 2, false);
-        assert_eq!(&up[..10], (20..30).collect::<Vec<_>>());
-        assert_eq!(&up[10..], [15, 16, 17, 18, 19, 10, 11, 12, 13, 14]);
         let mut m = Menu { screen: Screen::Mods, grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
         let e = |i: usize| Entry { meta: Meta { id: format!("m{i:03}"), name: format!("M{i:03}"), sha256: format!("{i:064x}"), size: 1, ..Default::default() }, rev: "main".into(), verified: true };
         m.add.store = Some((0..200).map(e).collect());
         m.mods_page(Page::Browse, 0);
         m.add.b.sort = grid::Sort::Az;
         let l = grid::lay(&m.grid);
-        let on_view = l.cols * l.rows;
+        let lines = grid::lines(&m.add.secs(), l.cols);
+        let first = grid::plan(&lines, 0, l.fit(&lines, 0), false);
         let go = grid::want(&mut m.add, &l, 3);
         assert_eq!(go.iter().map(|e| e.meta.name.as_str()).collect::<Vec<_>>(), ["M000", "M001", "M002"]);
         assert!(grid::want(&mut m.add, &l, 3).is_empty(), "three on their way: no more");
@@ -2934,13 +2510,15 @@ mod tests {
             }
             n += go.len();
         }
-        assert_eq!(n, 2 * on_view);
+        assert_eq!(n, first.len());
         // a scroll down asks for the screen after; loaded ones far away go once past KEEP
-        m.add.top = l.rows;
+        m.add.top = l.fit(&lines, 0);
         m.add.b.down = true;
         let go = grid::want(&mut m.add, &l, 1000);
-        assert_eq!(go.len(), on_view);
-        assert_eq!(go[0].meta.name, format!("M{:03}", 2 * on_view));
+        let next = grid::plan(&lines, m.add.top, l.fit(&lines, m.add.top), true);
+        assert_eq!(go.len(), next.iter().filter(|i| !first.contains(i)).count());
+        assert_eq!(go[0].meta.name, format!("M{:03}", first.len()));
+        let on_view = first.len() / 2;
         let shas: Vec<String> = m.add.b.pics.keys().cloned().collect();
         for (k, sha) in shas.into_iter().enumerate() {
             grid::got(&mut m.add, sha, Some((k as u32, 1.0)));
