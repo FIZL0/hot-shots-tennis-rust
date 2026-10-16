@@ -191,7 +191,6 @@ fn about(o: Opt) -> &'static str {
     }
 }
 
-/// B329: the Vibration row's text, by what this browser can do (`web/touch.js`).
 /// B421: the phone apps' Aspect Ratio also has Stretch.
 fn aspect_about() -> &'static str {
     if aspect_choices() > 5 {
@@ -201,6 +200,7 @@ fn aspect_about() -> &'static str {
     }
 }
 
+/// B329: the Vibration row's text, by what this browser can do (`web/touch.js`).
 fn vibration_about() -> &'static str {
     #[cfg(target_arch = "wasm32")]
     let can = crate::web::vibration();
@@ -209,6 +209,7 @@ fn vibration_about() -> &'static str {
     match &*can {
         "haptic" => "A light haptic tick on each press of the on-screen controls.",
         "vibrate" => "Buzz briefly on each press of the on-screen controls. Android: not while the phone's ringer is on Silent.",
+        "firefox" => "Firefox for Android doesn't let web pages vibrate, so this does nothing here. Chrome on Android buzzes.",
         _ => "This browser can't vibrate, so this does nothing here.",
     }
 }
