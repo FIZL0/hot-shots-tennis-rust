@@ -123,10 +123,27 @@ pub fn settings_text() -> String {
 /// `packs` in the order `o` gives them (top first): the ones it doesn't name first, in their own order, then its
 /// listed ones; those it has off left out.
 pub fn arrange(root: &Path, packs: Vec<Pack>, o: &Order) -> Vec<Pack> {
-    let at = |p: &Pack| o.order.iter().position(|n| *n == folder(root, &p.dir)).map_or(0, |i| i + 1);
-    let mut on: Vec<Pack> = packs.into_iter().filter(|p| !o.off.contains(&folder(root, &p.dir))).collect();
-    on.sort_by_key(at);
-    on
+    ordered(root, packs, o).into_iter().filter(|p| p.1).map(|p| p.0).collect()
+}
+
+/// M5b: every one of `packs` in the order `o` gives them (top first, as [`arrange`]), the ones switched off in their
+/// places too, each with whether it's on (the Mods page's list).
+pub fn ordered(root: &Path, packs: Vec<Pack>, o: &Order) -> Vec<(Pack, bool)> {
+    let at = |p: &(Pack, bool)| o.order.iter().position(|n| *n == folder(root, &p.0.dir)).map_or(0, |i| i + 1);
+    let mut all: Vec<(Pack, bool)> = packs.into_iter().map(|p| (!o.off.contains(&folder(root, &p.dir)), p)).map(|(on, p)| (p, on)).collect();
+    all.sort_by_key(at);
+    all
+}
+
+/// M5b: the [`Order`] that keeps `rows` (folder and whether it's on, top first) as they are: every one named, the
+/// off ones also in `off` (what the Mods page saves after a move or a switch).
+pub fn order_of(rows: &[(String, bool)]) -> Order {
+    Order { order: rows.iter().map(|r| r.0.clone()).collect(), off: rows.iter().filter(|r| !r.1).map(|r| r.0.clone()).collect() }
+}
+
+/// M5b: the bytes a pack's textures take (its PNGs').
+pub fn bytes(p: &Pack) -> u64 {
+    p.textures.values().filter_map(|f| crate::modfs::size(f)).map(|s| s.0).sum()
 }
 
 /// The packs switched on under `root`, top first ([`list`] in the saved [`order`]).
@@ -205,6 +222,16 @@ mod tests {
         }
         assert_eq!(order(), o);
         assert!(!setting("music", "on"));
+        // M5b: the Mods page's list keeps the off ones in their places; what it saves orders them all
+        let rows: Vec<(String, bool)> = ordered(&root, list(&root), &o).into_iter().map(|(p, on)| (folder(&root, &p.dir), on)).collect();
+        assert_eq!(rows, [("b".to_string(), false), ("d".into(), true), ("c".into(), true), ("a".into(), true)]);
+        let mut moved = rows.clone();
+        moved.swap(2, 3);
+        (moved[0].1, moved[1].1) = (true, false);
+        let o2 = order_of(&moved);
+        assert_eq!(o2, Order { order: vec!["b".into(), "d".into(), "a".into(), "c".into()], off: vec!["d".into()] });
+        assert_eq!(ids(&o2), ["b", "a", "c"]);
+        assert_eq!(bytes(&list(&root)[0]), std::fs::metadata(root.join("a/textures/x-0000000000000001.png")).unwrap().len());
         assert!(setting("texture_packs", " ../x, ok , /abs"));
         assert_eq!(order().order, ["ok"]);
         set_order(saved);

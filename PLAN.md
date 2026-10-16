@@ -128,7 +128,7 @@ the front-end into its `play` module (`mod play { pub use hst_play::play::*; pub
 `crates/hst/src/` — the game on top: menus, modes, startup
 
 - `main.rs` startup, disc load, auto_shot, wasm entry `run` · `play/main_menu.rs` + `play/main_menu/` the front-end
-  (menu rows of the legend in `main_menu/legend.rs`) · `play/menu.rs` the in-match pause screen (embeds the options
+  (menu rows of the legend in `main_menu/legend.rs`; Mods → Installed → Texture packs' list in `main_menu/mods_screen/packs.rs`) · `play/menu.rs` the in-match pause screen (embeds the options
   pages) · `loading.rs` · `sandbox.rs` · `mash.rs` · `update.rs` self-updater
 - no `tests/` dir on purpose (in either crate): any file there makes `cargo test -p <crate>` build the whole game a
   second time (as a binary for it); sim-only tests go in hst-sim

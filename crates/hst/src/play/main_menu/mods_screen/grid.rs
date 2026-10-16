@@ -268,7 +268,9 @@ impl View {
 
     /// B448: the pills row: Show's five, the sort, the filter.
     pub(super) fn pills(&self) -> Vec<Pill> {
-        SHOWS.iter().map(|s| Pill::Show(*s)).chain([Pill::Sort, Pill::Filter]).collect()
+        // M5b: the texture packs' list keeps its own order and has no games: no sort or filter
+        let strip: &[Pill] = if self.packs_page() { &[] } else { &[Pill::Sort, Pill::Filter] };
+        SHOWS.iter().map(|s| Pill::Show(*s)).chain(strip.iter().copied()).collect()
     }
 
     /// The games the filter names (of the kind tab's mods): the most mods first (at most [`GAMES`]; the chosen one
@@ -386,6 +388,11 @@ impl View {
     pub(super) fn tiles(&self) -> Vec<&Entry> {
         let games = self.games().0;
         let mut l: Vec<&Entry> = self.entries().iter().filter(|e| self.keeps(e, &games)).collect();
+        // M5b: the texture packs in their order (the top wins), the sort left out
+        if self.packs_page() {
+            l.sort_by_key(|e| self.pack_of(e));
+            return l;
+        }
         match self.b.sort {
             // the newest pull request first; merged ones (no number) after, A-Z as the store lists them
             Sort::Newest => l.sort_by_key(|e| std::cmp::Reverse(modstore::pr_of(&e.rev).unwrap_or(0))),
@@ -414,6 +421,10 @@ impl View {
         if self.page == Page::Upload {
             let n = if self.empty_kind() { 0 } else { self.locals().len() };
             return if n == 0 { Vec::new() } else { vec![Sec { name: "On this machine".into(), start: 0, len: n }] };
+        }
+        if self.packs_page() {
+            let n = self.items().len();
+            return if n == 0 { Vec::new() } else { vec![Sec { name: "In order: the top pack wins".into(), start: 0, len: n }] };
         }
         let mut out: Vec<Sec> = Vec::new();
         for (i, e) in self.items().iter().enumerate() {
@@ -596,6 +607,24 @@ pub(super) fn lay(g: &super::super::Grid) -> Lay {
     Lay { zoom, shows, search, card, strip, stack, grid, bar, foot, note, upload, detail, cols, tile: [tw, tw * PY / PX], gap: [gx, gy] }
 }
 
+/// M5b: the page's layout: [`lay`], one row a line on the Texture packs list (`packs.rs`).
+pub(super) fn lay_of(m: &Menu) -> Lay {
+    let mut l = lay(&m.grid);
+    if m.add.packs_page() {
+        (l.cols, l.tile) = (1, [l.grid[2], super::packs::ROW * PY]);
+        // no sort or filter pills: a narrow panel's strip keeps one line, the list gets the room
+        if l.stack {
+            let dy = (PILL + ROW_GAP) * PY;
+            l.stack = false;
+            l.strip[3] -= dy;
+            for r in [&mut l.grid, &mut l.bar] {
+                (r[1], r[3]) = (r[1] - dy, r[3] + dy);
+            }
+        }
+    }
+    l
+}
+
 impl Lay {
     /// A line's height (without the gap under it).
     fn line_h(&self, l: &Line) -> f32 {
@@ -663,12 +692,12 @@ impl Menu {
     pub(super) fn browse_move(&mut self, k: Press) -> bool {
         let v = &self.add;
         let (nw, np, n) = (v.words().len(), v.pills().len(), v.tiles().len());
-        let lines = lines(&v.secs(), lay(&self.grid).cols);
+        let lines = lines(&v.secs(), lay_of(self).cols);
         let (w0, p0, t0) = (2, 2 + nw, 2 + nw + np);
         let tile = (n > 0).then(|| t0 + v.b.tile_at.min(n - 1));
         let ns = SHOWS.len();
         let shown = p0 + SHOWS.iter().position(|s| *s == v.b.show).unwrap_or(0);
-        let strip = p0 + v.b.pill_at.clamp(ns, np - 1);
+        let strip = if np > ns { p0 + v.b.pill_at.clamp(ns, np - 1) } else { shown };
         let under = if nw > 0 { w0 } else { 1 };
         let to = match v.slot(self.sel) {
             // B471: the top bar: the Show tabs, then the search box on their right; ↓ to the sort and filter in the
@@ -677,10 +706,10 @@ impl Menu {
             Slot::Pill(i) if i < ns && k.right => if i + 1 < ns { self.sel + 1 } else { 0 },
             Slot::Pill(i) if i < ns && k.down => p0 + ns,
             Slot::Search if k.left => p0 + ns - 1,
-            Slot::Search if k.down => p0 + np - 1,
+            Slot::Search if k.down => if np > ns { p0 + np - 1 } else { tile.unwrap_or(under) },
             Slot::Pill(i) if k.left && i > ns => self.sel - 1,
             Slot::Pill(i) if k.right && i >= ns && i + 1 < np => self.sel + 1,
-            Slot::Pill(i) if k.up && i + 1 == np => 0,
+            Slot::Pill(i) if k.up && i >= ns && i + 1 == np => 0,
             Slot::Pill(_) if k.up => shown,
             Slot::Pill(i) if k.down && i >= ns => tile.unwrap_or(under),
             Slot::Tile(i) => match tile_step(&lines, i, k) {
@@ -712,7 +741,7 @@ impl Menu {
     pub(super) fn upload_move(&mut self, k: Press) -> usize {
         let v = &self.add;
         let n = v.locals().len();
-        let lines = lines(&v.secs(), lay(&self.grid).cols);
+        let lines = lines(&v.secs(), lay_of(self).cols);
         let to = match self.sel.checked_sub(UP_TOP) {
             None if k.left => 0,
             None if k.right => 1,
@@ -794,6 +823,7 @@ impl Menu {
                 (self.add.top, self.add.b.tile_at) = (0, 0);
                 out.push(Sound(0));
             }
+            Slot::Tile(_) if v.packs_page() => self.pack_press(k, out),
             Slot::Tile(_) => {
                 let Some(e) = v.hovered(self.sel).cloned() else { return };
                 if k.card {
@@ -848,7 +878,7 @@ impl Menu {
     /// Keeps the cursor's tile and its heading on view (`top`, the first line shown) and notes which way the grid
     /// scrolled (Browse's grids and Upload's alike).
     pub(super) fn browse_scroll(&mut self) {
-        let l = lay(&self.grid);
+        let l = lay_of(self);
         let v = &mut self.add;
         let lines = lines(&v.secs(), l.cols);
         if let Some(i) = self.sel.checked_sub(v.acts())
@@ -960,7 +990,7 @@ pub(super) fn typing(mut menu: ResMut<Menu>, mut keys: ResMut<ButtonInput<KeyCod
 // ---------------------------------------------------------------- drawing
 
 /// A little rotated bar (the ✓'s, the magnifier's and the spinner's strokes).
-fn bar(d: &mut Draw, [cx, cy]: [f32; 2], len: f32, thick: f32, angle: f32, rgb: [f32; 3], alpha: f32) {
+pub(super) fn bar(d: &mut Draw, [cx, cy]: [f32; 2], len: f32, thick: f32, angle: f32, rgb: [f32; 3], alpha: f32) {
     d.q(Tex::Solid, [0.0; 4], [cx - len / 2.0, cy - thick / 2.0, len, thick], rgb, alpha);
     if let Some(q) = d.out.last_mut() {
         q.angle = angle;
@@ -1231,7 +1261,7 @@ fn upload_button(d: &mut Draw, b @ [x, y, w, h]: [f32; 4], up: bool, on: bool, p
 /// bar, then the grid's panel and the chosen mod's (Browse, Installed, My uploads and Upload alike).
 pub(super) fn layout(d: &mut Draw, m: &Menu, _hand_x: f32) {
     let v = &m.add;
-    let l = lay(&m.grid);
+    let l = lay_of(m);
     let a = look::accent(mods_kind::seat_of(v.kind));
     *ADD_AT.lock().unwrap_or_else(|e| e.into_inner()) = None;
     look::backdrop(d);
@@ -1309,7 +1339,7 @@ fn strip(d: &mut Draw, m: &Menu, l: &Lay) {
     let size = 13.5 * PY;
     let gap = 6.0 * PX;
     let mut rx = x + w;
-    if mods_kind::coming(v.kind).is_some() {
+    if mods_kind::coming(v.kind).is_some() || v.packs_page() {
     } else if v.page == Page::Upload {
         let words = [v.account.as_ref().map_or("Sign in".to_string(), |a| format!("Signed in: {}", super::short(a, 18))), "Upload all".to_string()];
         for (i, word) in words.iter().enumerate().rev() {
@@ -1362,6 +1392,14 @@ fn grid_tiles(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
         let rect = [hit[0], hit[1], l.tile[0], l.tile[1]];
         let on = m.sel == t0 + i;
         let n0 = d.out.len();
+        if v.packs_page() {
+            // M5b: a pack's row, with its own taps
+            if let Some(p) = items.get(i).and_then(|e| v.pack_of(e)) {
+                super::packs::row(d, v, a, rect, on, p, t0 + i);
+                roster::cut(d, n0, foot);
+            }
+            continue;
+        }
         if v.page == Page::Upload {
             let Some(md) = locals.get(i) else { continue };
             let badges: Vec<(&str, [f32; 3])> = v.ups.get(&md.dir).map(|u| vec![up_badge(u)]).unwrap_or_default();
@@ -1384,6 +1422,7 @@ fn grid_tiles(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
             if v.page == Page::Mine { "Reading your uploads..." } else { "Reading the mod store..." }
         } else if v.entries().is_empty() {
             match v.page {
+                Page::Installed if v.packs_page() => "No texture packs installed. Put a pack's folder in mods/, or add its .zip with Add mod.",
                 Page::Installed => "No mods installed yet. Install one from Everything, or use Add mod.",
                 Page::Mine => "None of your mods are on the store.",
                 _ => "Nobody has shared a mod yet.",
@@ -1633,6 +1672,11 @@ fn buttons(d: &mut Draw, m: &Menu, b @ [x, y, w, h]: [f32; 4], child: Option<&su
             [Act::Press(OK), Act::Row(1, OK), Act::Row(0, OK)],
             true,
         )
+    } else if v.packs_page() {
+        // M5b: a pack's switch and moves
+        let Some(r) = v.pack_at(m.sel) else { return primary[1] };
+        let first = if r.on { "Turn off" } else { "Turn on" };
+        ([first.into(), "Move up".into(), "Move down".into()], [Act::Press(OK), press(|p| p.card = true), press(|p| p.page = true)], false)
     } else {
         let Some(e) = v.hovered(m.sel) else { return primary[1] };
         let mt = &e.meta;
@@ -1717,6 +1761,24 @@ fn shown(m: &Menu) -> Option<Shown> {
             verified: None,
         });
     }
+    if v.packs_page() {
+        // M5b: a texture pack: what it is, where it stands, its folder
+        let e = v.hovered(m.sel)?;
+        let i = v.pack_of(e)?;
+        let r = &v.packs[i];
+        return Some(Shown {
+            name: r.name.clone(),
+            by: if r.author.is_empty() { String::new() } else { format!("by {}", r.author) },
+            left: super::packs::count(r.count),
+            right: super::packs::size(r.bytes),
+            face: initial(&r.name, !r.on),
+            loading: false,
+            badge: Some(if r.on { ("On", hex(BADGE_INSTALLED)) } else { ("Off", look::c(look::RULE)) }),
+            stats: None,
+            facts: vec![v.pack_place(i), format!("Folder {}", r.folder), "Where two packs share a texture, the higher wins.".into()],
+            verified: None,
+        });
+    }
     let e = v.hovered(m.sel)?;
     let mt = &e.meta;
     let (face, loading) = entry_face(m, e);
@@ -1776,7 +1838,7 @@ pub(super) fn info(m: &Menu) -> String {
             "Refresh" if v.page == Page::Mine => "Read your uploads from the store again.".into(),
             "Refresh" => "Read the store's list again.".into(),
             "Add mod" if v.phone => "Not available in the browser on phones: use the desktop app.".into(),
-            "Add mod" => "Install a mod from a .zip file on this computer: a character, court or umpire.".into(),
+            "Add mod" => "Install a mod from a .zip file on this computer: a character, court, umpire or texture pack.".into(),
             "Remove all" => "Remove every mod the game installed (ones added by hand stay).".into(),
             "Remove all uploads" => "Take every mod you shared off the store (asks first).".into(),
             "Reload" => super::reload_said(v).into(),
@@ -1798,6 +1860,10 @@ pub(super) fn info(m: &Menu) -> String {
             .into(),
             Pill::Filter if v.groups() > 1 => format!("Showing {}: press for the next, Select for {}.", v.filter_words(), GROUPS[(v.b.filter + 1) % v.groups()].to_lowercase()),
             Pill::Filter => format!("Showing {}: press for the next game.", v.filter_words()),
+        },
+        Slot::Tile(_) if v.packs_page() => match v.hovered(m.sel).and_then(|e| v.pack_of(e)) {
+            Some(i) => format!("{} - {}. Switch it off or on, or move it up or down: the higher pack wins. Reload to see changes.", v.packs[i].name, v.pack_place(i)),
+            None => String::new(),
         },
         Slot::Tile(_) => match v.hovered(m.sel) {
             Some(e) if v.jobs.contains_key(&e.key()) => v.jobs[&e.key()].1.clone(),
@@ -1841,6 +1907,11 @@ pub(super) fn legend(m: &Menu) -> Vec<(super::super::legend::Act, &'static str)>
             Pill::Filter if v.groups() > 1 => l.extend([(L::Ok, "Next"), (L::Hand, "Filter")]),
             Pill::Filter => l.push((L::Ok, "Next")),
         },
+        Slot::Tile(_) if v.packs_page() => {
+            if let Some(r) = v.pack_at(m.sel) {
+                l.extend([(L::Ok, if r.on { "Turn off" } else { "Turn on" }), (L::Card, "Move up"), (L::Page, "Move down"), (L::Hand, "Remove")]);
+            }
+        }
         Slot::Tile(_) => {
             if let Some(e) = v.hovered(m.sel) {
                 let state = v.state(e).or((v.page == Page::Installed).then_some("Installed"));
@@ -1917,7 +1988,7 @@ pub(super) fn got(v: &mut View, sha: String, pic: Option<(u32, f32)>) {
 /// The installed mods' faces on the tiles on view (what `previews.rs` bakes first while the page is up).
 pub(super) fn faces(m: &Menu) -> Vec<super::super::Who> {
     let v = &m.add;
-    let l = lay(&m.grid);
+    let l = lay_of(m);
     let lines = lines(&v.secs(), l.cols);
     let on: Vec<usize> = l.laid(&lines, v.top).1.into_iter().map(|t| t.0).collect();
     let dirs: Vec<&std::path::Path> = if v.page == Page::Upload {
