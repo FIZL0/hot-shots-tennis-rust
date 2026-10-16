@@ -673,6 +673,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B469** iPhone 13 web app: the page reset when he hit a smash, probably a memory spike (smash effect/SFX/voice/replay buffer loaded on first use); find what allocates on the first smash and preload or cap it — same likely cause as B468 — crates/hst/src/play.rs, crates/hst/src/web.rs
 - [x] **B464** iOS Safari web app: Copy link in the online lobby does nothing (bevy clipboard set_text on iOS needs a user-gesture-bound navigator.clipboard.writeText, or fall back to the share sheet / a selectable text field) — crates/hst/src/play/main_menu/online.rs (apply, Copy link), crates/hst/src/web.rs
 - [x] **B465** beta.opentennis.dev: Add to Home Screen on iOS shows no icon (check apple-touch-icon/manifest icon paths resolve on the beta deploy; pages.yml beta build may drop icon-180.png or use a wrong base path) — web/index.html, web/manifest.webmanifest, .github/workflows/pages.yml
+- [x] **B419** Mobile (APK + IPA): the main menu needs a gap at the top so the on-screen controller buttons don't cover it. Push the menu's top edge down by the touch pad's top-row height on touch devices, at any aspect ratio (user 2026-10-15) → crates/hst/src/play/main_menu.rs · crates/hst/src/play/touch_pad.rs · play/widescreen.rs
 
 
 ### Shots

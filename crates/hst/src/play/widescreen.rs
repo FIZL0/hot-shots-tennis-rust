@@ -47,15 +47,21 @@ pub fn view(size: Vec2) -> Rect {
 }
 
 fn view_at(size: Vec2, aspect: u8) -> Rect {
-    view_in(size, aspect, SAFE.each_ref().map(|a| f32::from_bits(a.load(Ordering::Relaxed))))
+    view_below(size, aspect, SAFE.each_ref().map(|a| f32::from_bits(a.load(Ordering::Relaxed))), f32::from_bits(TOP_GAP.load(Ordering::Relaxed)))
 }
 
 /// `view_at` with the safe-area insets `safe` (left, top, right, bottom, as shares of the window's width and height).
-fn view_in(size: Vec2, aspect: u8, [l, t, r, b]: [f32; 4]) -> Rect {
+#[cfg(test)]
+fn view_in(size: Vec2, aspect: u8, safe: [f32; 4]) -> Rect {
+    view_below(size, aspect, safe, 0.0)
+}
+
+/// `view_in` kept below the window's top `gap` (a share of its height, B419), the safe area's top or not.
+fn view_below(size: Vec2, aspect: u8, [l, t, r, b]: [f32; 4], gap: f32) -> Rect {
     if aspect == STRETCH {
-        return Rect::from_corners(Vec2::ZERO, size);
+        return Rect::from_corners(Vec2::new(0.0, gap * size.y), size);
     }
-    let safe = Rect::from_corners(Vec2::new(l * size.x, t * size.y), Vec2::new(size.x * (1.0 - r), size.y * (1.0 - b)));
+    let safe = Rect::from_corners(Vec2::new(l * size.x, t.max(gap) * size.y), Vec2::new(size.x * (1.0 - r), size.y * (1.0 - b)));
     let ratio = RATIOS.get(aspect as usize).copied().unwrap_or(0.0);
     let s = safe.size();
     if ratio == 0.0 || size.x < size.y || s.x <= 0.0 || s.y <= 0.0 {
@@ -68,6 +74,16 @@ fn view_in(size: Vec2, aspect: u8, [l, t, r, b]: [f32; 4]) -> Rect {
 /// M106: the window's safe-area insets (left, top, right, bottom) as shares of its width and height, f32 bits: zero
 /// but in the native phone apps (or with `HST_SAFE`), whose windows reach under the notch and the home indicator.
 static SAFE: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+
+/// B419: the share of the window's height at its top the view keeps below, f32 bits: the touch pad's top row
+/// (L1, Select, Start, R1) while the main menu is up (`main_menu`), so the pad's buttons don't cover the menu; zero
+/// elsewhere (each mode's `plugin` clears it), where the match's picture and HUD keep the whole view.
+static TOP_GAP: AtomicU32 = AtomicU32::new(0);
+
+/// Sets `TOP_GAP` (a share of the window's height).
+pub(crate) fn set_top_gap(share: f32) {
+    TOP_GAP.store(share.clamp(0.0, 0.45).to_bits(), Ordering::Relaxed);
+}
 
 /// The safe-area insets in logical px of a `size` window (the touch pad's layout keeps clear of them too).
 pub(crate) fn safe_insets(size: Vec2) -> [f32; 4] {
@@ -268,7 +284,7 @@ fn fit(window: Query<&Window>, mut q: Query<&mut Node, With<Screen43>>) {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostUpdate, fit.before(bevy::ui::UiSystems::Layout));
+    app.add_systems(Startup, || set_top_gap(0.0)).add_systems(PostUpdate, fit.before(bevy::ui::UiSystems::Layout));
     if cfg!(any(target_os = "ios", target_os = "android")) || fake_safe().is_some() {
         app.add_systems(First, follow_safe_area);
     }
@@ -330,6 +346,17 @@ fn views_in_the_safe_area() {
     // B421: Stretch fills the whole window, notch and home indicator included, upright too
     assert_eq!(view_in(size, STRETCH, safe), Rect::new(0.0, 0.0, 852.0, 393.0));
     assert_eq!(view_in(Vec2::new(393.0, 852.0), STRETCH, [0.0, 59.0 / 852.0, 0.0, 34.0 / 852.0]), Rect::new(0.0, 0.0, 393.0, 852.0));
+    // B419: the touch pad's top row kept above the view (the main menu), at every ratio; a safe top inset deeper
+    // than the gap wins
+    let gap = 60.0 / 393.0;
+    assert!(close(view_below(size, 0, safe, gap), Rect::new(59.0, 60.0, 793.0, 372.0)));
+    assert!(close(view_below(size, STRETCH, safe, gap), Rect::new(0.0, 60.0, 852.0, 393.0)));
+    for a in [1, 2, 3, 4] {
+        let v = view_below(size, a, safe, gap);
+        assert!(v.min.y >= 60.0 - 1e-3 && v.max.y <= 372.0 + 1e-3 && v.min.x >= 59.0 - 1e-3 && v.max.x <= 793.0 + 1e-3, "{a}");
+        assert!((v.width() / v.height() - RATIOS[a as usize]).abs() < 1e-3, "{a}");
+    }
+    assert!(close(view_below(Vec2::new(393.0, 852.0), 0, [0.0, 0.1, 0.0, 0.0], 0.05), Rect::new(0.0, 85.2, 393.0, 852.0)));
 }
 
 #[test]
