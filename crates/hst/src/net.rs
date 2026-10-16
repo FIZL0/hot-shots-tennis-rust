@@ -1140,6 +1140,8 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
                 loop {
                     tokio::select! {
                         list = f.next(&cx) => match list {
+                            // B467: none found because the lobby list couldn't be read: say why, not "none open"
+                            Some(_) if f.failed().is_some() => cx.say(Event::Failed(format!("Couldn't read the lobby list: {}.", f.failed().unwrap()))),
                             Some(list) => cx.say(Event::Found(list)),
                             None => break,
                         },
@@ -1204,14 +1206,19 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
 /// merged with those in so far; the browser only the slots'.
 pub const FINDS: u8 = if cfg!(target_arch = "wasm32") { 1 } else { 3 };
 
-/// One of Find's lookups: which answer (0 the board, 1 the slots, 2 the LAN's wait) and its lobbies.
-type Lookup<'a> = std::pin::Pin<Box<dyn Future<Output = (usize, Vec<Listing>)> + 'a>>;
+/// One of Find's lookups: which answer (0 the board, 1 the slots, 2 the LAN's wait), its lobbies and (B467) why some
+/// of it couldn't be read.
+type Lookup<'a> = std::pin::Pin<Box<dyn Future<Output = (usize, Vec<Listing>, Option<String>)> + 'a>>;
 
 /// B267: Find's lookups all running at once; `next` gives the open lobbies so far as each answers.
 struct Finding<'a> {
     left: n0_future::FuturesUnordered<Lookup<'a>>,
     /// The DHT board's and the slots' answers.
     dht: [Vec<Listing>; 2],
+    /// B467: why a lookup came back short (the browser's pkarr relay refused or couldn't be reached), the last one.
+    trouble: Option<String>,
+    /// How many lobbies the last answer listed.
+    last: usize,
 }
 
 impl<'a> Finding<'a> {
@@ -1222,18 +1229,22 @@ impl<'a> Finding<'a> {
             // the LAN's is mDNS's, heard meanwhile: this only says when it's had its time
             left.push(Box::pin(async {
                 n0_future::time::sleep(LAN_WAIT).await;
-                (2, vec![])
+                (2, vec![], None)
             }));
-            left.push(Box::pin(async { (0, find(&cx.dht).await) }));
+            left.push(Box::pin(async { (0, find(&cx.dht).await, None) }));
         }
-        left.push(Box::pin(async { (1, find_slots(&cx.dht).await) }));
-        Finding { left, dht: Default::default() }
+        left.push(Box::pin(async {
+            let (l, why) = find_slots(&cx.dht).await;
+            (1, l, why)
+        }));
+        Finding { left, dht: Default::default(), trouble: None, last: 0 }
     }
 
     /// The open lobbies on the LAN and the DHT once one more lookup answered (the LAN's copy of one listed on both);
     /// None once all have.
     async fn next(&mut self, cx: &Ctx) -> Option<Vec<Listing>> {
-        let (i, l) = n0_future::StreamExt::next(&mut self.left).await?;
+        let (i, l, why) = n0_future::StreamExt::next(&mut self.left).await?;
+        self.trouble = why.or(self.trouble.take());
         // B455: which lookup came back with how many, so a phone's hst-log.txt says where an empty list came from
         let n = if i == 2 { lan_list(&cx.lan).len() } else { l.len() };
         bevy::log::info!("lobby find: {n} from {}", ["the DHT board", "the board slots", "the LAN"][i]);
@@ -1251,7 +1262,14 @@ impl<'a> Finding<'a> {
             }
         }
         // B332: never this machine's own lobby (its listing lingers on the DHT and the LAN after it stops hosting)
-        Some(not_mine(list, cx.ep.as_ref().map(|ep| ep.id().to_string())))
+        let list = not_mine(list, cx.ep.as_ref().map(|ep| ep.id().to_string()));
+        self.last = list.len();
+        Some(list)
+    }
+
+    /// B467: once every lookup answered with nothing, the reason some couldn't be read (else an empty list hides it).
+    fn failed(&self) -> Option<String> {
+        (self.left.is_empty() && self.last == 0).then(|| self.trouble.clone()).flatten()
     }
 }
 
@@ -1498,14 +1516,17 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         drop(ev.send(Event::Short(c.into())))
                     })
                     .await;
-                    if c.is_some() || !relays || ctx_.is_closed() {
-                        break c;
-                    }
-                    bevy::log::warn!("short code not out in {:?}: the ticket instead, again in {pause:?}", t.elapsed());
+                    let why = match c {
+                        Ok(c) => break Some(c),
+                        _ if !relays || ctx_.is_closed() => break None,
+                        Err(why) => why,
+                    };
+                    bevy::log::warn!("short code not out in {:?} ({why}): the ticket instead, again in {pause:?}", t.elapsed());
                     bevy::log::info!("lobby link {}", link(&ticket));
                     let _ = ev.send(Event::Short(String::new()));
                     let _ = ev.send(Event::Code(ticket));
-                    let _ = ev.send(Event::Status("No short code yet (retrying): share the lobby's link meanwhile.".into()));
+                    // B467: the reason too, so a host whose friend can't find the lobby sees what's wrong
+                    let _ = ev.send(Event::Status(format!("No short code yet (retrying: {why}): share the lobby's link meanwhile.")));
                     n0_future::time::sleep(pause).await;
                     pause = (pause * 2).min(Duration::from_secs(30));
                 };
@@ -1542,6 +1563,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut listed = false;
     // the board slot this lobby is listed in (B116; SLOTS: none yet)
     let slot = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(SLOTS));
+    // B467: the last code or board put failed (the lobby says why until one goes out again)
+    let unlisted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
     let t0 = n0_future::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
@@ -1613,18 +1636,29 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), courts: cx.courts.clone(), relays: cx.relays };
                 let n = lobby_number(ep.id());
                 let (code, ticket) = (code.clone(), code_ticket(ep, home.as_ref()));
-                let (id, slot) = (ep.id(), slot.clone());
+                let (id, slot, unlisted) = (ep.id(), slot.clone(), unlisted.clone());
                 let again = std::mem::take(&mut republish);
                 n0_future::task::spawn(async move {
                     if let Some(c) = code {
+                        let mut r = Ok(());
                         if again {
-                            publish(&cx2.dht, &c, &ticket).await;
+                            r = publish(&cx2.dht, &c, &ticket).await.map_err(|e| format!("the code {c} didn't go out ({e})"));
                         }
-                        if put {
+                        if put && r.is_ok() {
                             // B213: a private lobby's board slot is overwritten as full, like its DHT listing
                             let full = Listing::of(id, &l);
                             let taken = if l.private { full.seats } else { full.taken };
-                            list_in_slot(&cx2.dht, &slot, &Listing { code: c, taken, ..full }).await;
+                            r = list_in_slot(&cx2.dht, &slot, &Listing { code: c, taken, ..full }).await.map_err(|e| format!("it isn't on the lobby list ({e})"));
+                        }
+                        // B467: a host whose friend can't find the lobby sees why (and when it's fixed)
+                        match r {
+                            Err(why) => {
+                                bevy::log::warn!("lobby: {why}");
+                                unlisted.store(true, std::sync::atomic::Ordering::Relaxed);
+                                cx2.say(Event::Status(format!("Others may not find this lobby: {why}. Trying again in {} s.", REPUBLISH.as_secs())));
+                            }
+                            Ok(()) if unlisted.swap(false, std::sync::atomic::Ordering::Relaxed) => cx2.say(Event::Status("The lobby is listed again: Waiting for players...".into())),
+                            Ok(()) => {}
                         }
                     }
                     if put {
@@ -2216,11 +2250,14 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
     let shown = is_short(code).then(|| code.to_string());
     let code = if is_short(code) {
         cx.say(Event::Status(format!("Looking up {code}...")));
-        let Some(t) = resolve(&cx.dht, code).await else {
-            cx.say(Event::Failed(format!("No open lobby has the code {code}.")));
-            return None;
+        resolved = match resolve(&cx.dht, code).await {
+            Ok(t) => t,
+            Err(why) => {
+                bevy::log::warn!("join {code}: {why}");
+                cx.say(Event::Failed(why));
+                return None;
+            }
         };
-        resolved = t;
         resolved.as_str()
     } else {
         code
@@ -2578,34 +2615,78 @@ fn fresh(seq: i64) -> bool {
     unix_micros().saturating_sub(seq) <= STALE as i64 * 1_000_000
 }
 
-/// The ticket under `code` and when it was written.
+/// The ticket under `code` and when it was written; Ok(None): nobody wrote it; Err: why it couldn't be read (B467).
 #[cfg(not(target_arch = "wasm32"))]
-async fn lookup(dht: &Dht, code: &str) -> Option<(String, i64)> {
-    let item = dht.get_mutable_most_recent(code_key(code).public().as_bytes(), None).await.ok().flatten()?;
-    Some((txt_of(item.value())?, item.seq()))
+async fn lookup(dht: &Dht, code: &str) -> Result<Option<(String, i64)>, String> {
+    let item = dht.get_mutable_most_recent(code_key(code).public().as_bytes(), None).await.map_err(|e| format!("the DHT: {e}"))?;
+    Ok(item.and_then(|i| Some((txt_of(i.value())?, i.seq()))))
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn lookup(_: &Dht, code: &str) -> Option<(String, i64)> {
+async fn lookup(_: &Dht, code: &str) -> Result<Option<(String, i64)>, String> {
     relay_get(code).await
 }
 
-/// The record under `code` on the pkarr relay (the browser's [`lookup`]).
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-async fn relay_get(code: &str) -> Option<(String, i64)> {
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    // B275: the relay answers with max-age=300, so a browser's second lookup (a rejoin) got its cached copy, by then
-    // older than STALE: "No open lobby has the code"; the query makes each lookup a fresh request
-    let r = crate::modstore::client().get(format!("{PKARR}/{}?t={}", code_key(code).public().to_z32(), unix_micros())).send().await.ok()?;
-    let b = r.error_for_status().ok()?.bytes().await.ok()?;
-    // the relay's payload: signature, seq (big-endian), the packet
-    Some((txt_of(b.get(72..)?)?, i64::from_be_bytes(b.get(64..72)?.try_into().ok()?)))
+/// B467: the pkarr relay's refusals and errors in words a player can act on (they end up on the lobby screens).
+fn relay_trouble(status: Option<u16>, err: &str) -> String {
+    match status {
+        Some(429) => "the code server (relay.pkarr.org) is refusing this network for now (too many requests, maybe from other devices on the same Wi-Fi): wait a minute and try again".into(),
+        Some(s) => format!("the code server (relay.pkarr.org) answered HTTP {s}: try again in a minute"),
+        // the relay's 429s carry no CORS headers, so a browser's fetch fails ("Load failed" in Safari, "Failed to
+        // fetch" in Chrome) just as for a blocked or dropped request: it can't tell which
+        None if cfg!(target_arch = "wasm32") => format!("couldn't get an answer from the code server (relay.pkarr.org: {err}): it may be refusing this network for a minute (too many requests, maybe from other devices on the same Wi-Fi), or there's no internet, or a content blocker, VPN or iCloud Private Relay blocks it"),
+        None => format!("couldn't reach the code server (relay.pkarr.org: {err}): check the internet connection, and that no firewall or VPN blocks it"),
+    }
 }
 
-/// Put `ticket` under `code`; true if it went out (on the DHT, or the relay when the DHT put fails).
+/// B467: a refused request's wait before asking the pkarr relay again: 1-3 s, spread out so the requests turned away
+/// together don't all come back in the same second.
+fn relay_pause() -> Duration {
+    Duration::from_millis(1000 + SecretKey::generate().to_bytes()[0] as u64 * 8)
+}
+
+/// The record under `code` on the pkarr relay (the browser's [`lookup`]): Ok(None) if it has none.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    // B467: the relay lets one address make 10 requests at once, then about one a second (429, Retry-After: 1); two
+    // phones on one Wi-Fi (a host's slot reads and puts, a guest's Find) share that, so a refusal waits and asks again
+    // (the callers' timeouts end it sooner). In the browser a refusal is a failed fetch (`relay_trouble`): those too.
+    let mut why = relay_trouble(Some(429), "");
+    for _ in 0..8 {
+        // B275: the relay answers with max-age=300, so a browser's second lookup (a rejoin) got its cached copy, by
+        // then older than STALE: "No open lobby has the code"; the query makes each lookup a fresh request
+        let url = format!("{PKARR}/{}?t={}", code_key(code).public().to_z32(), unix_micros());
+        let r = match crate::modstore::client().get(url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                why = relay_trouble(None, &e.to_string());
+                n0_future::time::sleep(relay_pause()).await;
+                continue;
+            }
+        };
+        match r.status().as_u16() {
+            404 => return Ok(None),
+            429 => {
+                why = relay_trouble(Some(429), "");
+                n0_future::time::sleep(relay_pause()).await;
+            }
+            s if !(200..300).contains(&s) => return Err(relay_trouble(Some(s), "")),
+            _ => {
+                let b = r.bytes().await.map_err(|e| relay_trouble(None, &e.to_string()))?;
+                // the relay's payload: signature, seq (big-endian), the packet
+                let seq = b.get(64..72).and_then(|s| s.try_into().ok()).map(i64::from_be_bytes);
+                return Ok(seq.zip(b.get(72..).and_then(txt_of)).map(|(s, t)| (t, s)));
+            }
+        }
+    }
+    Err(why)
+}
+
+/// Put `ticket` under `code`: Ok once it went out (on the DHT, or the relay when the DHT put fails), else why not.
 #[cfg(not(target_arch = "wasm32"))]
-async fn publish(dht: &Dht, code: &str, ticket: &str) -> bool {
+async fn publish(dht: &Dht, code: &str, ticket: &str) -> Result<(), String> {
     let item = MutableItem::new(&SigningKey::from_bytes(&code_key(code).to_bytes()), &dns_txt(ticket), unix_micros(), None);
     let put = dht.put_mutable(item, None).await.map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok();
     // ponytail: the relay's own DHT lookup misses our put now and then, so browsers read it from the relay directly;
@@ -2614,18 +2695,18 @@ async fn publish(dht: &Dht, code: &str, ticket: &str) -> bool {
     if put && !cfg!(test) {
         let (code, ticket) = (code.to_string(), ticket.to_string());
         n0_future::task::spawn(async move { drop(relay_put(&code, &ticket).await) });
-        return true;
+        return Ok(());
     }
     relay_put(code, ticket).await
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn publish(_: &Dht, code: &str, ticket: &str) -> bool {
+async fn publish(_: &Dht, code: &str, ticket: &str) -> Result<(), String> {
     relay_put(code, ticket).await
 }
 
-/// Puts the code's record on the pkarr relay (which also puts it on the DHT).
-async fn relay_put(code: &str, ticket: &str) -> bool {
+/// Puts the code's record on the pkarr relay (which also puts it on the DHT); Err: why it didn't take it.
+async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
     let key = code_key(code);
@@ -2633,23 +2714,39 @@ async fn relay_put(code: &str, ticket: &str) -> bool {
     // BEP 44's signed form: bencoded seq and v
     let sig = key.sign(&[format!("3:seqi{seq}e1:v{}:", v.len()).into_bytes(), v.clone()].concat());
     let body = [sig.to_bytes().to_vec(), seq.to_be_bytes().to_vec(), v].concat();
-    let r = crate::modstore::client().put(format!("{PKARR}/{}", key.public().to_z32())).body(body).send().await;
-    r.and_then(|r| r.error_for_status()).map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok()
+    // B467: a refusal for too many requests (`relay_get`) waits and tries again
+    let mut why = String::new();
+    for _ in 0..5 {
+        let r = crate::modstore::client().put(format!("{PKARR}/{}", key.public().to_z32())).body(body.clone()).send().await;
+        match r.map(|r| r.status().as_u16()) {
+            Ok(s) if (200..300).contains(&s) => return Ok(()),
+            Ok(429) => why = relay_trouble(Some(429), ""),
+            Ok(s) => why = relay_trouble(Some(s), ""),
+            Err(e) => why = relay_trouble(None, &e.to_string()),
+        }
+        bevy::log::warn!("lobby code {code}: {why}");
+        // (a browser's failed fetch may be a refusal too)
+        if !why.contains("too many") && !cfg!(target_arch = "wasm32") {
+            break;
+        }
+        n0_future::time::sleep(relay_pause()).await;
+    }
+    Err(why)
 }
 
-/// A short code for the lobby with `ticket`, `code` first: a free one, published (None: the DHT or relay can't be
-/// reached). Each code tried after a taken one goes to `show`.
-async fn roll(dht: &Dht, mut code: String, ticket: &str, show: impl Fn(&str)) -> Option<String> {
+/// A short code for the lobby with `ticket`, `code` first: a free one, published (Err: why the DHT or relay
+/// didn't take it). Each code tried after a taken one goes to `show`.
+async fn roll(dht: &Dht, mut code: String, ticket: &str, show: impl Fn(&str)) -> Result<String, String> {
     for _ in 0..5 {
         match n0_future::time::timeout(Duration::from_secs(15), lookup(dht, &code)).await {
-            Ok(Some((_, seq))) if fresh(seq) => {
+            Ok(Ok(Some((_, seq)))) if fresh(seq) => {
                 code = new_short();
                 show(&code);
             }
-            _ => return publish(dht, &code, ticket).await.then_some(code),
+            _ => return publish(dht, &code, ticket).await.map(|_| code),
         }
     }
-    None
+    Err("five codes in a row were taken".into())
 }
 
 /// How many board slots there are: the browser reads every one through the pkarr relay, which answers about 10
@@ -2664,33 +2761,47 @@ fn slot_name(i: usize) -> String {
     format!("{}{i}", if cfg!(test) { "tslot" } else { "slot" })
 }
 
-/// The listing in board slot `i` and when it was written.
-async fn read_slot(dht: &Dht, i: usize) -> Option<(Listing, i64)> {
-    let (t, seq) = n0_future::time::timeout(Duration::from_secs(12), lookup(dht, &slot_name(i))).await.ok()??;
-    Some((serde_json::from_str(&t).ok()?, seq))
+/// What a short code's or slot's lookup says, `secs` at most: Ok(None) nobody wrote it, Err why it couldn't be read.
+async fn lookup_for(dht: &Dht, code: &str, secs: u64) -> Result<Option<(String, i64)>, String> {
+    let r = n0_future::time::timeout(Duration::from_secs(secs), lookup(dht, code)).await;
+    let where_ = if cfg!(target_arch = "wasm32") { "the code server (relay.pkarr.org)" } else { "the DHT" };
+    r.unwrap_or_else(|_| Err(format!("{where_} didn't answer in {secs} s")))
 }
 
-async fn read_slots(dht: &Dht) -> Vec<Option<(Listing, i64)>> {
+/// The listing in board slot `i` and when it was written (Ok(None): an empty slot, or one that isn't a listing).
+async fn read_slot(dht: &Dht, i: usize) -> Result<Option<(Listing, i64)>, String> {
+    let r = lookup_for(dht, &slot_name(i), 12).await?;
+    Ok(r.and_then(|(t, seq)| Some((serde_json::from_str(&t).ok()?, seq))))
+}
+
+async fn read_slots(dht: &Dht) -> Vec<Result<Option<(Listing, i64)>, String>> {
     n0_future::join_all((0..SLOTS).map(|i| read_slot(dht, i))).await
 }
 
-/// The open lobbies in the board slots, each with its short code.
-async fn find_slots(dht: &Dht) -> Vec<Listing> {
+/// The open lobbies in the board slots, each with its short code, and (B467) why some slots couldn't be read.
+async fn find_slots(dht: &Dht) -> (Vec<Listing>, Option<String>) {
+    let all = read_slots(dht).await;
+    let bad: Vec<&String> = all.iter().filter_map(|r| r.as_ref().err()).collect();
+    let why = bad.first().map(|e| if bad.len() == SLOTS { e.to_string() } else { format!("{} of its {SLOTS} slots unread, {e}", bad.len()) });
+    if let Some(w) = &why {
+        bevy::log::warn!("lobby find: {w}");
+    }
     let mut list: Vec<Listing> =
-        read_slots(dht).await.into_iter().flatten().filter(|(l, seq)| fresh(*seq) && l.open() > 0 && is_short(&l.code)).map(|(l, _)| l).collect();
+        all.into_iter().filter_map(|r| r.ok().flatten()).filter(|(l, seq)| fresh(*seq) && l.open() > 0 && is_short(&l.code)).map(|(l, _)| l).collect();
     // one host in two slots (it moved to a freed one): its newest
     list.sort_by(|a, b| (&a.id, b.time).cmp(&(&b.id, a.time)));
     list.dedup_by(|a, b| a.id == b.id);
-    list
+    (list, why)
 }
 
 /// Put `l` (with its short code) in a board slot: `slot`'s if it's still ours, else the first free, stale or ours
-/// from the one its ID picks; `slot` remembers it (`SLOTS`: the board is full, listed again next time).
-async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &Listing) {
+/// from the one its ID picks; `slot` remembers it (`SLOTS`: the board is full, listed again next time). Err: why
+/// it isn't on the board (B467).
+async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &Listing) -> Result<(), String> {
     use std::sync::atomic::Ordering::Relaxed;
     // ponytail: a slot that didn't answer (timeout, 429) counts as free, and two hosts claiming one at once both
     // write it; the next republish's check moves the loser on
-    let ours = |r: &Option<(Listing, i64)>| r.as_ref().is_none_or(|(o, seq)| o.id == l.id || !fresh(*seq));
+    let ours = |r: &Result<Option<(Listing, i64)>, String>| r.as_ref().ok().and_then(|r| r.as_ref()).is_none_or(|(o, seq)| o.id == l.id || !fresh(*seq));
     let mut i = slot.load(Relaxed);
     if i >= SLOTS || !ours(&read_slot(dht, i).await) {
         let all = read_slots(dht).await;
@@ -2701,33 +2812,52 @@ async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &List
     if i < SLOTS {
         // B321: the browser's put right after the slot reads is often refused (the pkarr relay's rate limit), which
         // left the lobby off the board until the next REPUBLISH: tried again a few seconds on
+        let mut r = Ok(());
         for pause in [0, 3, 6] {
             n0_future::time::sleep(Duration::from_secs(pause)).await;
-            if publish(dht, &slot_name(i), &serde_json::to_string(l).unwrap()).await {
+            r = publish(dht, &slot_name(i), &serde_json::to_string(l).unwrap()).await;
+            if r.is_ok() {
                 break;
             }
         }
+        r
     } else {
         bevy::log::warn!("lobby board full: listed on the DHT only");
+        Err(format!("all {SLOTS} lobby list slots are taken"))
     }
 }
 
-/// The ticket the short code `code` stands for, if its lobby is open.
-async fn resolve(dht: &Dht, code: &str) -> Option<String> {
+/// The ticket the short code `code` stands for, if its lobby is open; else (B467) what the lookup found instead.
+async fn resolve(dht: &Dht, code: &str) -> Result<String, String> {
     // B114: asked again until 20 s are up, as a code just rolled can take a few seconds to reach the relay or DHT
     // nodes this machine asks
     let until = n0_future::time::Instant::now() + Duration::from_secs(20);
     loop {
-        let left = until.saturating_duration_since(n0_future::time::Instant::now());
-        if let Ok(Some((t, seq))) = n0_future::time::timeout(left, lookup(dht, code)).await
-            && fresh(seq)
+        let left = until.saturating_duration_since(n0_future::time::Instant::now()).as_secs().max(1);
+        let r = lookup_for(dht, code, left).await;
+        if let Ok(Some((t, seq))) = &r
+            && fresh(*seq)
         {
-            return Some(t);
+            return Ok(t.clone());
         }
         if n0_future::time::Instant::now() + Duration::from_secs(3) >= until {
-            return None;
+            return Err(missed(code, r.map(|r| r.map(|(_, seq)| seq))));
         }
         n0_future::time::sleep(Duration::from_secs(3)).await;
+    }
+}
+
+/// B467: why the short code `code` led to no lobby, from its last lookup: the written time of a record that went
+/// stale, nothing under it, or the lookup's own failure.
+fn missed(code: &str, last: Result<Option<i64>, String>) -> String {
+    match last {
+        Ok(Some(seq)) => {
+            let m = unix_micros().saturating_sub(seq) / 60_000_000;
+            let ago = if m < 2 { "about a minute".into() } else if m < 120 { format!("{m} minutes") } else { "hours".into() };
+            format!("The lobby {code} stopped answering {ago} ago: the host left it, or their game was closed or went to the background (on a phone the host's game has to stay open on screen). Ask for the code their lobby shows now.")
+        }
+        Ok(None) => format!("No open lobby has the code {code}: check it against the host's screen (the code under the QR)."),
+        Err(e) => format!("Couldn't look up {code}: {e}."),
     }
 }
 
@@ -3096,13 +3226,15 @@ mod tests {
             let listing = |code: &str| Listing { code: code.into(), ..Listing::of(SecretKey::generate().public(), &r) };
             let (la, lb) = (listing("AAAA"), listing("BBBB"));
             let (sa, sb) = (AtomicUsize::new(SLOTS), AtomicUsize::new(SLOTS));
-            list_in_slot(&a, &sa, &la).await;
-            list_in_slot(&b, &sb, &lb).await;
+            list_in_slot(&a, &sa, &la).await.unwrap();
+            list_in_slot(&b, &sb, &lb).await.unwrap();
             let first = sa.load(Relaxed);
             assert!(first < SLOTS && sb.load(Relaxed) < SLOTS && first != sb.load(Relaxed));
-            list_in_slot(&a, &sa, &la).await;
+            list_in_slot(&a, &sa, &la).await.unwrap();
             assert_eq!(sa.load(Relaxed), first);
-            let mut found: Vec<String> = find_slots(&c).await.into_iter().map(|l| l.code).collect();
+            let (found, why) = find_slots(&c).await;
+            assert_eq!(why, None);
+            let mut found: Vec<String> = found.into_iter().map(|l| l.code).collect();
             found.sort();
             assert_eq!(found, ["AAAA", "BBBB"]);
             // the rest of the board taken: one more host isn't listed
@@ -3110,9 +3242,31 @@ mod tests {
             let free = (0..SLOTS).filter(|&i| i != first && i != sb.load(Relaxed)).map(|i| slot_name(i)).collect::<Vec<_>>();
             n0_future::join_all(free.iter().map(|n| publish(&c, n, &json))).await;
             let full = AtomicUsize::new(SLOTS);
-            list_in_slot(&c, &full, &listing("DDDD")).await;
+            assert!(list_in_slot(&c, &full, &listing("DDDD")).await.unwrap_err().contains("taken"));
             assert_eq!(full.load(Relaxed), SLOTS);
         });
+    }
+
+    /// B467: a short code that leads nowhere says why: never written, written by a host that stopped (its age), or
+    /// the code server's refusal or absence; Find's "none" turns into the reason when the slots couldn't be read.
+    #[test]
+    fn why_a_code_or_find_came_up_empty() {
+        assert!(missed("K7QX", Ok(None)).starts_with("No open lobby has the code K7QX"));
+        let stale = missed("K7QX", Ok(Some(unix_micros() - 5 * 60_000_000)));
+        assert!(stale.contains("stopped answering 5 minutes ago") && stale.contains("background"), "{stale}");
+        assert!(missed("K7QX", Ok(Some(unix_micros() - 100_000_000))).contains("about a minute ago"));
+        let busy = missed("K7QX", Err(relay_trouble(Some(429), "")));
+        assert!(busy.starts_with("Couldn't look up K7QX: ") && busy.contains("too many"), "{busy}");
+        assert!(relay_trouble(None, "Load failed").contains("couldn't reach the code server (relay.pkarr.org: Load failed)"));
+        assert!(relay_trouble(Some(502), "").contains("HTTP 502"));
+        // Find: a short answer with a reason only fails once every lookup is in and nothing was listed
+        let mut f = Finding { left: Default::default(), dht: Default::default(), trouble: Some("x".into()), last: 0 };
+        assert_eq!(f.failed().as_deref(), Some("x"));
+        f.last = 1;
+        assert_eq!(f.failed(), None);
+        f.last = 0;
+        f.left.push(Box::pin(async { (0, vec![], None) }));
+        assert_eq!(f.failed(), None);
     }
 
     /// B116: a listing through the pkarr relay, as the browser reads and writes the board (a test name, not a real
@@ -3127,10 +3281,16 @@ mod tests {
             r.take("host", &[Pick::disc(0, 0)]);
             let l = Listing { code: "TEST".into(), ..Listing::of(SecretKey::generate().public(), &r) };
             let name = format!("t{}", now() % 1_000_000_000);
-            assert!(relay_put(&name, &serde_json::to_string(&l).unwrap()).await);
-            let (t, seq) = relay_get(&name).await.expect("read back");
+            relay_put(&name, &serde_json::to_string(&l).unwrap()).await.unwrap();
+            let (t, seq) = relay_get(&name).await.unwrap().expect("read back");
             assert!(fresh(seq));
             assert_eq!(serde_json::from_str::<Listing>(&t).unwrap(), l);
+            // B467: a name nobody wrote is "none", not a failure, and 12 reads at once (over the relay's 10) still
+            // all answer (each refusal waits and asks again; 15 at once left one refused after 8 tries now and then)
+            let reads = (0..12).map(|i| relay_get(if i == 0 { "tnobody" } else { &name }));
+            let all = n0_future::join_all(reads).await;
+            assert_eq!(all[0], Ok(None));
+            assert!(all[1..].iter().all(|r| matches!(r, Ok(Some(_)))), "{all:?}");
         });
     }
 
