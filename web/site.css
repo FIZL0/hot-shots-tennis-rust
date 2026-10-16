@@ -157,6 +157,8 @@ html[data-game] #disc { display: none !important; }
 #disc details.group { border-top: 2px solid #eceae2; }
 #disc details.group:first-of-type { border-top: 0; }
 #disc details.group > summary { cursor: pointer; font-weight: 800; padding: .55em 0; list-style-position: inside; }
+#faq summary { cursor: pointer; }
+#faq summary h2 { display: inline; }
 #disc .note { font-size: 14px; color: var(--muted); }
 #disc .ok { color: #1f7a33; font-weight: 700; }
 #disc .bad { color: #b3261e; font-weight: 700; }
