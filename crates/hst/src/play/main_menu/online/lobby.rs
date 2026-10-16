@@ -276,7 +276,7 @@ fn plate(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32, foc
     let seat = r.seats.get(i).and_then(Option::as_ref);
     let Some(st) = seat else {
         // an open seat: the computer plays it unless someone joins
-        let pl = Plate { p: i, owner: "Open seat", slow: false, name: "Computer", sub: "Until someone joins", chip: Chip::Open, chip_words: "Open", dashed: true, remove: false, focus, remove_focus: false, random: false, hide, empty: true, mod_note: None };
+        let pl = Plate { p: i, owner: "Open seat", slow: false, name: "Computer", sub: "Until someone joins", chip: Chip::Open, chip_words: "Open", dashed: true, remove: false, focus, remove_focus: false, random: false, hide, empty: true, mod_note: None, device: None };
         return frame::plate(d, &pl, rect, s);
     };
     let com = !st.human();
@@ -329,6 +329,8 @@ fn plate(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32, foc
         hide,
         empty: false,
         mod_note,
+        // M95: a person's platform and input (this machine's too, as the lobby has it)
+        device: r.devices.get(&st.peer).copied().filter(|_| !com),
     };
     frame::plate(d, &pl, rect, s);
 }

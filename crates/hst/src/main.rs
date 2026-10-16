@@ -419,6 +419,7 @@ fn start(argv: Vec<String>) {
     let _ = graphics::SAVE.set(play::main_menu::save_graphics);
     app.add_plugins(graphics::plugin::<play::Game>).insert_resource(gfx);
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin, vertex_patch::plugin));
+    app.add_plugins(device::plugin);
     // M91a1: the iPhone's on-screen pad, kept through mode switches
     app.add_plugins(play::touch_pad::plugin);
     // M101: Android's controllers, which gilrs can't read

@@ -1989,7 +1989,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" | "online-unread" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
-        "lobby" | "lobby-bot" | "lobby-singles" | "lobby-courts" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
+        "lobby" | "lobby-ios" | "lobby-bot" | "lobby-singles" | "lobby-courts" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" | "relay-url" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" | "signinmods" | "phonemods" | "phonemods-ask" => Screen::Mods,
         _ => Screen::Main,
