@@ -1,6 +1,6 @@
 //! Face tracks: per motion, a `.MOR` file of morph-target weights and a `.UVA` file of texture UV offsets. The
-//! motion setter selects the face of the same index (team reactions 0x30.. add the player's co offset; 0x1c/0x1d
-//! keep the previous face) and starts its clock with the motion's speed and looping; each frame the face clock
+//! motion setter selects the face of the same index (team reactions, `motion::id::TEAM` on, add the player's co offset; the soft
+//! follow-throughs `SOFT_FORE`/`SOFT_BACK` keep the previous face) and starts its clock with the motion's speed and looping; each frame the face clock
 //! wraps (looping) or clamps into its own length — the last key over all tracks, in frames — samples every track
 //! at time × ticks per frame, then adds the speed, as [`crate::motion::Clock`] with that length.
 #![deny(clippy::float_arithmetic)]

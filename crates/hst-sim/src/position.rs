@@ -7,13 +7,18 @@
 //! once: on a pass the bot walks there, after a 60-frame wait if it fails, and stops once inside the centre radius.
 #![deny(clippy::float_arithmetic)]
 
+use crate::ai::{formation::STAGGERED, style};
+use crate::lines::{BASELINE, DOUBLES_SIDELINE, SERVICE_LINE, SINGLES_SIDELINE};
 use crate::ps2::{self, F, f32s};
+use crate::rng::{TWO_POW_M32, r15};
 
 /// Half the doubles court's width split three ways: the middle third is lane 1 in the 3-lane split.
-const WIDTH: f32 = 5.485;
+const WIDTH: f32 = DOUBLES_SIDELINE;
 /// A spot's x: the middle of one half of the doubles width.
 const HALF: f32 = 2.7425;
 const NEG_HALF: f32 = -HALF;
+/// The middle spot's depth: on the service line.
+const NEG_SERVICE_LINE: f32 = -SERVICE_LINE;
 
 /// The bot's place in the formation (lane 0: not placed yet).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -51,9 +56,9 @@ pub struct Team {
 impl Team {
     /// `lean` from both styles (1 NET, 2 BASE) when the formation is staggered and neither player is human.
     pub fn lean(formation: u8, both_bots: bool, mine: u8, partners: u8) -> i32 {
-        match (formation == 0 && both_bots, mine, partners) {
-            (true, 1, 2) => 1,
-            (true, 2, 1) => 0,
+        match (formation == STAGGERED && both_bots, mine, partners) {
+            (true, style::NET, style::BASE) => 1,
+            (true, style::BASE, style::NET) => 0,
             _ => -1,
         }
     }
@@ -65,10 +70,10 @@ impl Team {
     /// the setup byte, staggered one time in five.
     pub fn pick(humans: (bool, bool), rows: (u8, u8), setup: u8, draw: u32) -> u8 {
         match humans {
-            (true, true) => 0,
+            (true, true) => STAGGERED,
             (true, false) => rows.1,
             (false, true) => rows.0,
-            (false, false) if (draw >> 16 & 0x7fff) % 100 < 20 => 0,
+            (false, false) if r15(draw) % 100 < 20 => STAGGERED,
             (false, false) => setup,
         }
     }
@@ -101,7 +106,7 @@ impl Formation {
         let x = F(t.side) * HALF * if lane == 1 { 1.0 } else { -1.0 };
         let z = match (t.formation, front) {
             (_, false) => -11.0,
-            (0, true) => -3.2,
+            (STAGGERED, true) => -3.2,
             (_, true) => -7.9,
         };
         Formation { lane, front, spot: f32s([x, F(t.side) * z]) }
@@ -118,7 +123,7 @@ impl Formation {
         };
         let (at, mine) = match cue {
             Cue::Middle => {
-                self.spot = [0.0, (F(t.side) * -6.4).0];
+                self.spot = [0.0, (F(t.side) * NEG_SERVICE_LINE).0];
                 return self.spot != old;
             }
             Cue::Me(at) => (at, true),
@@ -139,7 +144,7 @@ impl Formation {
         }
         let side = t.side;
         let x = (F(side) * HALF * if self.lane == 1 { 1.0 } else { -1.0 }).0;
-        let inside = mine || at[0].abs() <= 4.115 && at[1].abs() <= 11.885;
+        let inside = mine || at[0].abs() <= SINGLES && at[1].abs() <= BASELINE;
         // a shot from outside the court: hold the service-line depth, in the middle when it's well wide
         let wide = |front_z: f32| [if at[0].abs() > 5.985 { 0.0 } else { x }, (F(side) * front_z).0];
         // a net player stays closer in after its partner's shot unless its own team hit a deep ball on this side
@@ -149,7 +154,7 @@ impl Formation {
             [x, (-(F(d) + 3.2) * side).0]
         };
         self.spot = match (t.formation, self.front) {
-            (0, false) => {
+            (STAGGERED, false) => {
                 let d = match (t.lean > 0, mine) {
                     (false, _) => 0.0,
                     (true, false) => 1.0,
@@ -157,8 +162,8 @@ impl Formation {
                 };
                 [x, (-(F(11.0) - d) * side).0]
             }
-            (0, true) if !inside => wide(-6.2),
-            (0, true) => net(2.0),
+            (STAGGERED, true) if !inside => wide(-6.2),
+            (STAGGERED, true) => net(2.0),
             (1, false) => [x, (F(side) * -4.9).0],
             (1, true) if !inside => wide(-6.2),
             (1, true) => net(0.5),
@@ -190,7 +195,7 @@ pub struct Return {
 
 /// The game's percentage roll: (MT word >> 16 & 0x7fff) % 100 < p.
 fn chance(roll: &mut impl FnMut() -> u32, p: i32) -> bool {
-    ((roll() >> 16 & 0x7fff) % 100) < p.max(0) as u32
+    (r15(roll()) % 100) < p.max(0) as u32
 }
 
 impl Return {
@@ -222,7 +227,7 @@ impl Return {
 }
 
 /// Half the singles court's width.
-const SINGLES: f32 = 4.115;
+const SINGLES: f32 = SINGLES_SIDELINE;
 /// How far across the dash spot may go: two thirds of the singles half-width.
 const DASH_X: f32 = 2.743333;
 const NEG_DASH_X: f32 = -DASH_X;
@@ -245,7 +250,7 @@ pub fn zone_in(p: [f32; 2], w: f32, blur: Option<&mut dyn FnMut() -> u32>) -> (u
         return (lane, depth);
     };
     // the MT word as a fraction of 2³²
-    let mut roll = || F(2.3283064e-10) * ps2::utof(roll());
+    let mut roll = || F(TWO_POW_M32) * ps2::utof(roll());
     let q = F(w) * 2.0 / 3.0 / 4.0;
     let inner = third - q;
     let lane = if x <= inner {
@@ -303,7 +308,7 @@ impl Single {
 
     /// The net spot: straight up at the reach depth, or a third of the way back from it after shot choice 10.
     fn net_spot(&self, c: &Court, deep: bool) -> [f32; 2] {
-        let d = if deep { (F(11.885) - c.reach) / 3.0 + c.reach } else { F(c.reach) };
+        let d = if deep { (F(BASELINE) - c.reach) / 3.0 + c.reach } else { F(c.reach) };
         [0.0, (F(c.side) * -d).0]
     }
 
@@ -338,7 +343,7 @@ impl Single {
                 if shot.0 == 1 || shot == them {
                     self.spot[1] = if me[1].abs() > 10.0 { (F(c.side) * -10.0).0 } else { me[1] };
                 } else {
-                    let back = (F(11.885) - c.reach) * 2.0 / 3.0 + c.reach;
+                    let back = (F(BASELINE) - c.reach) * 2.0 / 3.0 + c.reach;
                     let back = if opp[1].abs() < back { F(opp[1].abs()) } else { back };
                     self.spot[1] = (F(c.side) * -back).0;
                     if mine.1 < 2 || them.1 < 2 {
