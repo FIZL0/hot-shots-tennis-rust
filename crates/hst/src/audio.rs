@@ -63,6 +63,11 @@ impl Track {
     /// (`court_bgm_loudness` measures it over their first 20 s: 0.051 to 0.080 over the eleven, this their median).
     pub const BGM_RMS: f32 = 0.069;
 
+    /// M111: a stock court's continuous ambience: court 2's four surf loops at their spawn volumes, from the four
+    /// bearings the game sweeps them over (`court_ambience_loudness`: 0.017 to 0.022 by bearing). A court mod's
+    /// ambience layers together sit at this, about 10 dB under the BGM.
+    pub const AMBIENCE_RMS: f32 = 0.02;
+
     /// A RIFF PCM16 wav looping over frames `at` (`[0, 0]`, or an end past the file: to its end), its gain set so
     /// its RMS over the loop is `rms` of full scale.
     pub fn read(d: &[u8], at: [u64; 2], rms: f32) -> Option<Track> {
@@ -264,6 +269,9 @@ pub enum Group {
     Sfx,
     /// The players' and the umpire's voices.
     Voices,
+    /// M111: the court's ambience: its creature and emitter sounds (court bank program 7: birds, surf, chimes) and a
+    /// court mod's ambience loops.
+    Ambience,
 }
 
 impl Group {
@@ -277,20 +285,26 @@ impl Group {
             _ => Group::Sfx,
         }
     }
+
+    /// M111: the group of play `p`: `of` its slot, but the court bank's program 7 (its ambience) [`Group::Ambience`].
+    pub fn of_play(p: &sound::Play) -> Self {
+        if p.slot == 0 && p.program == 7 { Group::Ambience } else { Group::of(p.slot) }
+    }
 }
 
-/// B235: the four volume sliders in tenths (0..=10): master, music, sound effects, voices. Saved in settings.txt.
+/// B235: the volume sliders in tenths (0..=10): master, music, sound effects, voices, ambience (M111). Saved in
+/// settings.txt.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Volumes(pub [u8; 4]);
+pub struct Volumes(pub [u8; 5]);
 
 impl Default for Volumes {
     fn default() -> Self {
-        Volumes([10; 4])
+        Volumes([10; 5])
     }
 }
 
 impl Volumes {
-    pub const NAMES: [&str; 4] = ["master_volume", "music_volume", "sfx_volume", "voice_volume"];
+    pub const NAMES: [&str; 5] = ["master_volume", "music_volume", "sfx_volume", "voice_volume", "ambience_volume"];
 
     /// The volume lines of a settings.txt (others ignored; missing ones full).
     pub fn parse(text: &str) -> Self {
@@ -307,8 +321,8 @@ impl Volumes {
         Self::NAMES.iter().zip(self.0).map(|(n, x)| format!("{n} = {x}\n")).collect()
     }
 
-    /// Each group's gain (music, SFX, voices), the master's included.
-    fn gains(&self) -> [f32; 3] {
+    /// Each group's gain (music, SFX, voices, ambience), the master's included.
+    fn gains(&self) -> [f32; 4] {
         let [m, g @ ..] = self.0.map(|x| x as f32 / 10.0);
         g.map(|g| m * g)
     }
@@ -317,12 +331,12 @@ impl Volumes {
 /// Each play's group and the groups' gains.
 struct Vol {
     groups: std::collections::HashMap<u64, Group>,
-    gain: [f32; 3],
+    gain: [f32; 4],
 }
 
 impl Default for Vol {
     fn default() -> Self {
-        Vol { groups: Default::default(), gain: [1.0; 3] }
+        Vol { groups: Default::default(), gain: [1.0; 4] }
     }
 }
 
@@ -376,7 +390,7 @@ impl Mix {
         let groups: Vec<usize> = self.voices.iter().map(|v| self.vol.groups.get(&v.2).map_or(Group::Sfx, |g| *g) as usize).collect();
         let gain = self.vol.gain;
         for _ in 0..FRAME {
-            let mut s = [[0; 2]; 3];
+            let mut s = [[0; 2]; 4];
             let tags = &self.tags;
             for ((v, b, ..), &g) in self.voices.iter_mut().zip(&groups).filter(|(v, _)| !(tags.held && tags.ids.contains(&v.2))) {
                 let [l, r] = v.tick(&b.bd);
@@ -387,7 +401,7 @@ impl Mix {
                 s[g] = [s[g][0] + l, s[g][1] + r];
             }
             // ponytail: dry voices only — no core/master volume or reverb
-            out.extend([0, 1].map(|c| (0..3).map(|g| s[g][c] as f32 * gain[g]).sum::<f32>().clamp(-32768.0, 32767.0) / 32768.0));
+            out.extend([0, 1].map(|c| (0..4).map(|g| s[g][c] as f32 * gain[g]).sum::<f32>().clamp(-32768.0, 32767.0) / 32768.0));
         }
         self.voices.retain(|v| v.0.phase != 0);
         let (voices, playing, loops) = (&self.voices, &self.playing, &self.loops);
@@ -637,9 +651,9 @@ impl Sound {
         let level = Level { seq: [p.volume as u32; 2], bank: bank_volume, pan: [0x40; 3], ..default() };
         let (program, key, scale) = (p.program as usize, p.key as usize, sound::speed_word(p.speed));
         if let Some((w, rate)) = bank.takes.get(&(program, key)).filter(|_| takes) {
-            return self.play_take(bank, w, *rate, level, scale, Group::of(p.slot));
+            return self.play_take(bank, w, *rate, level, scale, Group::of_play(&p));
         }
-        self.play_as(bank, program, key, level, scale, Group::of(p.slot))
+        self.play_as(bank, program, key, level, scale, Group::of_play(&p))
     }
 
     /// B203: a menu cue (system bank key `key`, centred, full volume) that cuts the one before it, so mashing
@@ -734,7 +748,7 @@ impl Sound {
     /// tables, the bank volume of the play's slot and its play speed.
     pub fn play_at(&self, bank: &Arc<SoundBank>, p: sound::Play, pos: [f32; 3]) -> u64 {
         let level = self.0.lock().unwrap().level(p, pos);
-        self.play_as(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed), Group::of(p.slot))
+        self.play_as(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed), Group::of_play(&p))
     }
 
     /// The play `id` (a `play_toward` one) turned to `angle`: its voices re-panned at sequence volume `volume`.
@@ -757,7 +771,7 @@ impl Sound {
             let seq = sound::stereo(p.volume, heard(angle), &m.stereo).map(|x| x as u32);
             Level { seq, bank: m.bank_volumes[p.slot as usize], pan: [0x40; 3], ..default() }
         };
-        self.play_as(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed), Group::of(p.slot))
+        self.play_as(bank, p.program as usize, p.key as usize, level, sound::speed_word(p.speed), Group::of_play(&p))
     }
 }
 
@@ -1000,7 +1014,8 @@ mod tests {
     }
 
     /// B235: each volume slider at 0 silences only its group — the BGM (music), a system sound (SFX), the umpire
-    /// (voices) — and master silences all; at full the output is as before (no gain applied).
+    /// (voices), court 2's surf (ambience, M111) — and master silences all; at full the output is as before (no gain
+    /// applied).
     #[test]
     fn each_volume_silences_its_group() {
         let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
@@ -1010,14 +1025,16 @@ mod tests {
         let (bgm, mid) = SoundBank::music(&mut iso, "Court", "bgmg_01").unwrap();
         let (bgm, sys) = (Arc::new(bgm), Arc::new(SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").unwrap()));
         let umpire = Arc::new(umpire_bank(&mut iso, 0, 0).unwrap());
+        let court = court_bank(&mut iso, 2).0.unwrap();
         // the loudest sample of `group`'s source alone over 2 s at volumes `v`
-        let peak = |group: Group, v: [u8; 4]| {
+        let peak = |group: Group, v: [u8; 5]| {
             let sound = Sound(Arc::new(Mutex::new(mix_clone(&base))));
             sound.set_volumes(Volumes(v));
             match group {
                 Group::Music => sound.music(&bgm, &mid, 55),
                 Group::Sfx => _ = sound.play_centre(&sys, sound::Play { slot: 9, program: 0, key: 0, volume: 0x80, speed: 1.0 }),
                 Group::Voices => _ = sound.play_centre(&umpire, sound::Play { slot: 5, program: 0, key: 0, volume: 0x80, speed: 1.0 }),
+                Group::Ambience => _ = sound.play_toward(&court, sound::Play { slot: 0, program: 7, key: 25, volume: 43, speed: 1.0 }, 90),
             }
             let mut out = Vec::new();
             for _ in 0..120 {
@@ -1025,11 +1042,11 @@ mod tests {
             }
             out.iter().fold(0f32, |a, x| a.max(x.abs()))
         };
-        for (g, group) in [Group::Music, Group::Sfx, Group::Voices].into_iter().enumerate() {
-            let full = peak(group, [10; 4]);
+        for (g, group) in [Group::Music, Group::Sfx, Group::Voices, Group::Ambience].into_iter().enumerate() {
+            let full = peak(group, [10; 5]);
             assert!(full > 0.01, "{group:?} sounds");
-            for zero in 0..4 {
-                let mut v = [10; 4];
+            for zero in 0..5 {
+                let mut v = [10; 5];
                 v[zero] = 0;
                 let p = peak(group, v);
                 assert_eq!(p == 0.0, zero == 0 || zero == g + 1, "{group:?} with slider {zero} at 0: peak {p}");
@@ -1037,15 +1054,20 @@ mod tests {
                     assert_eq!(p, full);
                 }
             }
-            let half = peak(group, [5, 10, 10, 10]);
+            let half = peak(group, [5, 10, 10, 10, 10]);
             assert!(half > full * 0.4 && half < full * 0.6, "{group:?} at half master: {half} of {full}");
         }
-        assert_eq!(Volumes::parse(&Volumes([3, 0, 10, 7]).text()), Volumes([3, 0, 10, 7]));
-        assert_eq!(Volumes::parse("music_volume = 99\nbogus = 1\n"), Volumes([10; 4]));
+        assert_eq!(Volumes::parse(&Volumes([3, 0, 10, 7, 4]).text()), Volumes([3, 0, 10, 7, 4]));
+        assert_eq!(Volumes::parse("music_volume = 99\nbogus = 1\n"), Volumes([10; 5]));
+        // a settings.txt from before the ambience slider: ambience full
+        assert_eq!(Volumes::parse("master_volume = 6\nvoice_volume = 2\n"), Volumes([6, 10, 10, 2, 10]));
         assert_eq!(Group::of(1), Group::Voices);
         assert_eq!(Group::of(0x16), Group::Voices);
         assert_eq!(Group::of(6), Group::Sfx);
         assert_eq!(Group::of(8), Group::Music);
+        let court = |program| sound::Play { slot: 0, program, key: 0, volume: 0x80, speed: 1.0 };
+        assert_eq!((Group::of_play(&court(7)), Group::of_play(&court(2))), (Group::Ambience, Group::Sfx));
+        assert_eq!(Group::of_play(&sound::Play { slot: 6, ..court(7) }), Group::Sfx, "the gallery's program 7 is the crowd");
     }
 
     /// The first system sound renders: the voice keys on, sounds, and ends.
@@ -1316,13 +1338,16 @@ mod tests {
         sound.music_volume(0);
         assert!(rms(&render(10)) < 1e-4);
         sound.music_volume(55);
-        sound.set_volumes(Volumes([10, 0, 10, 10]));
+        sound.set_volumes(Volumes([10, 0, 10, 10, 10]));
         assert!(rms(&render(10)) < 1e-4, "the music volume group");
-        sound.set_volumes(Volumes([10; 4]));
+        sound.set_volumes(Volumes([10; 5]));
         sound.stop_music();
         assert!(rms(&render(10)) < 1e-4);
-        let id = sound.play_loop(&track, Group::Sfx, 1.0);
+        let id = sound.play_loop(&track, Group::Ambience, 1.0);
         assert!(sound.playing(id) && rms(&render(10)) > 0.05);
+        sound.set_volumes(Volumes([10, 10, 10, 10, 0]));
+        assert!(rms(&render(10)) < 1e-4, "the ambience volume group");
+        sound.set_volumes(Volumes([10; 5]));
         sound.stop(id);
         assert!(!sound.playing(id) && rms(&render(10)) < 1e-4);
     }
@@ -1352,6 +1377,33 @@ mod tests {
         }
         let (lo, hi) = all.iter().fold((f32::MAX, 0f32), |(l, h), &r| (l.min(r), h.max(r)));
         assert!((lo..=hi).contains(&Track::BGM_RMS), "{lo}..{hi}");
+    }
+
+    /// M111: `Track::AMBIENCE_RMS`, the loudness a court mod's ambience is levelled to, is a stock court's: court 2's
+    /// surf (program 7 key 25, its four loops at their spawn volumes 43, 32, 32, 43) over 10 s from each set of
+    /// bearings its sweep passes through, and well under the BGM's.
+    #[test]
+    fn court_ambience_loudness() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let base = mix(&mut iso);
+        let bank = court_bank(&mut iso, 2).0.unwrap();
+        let mut all = Vec::new();
+        for angles in [[0; 4], [90, 135, 225, 270], [45, 135, 225, 315]] {
+            let sound = Sound(Arc::new(Mutex::new(mix_clone(&base))));
+            for (volume, angle) in [43, 32, 32, 43].into_iter().zip(angles) {
+                sound.play_toward(&bank, sound::Play { slot: 0, program: 7, key: 25, volume, speed: 1.0 }, angle);
+            }
+            let mut out = Vec::new();
+            for _ in 0..600 {
+                sound.0.lock().unwrap().render(&mut out);
+            }
+            all.push((out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt());
+        }
+        let (lo, hi) = all.iter().fold((f32::MAX, 0f32), |(l, h), &r| (l.min(r), h.max(r)));
+        assert!((lo..=hi).contains(&Track::AMBIENCE_RMS), "{lo}..{hi}");
+        assert!(Track::AMBIENCE_RMS < Track::BGM_RMS / 3.0);
     }
 
     fn mix_clone(m: &Mix) -> Mix {
