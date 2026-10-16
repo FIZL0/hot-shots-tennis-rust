@@ -1496,7 +1496,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ => None,
             };
             if let Some(w) = m.net.ask.and_then(|h| room?.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) {
-                // a mod this machine doesn't have: its looks, or its donor recoloured, asked over the lobby; the gold
+                // a mod this machine doesn't have: its looks, or its donor as a stand-in, asked over the lobby; the gold
                 // pill is the cursor, and it has to be answered
                 lobby::draw(d, m, status.as_deref());
                 ask_popup(d, &w.name, room.map_or(0, |r| r.wait), m.sel, None);
@@ -1743,12 +1743,12 @@ fn qr(code: &str) -> Option<Image> {
     Some(img)
 }
 
-/// A mod this machine doesn't have: its looks, or its donor recoloured, asked over the screen under it; the gold pill
+/// A mod this machine doesn't have: its looks, or its donor as a stand-in, asked over the screen under it; the gold pill
 /// (row `sel`) is the cursor, and it has to be answered (`outside`: what a press off the box does).
 fn ask_popup(d: &mut Draw, name: &str, wait: u32, sel: usize, outside: Option<Act>) {
     let help = match wait {
-        0 => "Download its looks, or play it as the character it's based on, in other colours.".into(),
-        s => format!("The match is waiting: choose within {s} s, or it plays as the character it's based on, in other colours."),
+        0 => "Download its looks, or play it as the character it's based on.".into(),
+        s => format!("The match is waiting: choose within {s} s, or it plays as the character it's based on."),
     };
     d.popup(outside);
     let (sw, sh) = (260.0, 230.0);
