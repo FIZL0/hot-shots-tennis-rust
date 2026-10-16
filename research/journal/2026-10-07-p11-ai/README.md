@@ -127,3 +127,10 @@ See 23-P11K4-VPAD-SERVES-FINAL.md. `record_ai_rally.py` drives P1's serve (`HST_
 out-of-court aims (plans 10/11) are reached unpoked. The last-entry pick and the receive's smash find are reached
 on poked states (`HST_PATH_STOP`, `HST_CHAR`), because normal play can't get there. Test:
 `vpad_serves_receive_matches_the_game`.
+
+## P11l4 (singles receive branches from P1's serves)
+
+See 24-P11L4-SINGLES-VPAD-FINAL.md: a singles save with a human P1 (`context/recordings/singles_1p_serve.p2s`).
+From it, the singles receive's out-of-court aims (plans 10/11) and the level-3 plan-10 upgrade are reached
+unpoked: the upgrade with P1 at ×2.5 speed (`HST_SPEED`) and COM row 29. The last-entry pick and smash find use
+P11k4's pokes. Test: `singles_vpad_serves_receive_matches_the_game`.

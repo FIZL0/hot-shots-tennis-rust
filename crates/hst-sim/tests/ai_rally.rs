@@ -544,6 +544,46 @@ fn vpad_serves_receive_matches_the_game() {
     assert!(plans[0] > 0 && plans[1] > 0 && short > 0 && smash > 0);
 }
 
+/// P11l4: the singles receive's branches only P1's serves reach, `context/recordings/singles_1p_serve.p2s` (Fun Time
+/// Tennis singles, P1 Ashley human and serving, P2 COM; from `singles_1p_select.p2s`, the character select) in slot 8,
+/// P1 serving from the pad (`HST_SINGLES=1 HST_DRIVE=1 HST_SERVE=cross`; journal 2026-10-07-p11-ai 24). Every call
+/// replays bit for bit and each fixture must run its branch, read from the game's own calls: `_wide`/`_wide_b` the
+/// out-of-court aims (plans 11 and 10 with the receiver past the 5.485 line as it aims; `HST_SERVE_Y=0.5`, the
+/// walk on, row 29 level 3 via `HST_AI=1:29:3`, `_b` with `HST_SERVE_DELAY=7`); `_upgrade` the level-3 plan-10
+/// upgrade (row 29: return level 2 always, no special return, so a plan 10 inside the court is the upgrade; P1's
+/// speed ×2.5, `HST_SPEED=0:2.5`, so it is inside 7.4 m of the net as the CPU aims); `_last` and `_smash` the
+/// last-entry pick and smash find on the doubles fixtures' pokes (`HST_PATH_STOP=9` at 0.3 speed;
+/// `HST_CHAR=1:0xe0:0.01,1:0xe8:1.8,1:0xec:1.2,1:0xf0:0.8` with `HST_SERVE=cross,circle`).
+#[test]
+fn singles_vpad_serves_receive_matches_the_game() {
+    let table = table();
+    let (mut out, mut upgrade, mut short, mut smash) = ([0; 2], 0, 0, 0);
+    for name in ["ai_rally_singles_vpad_wide.bin", "ai_rally_singles_vpad_wide_b.bin", "ai_rally_singles_vpad_upgrade.bin", "ai_rally_singles_vpad_last.bin", "ai_rally_singles_vpad_smash.bin"] {
+        let Some(n) = replay(name, 1) else { return eprintln!("{name} or disc missing, skipped") };
+        eprintln!("{name}: calls, per substate: {n:?}");
+        let d = std::fs::read(format!("{}/context/fixtures/{name}", root())).unwrap();
+        for (_, _, e, x) in calls(&d, &[1]) {
+            let (from, to, plan) = (e[A + 0x56], x[A + 0x56], x[A + 0xb2]);
+            if from == 2 && to == 3 && (10..=11).contains(&plan) {
+                let row = &table.as_ref().unwrap()[((u32_at(e, A + 0xc) - TABLE) / RECORD) as usize];
+                if f32_at(e, 0x490).abs() > 5.485 {
+                    out[(plan - 10) as usize] += 1;
+                } else if plan == 10 && row.special_return_rate == 0 && f32_at(e, 0x508).abs() < 7.4 {
+                    upgrade += 1;
+                }
+            }
+            if from == 0 && to == 0 && (1..=11).contains(&i32_at(x, A + 0x3c)) {
+                short += 1;
+            }
+            if from == 0 && to == 1 && x[A + 0x9a] == 3 {
+                smash += 1;
+            }
+        }
+    }
+    eprintln!("out-of-court plans 10/11 {out:?}, upgrades {upgrade}, short copies {short}, smash finds {smash}");
+    assert!(out[0] > 0 && out[1] > 0 && upgrade > 0 && short > 0 && smash > 0);
+}
+
 #[test]
 fn net_and_base_match_the_game() {
     for (tag, what) in [(2, "NET"), (3, "BASE")] {
