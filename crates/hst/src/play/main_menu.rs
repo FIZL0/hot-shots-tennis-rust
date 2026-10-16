@@ -705,10 +705,13 @@ impl Menu {
 
     /// B217: a character open to player `p` (any disc character or custom one, a costume pack's costumes going with
     /// its disc character) and one of its open costumes, each at random by `seed`; `None` if nothing's open.
+    /// B520: in an online lobby with mods off, only the disc characters and their own costumes.
     fn draw(&self, p: usize, seed: u64) -> Option<(Who, usize)> {
-        let whos = (0..CHARS).map(Who::Disc).chain((0..self.own_mods()).filter(|&i| self.mods[i].costume_of.is_none()).map(Who::Mod));
-        let open: Vec<(Who, Vec<usize>)> =
-            whos.map(|w| (w, (0..self.costumes(w)).filter(|&c| self.free(p, w, c)).collect::<Vec<_>>())).filter(|(_, c)| !c.is_empty()).collect();
+        let vanilla = self.vanilla_lobby();
+        let mods = if vanilla { 0 } else { self.own_mods() };
+        let whos = (0..CHARS).map(Who::Disc).chain((0..mods).filter(|&i| self.mods[i].costume_of.is_none()).map(Who::Mod));
+        let n = |w: Who| if vanilla { COSTUMES } else { self.costumes(w) };
+        let open: Vec<(Who, Vec<usize>)> = whos.map(|w| (w, (0..n(w)).filter(|&c| self.free(p, w, c)).collect::<Vec<_>>())).filter(|(_, c)| !c.is_empty()).collect();
         let n = open.len() as u64;
         let (w, cs) = open.get((seed % n.max(1)) as usize)?;
         Some((*w, cs[(seed / n % cs.len() as u64) as usize]))

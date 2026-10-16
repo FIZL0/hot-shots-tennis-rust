@@ -426,7 +426,8 @@ impl Room {
         self.vanilla = vanilla;
         for s in self.seats.iter_mut().flatten() {
             if let Some(w) = s.pick.r#mod.take() {
-                s.pick = Pick::disc(w.donor, 0);
+                // B520: a Random draw stays Random, the hand toggle stays
+                s.pick = Pick { random: s.pick.random, swap: s.pick.swap, ..Pick::disc(w.donor, 0) };
             }
         }
         self.ver += 1;
@@ -3089,13 +3090,13 @@ mod tests {
             id: "x".into(), name: "X".into(), donor: 5, hand: 1.0, base: 5, overrides: vec![], ai_row: 5,
             names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: 1, dir: None,
         };
-        let modded = Pick { r#mod: Some(Box::new(w)), ..Pick::disc(5, 2) };
+        let modded = Pick { r#mod: Some(Box::new(w)), swap: true, random: true, ..Pick::disc(5, 2) };
         let mut r = room(false);
         assert!(r.take("host", &[modded.clone()]));
         assert!(r.allowed(std::slice::from_ref(&modded)).is_ok());
         let v = r.ver;
         assert!(r.set_vanilla(true) && !r.set_vanilla(true));
-        assert_eq!((r.seats[0].as_ref().unwrap().pick.clone(), r.ver), (Pick::disc(5, 0), v + 1));
+        assert_eq!((r.seats[0].as_ref().unwrap().pick.clone(), r.ver), (Pick { swap: true, random: true, ..Pick::disc(5, 0) }, v + 1), "B520: Random and the hand kept");
         assert!(r.allowed(&[modded]).is_err() && r.allowed(&[Pick::disc(1, 0)]).is_ok());
     }
 
