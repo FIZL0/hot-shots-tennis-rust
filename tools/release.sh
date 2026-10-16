@@ -53,7 +53,9 @@ git diff --cached --quiet || git commit -q -m "Dev stats for $tag" research/dev-
 for f in tools/build.sh tools/apk.sh tools/ios-ipa.sh; do
     grep -q 'features[ =].*ship' "$f" || { echo "$f doesn't build with --features ship (B492)" >&2; exit 1; }
 done
-HST_VERSION=$tag tools/build.sh all  # B374: update.rs compares this tag
+# M22: one commit stamp for every platform (the online build id: players of one release meet, other builds are refused)
+HST_COMMIT=$(git rev-parse HEAD | cut -c1-7)
+HST_COMMIT=$HST_COMMIT HST_VERSION=$tag tools/build.sh all  # B374: update.rs compares this tag
 out=dist/release
 rm -rf "$out" && mkdir -p "$out"
 tar -czf "$out/opentennis-linux-x86_64.tar.gz" -C dist/linux .

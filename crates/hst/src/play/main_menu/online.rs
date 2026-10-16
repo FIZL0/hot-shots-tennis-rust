@@ -855,6 +855,11 @@ impl Menu {
                     (self.net.naming, self.net.entry) = (false, String::new());
                     self.net.status.clear();
                     self.go(Screen::Code, out);
+                } else if k.ok && self.sel < n && !self.net.list[self.sel].same_build() {
+                    // M22: another build's lobby is greyed out: it would refuse this one at the door
+                    let l = &self.net.list[self.sel];
+                    self.net.status = format!("Can't join {}: {}", l.name, crate::net::version_differs(&other_build(l), crate::handshake::build()));
+                    out.push(Sound(1));
                 } else if k.ok && self.sel < n {
                     // the lobby's kind and room: this machine's controllers next, then join it
                     let l = &self.net.list[self.sel];
@@ -1468,6 +1473,11 @@ fn court_name(text: &super::Text, c: usize) -> String {
     format!("{} {}", text.msg(276 + 2 * c), text.msg(277 + 2 * c))
 }
 
+/// M22: a listed lobby's build id for the player, "an older version" from a build before the lobby list carried it.
+fn other_build(l: &Listing) -> String {
+    if l.build.is_empty() { "an older version".into() } else { l.build.clone() }
+}
+
 pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let text = d.text;
     match m.screen {
@@ -1488,6 +1498,16 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                     d.centred(["Refresh", "Join by Code", "Back"][i - n], x + w / 2.0, y + 7.0, 24.0, rgb);
                     continue;
                 };
+                if !l.same_build() {
+                    // M22: another build's lobby, greyed out: its host, kind and why it can't be joined
+                    d.pill(x, y, w, if on { [84.0, 80.0, 70.0] } else { [52.0, 52.0, 58.0] });
+                    d.hit([x, y, w, 38.0], Act::Row(i, OK));
+                    let grey = [72.0; 3];
+                    d.centred(&l.name, x + 70.0, y + 9.0, 20.0 * (120.0 / d.width(&l.name, 20.0).max(120.0)), grey);
+                    d.centred(if l.doubles { "Doubles" } else { "Singles" }, x + 180.0, y + 9.0, 20.0, grey);
+                    d.centred("Other version: update", x + 360.0, y + 9.0, 20.0, grey);
+                    continue;
+                }
                 d.fitted(&l.name, x + 70.0, y + 9.0, 20.0, 120.0);
                 d.centred(if l.doubles { "Doubles" } else { "Singles" }, x + 180.0, y + 9.0, 20.0, rgb);
                 d.fitted(&court_name(text, l.court), x + 315.0, y + 9.0, 20.0, 170.0);
@@ -1512,6 +1532,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.label("Join by Code is more reliable.", 320.0, 372.0, 16.0, w - 24.0, super::GOLD);
             d.hit([x, 346.0, w, 48.0], Act::Row(n + 1, OK));
             let info = match m.net.list.get(m.sel) {
+                Some(l) if !l.same_build() => format!("{}'s lobby: {}", l.name, crate::net::version_differs(&other_build(l), crate::handshake::build())),
                 Some(l) => format!("{}'s {} lobby on {}: {} of {} seats open. OK joins, then you pick your characters.", l.name, if l.doubles { "doubles" } else { "singles" }, court_name(text, l.court), l.open(), l.seats),
                 None if m.sel == n + 1 => "Type the host's 4-character code, or paste their link or code.".into(),
                 None if m.net.status.is_empty() => "Looking for lobbies...".into(),
@@ -1693,11 +1714,12 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
         for (k, l) in m.net.list.iter().take(3).enumerate() {
             let r = [x + 16.0, y + 32.0 + 30.0 * k as f32, w - 32.0, 26.0];
             d.box3(r, 9.0, [Some(INK), Some(PAPER), Some(PAPER)], 110.0);
-            let count = format!("{} / {}", l.taken, l.seats);
+            // M22: another build's lobby says so instead of its seats
+            let count = if l.same_build() { format!("{} / {}", l.taken, l.seats) } else { "Other version".into() };
             let cw = d.width(&count, 15.0);
             fit(d, &l.name, r[0] + 10.0, r[1] + 5.0, 15.0, r[2] * 0.5 - 14.0, INK);
             d.text(if l.doubles { "Doubles" } else { "Singles" }, r[0] + r[2] * 0.5, r[1] + 5.0, 15.0, MUTED);
-            d.text(&count, r[0] + r[2] - 10.0 - cw, r[1] + 5.0, 15.0, INK);
+            d.text(&count, r[0] + r[2] - 10.0 - cw, r[1] + 5.0, 15.0, if l.same_build() { INK } else { MUTED });
         }
     };
     let big = |d: &mut Draw, s: &str| {
@@ -2119,7 +2141,9 @@ pub(super) fn sample(m: &mut Menu) {
         m.net.entry = "K7".into();
     }
     m.net.code = "endpointaabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz223344556677".into();
-    m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0, code: String::new() }).collect();
+    // M22: the third one is another build's, greyed out
+    let build = |i| if i == 2 { "0.9.0 1a2b3c4".to_string() } else { crate::handshake::build().into() };
+    m.net.list = (0..3).map(|i| Listing { id: format!("{i}"), name: format!("Lobby {i}"), doubles: i != 1, court: i, taken: 1 + i % 2, seats: if i != 1 { 4 } else { 2 }, time: 0, code: String::new(), build: build(i) }).collect();
     // B236: the loading, empty and failed states
     match menu.as_str() {
         "lobbies-searching" | "lobbies-none" | "lobbies-failed" => m.net.list.clear(),
@@ -3211,6 +3235,23 @@ mod tests {
         assert_eq!(m.items().iter().filter(|it| **it != Item::Button("Chat")).copied().collect::<Vec<_>>(), GUEST_BUTTONS.map(Item::Button));
     }
 
+    /// M22: another build's lobby is listed greyed out; OK on it says why and doesn't join.
+    #[test]
+    fn another_builds_lobby_is_not_joined() {
+        let dev = super::super::Dev::Keys;
+        let ok = Press { ok: true, ..default() };
+        let mut m = Menu { screen: Screen::Lobbies, seats: [Some(dev), None, None, None], net: View { cfg: Some(Online::default()), ..default() }, ..default() };
+        let l = |build: &str| Listing { id: "X".into(), name: "Kim".into(), doubles: false, court: 1, taken: 1, seats: 2, time: 0, code: String::new(), build: build.into() };
+        m.heard(Event::Found(vec![l("0.0.0 1a2b3c4"), l(crate::handshake::build())]));
+        let fx = m.step(dev, ok);
+        assert_eq!(m.screen, Screen::Lobbies);
+        assert!(!fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Join(..))))), "{fx:?}");
+        assert!(m.net.status.contains(&format!("host 0.0.0 1a2b3c4, you {}", crate::handshake::build())), "{}", m.net.status);
+        m.sel = 1;
+        let fx = m.step(dev, ok);
+        assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Join(..))))), "the same build's joins: {fx:?}");
+    }
+
     fn find_first_then_pick_in_the_lobby() {
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };
@@ -3219,7 +3260,7 @@ mod tests {
         assert_eq!(m.screen, Screen::Lobbies);
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Find))), "{fx:?}");
         // a singles and a doubles lobby side by side
-        let l = |id: &str, doubles, taken| Listing { id: id.into(), name: id.into(), doubles, court: 1, taken, seats: if doubles { 4 } else { 2 }, time: 0, code: String::new() };
+        let l = |id: &str, doubles, taken| Listing { id: id.into(), name: id.into(), doubles, court: 1, taken, seats: if doubles { 4 } else { 2 }, time: 0, code: String::new(), build: crate::handshake::build().into() };
         m.heard(Event::Found(vec![l("S", false, 1), l("D", true, 2)]));
         assert_eq!(m.net.list.len(), 2);
         for (sel, id, doubles, fit) in [(0, "S", false, 1), (1, "D", true, 2)] {
@@ -3253,7 +3294,7 @@ mod tests {
     #[test]
     fn find_offers_join_by_code() {
         let dev = super::super::Dev::Keys;
-        let l = Listing { id: "S".into(), name: "S".into(), doubles: false, court: 1, taken: 1, seats: 2, time: 0, code: String::new() };
+        let l = Listing { id: "S".into(), name: "S".into(), doubles: false, court: 1, taken: 1, seats: 2, time: 0, code: String::new(), build: crate::handshake::build().into() };
         for (sel, p) in [(2, Press { ok: true, ..default() }), (0, Press { page: true, ..default() }), (1, Press { page: true, ..default() })] {
             let net = View { cfg: Some(Online::default()), list: vec![l.clone()], go: Some(Go::Find), finding: 1, ..default() };
             let mut m = Menu { screen: Screen::Lobbies, sel, seats: [Some(dev), None, None, None], net, ..default() };

@@ -2,19 +2,25 @@
 // B302: the git commit for the main menu's version corner (HST_COMMIT), "unknown" outside a git checkout.
 // P59: release builds only (every shipped build and tools/shot.sh's): watching .git/logs/HEAD rebuilt hst's test
 // binary on every commit in the shared checkout; dev/test builds say "dev".
+// M22: it is also the online build id (`handshake::set_build`); HST_COMMIT in the environment (tools/build.sh, the
+// Actions jobs: a worktree's or a container's checkout may have no usable git) wins, in any profile.
 fn main() {
+    println!("cargo:rerun-if-env-changed=HST_COMMIT");
     println!("cargo:rerun-if-changed=icon/hst.ico");
     let git = |args: &[&str]| {
         std::process::Command::new("git").args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
     };
-    if std::env::var("PROFILE").as_deref() == Ok("release") {
+    if let Some(c) = std::env::var("HST_COMMIT").ok().filter(|c| !c.is_empty()) {
+        println!("cargo:rustc-env=HST_COMMIT={c}");
+    } else if std::env::var("PROFILE").as_deref() == Ok("release") {
         for f in ["HEAD", "logs/HEAD"] {
             if let Some(p) = git(&["rev-parse", "--git-path", f]) {
                 println!("cargo:rerun-if-changed={p}");
             }
         }
         let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
-        let commit = git(&["rev-parse", "--short=7", "HEAD"]).unwrap_or_else(|| "unknown".into());
+        // always 7 characters, like ${GITHUB_SHA::7} in the Actions jobs (`--short` grows on an ambiguous prefix)
+        let commit = git(&["rev-parse", "HEAD"]).and_then(|c| c.get(..7).map(str::to_string)).unwrap_or_else(|| "unknown".into());
         println!("cargo:rustc-env=HST_COMMIT={commit}{}", if dirty { "+" } else { "" });
     } else {
         println!("cargo:rustc-env=HST_COMMIT=dev");
