@@ -32,10 +32,16 @@ html[data-game] #disc { display: none !important; }
 
 /* the logo band: the badge on the left, the title beside it, over a darkened court */
 #disc .band { position: relative; color: #fff; border-bottom: 6px solid var(--gold); background: #17311f; overflow: hidden; }
-/* M98: the hero shot; a portrait phone gets the portrait one */
-#disc .band { --shot: url(shots/hero.jpg); }
-@media (orientation: portrait) and (max-width: 760px) { #disc .band { --shot: url(shots/phone.jpg); } }
-#disc .band::before { content: ''; position: absolute; inset: 0; background: var(--shot, none) center 40% / cover no-repeat; filter: brightness(.42) saturate(1.1); }
+/* the band fades through the celebration close-ups (docs/screenshots/celebrate-*.jpg), 6 s each */
+#disc .band .slides { position: absolute; inset: 0; filter: brightness(.42) saturate(1.1); }
+#disc .band .slides i { position: absolute; inset: 0; background: center 30% / cover no-repeat; opacity: 0; animation: band-fade 30s infinite; }
+#disc .band .slides i:nth-child(1) { background-image: url(shots/celebrate-carol.jpg); }
+#disc .band .slides i:nth-child(2) { background-image: url(shots/celebrate-anya.jpg); animation-delay: 6s; }
+#disc .band .slides i:nth-child(3) { background-image: url(shots/celebrate-sophie.jpg); animation-delay: 12s; }
+#disc .band .slides i:nth-child(4) { background-image: url(shots/celebrate-will.jpg); animation-delay: 18s; }
+#disc .band .slides i:nth-child(5) { background-image: url(shots/celebrate-cody.jpg); animation-delay: 24s; }
+@keyframes band-fade { 0% { opacity: 0; } 4%, 20% { opacity: 1; } 24%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { #disc .band .slides i { animation: none; } #disc .band .slides i:first-child { opacity: 1; } }
 #disc .band .wrap { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: clamp(12px, 3vw, 40px); padding-block: clamp(18px, 4vw, 40px); }
 #disc .band .logo { width: clamp(180px, 34vw, 380px); height: auto; flex: none; filter: drop-shadow(0 6px 10px #0008); }
 #disc .band .title { flex: 1 1 300px; min-width: 0; }
