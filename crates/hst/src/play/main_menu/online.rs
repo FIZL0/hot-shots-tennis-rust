@@ -1330,7 +1330,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     match m.screen {
         Screen::Online => online_screen(d, m, hand_x),
         Screen::Lobbies => {
-            d.frame(0, 5);
+            d.frame(8, 5);
             // B195: every open lobby, singles and doubles together, a row each: host, kind, court, open seats
             let n = m.net.list.len();
             // ponytail: one page of 7 rows; scroll when lobbies get that many
@@ -1377,7 +1377,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             osk::draw(d, &m.net.entry, m.sel, hand_x, osk::Look { title: Some("Your name (the other players see it)"), done: "Save", full });
         }
         Screen::Code => {
-            d.frame(0, 5);
+            d.frame(8, 5);
             const ON: [f32; 3] = [128.0, 110.0, 40.0];
             const OFF: [f32; 3] = [70.0, 70.0, 80.0];
             let keys = m.keys();
