@@ -1,4 +1,5 @@
-//! M98: a clean picture for screenshots (ours, not the original's): with the HUD off (`--no-hud`, or F10 toggles it)
+//! M98: a clean picture for screenshots (ours, not the original's): with the HUD off (`--no-hud`, or F10 toggles it
+//! when launched with `--hud-key`)
 //! the match draws no UI at all (score panel, pop-ups, hints, name tags, the pause and result screens) and none of
 //! the pieces in the scene (timing balloons, the 1P..4P/COM markers, the umpire's calls and the GAME START/SET banners); the court, players, ball and effects draw as
 //! ever. Drawing only: nothing here reaches the sim.
@@ -6,15 +7,18 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// The HUD is off (`--no-hud`; F10 flips it).
+/// The HUD is off (`--no-hud`; F10 flips it when [`KEY`] is on).
 pub static OFF: AtomicBool = AtomicBool::new(false);
+/// F10 toggles the HUD (`--hud-key`, or a scripted F10 in `HST_KEYS`): off by default, so a stray F10 can't hide it
+/// in a normal game (B505).
+pub static KEY: AtomicBool = AtomicBool::new(false);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostUpdate, (toggle, hide, hide_calls).chain().before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate));
 }
 
 fn toggle(keys: Option<Res<ButtonInput<KeyCode>>>) {
-    if keys.is_some_and(|k| k.just_pressed(KeyCode::F10)) {
+    if KEY.load(Ordering::Relaxed) && keys.is_some_and(|k| k.just_pressed(KeyCode::F10)) {
         OFF.fetch_xor(true, Ordering::Relaxed);
     }
 }
@@ -59,5 +63,20 @@ fn hide_calls(calls: Option<Res<popups::Calls>>, game: Option<Res<Game>>, mut q:
                 v.set_if_neq(Visibility::Hidden);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B505: without `--hud-key`, F10 leaves the HUD on.
+    #[test]
+    fn f10_does_nothing_without_the_hud_key() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>().add_systems(Update, toggle);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F10);
+        app.update();
+        assert!(!KEY.load(Ordering::Relaxed) && !OFF.load(Ordering::Relaxed));
     }
 }

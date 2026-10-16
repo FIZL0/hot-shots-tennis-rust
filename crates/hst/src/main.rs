@@ -144,6 +144,8 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
             "--no-upscale" => upscale = false,
             // M98: no HUD in the match (promo screenshots)
             "--no-hud" => play::no_hud::OFF.store(true, std::sync::atomic::Ordering::Relaxed),
+            // B505: F10 toggles the HUD only with this
+            "--hud-key" => play::no_hud::KEY.store(true, std::sync::atomic::Ordering::Relaxed),
             // B374: no check for a newer release this run
             "--no-update-check" => update::NO_CHECK_FLAG.store(true, std::sync::atomic::Ordering::Relaxed),
             "--sound" => {
@@ -1402,8 +1404,11 @@ fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut
         "Digit2" => KeyCode::Digit2,
         "Digit3" => KeyCode::Digit3,
         "Digit4" => KeyCode::Digit4,
-        // the HUD on/off (M98)
-        "F10" => KeyCode::F10,
+        // the HUD on/off (M98); a scripted F10 turns the key on (B505)
+        "F10" => {
+            play::no_hud::KEY.store(true, std::sync::atomic::Ordering::Relaxed);
+            KeyCode::F10
+        }
         _ => {
             if let Some(path) = what.strip_prefix("shot=") {
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.to_string()));

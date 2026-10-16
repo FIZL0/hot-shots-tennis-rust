@@ -25,7 +25,7 @@
   workspace = 'special:hstshot silent' })`), so every shot is the same size (2048×1152 at the desktop's scale) however
   many windows other agents have tiled; launch any window you compare across runs this way. `HST_ISO=` a symlink in a
   folder without `mods/texture-replacements` shows the disc's own textures.
-- Promo shots (M98): `--no-hud` (F10 toggles it in a match) hides every UI root, balloons, markers and the umpire's
+- Promo shots (M98): `--no-hud` (F10 toggles it in a match when launched with `--hud-key`; a scripted `HST_KEYS` F10 always works) hides every UI root, balloons, markers and the umpire's
   calls; `HST_SIZE="W H"` sets the shot window (any aspect), `HST_KEYS="20:shot=a.png 21:F10 …"` takes many frames per
   run, `HST_WAIT` how long shot.sh waits. The set in `docs/screenshots/` (README and site share it) and how it was
   picked: journal 2026-10-16-m98-promo-shots.
