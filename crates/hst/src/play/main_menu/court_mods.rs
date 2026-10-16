@@ -80,6 +80,7 @@ impl Menu {
 
     /// B401: court `c`'s label under its strip tile: a mod's name broken over two lines at the space nearest its
     /// middle, as the disc names are (its game is on the name card), else `court_lines`.
+    #[cfg(test)]
     pub(super) fn court_tile_lines(&self, text: &Text, c: usize) -> [String; 2] {
         match self.court_mod_of(c) {
             Some(x) => halves(&x.name),
@@ -145,6 +146,7 @@ fn source(x: &Court) -> String {
 }
 
 /// `name` in two lines, broken at the space nearest its middle (one word: all on the first).
+#[cfg(test)]
 fn halves(name: &str) -> [String; 2] {
     let mid = name.chars().count() as f32 / 2.0;
     let at = name.char_indices().filter(|&(_, ch)| ch == ' ').map(|(i, _)| i).min_by(|&a, &b| {

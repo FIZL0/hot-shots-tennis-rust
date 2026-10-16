@@ -112,6 +112,7 @@ pub(super) struct Parts {
 }
 
 /// The select's `n` player columns on `view` (left, top, right, bottom).
+#[cfg(test)]
 pub(super) fn columns(view: [f32; 4], n: usize) -> Columns {
     columns_mixed(view, n, [false; 4])
 }
@@ -1330,10 +1331,10 @@ mod tests {
                     let compact = std::array::from_fn(|p| mask >> p & 1 == 1);
                     let c = columns_mixed(g.view, n, compact);
                     let mut x = l;
-                    for p in 0..n {
+                    for (p, &small) in compact.iter().enumerate().take(n) {
                         let [cx, _, cw, _] = c.parts(p).card;
                         assert!(cx >= x - 1e-3 && cw > 0.0, "{a} {n} {mask} {p}");
-                        if compact[p] {
+                        if small {
                             assert!(cw <= COMPACT_W * PX + 1e-3 && cw <= c.first[2] + 1e-3, "{a} {n} {mask} {p}");
                         } else {
                             assert!((cw - c.first[2]).abs() < 1e-3, "{a} {n} {mask} {p}");

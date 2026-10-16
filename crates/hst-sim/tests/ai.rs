@@ -620,7 +620,7 @@ fn singles_aims_match_the_game() {
         if tag == 2 {
             assert_eq!(short, b[0x10 + 0x257] != 0, "{ctx}: short flag");
         }
-        seen[tag as usize - 1][l.kind as usize] += 1;
+        seen[tag - 1][l.kind as usize] += 1;
         if let Some(n) = opp.get_mut(l.opp_kind as usize) {
             *n += 1;
         }

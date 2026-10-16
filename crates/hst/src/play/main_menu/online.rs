@@ -439,7 +439,7 @@ impl Menu {
             false => Vec::new(),
         };
         // read in first (asked again each frame until they are)
-        if unwired.is_empty() || !unwired.iter().fold(true, |ok, &i| crate::modfs::ready(&self.mods[i].dir) && ok) {
+        if unwired.is_empty() || unwired.iter().filter(|&&i| !crate::modfs::ready(&self.mods[i].dir)).count() > 0 {
             return;
         }
         self.net.rewired = Some(r.ver);

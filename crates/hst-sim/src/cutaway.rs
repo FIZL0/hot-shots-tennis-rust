@@ -743,14 +743,13 @@ pub fn pick(lists: &[Vec<u8>; 3], counters: &mut [usize; 3], i: &PickInput) -> u
             n = next(counters);
         }
     }
-    if i.game_end && i.lost {
-        if (NO_WINNER_SHOT.contains(&i.character) && n == WINNER)
-            || (i.character == 6 && (WINNER..CLOSE_UP).contains(&n))
+    if i.game_end && i.lost
+        && ((NO_WINNER_SHOT.contains(&i.character) && n == WINNER)
+            || (i.character == 6 && (WINNER..CLOSE_UP).contains(&n)))
         {
             n = LOSER;
             counters[list] += 1;
         }
-    }
     n
 }
 

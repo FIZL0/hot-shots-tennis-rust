@@ -235,7 +235,7 @@ fn unpad(data: &[u8], size: UVec2) -> Vec<u8> {
     let mut out = Vec::with_capacity(size.x as usize * size.y as usize * 3);
     for y in 0..size.y as usize {
         let Some(r) = data.get(y * row..y * row + size.x as usize * 4) else { break };
-        r.chunks_exact(4).for_each(|p| out.extend_from_slice(&p[..3]));
+        r.as_chunks::<4>().0.iter().for_each(|p| out.extend_from_slice(&p[..3]));
     }
     out
 }
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(size(3840, 2160), UVec2::new(1920, 1080));
         assert_eq!(size(1280, 720), UVec2::new(1280, 720));
         let wide = size(5120, 1440);
-        assert!(wide.x <= 2560 + 32 && wide.y <= 1080 && wide.x % 64 == 0, "{wide}");
+        assert!(wide.x <= 2560 + 32 && wide.y <= 1080 && wide.x.is_multiple_of(64), "{wide}");
         assert_eq!(size(1000, 1000).x % 64, 0);
         assert!(fits([1920, 1080], size(1920, 1080)));
         assert!(fits([1920, 1080], size(1760, 990)));

@@ -442,9 +442,6 @@ mod tests {
         assert_eq!(clean(&"x".repeat(200)).map(|s| s.len()), Some(MAX));
     }
 
-    /// The statics (`ASK`, `BUTTON`, …) are shared: one chat app at a time.
-    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// In a lobby, T opens the box, typed keys go into it (not to the menus' keys), Enter sends the line.
     #[test]
     fn enter_types_and_sends() {
