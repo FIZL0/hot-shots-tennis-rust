@@ -23,7 +23,6 @@ index out of bounds: the len is 0 but the index is 0"
 
 ### Players
 
-- [ ] **P7** (split into P7a–f) Exact character movement stats → `hst-sim/src/player.rs` · `play.rs` locomote/character_stats/tparam | t: player.rs
 - [~] **P8** Player animation timing (overlaps N1) → `motion.rs` · `character.rs` · `play.rs` motions | t: motion.rs
 - [~] **P10** Timing pop-ups (screen size/position open) → `play.rs` balloon_art/balloons/age_balloons — B21 resolved the screen size/position (neck anchor, per-kind size, 53-frame fade)
 
