@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc as amp;
 
 pub mod rtc;
+pub mod keeper;
 
 pub const ALPN: &[u8] = b"hst/lobby/1";
 /// The lobby list's infohash (any 20 bytes; these spell it).
@@ -626,6 +627,9 @@ pub enum Msg {
     Lobby(Room),
     /// B200: a peer's match is past its loading screen (the match starts once every peer's is).
     Loaded(String),
+    /// B162: a peer whose player switched away (its frames stopped: a hidden tab, a minimised window), about once a
+    /// second from its `keeper::Keeper`, not its frame loop. The others hold the match for it longer than for a silent one.
+    Hidden(String),
     /// M20: a chat line (`chat.rs`), in the lobby and the match alike; never in the match's input. A guest's goes to
     /// the host with `from` and `name` empty; the host fills them in (the sender's peer and lobby name), cleans and
     /// rate-limits it and passes it to everyone else.
@@ -643,7 +647,7 @@ impl Msg {
     fn in_match(&self) -> bool {
         matches!(
             self,
-            Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_) | Msg::State { .. } | Msg::Resynced(_) | Msg::Alive(_) | Msg::Away { .. } | Msg::Choose(_) | Msg::Restart { .. } | Msg::Lobby(_) | Msg::Loaded(_)
+            Msg::Pads { .. } | Msg::Intro { .. } | Msg::Hash { .. } | Msg::Pause(_) | Msg::Bye(_) | Msg::State { .. } | Msg::Resynced(_) | Msg::Alive(_) | Msg::Away { .. } | Msg::Choose(_) | Msg::Restart { .. } | Msg::Lobby(_) | Msg::Loaded(_) | Msg::Hidden(_)
         )
     }
 }
@@ -924,6 +928,11 @@ impl Net {
         move || {
             let _ = cmd.send(Cmd::Leave);
         }
+    }
+
+    /// B162: the match's keeper for this machine (peer `me`): `Msg::Hidden` while its player has switched away.
+    pub fn keeper(&self, me: String) -> keeper::Keeper {
+        keeper::Keeper::start(self.cmd.clone(), me, keeper::EVERY)
     }
 
     /// M20: the chat lines heard since the last call (`poll` takes them out of the events).

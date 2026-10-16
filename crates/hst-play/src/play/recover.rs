@@ -11,6 +11,11 @@
 //! on, sets which seats are people (`Pads::seats`: a bot's is the computer's from that tick, as a seat started empty
 //! is) and starts a new rollback session (or lockstep) from that tick. The host silent: the guests wait
 //! [`HOST_WAIT`] and end the match (the star goes through it; there's no new host).
+//!
+//! B162: a player who switched away (a hidden tab, a minimised window: its frames stop) isn't silent: its machine's
+//! keeper (`net::keeper`) says so (`Msg::Hidden`) about once a second. Everyone holds the match for it with "… switched
+//! away" and a countdown of [`LONG`]; it's away (the wait and question above) only after that, or if even the keeper
+//! goes quiet for [`HIDDEN_QUIET`] (a browser throttles a hidden tab's timers). Back, it plays on from where it was.
 
 use super::netplay::{Lockstep, Netplay, unwire};
 use super::tick_input::IDLE;
@@ -30,13 +35,16 @@ pub const WAIT: f32 = 20.0;
 pub const CHOOSE: f32 = 15.0;
 /// How long the guests wait for a silent host.
 const HOST_WAIT: f32 = 10.0;
+/// B162: how long everyone waits for a player who switched away, and how long its keeper may go unheard meanwhile.
+pub const LONG: f32 = 300.0;
+const HIDDEN_QUIET: f32 = 75.0;
 
 pub struct Recover {
     /// Seconds since each peer was last heard, and whether it has been at all.
     quiet: BTreeMap<String, (f32, bool)>,
     alive: f32,
     /// The host: the peers away, seconds waited, the answer's countdown once it asks, an answer, the countdown sent.
-    away: Vec<String>,
+    pub(super) away: Vec<String>,
     waited: f32,
     asking: Option<f32>,
     chosen: Option<bool>,
@@ -57,19 +65,31 @@ pub struct Recover {
     pub ask_me: bool,
     /// B200: the peers (this machine too) past their loading screen; the match's ticks wait for all of them.
     pub loaded: BTreeSet<String>,
+    /// B162: the peers whose players switched away, seconds since; this machine's keeper (`keep`).
+    pub hidden: BTreeMap<String, f32>,
+    keeper: Option<crate::net::keeper::Keeper>,
 }
 
 impl Recover {
     /// `others`: the other peers, already playing if this machine rejoins.
     pub fn new(rejoin: bool, others: impl Iterator<Item = String>) -> Self {
         let loaded = if rejoin { others.collect() } else { BTreeSet::new() };
-        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None, ask_me: false, loaded }
+        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None, ask_me: false, loaded, hidden: BTreeMap::new(), keeper: None }
     }
 
     /// Any word from a peer.
     pub fn heard_from(&mut self, e: &Event) {
-        if let Event::Datagram(p, _) | Event::Match(Msg::Alive(p) | Msg::Loaded(p)) = e {
+        if let Event::Datagram(p, _) | Event::Match(Msg::Alive(p) | Msg::Loaded(p) | Msg::Hidden(p)) = e {
             self.quiet.insert(p.clone(), (0.0, true));
+        }
+        // B162: the keeper while it's away, the frame loop's keep-alive once it's back
+        match e {
+            Event::Match(Msg::Hidden(p)) if !self.hidden.contains_key(p) => {
+                info!("online: {p} switched away");
+                self.hidden.insert(p.clone(), 0.0);
+            }
+            Event::Match(Msg::Alive(p)) if self.hidden.remove(p).is_some() => info!("online: {p} is back"),
+            _ => {}
         }
         if let Event::Match(Msg::Loaded(p)) = e {
             self.loaded.insert(p.clone());
@@ -205,10 +225,18 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     for q in r.quiet.values_mut() {
         q.0 += dt;
     }
+    for h in r.hidden.values_mut() {
+        *h += dt;
+    }
     let names = |room: &Room, who: &[String]| who.iter().map(|p| name(room, p)).collect::<Vec<_>>().join(", ");
     if np.me != "host" {
         let q = quiet(&mut r.quiet, "host");
-        let limit = if r.loaded.contains("host") { SILENT } else { LOADING };
+        let hid = r.hidden.get("host").copied();
+        let limit = if hid.is_some() { HIDDEN_QUIET } else if r.loaded.contains("host") { SILENT } else { LOADING };
+        if hid.is_some_and(|h| h > LONG) {
+            np.finish(format!("{} switched away for {} minutes. The match is over.\n{score}", name(&np.room, "host"), LONG as u32 / 60), false);
+            return String::new();
+        }
         if q > limit + HOST_WAIT {
             np.finish(format!("The host stopped answering. The match is over.\n{score}"), false);
             return String::new();
@@ -216,7 +244,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
         if q > limit {
             return format!("Waiting for the host... {} s", (limit + HOST_WAIT - q).ceil());
         }
-        let Some((who, left, ask)) = &r.told else { return String::new() };
+        let Some((who, left, ask)) = &r.told else { return switched(&np.room, &r.hidden) };
         let (left, ask) = (*left, *ask);
         if ask && !r.answered && let Some(bot) = press {
             r.answered = true;
@@ -234,10 +262,13 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
         }
         let q = quiet(&mut r.quiet, p);
         let away = r.away.iter().any(|x| x == p);
-        if !away && q > if r.loaded.contains(p) { SILENT } else { LOADING } {
+        let hid = r.hidden.get(p).copied();
+        let limit = if hid.is_some() { HIDDEN_QUIET } else if r.loaded.contains(p) { SILENT } else { LOADING };
+        let gone = q > limit || hid.is_some_and(|h| h > LONG);
+        if !away && gone {
             info!("online: {} went silent", name(&np.room, p));
             r.away.push(p.to_string());
-        } else if away && q < SILENT {
+        } else if away && !gone && q < SILENT {
             info!("online: {} is answering again", name(&np.room, p));
             r.away.retain(|x| x != p);
         }
@@ -247,7 +278,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
             np.out.push(Msg::Away { who: Vec::new(), left: 0, ask: false });
         }
         (r.waited, r.asking, r.chosen) = (0.0, None, None);
-        return String::new();
+        return switched(&np.room, &r.hidden);
     }
     r.waited += dt;
     if r.asking.is_none() && r.waited >= WAIT {
@@ -291,6 +322,29 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
             r.ask_me = ask;
             notice(&who, left, ask, false)
         }
+    }
+}
+
+/// B162: who switched away, and how long until the wait for them runs out (empty: nobody).
+fn switched(room: &Room, hidden: &BTreeMap<String, f32>) -> String {
+    let Some(most) = hidden.values().copied().reduce(f32::max) else { return String::new() };
+    let who = hidden.keys().map(|p| name(room, p)).collect::<Vec<_>>().join(", ");
+    let left = (LONG - most).ceil().max(0.0) as u32;
+    format!("{who} switched away from the game.\nWaiting for them to come back... {}:{:02}", left / 60, left % 60)
+}
+
+/// B162: each frame, this machine's keeper (made once the match has a network) hears it ran, and whether the window
+/// had the focus (a minimised one loses it before its frames stop).
+pub(super) fn keep(w: &mut World) {
+    let focused = w.query_filtered::<&bevy::window::Window, With<bevy::window::PrimaryWindow>>().iter(w).next().is_none_or(|w| w.focused);
+    let Some(np) = w.get_resource::<Netplay>() else { return };
+    if np.recover.keeper.is_none() {
+        let me = np.me.clone();
+        let Some(k) = w.get_resource::<crate::net::Net>().map(|n| n.keeper(me)) else { return };
+        w.resource_mut::<Netplay>().recover.keeper = Some(k);
+    }
+    if let Some(k) = &w.resource::<Netplay>().recover.keeper {
+        k.frame(focused);
     }
 }
 
