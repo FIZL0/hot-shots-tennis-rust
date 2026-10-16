@@ -57,31 +57,6 @@ fn decode(png: &[u8]) -> Option<(Pic, Image)> {
     Some((pic, Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, img.into_raw(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)))
 }
 
-/// B400: umpire mod `v`'s card on the strip in `r` when it has a picture: its head across the card (cut to the card's
-/// shape), the name on its foot as Random's. False: no picture (the plain named card).
-pub(super) fn card(d: &mut Draw, m: &Menu, v: usize, r: [f32; 4], on: bool, text: &Text) -> bool {
-    let Some((i, pic)) = picture(m, v) else { return false };
-    let [fx, fy, fs, _] = pic.face;
-    // the head's square widened to the card's shape about its middle, its top kept
-    let w = fs * r[2] / r[3];
-    d.q(Tex::Solid, [0.0; 4], r, if on { [70.0, 66.0, 86.0] } else { [44.0, 40.0, 54.0] }, 128.0);
-    d.q(Tex::Umpire(i), [fx + fs / 2.0 - w / 2.0, fy, w, fs], r, if on { WHITE } else { [100.0; 3] }, 128.0);
-    let name = m.umpire_name(text, v);
-    let rgb = if on { super::GOLD } else { WHITE };
-    d.outlined(|d| d.label(&name, r[0] + r[2] / 2.0, r[1] + r[3] - 14.0, 12.0, r[2] - 4.0, rgb));
-    true
-}
-
-/// B400: umpire mod `v`'s whole picture on the select's stage `[x, y, w, h]`, as big as fits. False: no picture.
-pub(super) fn stage(d: &mut Draw, m: &Menu, v: usize, [x, y, w, h]: [f32; 4]) -> bool {
-    let Some((i, pic)) = picture(m, v) else { return false };
-    let [sw, sh] = pic.size;
-    let ph = (h - 16.0).min((w - 16.0) * sh / sw);
-    let pw = ph * sw / sh;
-    d.q(Tex::Umpire(i), [0.0, 0.0, sw, sh], [x + (w - pw) / 2.0, y + (h - ph) / 2.0, pw, ph], WHITE, 128.0);
-    true
-}
-
 /// B400: umpire mod `v`'s round face of `size` centred on `[x, y]` (the confirm card's): the disc faces' dark rim and
 /// white ring, its head clipped round inside. False: no picture.
 pub(super) fn face(d: &mut Draw, m: &Menu, v: usize, [x, y]: [f32; 2], size: f32) -> bool {

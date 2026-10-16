@@ -21,6 +21,19 @@ use crate::{mesh, ps2, vu0};
 pub const COLS: usize = 0x500;
 pub const ROWS: usize = 0x380;
 pub const BYTES: usize = COLS * ROWS / 8;
+/// The load pass's screen (pixels across game z, game x).
+const SCREEN: [f32; 2] = [1280.0, 896.0];
+/// Reds above this are shade.
+const SHADE_RED: u32 = 0x6f;
+/// The PS2's full colour / opaque alpha, and the red a fogged cutout blends toward (fog 0xff).
+const FULL: u8 = 0x80;
+const FOGGED_RED: u8 = 0x7f;
+/// The court's half width and half length: the ground there is flat at 0.
+const COURT_HALF: [f32; 2] = [10.685, 19.885];
+/// The materials whose shadows are cut by their texture's alpha (alpha-tested modes).
+const CUTOUT_MODES: std::ops::RangeInclusive<i16> = 10..=29;
+/// A strip vertex's no-kick flag: it closes no triangle.
+const NO_KICK: u16 = 0x8000;
 
 /// Where the map lies on the court: the corner it starts at and map pixels per game unit, (z, x).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,7 +64,7 @@ impl Frame {
         let hx = ps2::chop(3.0 * (-h as f64 * tan) / 4.0);
         Frame {
             origin: [(t[2] + cz - hz).0, (t[0] + cx - hx).0],
-            scale: [(1.0 / (F(hz) * 2.0 / 1280.0)).0, (1.0 / (F(hx) * 2.0 / 896.0)).0],
+            scale: [(1.0 / (F(hz) * 2.0 / SCREEN[0])).0, (1.0 / (F(hx) * 2.0 / SCREEN[1])).0],
         }
     }
 }
@@ -106,7 +119,7 @@ pub fn ball_height(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) 
 /// last light scale and shadow).
 pub fn ground(court: &mesh::Object, models: &[mesh::Model], pos: [f32; 4]) -> Option<([f32; 4], [f32; 4])> {
     let [x, y, z, w] = pos;
-    if x.abs() <= 10.685 && z.abs() <= 19.885 {
+    if x.abs() <= COURT_HALF[0] && z.abs() <= COURT_HALF[1] {
         return Some(([x, 0.0, z, w], [-0.0, -1.0, -0.0, -0.0]));
     }
     let mut hit = mesh::Hit::NONE;
@@ -225,6 +238,7 @@ pub struct Shape {
 
 impl Shape {
     pub fn new(model: &hst_data::mdl::Model, mats: &hst_data::mtl::Mtl) -> Shape {
+        use hst_data::mdl::prim::{FGE, TME};
         let mut s = Shape {
             centre: std::array::from_fn(|k| ((F(model.lo[k]) + model.hi[k]) * 0.5).0),
             half: std::array::from_fn(|k| ((F(model.hi[k]) - model.lo[k]) * 0.5).0),
@@ -232,22 +246,22 @@ impl Shape {
         };
         for (mi, packets) in model.materials.iter().enumerate() {
             let mat = mats.materials.get(mi);
-            let mode = mat.map_or(0, |m| i16::from_le_bytes([m.header[0x1e], m.header[0x1f]]));
-            let tex = mat.and_then(|m| m.texture).and_then(|t| mats.textures.get(t)).filter(|_| (10..=29).contains(&mode));
+            let mode = mat.map_or(0, |m| m.mode());
+            let tex = mat.and_then(|m| m.texture).and_then(|t| mats.textures.get(t)).filter(|_| CUTOUT_MODES.contains(&mode));
             let mut cut = tex.map(|t| Cutout {
                 width: t.width as usize,
                 height: t.height as usize,
                 // back from the expanded alpha (a·255/128) to the PS2's
                 alpha: t.rgba.chunks_exact(4).map(|c| ((c[3] as u32 * 128).div_ceil(255)) as u8).collect(),
                 wrap: model.wrap.get(mi).copied().unwrap_or([0, 0]),
-                red: if packets.iter().any(|p| p.prim & 0x30 == 0x30) { 0x7f } else { 0x80 },
+                red: if packets.iter().any(|p| p.prim & (TME | FGE) == TME | FGE) { FOGGED_RED } else { FULL },
                 tris: Vec::new(),
             });
             for pk in packets {
                 for t in &pk.triangles {
                     let v = t.map(|i| pk.vertices[i as usize]);
                     match &mut cut {
-                        Some(c) if pk.prim & 0x10 != 0 => c.tris.push((v.map(|v| v.pos), v.map(|v| v.uv))),
+                        Some(c) if pk.prim & TME != 0 => c.tris.push((v.map(|v| v.pos), v.map(|v| v.uv))),
                         _ => s.tris.push(v.map(|v| v.pos)),
                     }
                 }
@@ -385,7 +399,7 @@ pub fn build(f: &Frame, casters: &[Caster], hole: &hst_data::mdl::Model, mats: &
     }
     let mut map = vec![0u8; BYTES];
     for (i, &r) in red.iter().enumerate() {
-        if r.min(0xff) > 0x6f {
+        if r.min(0xff) > SHADE_RED {
             map[i >> 3] |= 1 << (i & 7);
         }
     }
@@ -814,7 +828,7 @@ fn tri_out(p: &Planes, v1: [f32; 3], v2: [f32; 3], v3: [f32; 3], w: f32) -> bool
 pub fn receiver_strip(p: &Planes, pos: &[[f32; 3]], flags: &[u16], uv_w: &[f32]) -> Vec<([f32; 3], bool)> {
     let (mut out, mut h): (Vec<([f32; 3], bool)>, u32) = (Vec::new(), 0);
     for (i, &v) in pos.iter().enumerate() {
-        let skip = flags[i] & 0x8000 != 0; // a strip's first two vertices always are
+        let skip = flags[i] & NO_KICK != 0; // a strip's first two vertices always are
         h = (h & 3) << 1 | (skip || i < 2 || tri_out(p, pos[i - 2], pos[i - 1], v, uv_w[i])) as u32;
         if h == 7 {
             h = 3;

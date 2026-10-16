@@ -53,7 +53,7 @@ pub(super) fn c(c: u32) -> [f32; 3] {
 
 /// The background over the whole window: the main menu's tiled wall.
 pub(super) fn backdrop(d: &mut Draw) {
-    d.wall(5);
+    d.wall(super::WALL);
 }
 
 /// The main menu's title band (`Draw::frame`): `band` along the top over a white and a dark rule, a tab hanging from

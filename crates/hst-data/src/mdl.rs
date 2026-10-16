@@ -26,6 +26,16 @@
 
 use crate::xb::Error;
 
+/// GS PRIM bits a batch carries.
+pub mod prim {
+    /// Textured.
+    pub const TME: u8 = 0x10;
+    /// Fogged.
+    pub const FGE: u8 = 0x20;
+    /// Blended.
+    pub const ABE: u8 = 0x40;
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vertex {
     pub pos: [f32; 3],
@@ -53,7 +63,7 @@ pub struct Packet {
     pub colors: Vec<[u8; 4]>,
     /// Nodes this packet's batch is bound to (bone slots).
     pub palette: Vec<usize>,
-    /// The batch's GS PRIM bits (batch header +0x31): 0x10 TME (textured), 0x20 FGE (fogged), 0x40 ABE (blended).
+    /// The batch's GS PRIM bits (batch header +0x31): [`prim`].
     pub prim: u8,
     /// The batch's VU1 object flags (batch header +0x30, 0x0c or 0x0e): bit 1 skips the normal transform, so the
     /// packet draws unlit at vc · (ambient + light) (the net's wire and poles).

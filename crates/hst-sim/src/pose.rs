@@ -7,6 +7,17 @@ use hst_data::ani::Anim;
 use crate::libm;
 use crate::ps2::{F, f32s, fs};
 
+/// Below this rotation (radians) the quaternion exponential takes sin(n)/n as 1.
+const TINY_ANGLE: f32 = 1e-4;
+/// The racket arm's lift in the reach solve: 135° about z.
+const THREE_QUARTERS_PI: f32 = 2.3561945;
+/// The reach solve stops once the racket point is within this squared distance (xy) of its target.
+const NEAR2: f32 = 0.01;
+/// A joint turns only while the cosine to its target is below this (already aligned otherwise).
+const ALIGNED: f32 = 0.99999;
+/// One turn of a joint goes at most 30° (cos 30°).
+const COS_30: f32 = 0.8660254;
+
 pub type M4 = [[f32; 4]; 4];
 
 /// A skeleton: node names, parents (index before child) and rest local matrices.
@@ -114,7 +125,7 @@ fn q_log(q: [f32; 4]) -> [f32; 4] {
 
 fn q_exp(v: [f32; 4]) -> [f32; 4] {
     let n = norm3(v);
-    let k = if n <= f32::from_bits(0x38d1_b717) { F::ONE } else { F(libm::sinf(n)) / n };
+    let k = if n <= TINY_ANGLE { F::ONE } else { F(libm::sinf(n)) / n };
     [(k * v[0]).0, (k * v[1]).0, (k * v[2]).0, libm::cosf(n)]
 }
 
@@ -555,7 +566,7 @@ pub fn axis_rotation(c: f32, s: f32, axis: [f32; 3]) -> M4 {
     ]
 }
 
-/// One stroke's entry of the arm table (motions 0x10–0x19 posed at frame 8).
+/// One stroke's entry of the arm table (`motion::id::STROKES`, posed at frame 8).
 #[derive(Clone, Debug)]
 pub struct ArmPose {
     /// Racket, right hand, right forearm, right upper arm (translation zeroed), left upper arm locals.
@@ -581,7 +592,7 @@ pub struct ArmPose {
 
 /// The arm table the game builds at player load: per stroke motion, the pose at frame 8 and the arm's geometry.
 pub struct ArmTable {
-    /// Strokes 0x10–0x19, then the volleys 0x1a/0x1b (of these the volley solve reads the right arm's locals,
+    /// `motion::id::STROKES`, then the two volleys after them (of these the volley solve reads the right arm's locals,
     /// chain and shoulder).
     pub poses: Vec<ArmPose>,
     /// Mean forward reach of the racket point.
@@ -595,7 +606,8 @@ pub struct ArmTable {
 /// The node names the table reads.
 pub(crate) const ARM_NODES: [&str; 5] = ["Racket", "Bip01RHand", "Bip01RForearm", "Bip01RUpperArm", "Bip01LUpperArm"];
 
-/// The arm table from the skeleton and the stroke and volley motions (0x10 … 0x1b) of `character`.
+/// The arm table from the skeleton and the stroke and volley motions (`motion::id::FORE_TOPSPIN` on, through the
+/// volleys) of `character`.
 pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
     use crate::vu0::transform;
     let idx = ARM_NODES.map(|n| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no node {n}")));
@@ -644,7 +656,7 @@ pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
             angle = (F(angle) * -1.0).0;
         }
         let yaw = axis_angle(angle, [0.0, 1.0, 0.0]);
-        let mut aimed = vmul(&vmul(&vmul(&upper, &yaw), &axis_angle(f32::from_bits(0x4016_cbe4), [0.0, 0.0, sign])), &transpose3(&r_chain));
+        let mut aimed = vmul(&vmul(&vmul(&upper, &yaw), &axis_angle(THREE_QUARTERS_PI, [0.0, 0.0, sign])), &transpose3(&r_chain));
         aimed[3] = zero_t;
         r_upper[3] = zero_t;
         r_chain[3] = zero_t;
@@ -677,7 +689,7 @@ pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
     ArmTable { poses, reach: reach.0, side: side.0, hand_x: hand_x.0 }
 }
 
-/// The dive arm the game measures at player load from the receive motion (0x1e) at time 5: the model matrices
+/// The dive arm the game measures at player load from the receive motion (`motion::id::RECEIVE`) at time 5: the model matrices
 /// of the racket and of the right upper arm (`swing::Reach::dive_arm`).
 pub fn dive_arm(sk: &Skeleton, clip: &Clip) -> [M4; 2] {
     let [racket, upper] = [ARM_NODES[0], ARM_NODES[3]].map(|n| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no node {n}")));
@@ -769,16 +781,16 @@ pub fn contact_solve(t: &ArmTable, i: usize, contact: [f32; 4], pos: [f32; 4], s
     let mut p = tip(&forearm, &aimed);
     let mut elbow = true;
     for _ in 0..50 {
-        if dist(v, p) <= f32::from_bits(0x3c23_d70a) {
+        if dist(v, p) <= NEAR2 {
             break;
         }
         let (m, frame) = if elbow { (vmul(&vmul(&forearm, &aimed), &chain), vmul(&aimed, &chain)) } else { (vmul(&aimed, &chain), chain) };
         let (u, w) = (unit_xy(p, m[3]), unit_xy(v, m[3]));
         let dot = (F(u[1]) * w[1]).madd(u[0], w[0]).madd(0.0, 0.0);
-        if !(dot < f32::from_bits(0x3f7f_ff58)) {
+        if !(dot < ALIGNED) {
             break;
         }
-        let c = if dot < f32::from_bits(0x3f5d_b3d7) { f32::from_bits(0x3f5d_b3d7) } else { dot.0 };
+        let c = if dot < COS_30 { COS_30 } else { dot.0 };
         let s = if dot < 0.0 {
             (-F(sign)).0
         } else if (F::ZERO + F(u[0]) * w[1]).msub(u[1], w[0]) < 0.0 {
@@ -799,7 +811,7 @@ pub fn contact_solve(t: &ArmTable, i: usize, contact: [f32; 4], pos: [f32; 4], s
         let m = vmul(&hand, &frame);
         let (u, w) = (unit_xy(p, m[3]), unit_xy(v, m[3]));
         let dot = (F(u[1]) * w[1]).madd(u[0], w[0]).madd(0.0, 0.0);
-        if !(dot < f32::from_bits(0x3f5d_b3d7)) {
+        if !(dot < COS_30) {
             let s = if (F(u[0]) * w[1]).msub(u[1], w[0]) < 0.0 { -1.0 } else { 1.0 };
             let bent = vmul(&vmul(&m, &axis_cos(dot.clamp(-1.0, 1.0).0, s, [0.0, 0.0, 1.0])), &transpose3(&frame));
             hand = keep_row3(bent, &hand);
@@ -847,8 +859,8 @@ fn volley_solve(a: &ArmPose, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) 
         let p = transform(&m.iter().fold(id, |acc, x| vmul(&acc, x)), TIP);
         let (dot, s) = dot_cross(p, v, vmul(&m[j], &frame)[3]);
         let c = dot.clamp(-1.0, 1.0).0;
-        if c < f32::from_bits(0x3f7f_ff58) {
-            turn(&mut m, j, &frame, if j != 1 && c < f32::from_bits(0x3f5d_b3d7) { f32::from_bits(0x3f5d_b3d7) } else { c }, s);
+        if c < ALIGNED {
+            turn(&mut m, j, &frame, if j != 1 && c < COS_30 { COS_30 } else { c }, s);
         }
     }
     let frame = vmul(&vmul(&m[2], &m[3]), &m[4]);
@@ -859,7 +871,7 @@ fn volley_solve(a: &ArmPose, contact: [f32; 4], pos: [f32; 4], scale: [f32; 2]) 
         step[0] = ((F(v[0]) - p[0]) / 2.0).0;
         v[0] = (F(v[0]) - step[0]).0;
         let (dot, s) = dot_cross(p, v, vmul(&m[1], &frame)[3]);
-        if !(dot < f32::from_bits(0x3f5d_b3d7)) {
+        if !(dot < COS_30) {
             turn(&mut m, 1, &frame, dot.clamp(-1.0, 1.0).0, s);
             p = tip(&m);
         }
@@ -944,5 +956,15 @@ impl ArmIk {
     pub fn apply(&self, j: usize, w: f32, local: &M4) -> M4 {
         let q = crate::quat::slerp([0.0, 0.0, 0.0, 1.0], self.solve.quats[j], w);
         keep_row3(vmul(local, &crate::quat::to_matrix(q)), local)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn constant_bits() {
+        use super::*;
+        let bits = [TINY_ANGLE, THREE_QUARTERS_PI, NEAR2, ALIGNED, COS_30].map(f32::to_bits);
+        assert_eq!(bits, [0x38d1_b717, 0x4016_cbe4, 0x3c23_d70a, 0x3f7f_ff58, 0x3f5d_b3d7]);
     }
 }

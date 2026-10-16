@@ -19,6 +19,14 @@
 //! All are camera-facing quads drawn like the timing balloons: same anchor over the head, the swirl a little bigger.
 #![deny(clippy::float_arithmetic)]
 
+use crate::judge::verdict;
+
+/// A pop-up's alpha when fully shown (the GS's 0x80).
+pub const OPAQUE: i32 = 128;
+/// The swirl's cells, and the frames each is shown.
+const SWIRL_CELLS: u8 = 5;
+const SWIRL_FRAMES: u32 = 3;
+
 /// Which pop-up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Popup {
@@ -55,12 +63,20 @@ impl Popup {
     }
 }
 
-/// A live pop-up: the original's stage machine (0 fade-in, 1 hold, 2 fade-out) and its alpha (0..=128, 128 opaque).
+/// Where a pop-up is in its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum Stage {
+    FadeIn,
+    Hold,
+    FadeOut,
+}
+
+/// A live pop-up: its stage, the frames left in it and its alpha (0..=[`OPAQUE`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pop {
     pub popup: Popup,
     pub player: usize,
-    stage: u8,
+    stage: Stage,
     t: i32,
     pub alpha: i32,
     /// Frames aged, and the swirl's cell (0..5, the next every third frame).
@@ -71,37 +87,37 @@ pub struct Pop {
 impl Pop {
     /// A new pop-up; `tick` it the same frame (the list ages right after spawning, before drawing).
     pub fn new(popup: Popup, player: usize) -> Self {
-        Pop { popup, player, stage: 0, t: popup.frames()[0], alpha: 128, n: 0, cell: 0 }
+        Pop { popup, player, stage: Stage::FadeIn, t: popup.frames()[0], alpha: OPAQUE, n: 0, cell: 0 }
     }
 
     /// One frame of ageing; false once it's gone (the list drops it before drawing).
     pub fn tick(&mut self) -> bool {
         let [fade_in, hold, fade_out] = self.popup.frames();
-        self.alpha = 128;
+        self.alpha = OPAQUE;
         if self.popup == Popup::Swirl {
             self.n += 1;
-            if self.n % 3 == 0 {
-                self.cell = (self.cell + 1) % 5;
+            if self.n % SWIRL_FRAMES == 0 {
+                self.cell = (self.cell + 1) % SWIRL_CELLS;
             }
         }
         match self.stage {
-            0 => {
+            Stage::FadeIn => {
                 self.t -= 1;
-                self.alpha = (128 - self.t * 128 / fade_in).min(128);
+                self.alpha = (OPAQUE - self.t * OPAQUE / fade_in).min(OPAQUE);
                 if self.t < 0 {
-                    (self.stage, self.t) = (1, hold);
+                    (self.stage, self.t) = (Stage::Hold, hold);
                 }
             }
-            1 if matches!(self.popup, Popup::Bang | Popup::Skull) => {
+            Stage::Hold if matches!(self.popup, Popup::Bang | Popup::Skull) => {
                 self.t -= 1;
                 if self.t < 0 {
-                    (self.stage, self.t) = (2, fade_out);
+                    (self.stage, self.t) = (Stage::FadeOut, fade_out);
                 }
             }
-            1 => {}
-            _ => {
+            Stage::Hold => {}
+            Stage::FadeOut => {
                 self.t -= 1;
-                self.alpha = (self.t * 128 / fade_out).max(0);
+                self.alpha = (self.t * OPAQUE / fade_out).max(0);
                 if self.t < 0 {
                     return false;
                 }
@@ -111,10 +127,15 @@ impl Pop {
     }
 }
 
-/// The sweat drop's player and the "..." player when a doubles point ends on `call` (judge codes: 1 out, 3 double
-/// fault, 5 out after the net, 6 illegal hit). `shots` this point, `hitter` the last hitter, `server`.
+/// The verdicts that upset: an out (also after the net), a double fault or an illegal hit.
+fn upset(call: u8) -> bool {
+    matches!(call, verdict::OUT | verdict::DOUBLE_FAULT | verdict::NET_OUT | verdict::ILLEGAL_HIT)
+}
+
+/// The sweat drop's player and the "..." player (the partner) when a doubles point ends on `call` (a
+/// `judge::verdict`, see [`upset`]). `shots` this point, `hitter` the last hitter, `server`.
 pub fn sweat(players: usize, call: u8, shots: i32, hitter: i32, server: i32) -> Option<(usize, usize)> {
-    if players < 4 || !matches!(call, 1 | 3 | 5 | 6) {
+    if players < 4 || !upset(call) {
         return None;
     }
     let who = if shots != 0 { hitter } else { server } as usize;
@@ -123,7 +144,7 @@ pub fn sweat(players: usize, call: u8, shots: i32, hitter: i32, server: i32) -> 
 
 /// The swirl's player when a singles point ends on `call` (as [`sweat`]).
 pub fn swirl(players: usize, call: u8, shots: i32, hitter: i32, server: i32) -> Option<usize> {
-    (players == 2 && matches!(call, 1 | 3 | 5 | 6)).then_some(if shots != 0 { hitter } else { server } as usize)
+    (players == 2 && upset(call)).then_some(if shots != 0 { hitter } else { server } as usize)
 }
 
 #[cfg(test)]

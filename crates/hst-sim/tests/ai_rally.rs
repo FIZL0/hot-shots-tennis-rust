@@ -768,6 +768,38 @@ fn singles_net_and_base_match_the_game() {
     }
 }
 
+/// P11l5: the singles NET/BASE branches no bot-only recording reached, from a 1P singles match with P1 driven by the
+/// virtual pad (slot 8 = `singles_1p_serve.p2s`, `HST_SINGLES=1 HST_DRIVE=1`, 3000-4000 frames, tags 1,2,3; journal
+/// 25). All three are poked, because unpoked play can't reach them:
+/// - `_redraw` (`HST_WIDE=1 HST_RATE=0`): the walk back's 60-frame redraw. Every singles row's centre rate is 100, so
+///   the walk back always goes on its first draw; with the rate at 0 it waits, and draws again every 60 frames.
+/// - `_chase` (`HST_CHAR_RALLY=1 HST_CHAR=1:0xe0:0.01,1:0xe4:0.01,1:0xe8:20,1:0xec:19.5,1:0xf0:19`): in rallies the
+///   CPU's contact heights miss every ball, so its chase walk runs on and arrives at the after-bounce spot.
+/// - `_let_go` (`HST_LINE=-2 HST_LINE_FROM=3 HST_MARGIN=-3`, as `ai_let_go_s05.bin` but only from a point's third
+///   shot): the line-margin hold at the press.
+///
+/// Each call replays bit for bit. The branches are read from the game's entry/exit records: wait 59 → 0 in the
+/// wait substate (redraw), chase on → off with the substate still 0 (arrival), the held flag set (hold).
+#[test]
+fn singles_vpad_net_and_base_match_the_game() {
+    let (mut redraw, mut arrive, mut hold) = (0, 0, 0);
+    for name in ["ai_rally_singles_vpad_redraw.bin", "ai_rally_singles_vpad_chase.bin", "ai_rally_singles_vpad_let_go.bin"] {
+        for (tag, what) in [(2, "NET"), (3, "BASE")] {
+            let Some(n) = replay(name, tag) else { return eprintln!("{name} or disc missing, skipped") };
+            eprintln!("{name} {what}: calls, per substate {n:?}");
+        }
+        let d = std::fs::read(format!("{}/context/fixtures/{name}", root())).unwrap();
+        for (_, _, e, x) in calls(&d, &[2, 3]) {
+            let (from, to) = (e[A + 0x57], x[A + 0x57]);
+            redraw += (from == 0 && i32_at(e, A + 0x250) == 59 && i32_at(x, A + 0x250) == 0) as usize;
+            arrive += (from == 0 && to == 0 && e[A + 0x99] == 1 && x[A + 0x99] == 0) as usize;
+            hold += (e[A + 0xbc] == 0 && x[A + 0xbc] == 1) as usize;
+        }
+    }
+    eprintln!("redraws {redraw}, chase arrivals {arrive}, line-margin holds {hold}");
+    assert!(redraw > 0 && arrive > 0 && hold > 0);
+}
+
 /// B57: CPUs let a ball that will land out go by. `ai_let_go_s05.bin` is slot 5 with the line-call margin pulled 2 m
 /// inside every line (`HST_LINE=-2`, so near-line landings are called out) and every CPU row's let-go margin at -3 m
 /// (`HST_MARGIN=-3`), so out calls whose distance to the nearest true line is negative still pass the check: the BASE

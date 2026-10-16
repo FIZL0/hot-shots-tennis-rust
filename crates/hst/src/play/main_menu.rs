@@ -35,7 +35,6 @@ use hst_sim::sound;
 use std::sync::Arc;
 
 use super::controls::{self, Action, Bindings, Seat};
-use super::panel;
 use super::widescreen::Anchor;
 use crate::Args;
 use crate::graphics::Graphics;
@@ -179,8 +178,6 @@ fn fit_grid(window: Query<&Window, With<PrimaryWindow>>, mut menu: ResMut<Menu>)
 const COURTS: usize = 11;
 /// Each court's surface on the confirm screen (0 grass, 1 clay, 2 hard; `hst_sim::ball::COURTS` bounces the same).
 const SURFACE: [usize; COURTS] = [1, 1, 1, 2, 0, 0, 2, 0, 1, 0, 2];
-/// The confirm screen's ball meters per surface: bounce height and ball speed, out of 4.
-const METERS: [(usize, usize); 3] = [(2, 4), (3, 2), (4, 3)];
 /// The umpires; the value after the last court or umpire is a random pick (`Menu::venue`).
 const UMPIRES: usize = 5;
 /// The court picker's strip order (the original's tiles 1–11 as courts k), then our Random.
@@ -1116,6 +1113,11 @@ impl Menu {
             self.online_enter(&mut out);
             return out;
         }
+        // B516: the splash's 1P (and the keyboard) works the menus; another pad only joins the screens that seat players
+        let joins = matches!(self.screen, Screen::Assign | Screen::Chars | Screen::Confirm | Screen::Lobby);
+        if !self.paused && !joins && matches!(dev, Dev::Pad(_)) && self.p1.is_some_and(|p| p != dev) {
+            return out;
+        }
         let host = self.lead();
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
             return out;
@@ -1636,7 +1638,6 @@ impl Repeat {
 enum Tex {
     Solid,
     Font,
-    Hand,
     /// The 3D pointing hand (`cursor.rs`).
     Cursor,
     /// `SHEETS[k]`.
@@ -1672,38 +1673,28 @@ enum Tex {
 #[derive(Resource, Default)]
 struct Icons(std::collections::HashMap<Who, Handle<Image>>);
 
-const SHEETS: [(&str, &str); 15] = [
-    ("MENU/MENU10A.XB0", "title_mainmenu"),
-    ("MENU/MENU70.XB0", "title_option"),
-    ("MENU/MENU05.XB0", "title_playerselect"),
-    ("MENU/MENU12A.XB0", "title_characterselect2"),
-    ("MENU/MENU03.XB0", "title_confirmation_01"),
+/// Z21: only the sheets something draws (our titles, rows and cards replaced the disc's title bars, option and select
+/// sheets, the shots pictures, `info`, `Confirmation_01`/`04` and `KeyAssign_CharacterSelect2`; the umpire picker's
+/// cards and tiles the umpire screen's wall, `Confirmation_03` and `item_umpireNN` stills).
+const SHEETS: [(&str, &str); 3] = [
     ("MENU/MENU05.XB0", "wall_playerselect"),
-    ("MENU/MENU70.XB0", "wall_option"),
-    ("MENU/MENU12A.XB0", "wall_characterselect2"),
-    ("MENU/MENU03.XB0", "wall_confirmation"),
-    ("MENU/MENU70.XB0", "option_00"),
-    ("MENU/MENU12B.XB0", "characterselect2_00"),
     ("MENU/MENU12B.XB0", "characterselect2_01"),
-    ("MENU/MENU12B.XB0", "characterselect2_02"),
-    ("MENU/MENU12B.XB0", "characterselect2_03"),
     ("MENU/MENU12B.XB0", "characterselect2_04"),
 ];
+/// Every screen's wall (`SHEETS` index).
+const WALL: usize = 0;
 /// The disc grid's faces sheet (`SHEETS` index): drawn for a face icon not baked yet.
-const FACES: usize = 11;
+const FACES: usize = 1;
 /// The △ attribute card: title box, play-style titles, stat labels and the A–F letters.
-const ATTRS: Tex = Tex::Sheet(14);
-const CONFIRM: Tex = Tex::Sheet(15);
-/// After the portrait sheets: `info.tm2` (button icons), `Confirmation_04` (the rank labels and their pill),
-/// `KeyAssign_CharacterSelect2` (the select's key hint words), then `Confirmation_00`/`01`/`02`: round umpire faces and
-/// balls; court names, surfaces and meter icons; court tiles (the "?" one).
-const EXTRA: usize = SHEETS.len() + 2 + UMPIRES + 4 + CHARS;
-const C00: Tex = Tex::Sheet(EXTRA + 3);
-const C02: Tex = Tex::Sheet(EXTRA + 5);
+const ATTRS: Tex = Tex::Sheet(2);
+/// After `SHEETS`: `Confirmation_00`/`02`: round umpire faces and balls; court tiles (the "?" one).
+const EXTRA: usize = SHEETS.len();
+const C00: Tex = Tex::Sheet(EXTRA);
+const C02: Tex = Tex::Sheet(EXTRA + 1);
 /// B192: court `k`'s picture (`MENU/WALL/COURTnn.XB` → `Confirmation_Courtnn.tm2`, 568×256), the original's confirm
 /// screen backdrop.
 const fn court_pic(k: usize) -> Tex {
-    Tex::Sheet(EXTRA + 6 + k)
+    Tex::Sheet(EXTRA + 2 + k)
 }
 /// The "?" court tile on `C02` (a random court; B217's Random card).
 const RANDOM_TILE: [f32; 4] = [96.0, 360.0, 92.0, 68.0];
@@ -1901,36 +1892,13 @@ fn read_sheets(mut commands: Commands, args: Res<Args>, mut images: ResMut<Asset
     ))];
     let font = read(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
     art.push(super::menu_art::image(&mut images, &font, "word"));
-    let inpane = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
-    let inpane = Archive::parse(&inpane).expect("xb archive");
-    let hand = inpane.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("hsm_yubi.tm2")).expect("hsm_yubi");
-    art.push(panel::image(&mut images, &inpane.read(hand).expect("INPANE bytes")));
     // Z1: read every sheet first so their replacements decode on all cores at once
     let mut sheets: Vec<(String, Vec<u8>)> = SHEETS
         .iter()
-        .chain([&("MENU/MENU03.XB0", "confirmation_03"), &("MENU/MENU03.XB0", "f_s")])
         .map(|(xb, name)| (name.to_string(), read(&mut iso, xb, &format!("/{name}.tm2"))))
         .collect();
-    for u in 0..5 {
-        let name = format!("item_umpire{u:02}");
-        sheets.push((name.clone(), read(&mut iso, "MENU/MENU60.XB0", &format!("/{name}.tm2"))));
-    }
-    let shots = ["cs2_shots_nomal_a", "cs2_shots_nomal_b", "cs2_shots_cos_a", "cs2_shots_cos_b"]
-        .into_iter()
-        .map(String::from)
-        .chain((0..CHARS).map(|c| format!("cs2_shots_{c:02}")));
-    for name in shots {
-        sheets.push((name.clone(), read(&mut iso, "MENU/MENU12B.XB0", &format!("/{name}.tm2"))));
-    }
-    for (xb, name) in [
-        ("MENU/MENU12A.XB0", "info"),
-        ("MENU/MENU12B.XB0", "confirmation_04"),
-        ("MENU/MENU12A.XB0", "keyassign_characterselect2"),
-        ("MENU/MENU03.XB0", "confirmation_00"),
-        ("MENU/MENU03.XB0", "confirmation_01"),
-        ("MENU/MENU03.XB0", "confirmation_02"),
-    ] {
-        sheets.push((name.into(), read(&mut iso, xb, &format!("/{name}.tm2"))));
+    for name in ["confirmation_00", "confirmation_02"] {
+        sheets.push((name.into(), read(&mut iso, "MENU/MENU03.XB0", &format!("/{name}.tm2"))));
     }
     // B192: each court's picture behind the confirm screen's players ([`court_pic`])
     for k in 0..COURTS {
@@ -2603,7 +2571,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::ModSettings | Screen::Mobile => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => options::controls_layout(&mut d, m, bind, hand_x),
         Screen::Mode => {
-            d.frame(2, 5);
+            d.frame(2, WALL);
             // the whole pill, its dark rim included (it runs to the sheet's edges), at the same scale and place as before
             for (i, words) in ["Singles", "Doubles"].into_iter().enumerate() {
                 let on = (i == 1) == m.doubles;
@@ -2614,7 +2582,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
             d.info(text.msg(192));
         }
         Screen::Assign => {
-            d.frame(2, 5);
+            d.frame(2, WALL);
             for p in 0..m.players() {
                 let y = 90.0 + 70.0 * p as f32;
                 d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(CARD_FILL[p])], 128.0);
@@ -2823,7 +2791,6 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
             }
             court_picker::draw(d, m, text);
         }
-        4 if m.picking.is_some() => umpire_screen(d, m, text),
         _ => confirm::draw(d, m, text, pads, hand_x),
     }
 }
@@ -2843,29 +2810,6 @@ fn random_face(d: &mut Draw, src: [f32; 4], [x, y]: [f32; 2], size: f32) {
     d.out.last_mut().unwrap().round = [r; 4];
 }
 
-/// The court's surface (from `[x, y]`) and its bounce and speed meters under it, across `w`; nothing for Random.
-fn court_meters(d: &mut Draw, m: &Menu, [x0, y, w]: [f32; 3]) {
-    if m.court_layout(m.court) < COURTS {
-        let s = SURFACE[m.court_layout(m.court)];
-        let tint = [[50.0, 128.0, 30.0], [128.0, 80.0, 30.0], [40.0, 100.0, 128.0]][s];
-        d.outlined(|d| left(d, ["Grass Court", "Clay Court", "Hard Court"][s], x0, y, 16.0, w, tint));
-        // B141a: the icons and balls are ours (`menu_art::pill_layers`)
-        let meters = [(super::menu_art::BOUNCE, METERS[s].0), (super::menu_art::SPEED, METERS[s].1)];
-        // each meter in its half of the card, the pair shrunk alike when the wider one wouldn't fit there
-        let natural = |icon: [f32; 4]| icon[2] * 18.0 / icon[3] + 2.0 + 13.0 * 4.0;
-        let z = meters.iter().map(|m| (w / 2.0 - 4.0) / natural(m.0)).fold(1.0f32, f32::min);
-        for (g, (icon, n)) in meters.into_iter().enumerate() {
-            let x = x0 + w / 2.0 * g as f32;
-            let (ih, ball) = (18.0 * z, 13.0 * z);
-            let iw = icon[2] * ih / icon[3];
-            d.q(Tex::Pill, icon, [x, y + 29.0 - ih / 2.0, iw, ih], WHITE, 128.0);
-            for b in 0..4 {
-                d.q(Tex::Pill, if b < n { super::menu_art::BALL } else { super::menu_art::BALL_OFF }, [x + iw + 2.0 * z + ball * b as f32, y + 28.5 - ball / 2.0, ball, ball], WHITE, 128.0);
-            }
-        }
-    }
-}
-
 /// The part of a `[pw, ph]` picture that covers a `w`×`h` box, cut about its middle (never stretched).
 fn cover([pw, ph]: [f32; 2], [w, h]: [f32; 2]) -> [f32; 4] {
     if w / h > pw / ph { let sh = pw * h / w; [0.0, (ph - sh) / 2.0, pw, sh] } else { let sw = ph * w / h; [(pw - sw) / 2.0, 0.0, sw, ph] }
@@ -2882,171 +2826,6 @@ fn court_picture(d: &mut Draw, m: &Menu, c: usize, [x, y, w, h]: [f32; 4]) {
         return d.q(C02, random_cover([w, h]), [x, y, w, h], WHITE, 128.0);
     }
     d.q(court_pic(k), cover([568.0, 256.0], [w, h]), [x, y, w, h], WHITE, 128.0);
-}
-
-/// Select Umpire as its own screen (ours): the hovered umpire in her chair (the disc's still of her model,
-/// `item_umpireNN`) on a stage in the middle, her name on a card top-left (the lob key, △, plays one of her calls), the strip of
-/// umpire cards along the foot.
-fn umpire_screen(d: &mut Draw, m: &Menu, text: &Text) {
-    d.frame(9, 8);
-    let [l, t, r, _] = m.grid.reach();
-    let (_, top) = strip_rects(m);
-    let u = m.umpire as usize;
-    let (name, sub) = match (u, m.umpire_mod_of(u)) {
-        (UMPIRES, _) => ("Random".to_string(), "Any of the 5 umpires".to_string()),
-        // M8f3: a mod by its name and its game; B408: not its donor, which only fills missing calls and timing
-        (_, Some(x)) => (x.name.clone(), x.game().to_string()),
-        _ => (m.umpire_name(text, u), format!("Umpire {} of {UMPIRES}", u + 1)),
-    };
-    let [cx, cy, cw, ch] = name_card(d, m, &name, &sub, false);
-    // the stage: as tall as the room between the title and the strip, the still fitted in it; on a narrow window,
-    // under the card
-    let stage = |y0: f32| {
-        let h = top - 10.0 - y0;
-        let w = (h * 0.8).min(r - l - 16.0);
-        [(l + r) / 2.0 - w / 2.0, y0, w, h]
-    };
-    let mut s = stage(t + 48.0);
-    if s[0] < cx + cw + 8.0 {
-        s = stage(cy + ch + 10.0);
-    }
-    let [x, y0, w, h] = s;
-    d.box3(s, 16.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
-    // B400: a mod's own picture, else its donor's still
-    let mine = umpire_mods::stage(d, m, u, s);
-    let u = m.umpire_donor(u);
-    if mine {
-        // drawn
-    } else if u < UMPIRES {
-        let (sw, sh) = (190.0, 336.0);
-        let ph = (h - 16.0).min((w - 16.0) * sh / sw);
-        let pw = ph * sw / sh;
-        d.q(Tex::Sheet(SHEETS.len() + 2 + u), [0.0, 8.0, sw, sh], [x + (w - pw) / 2.0, y0 + (h - ph) / 2.0, pw, ph], WHITE, 128.0);
-    } else {
-        let tw = w * 0.5;
-        d.q(C02, RANDOM_TILE, [x + (w - tw) / 2.0, y0 + (h - tw * 68.0 / 92.0) / 2.0, tw, tw * 68.0 / 92.0], WHITE, 128.0);
-    }
-    strip(d, m, text);
-    if u < UMPIRES {
-        // a tap on her plays a call, as the lob key's Preview Voice
-        d.hit(s, pointer::press(|k| k.card = true));
-    }
-    d.info(text.msg(333));
-}
-
-/// The pickers' name card top-left under the title (never under the strip): the name large, `sub` under it, the
-/// court's surface and meters (`meters`). Returns its box.
-fn name_card(d: &mut Draw, m: &Menu, name: &str, sub: &str, meters: bool) -> [f32; 4] {
-    let [l, t, r, _] = m.grid.reach();
-    let cw = (d.width(name, 26.0).max(d.width(sub, 14.0)) + 28.0).max(if meters { 260.0 } else { 0.0 }).min(r - l - 16.0);
-    let card = [l + 8.0, t + 48.0, cw, if meters { 104.0 } else { 64.0 }];
-    d.box3(card, 14.0, [Some(INK), Some(WHITE), Some(CREAM)], 128.0);
-    left(d, name, card[0] + 14.0, card[1] + 9.0, 26.0, cw - 28.0, BROWN);
-    left(d, sub, card[0] + 14.0, card[1] + 39.0, 14.0, cw - 28.0, [70.0, 64.0, 80.0]);
-    if meters {
-        court_meters(d, m, [card[0] + 14.0, card[1] + 58.0, cw - 28.0]);
-    }
-    card
-}
-
-/// The picker strip's tiles (`strip_order`'s, Random first) along the foot over the description bar, the picked one
-/// larger, and the strip's top. Tiles share the width, no larger than the strip's height allows.
-fn strip_rects(m: &Menu) -> (Vec<[f32; 4]>, f32) {
-    let [l, _, r, b] = m.grid.reach();
-    let court = m.sel == 1;
-    // M8f6: a long strip (court or umpire mods past the disc's) shows `STRIP_SHOWN` slots around the pick, the
-    // rest zero-sized off it
-    let total = strip_order(m).len();
-    let first = strip_at(m).saturating_sub(STRIP_SHOWN / 2).min(total.saturating_sub(STRIP_SHOWN));
-    let n = total.min(STRIP_SHOWN) as f32;
-    let at = strip_at(m) - first;
-    let top = b - 26.0 - STRIP_H;
-    // tile room above the courts' names; the aspect of the disc's tiles
-    let (room, aspect) = if court { (STRIP_H - 30.0, 92.0 / 68.0) } else { (STRIP_H - 12.0, 80.0 / 64.0) };
-    let p = ((r - l - 16.0) / (n + 0.4)).min(room * aspect / 1.26);
-    let foot = top + 6.0 + room;
-    let mut x = (l + r) / 2.0 - p * (n + 0.4) / 2.0;
-    let rects = (0..total)
-        .map(|i| {
-            let Some(i) = i.checked_sub(first).filter(|&i| i < STRIP_SHOWN) else { return [-640.0, foot, 0.0, 0.0] };
-            let slot = if i == at { 1.4 * p } else { p };
-            let (w, h) = (slot * 0.9, slot * 0.9 / aspect);
-            let rect = [x + (slot - w) / 2.0, foot - h, w, h];
-            x += slot;
-            rect
-        })
-        .collect();
-    (rects, top)
-}
-
-/// The picker strip's height over the description bar.
-const STRIP_H: f32 = 84.0;
-/// The most slots the picker strip shows at once (M8f6).
-const STRIP_SHOWN: usize = 17;
-
-/// The picker strip (`strip_rects`): a dark band, the disc's court tiles named under them or the umpire cards
-/// (`Confirmation_03`, their names on them) and Random's "?" tile; a tap on one hovers it, on the hovered one keeps
-/// it, off the strip puts it back (as ○).
-fn strip(d: &mut Draw, m: &Menu, text: &Text) {
-    d.popup(Some(pointer::press(|k| k.back = true)));
-    let (rects, _) = strip_rects(m);
-    d.anchor = Anchor::Span;
-    d.q(Tex::Solid, [0.0; 4], [0.0, 404.0 - STRIP_H, 640.0, STRIP_H], [20.0, 18.0, 24.0], 100.0);
-    d.q(Tex::Solid, [0.0; 4], [0.0, 404.0 - STRIP_H, 640.0, 1.5], INK, 128.0);
-    d.anchor = Anchor::Centre;
-    let at = strip_at(m);
-    for (i, (v, r)) in strip_order(m).into_iter().zip(rects).enumerate() {
-        if r[2] == 0.0 {
-            continue;
-        }
-        let on = i == at;
-        let (tex, src) = match v {
-            _ if m.sel != 1 && v < UMPIRES => (CONFIRM, [8.0 + 88.0 * v as f32, 392.0, 80.0, 64.0]),
-            // M8f3: a mod on a plain card, named below
-            _ if m.sel != 1 && v > UMPIRES => (Tex::Solid, [0.0; 4]),
-            // B401: a mod with its own picture on it
-            _ if m.sel == 1 && m.court_pic(v).is_some() => {
-                let (i, size) = m.court_pic(v).unwrap();
-                (Tex::CourtMod(i), cover(size, [92.0, 68.0]))
-            }
-            // M8f6: a mod on its layout court's tile, named below
-            _ if m.sel == 1 && m.court_layout(v) < COURTS => {
-                let v = m.court_layout(v);
-                let t = if v < 7 { 2 * v } else { 2 * (v - 7) + 1 };
-                (C02, [96.0 * (t % 2) as f32, 72.0 * (t / 2) as f32, 92.0, 68.0])
-            }
-            _ => (C02, RANDOM_TILE),
-        };
-        let ring = if on { 2.5 } else { 1.5 };
-        d.q(Tex::Solid, [0.0; 4], [r[0] - ring, r[1] - ring, r[2] + 2.0 * ring, r[3] + 2.0 * ring], if on { [128.0, 108.0, 38.0] } else { INK }, 128.0);
-        if m.sel != 1 && v > UMPIRES {
-            d.q(tex, src, r, if on { [92.0, 80.0, 112.0] } else { [56.0, 50.0, 70.0] }, 128.0);
-        } else {
-            d.q(tex, src, r, if on { WHITE } else { [100.0; 3] }, 128.0);
-        }
-        d.hit(r, pointer::Act::Pick(v));
-        // B400: a mod with its own picture: its head on the card
-        if m.sel != 1 && v > UMPIRES && umpire_mods::card(d, m, v, r, on, text) {
-            continue;
-        }
-        let rgb = if on { GOLD } else { WHITE };
-        let cx = r[0] + r[2] / 2.0;
-        if m.sel == 1 {
-            let size = if on { 10.0 } else { 8.5 };
-            let lines = m.court_tile_lines(text, v);
-            // M8f6: with court mods on the strip only the hovered tile's names are outlined (the menu's quad pool)
-            let plain = !on && strip_order(m).len() > COURTS + 1;
-            for (j, s) in lines.iter().enumerate() {
-                let name = |d: &mut Draw| d.label(s, cx, r[1] + r[3] + 3.0 + (size + 1.0) * j as f32, size, r[2] + 2.0, rgb);
-                if plain { name(d) } else { d.outlined(name) }
-            }
-        } else if v == UMPIRES {
-            d.outlined(|d| d.label("Random", cx, r[1] + r[3] - 14.0, 12.0, r[2] - 4.0, rgb));
-        } else if v > UMPIRES {
-            let name = m.umpire_name(text, v);
-            d.outlined(|d| d.label(&name, cx, r[1] + r[3] / 2.0 - 6.0, 12.0, r[2] - 4.0, rgb));
-        }
-    }
 }
 
 /// B295: a side card button: the big one (Start, Ready) yellow with dark words, the rest grey; the chosen one gold.
@@ -3359,12 +3138,16 @@ fn draw(
         img.image = match quad.tex {
             Tex::Solid => art.0[0].clone(),
             Tex::Font => art.0[1].clone(),
-            Tex::Hand => art.0[2].clone(),
+            // Z21: always there (`cursor::setup` at Startup, from the disc the game can't start without), so no
+            // `hsm_yubi` standing in for it
             Tex::Cursor => match &cursor {
                 Some(c) => c.image.clone(),
-                None => art.0[2].clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
             },
-            Tex::Sheet(k) => art.0[3 + k].clone(),
+            Tex::Sheet(k) => art.0[2 + k].clone(),
             Tex::Pill => art.0.last().expect("pill").clone(),
             Tex::Logo => match &logo {
                 Some(l) => l.0.clone(),
@@ -3376,7 +3159,7 @@ fn draw(
             Tex::Preview(_) => continue,
             Tex::Icon(w) => match (icons.0.get(&w), w) {
                 (Some(h), _) => h.clone(),
-                (None, Who::Disc(_)) => art.0[3 + FACES].clone(),
+                (None, Who::Disc(_)) => art.0[2 + FACES].clone(),
                 (None, Who::Mod(_)) => {
                     *vis = Visibility::Hidden;
                     continue;
@@ -4283,6 +4066,24 @@ mod tests {
         m.step(pa, press(|p| &mut p.ok));
         assert_eq!((m.screen, m.lead()), (Screen::Chars, Some(Dev::Keys)));
         assert!(!m.droppable(0)); // the select's driver stays
+    }
+
+    #[test]
+    fn keyboard_p1_ignores_other_pads_in_the_menus() {
+        let pad = Dev::Pad(Entity::from_raw_u32(3).unwrap());
+        let mut m = Menu { screen: Screen::Press, ..default() };
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        m.screen = Screen::Main;
+        // the pad neither moves the main menu nor picks its row
+        m.step(pad, press(|p| &mut p.down));
+        assert_eq!(m.sel, 0);
+        m.step(pad, press(|p| &mut p.ok));
+        assert_eq!(m.screen, Screen::Main);
+        // the keyboard starts Local as 1P; on the select the pad still joins as 2P
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        assert_eq!((m.screen, m.seats[0]), (Screen::Chars, Some(Dev::Keys)));
+        m.step(pad, press(|p| &mut p.ok));
+        assert_eq!(m.seats[..2], [Some(Dev::Keys), Some(pad)]);
     }
 
     #[test]

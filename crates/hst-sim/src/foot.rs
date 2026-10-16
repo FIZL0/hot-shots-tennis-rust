@@ -12,8 +12,28 @@
 
 use hst_data::exe::Foot;
 
+use crate::lines::DEG;
+use crate::motion::id;
+use crate::player::character::SUZUKI;
 use crate::ps2::{self, F, f32s};
+use crate::rng::TWO_POW_M32;
+use crate::world::TWO_PI;
 use crate::{effect, libm, shot, weather, world};
+
+/// Puffs start at this y (Y-down: 0.08 m below the court plane).
+const PUFF_Y: f32 = 0.08;
+/// Footprints lie at this y (0.01 m above the court plane).
+const PRINT_Y: f32 = -0.01;
+/// A sit-down burst's three outer puffs: 0.2 m ahead of the hips, two of them that far across either way.
+const AHEAD: f32 = 0.2;
+const ACROSS: f32 = 0.15;
+const NEG_ACROSS: f32 = -ACROSS;
+/// A replay grass blade's spin: the generator's word (low 11 bits cleared) as a signed fraction of 2³¹.
+const TWO_POW_M31: f32 = 4.656_613e-10;
+/// A clod's fall a frame: 9.8 m/s² over 60² frames², times its row's `fall`.
+const GRAVITY: f32 = 0.002_722_222_4;
+/// Past the point, a reaction (from `id::WON` on) stops stepping once its sub-state reaches this.
+const LATE_SUB: i32 = 0x30;
 
 type V4 = [f32; 4];
 
@@ -161,7 +181,7 @@ impl Feet {
         let table = |v: Option<&Vec<bool>>| v.and_then(|v| v.get(motion as usize)).copied().unwrap_or(false);
         let (runs, burst) = (table(st.map(|s| &s.runs)), table(st.map(|s| &s.burst)));
         let aiming = self.puffs.iter().any(|u| u.aim && u.player == p);
-        [runs || dive || aiming, burst && !spent || dive, character == 0xd && motion == 0x2f && !spent, dive]
+        [runs || dive || aiming, burst && !spent || dive, character == SUZUKI as usize && motion == id::LOST_GAME && !spent, dive]
     }
 
     /// One frame on `court`: steps (when `stepping`), then every puff and footprint ages. `dusty` and `wet` pick the
@@ -182,11 +202,11 @@ impl Feet {
                 self.burst[p] = true;
                 self.spray(t, dusty, wet, scale, &r.pelvis);
             }
-            if r.character == 0xd && r.motion == 0x2f && !self.burst[p] && low(&r.spine, -0.26) {
+            if r.character == SUZUKI as usize && r.motion == id::LOST_GAME && !self.burst[p] && low(&r.spine, -0.26) {
                 self.burst[p] = true;
                 self.spray(t, dusty, wet, scale, &r.spine);
             }
-            let late = self.after_point && r.motion >= 0x2c && r.sub >= 0x30;
+            let late = self.after_point && r.motion >= id::WON && r.sub >= LATE_SUB;
             let runs = !late && st.runs.get(r.motion as usize).copied().unwrap_or(false);
             for f in (0..2).filter(|_| runs) {
                 let y = r.toes[f][1];
@@ -202,7 +222,7 @@ impl Feet {
                 if step && (dusty || wet) {
                     let by = |v: f32| if dusty { F(v) * scale } else { F(v) };
                     let mut pos = r.toes[f];
-                    pos[1] = f32::from_bits(0x3da3_d70a);
+                    pos[1] = PUFF_Y;
                     self.push(Puff {
                         timer: row.fade_in,
                         size: row.size,
@@ -226,7 +246,7 @@ impl Feet {
                     let k = F(m[1][2]) * m[2][1];
                     let mut pm = world::rot_y(if k == 1.0 || k == -1.0 { 0.0 } else { libm::atan2f(m[2][0], m[2][2]) });
                     pm[3] = r.toes[f];
-                    pm[3][1] = f32::from_bits(0xbc23_d70a);
+                    pm[3][1] = PRINT_Y;
                     let alpha = c.print_alpha[wet as usize] as f32;
                     let life = c.print_life[wet as usize];
                     self.prints.push(Print { m: pm, alpha, life, fade: (-(F(alpha) / life as f32)).0 });
@@ -251,7 +271,7 @@ impl Feet {
                     let s = if wet { -1.0 } else { 1.0 };
                     // the game keeps y +0 but scales w, so w is −0 in rain
                     let dir = f32s([dx * q * s, F::ZERO, dz * q * s, F::ZERO * s]);
-                    let draw = |rand: &mut dyn FnMut() -> u32, [lo, hi]: [f32; 2]| (F::ZERO + lo).madd(F(hi) - lo, F(f32::from_bits(0x2f80_0000)) * ps2::utof(rand())).0;
+                    let draw = |rand: &mut dyn FnMut() -> u32, [lo, hi]: [f32; 2]| (F::ZERO + lo).madd(F(hi) - lo, F(TWO_POW_M32) * ps2::utof(rand())).0;
                     let life = (row.fade_in + row.fade_out2) as f32;
                     for k in 0..10 {
                         let size = draw(rand, row.ring_size);
@@ -261,14 +281,14 @@ impl Feet {
                             size,
                             grow: (F(2.0) * size / life).0,
                             fade: (F(row.alpha2 as f32) / row.fade_in as f32).0,
-                            pos: [r.m[3][0], f32::from_bits(0x3da3_d70a), r.m[3][2], r.m[3][3]],
+                            pos: [r.m[3][0], PUFF_Y, r.m[3][2], r.m[3][3]],
                             dir,
                             player: p,
                             speed: draw(rand, row.ring_speed),
                             fresh: true,
                             ..Puff::default()
                         };
-                        let a = (F(f32::from_bits(0x3c8e_fa35)) * (F(36.0) * k as f32)).0;
+                        let a = (F(DEG) * (F(36.0) * k as f32)).0;
                         let v = F(u.speed) * life;
                         u.vel = [(v * libm::cosf(a) / life).0, 0.0, (v * libm::sinf(a) / life).0, 0.0];
                         self.push(u);
@@ -280,7 +300,7 @@ impl Feet {
                     self.throw(t, court, kind as usize, r, rand);
                 }
             }
-            if self.dash[p].is_some() && (r.motion != 0x1e || r.dive_over) {
+            if self.dash[p].is_some() && (r.motion != id::RECEIVE || r.dive_over) {
                 self.dash[p] = None;
             }
         }
@@ -352,13 +372,13 @@ impl Feet {
         let cells = t.debris.cells[kind];
         let b = effect::impact_matrix(dir, [0.0; 3]);
         let mut basis = [b[0], b[1], b[2], std::array::from_fn(|k| (F::ZERO + o[k]).madd(b[2][k], row.reach).0)];
-        let unit = |x: u32| F(ps2::utof(x)) * f32::from_bits(0x2f80_0000);
-        let span = |[lo, hi]: [f32; 2], x: u32| (F::ZERO + lo).madd((F(hi) - lo) * ps2::utof(x), f32::from_bits(0x2f80_0000));
+        let unit = |x: u32| F(ps2::utof(x)) * TWO_POW_M32;
+        let span = |[lo, hi]: [f32; 2], x: u32| (F::ZERO + lo).madd((F(hi) - lo) * ps2::utof(x), TWO_POW_M32);
         let size = |r: F| ((F::ZERO + row.size[0]).madd(F::ONE - r, F(row.size[1]) - row.size[0]) / 2.0).0;
         let rgb = t.courts[court].blade_rgb;
         for k in 0..BITS {
             // the throw turns about the way out by a random angle per bit (blades only spend the draw)
-            basis = world::mat_mul(&shot::rot_z((unit(rand()) * f32::from_bits(0x40c9_0fdb)).0), &basis);
+            basis = world::mat_mul(&shot::rot_z((unit(rand()) * TWO_PI).0), &basis);
             let s = &mut self.bits[g][k];
             s.alive = true;
             if kind == 0 {
@@ -385,10 +405,10 @@ impl Feet {
             }
             s.cell = cells[(rand() >> 16 & 3) as usize];
             if kind == 1 {
-                let deg = f32::from_bits(0x3c8e_fa35);
+                let deg = DEG;
                 let mut turn = |[lo, hi]: [f32; 2]| {
                     let (lo, hi) = (F(lo) * deg, F(hi) * deg);
-                    (F::ZERO + lo).madd((hi - lo) * f32::from_bits(0x3000_0000), (self.crand.next() & 0xffff_f800) as i32 as f32).0
+                    (F::ZERO + lo).madd((hi - lo) * TWO_POW_M31, (self.crand.next() & 0xffff_f800) as i32 as f32).0
                 };
                 let z = turn(row.spin[2]);
                 let y = turn(row.spin[1]);
@@ -423,7 +443,7 @@ impl Feet {
                     s.m[3] = std::array::from_fn(|k| (F(s.m[3][k]) + s.vel[k]).0);
                     s.alive = s.m[3][1] < 0.0;
                     s.vel = s.vel.map(|v| (F(v) * row.decay).0);
-                    s.vel[1] = (F(s.vel[1]) + F(row.fall) * f32::from_bits(0x3b32_6750)).0;
+                    s.vel[1] = (F(s.vel[1]) + F(row.fall) * GRAVITY).0;
                 } else {
                     s.m[3] = std::array::from_fn(|k| (F(s.m[3][k]) + F(s.vel[k]).madd(wind[k], 0.5)).0);
                     s.m[3][1] = (F(s.m[3][1]) + t.debris.sink).0;
@@ -466,12 +486,12 @@ impl Feet {
         for k in 0..4 {
             let mut pos = m[3];
             if k > 0 {
-                pos = std::array::from_fn(|i| (F::ZERO + m[3][i]).madd(m[2][i], f32::from_bits(0x3e4c_cccd)).0);
+                pos = std::array::from_fn(|i| (F::ZERO + m[3][i]).madd(m[2][i], AHEAD).0);
             }
             if k == 1 || k == 2 {
-                pos[0] = (F(pos[0]) + f32::from_bits(if k == 1 { 0x3e19_999a } else { 0xbe19_999a })).0;
+                pos[0] = (F(pos[0]) + if k == 1 { ACROSS } else { NEG_ACROSS }).0;
             }
-            pos[1] = f32::from_bits(0x3da3_d70a);
+            pos[1] = PUFF_Y;
             self.push(Puff {
                 kind: 2,
                 timer: row.fade_in,
@@ -507,4 +527,14 @@ fn step_age(u: &mut Puff, runners: &[Runner], after_point: bool, rise: f32, deca
     u.pos = std::array::from_fn(|k| (F::ZERO + u.pos[k]).madd(u.dir[k], u.speed).0);
     drift(u);
     u.speed = (F(u.speed) * decay).0;
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn constant_bits() {
+        use super::*;
+        let bits = [PUFF_Y, PRINT_Y, AHEAD, ACROSS, NEG_ACROSS, TWO_POW_M31, GRAVITY, DEG, TWO_PI, TWO_POW_M32].map(f32::to_bits);
+        assert_eq!(bits, [0x3da3_d70a, 0xbc23_d70a, 0x3e4c_cccd, 0x3e19_999a, 0xbe19_999a, 0x3000_0000, 0x3b32_6750, 0x3c8e_fa35, 0x40c9_0fdb, 0x2f80_0000]);
+    }
 }

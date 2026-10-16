@@ -58,10 +58,14 @@ let buzz = true;
 // B329: the buzz. Android's browsers have `navigator.vibrate` (Chrome skips it while the phone's ringer is on Silent, and
 // only after the page's first tap); 8 ms was too short for many phones' motors to be felt at all. iOS Safari has no
 // vibration API, and iOS 26.5 closed the switch-checkbox haptic trick, so an iPhone browser gets nothing.
-const vibrates = typeof navigator.vibrate === 'function';
+// B525: Firefox for Android (and its forks: Focus, Iceraven, Mull) keeps `navigator.vibrate` but since Firefox 79 it
+// returns true and never vibrates (Mozilla bug 1653318, abuse concerns); no other web API reaches the motor, so it's
+// told apart by its user agent and the setting says so. Desktop Firefox dropped the method in 129.
+const firefox = /Android/.test(navigator.userAgent) && /\bGecko\/\d/.test(navigator.userAgent);
+const vibrates = typeof navigator.vibrate === 'function' && !firefox;
 const buzzOnce = () => vibrates && navigator.vibrate(15);
-// what the Vibration setting's text says: 'vibrate' or 'none'
-window.hstVibration = () => (vibrates ? 'vibrate' : 'none');
+// what the Vibration setting's text says: 'vibrate', 'firefox' or 'none'
+window.hstVibration = () => (vibrates ? 'vibrate' : firefox ? 'firefox' : 'none');
 // B165: the game's polls, counted in animation frames. A tap shorter than a frame (or one that lands while the page is
 // busy, its down and up queued together) would come and go between two polls and never be seen: a button stays down
 // until a poll has seen it and a later frame has started, so every tap counts once.

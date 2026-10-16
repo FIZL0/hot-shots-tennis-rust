@@ -1240,10 +1240,19 @@ fn watch_lan(_: ()) -> Lan {
 #[cfg(target_arch = "wasm32")]
 async fn announce(_: &Ctx, _: u16, _: &Room) {}
 
+/// B515: n0's relays without their hostnames' trailing dot (`use1-1.relay.n0.iroh.link.`): iOS Safari's fetch and
+/// WebSocket never reach the dotted form, so its latency probes never finished and no home relay was ever picked
+#[cfg(target_arch = "wasm32")]
+fn n0_relays() -> iroh::RelayMap {
+    let urls: Vec<RelayUrl> = iroh::defaults::prod::default_relay_map().urls();
+    let urls: Vec<String> = urls.iter().map(|u| u.to_string().replace("iroh.link./", "iroh.link/")).collect();
+    iroh::RelayMap::try_from_iter(urls.iter().map(String::as_str)).expect("n0 relay urls")
+}
+
 #[cfg(target_arch = "wasm32")]
 pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, ()), String> {
     let mode = match relay {
-        Relay::N0 => RelayMode::Default,
+        Relay::N0 => RelayMode::Custom(n0_relays()),
         Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
         Relay::Off => unreachable!("the browser's LAN is WebRTC (`bind`)"),
     };

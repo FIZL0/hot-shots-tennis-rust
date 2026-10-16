@@ -4,7 +4,8 @@
 # at a time (default 2), each in a tools/shot.sh window; one log per run in OUT_DIR/<run>.tsv. Then:
 #   target/release/texkeys "Hot Shots Tennis (USA).iso" > OUT_DIR/texkeys.tsv
 #   research/assets_used.py OUT_DIR/texkeys.tsv OUT_DIR/*.tsv --pack mods/<pack>/textures
-# HST_SWEEP=matches|costumes|mods|menus runs one part only. Matches are all-computer (HST_AUTOPLAY), 1 game a set,
+# HST_SWEEP=matches|costumes|mods|menus|paths runs one part only (paths, Z21: every HST_MENU screen with and without
+# --original, pause → Settings by HST_KEYS, 3-set singles and court-7 doubles to the result screens; not in `all`). Matches are all-computer (HST_AUTOPLAY), 1 game a set,
 # shot (and quit) after SECS (HST_SWEEP_SECS, 200) so most reach the result screens.
 set -u
 cd "$(dirname "$0")/.."
@@ -72,6 +73,23 @@ if [ "$part" = all ] || [ "$part" = menus ]; then
     for seed in 1 2 3 4 5 6; do
         run "menus-$seed" 200 HST_MASH="150,$seed,3" -- --shot-at 149
     done
+fi
+if [ "$part" = paths ]; then
+    # every menu screen straight from HST_MENU (the mash reaches few), remastered and --original
+    for o in "" original; do
+        for m in press main rematch settings graphics advanced sound controls mode assign chars chars4 attrs names coms \
+            confirm confirm-random confirm-court courts umpires sets mods extras online lobbies; do
+            run "menu-$m${o:+-$o}" 40 HST_MENU=$m -- ${o:+--$o} --shot-at 8
+        done
+    done
+    # pause → Settings (row 2), a tab across, back out, in both looks
+    for o in "" original; do
+        run "pause${o:+-$o}" 90 HST_AUTOPLAY=1 HST_KEYS="20:Escape 23:ArrowDown 25:Enter 28:ArrowRight 31:ArrowRight 34:Escape 37:Escape" -- \
+            ${o:+--$o} --stage 3 --court 3 --play --singles --shot-at 40
+    done
+    # set pop-ups and the result screens: best of three sets of one game, singles on court 1, doubles on court 7
+    run "sets3-s1-singles" $((secs * 3 + 60)) HST_AUTOPLAY=1 HST_WEATHER=0 -- --stage 1 --court 1 --play --singles --sets 3 --games 1 --shot-at $((secs * 3))
+    run "sets3-s7-doubles" $((secs * 3 + 60)) HST_AUTOPLAY=1 HST_WEATHER=1 -- --stage 7 --court 7 --play --sets 3 --games 1 --original --shot-at $((secs * 3))
 fi
 wait
 echo "asset_sweep: $(ls "$out"/*.tsv 2>/dev/null | wc -l) logs in $out"

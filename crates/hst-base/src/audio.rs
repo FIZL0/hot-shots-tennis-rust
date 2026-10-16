@@ -519,6 +519,7 @@ impl Sound {
 
     /// Starts a BGM from the top at `volume` (the game's 55), replacing the one playing.
     pub fn music(&self, bank: &Arc<SoundBank>, mid: &[u8], volume: u32) {
+        hst_data::uselog::used("snd", &bank.hd, || " music".to_string());
         let mut m = self.0.lock().unwrap();
         if let Some(old) = m.music.take() {
             m.voices.iter_mut().filter(|v| (old.id..old.id + 16).contains(&v.2)).for_each(|v| v.0.key_off());

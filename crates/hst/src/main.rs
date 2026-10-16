@@ -396,6 +396,9 @@ fn start(argv: Vec<String>) {
     // and warns of each event it hands over while redrawing (P49: 14.5k of a 4-minute log's 15.8k lines)
     #[cfg(target_os = "ios")]
     let plugins = plugins.set(bevy::log::LogPlugin { custom_layer: ios::log_layer, filter: format!("{},winit=warn,winit::platform_impl::ios::app_state=error", bevy::log::DEFAULT_FILTER), ..default() });
+    // B515: iOS Safari never picks a home relay; iroh's net report and relay picking at debug show which probe stalls
+    #[cfg(target_arch = "wasm32")]
+    let plugins = plugins.set(bevy::log::LogPlugin { filter: format!("{},iroh::net_report=debug,iroh::socket=debug,iroh_relay=debug", bevy::log::DEFAULT_FILTER), ..default() });
     // Android: into hst-log.txt too (`android.rs`)
     #[cfg(target_os = "android")]
     let plugins = plugins.set(bevy::log::LogPlugin { fmt_layer: android::log_layer, ..default() });

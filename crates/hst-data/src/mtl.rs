@@ -52,6 +52,13 @@ pub struct Material {
     pub header: [u8; 0x30],
 }
 
+impl Material {
+    /// The material's draw mode (header +0x1e, i16; 10..=29 are alpha-tested).
+    pub fn mode(&self) -> i16 {
+        i16::from_le_bytes([self.header[0x1e], self.header[0x1f]])
+    }
+}
+
 /// An embedded texture as raw collision data.
 pub struct AttributeMap {
     pub header: [u8; 0x48],
