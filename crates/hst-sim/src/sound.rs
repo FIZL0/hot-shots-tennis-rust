@@ -4,14 +4,114 @@
 
 #![deny(clippy::float_arithmetic)]
 
+use crate::judge::verdict;
 use crate::libm::atan2f;
 use crate::ps2::{F, fs};
+use crate::shot::{branch, kind};
+
+/// The sound banks' slots.
+pub mod slot {
+    /// The court's sound effects.
+    pub const COURT: u8 = 0;
+    /// The umpire's voice.
+    pub const UMPIRE: u8 = 5;
+    /// The gallery (the court archive's `galsg` bank).
+    pub const GALLERY: u8 = 6;
+    /// The jingles.
+    pub const JINGLES: u8 = 8;
+    /// The system sound effects.
+    pub const SYSTEM: u8 = 9;
+
+    /// Player `player`'s voice bank (1..=4).
+    pub fn voice(player: usize) -> u8 {
+        1 + player as u8
+    }
+}
+
+/// The court bank's programs.
+mod court {
+    /// The ball's bounces (key 0 on the playing surface, else the material's).
+    pub const BOUNCE: u8 = 2;
+    /// A dive's thud.
+    pub const THUD: u8 = 3;
+    /// The swing whoosh.
+    pub const WHOOSH: u8 = 4;
+    /// The ball's flight (the whistle and the rush), and the drop shot's hit.
+    pub const FLIGHT: u8 = 5;
+    /// The racket hits ([`super::racket`]).
+    pub const RACKET: u8 = 6;
+}
+
+/// The court bank's racket-hit keys.
+mod racket {
+    pub const SWEET: u8 = 0;
+    pub const SMASH: u8 = 1;
+    pub const STROKE: u8 = 2;
+    /// A dull hit (or the other unclean stroke).
+    pub const DULL: u8 = 3;
+    /// The crisp ring on top of a clean, well-timed stroke.
+    pub const CRISP: u8 = 4;
+    pub const SLICED_SMASH: u8 = 5;
+    /// The overpowering volley.
+    pub const OVERPOWER: u8 = 8;
+}
+
+/// The flight program's keys.
+mod flight {
+    /// Lola's special slice serve's rush.
+    pub const LOLA_RUSH: u8 = 0;
+    pub const WHISTLE: u8 = 2;
+    /// The drop shot's hit.
+    pub const DROP_HIT: u8 = 4;
+    /// The special lob's whistle of characters 5 and 13.
+    pub const SPECIAL_WHISTLE: u8 = 5;
+    pub const RUSH: u8 = 6;
+}
+
+/// The voice banks' programs (shouts 0..=4 are `Voice::shout`'s).
+mod voice {
+    /// A shout that goes with a stroke (`stroke_shout`'s 0).
+    pub const SHOUT: u8 = 0;
+    /// The sweet-frame shout (`stroke_shout`'s 1).
+    pub const SWEET_SHOUT: u8 = 1;
+    /// A strain (`stroke_shout`'s 2).
+    pub const STRAIN: u8 = 2;
+    pub const HIT_CRY: u8 = 5;
+    pub const CALL_OUT: u8 = 6;
+    /// The reaction voices: cheer, groan, the set cheer and groan.
+    pub const CHEER: u8 = 7;
+    pub const GROAN: u8 = 8;
+    pub const SET_CHEER: u8 = 9;
+    pub const SET_GROAN: u8 = 10;
+}
+
+/// The umpire bank's programs.
+mod umpire {
+    /// The score words (`score_call`'s keys).
+    pub const SCORE: u8 = 0;
+    /// The line calls (key `verdict` − 1).
+    pub const LINE: u8 = 1;
+    /// The other calls.
+    pub const CALL: u8 = 2;
+}
+
+/// The reaction motions `reaction_voice` tells apart (`motion::reaction`): the winners' `gu` and losers' `di`,
+/// and their `_set` forms.
+mod reaction_motion {
+    pub const GU: i32 = 0x2c;
+    pub const DI: i32 = 0x2d;
+    pub const GU_SET: i32 = 0x2e;
+    pub const DI_SET: i32 = 0x2f;
+}
+
+/// A play's full volume.
+const FULL: i32 = 0x80;
 
 /// The listener: identity orientation at (0, 0, −10) in game space (the library's fixed listener, the only mode
 /// the game uses).
 const LISTENER: [f32; 3] = [0.0, 0.0, -10.0];
-const PI: f32 = f32::from_bits(0x4049_0fdb);
-const DEGREES: f32 = f32::from_bits(0x4265_2ee1); // 57.29578
+const PI: f32 = std::f32::consts::PI;
+const DEGREES: f32 = 57.295_78;
 /// Distances (whole metres) are clamped to this; it is also where a sound falls silent.
 const FAR: i32 = 128;
 /// Full volume up to here.
@@ -28,7 +128,7 @@ pub fn place(pos: [f32; 3]) -> (i32, i32) {
     (a.clamp(0, 359), d.clamp(0, FAR))
 }
 
-/// `volume` (0..128) at `dist` metres: full up to 10 m, then linearly down to nothing at 128 m.
+/// `volume` (0..=`FULL`) at `dist` metres: full up to 10 m, then linearly down to nothing at 128 m.
 pub fn falloff(volume: i32, dist: i32) -> i32 {
     let v = F(volume as f32);
     let v = if dist as f32 <= NEAR {
@@ -40,7 +140,7 @@ pub fn falloff(volume: i32, dist: i32) -> i32 {
         let step = if span == 0.0 { F::ZERO } else { v / span };
         (v + 0.0).msub(step, F(dist as f32) - NEAR)
     };
-    (v.0 as i32).clamp(0, 128)
+    (v.0 as i32).clamp(0, FULL)
 }
 
 /// The sequence's left and right volume for `volume` at bearing `angle`, from `exe::stereo_tables`. The tables'
@@ -70,19 +170,19 @@ const fn play(slot: u8, program: u8, key: u8, volume: i32) -> Play {
 /// What the racket-hit effect reads when a player's racket meets the ball.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hit {
-    /// Contact: 0 serve, 1 ground stroke, 2 volley, 3 dive, 4 smash.
+    /// Contact (`shot::branch`).
     pub branch: u8,
     /// Timing grade (1 and 2 are the clean ones).
     pub grade: u8,
     /// Frames off the sweet frame.
     pub offset: i32,
-    /// Shot kind: 0 topspin, 1 slice, 2 flat, 3 lob, 4 drop.
+    /// Shot kind (`shot::kind`).
     pub kind: i32,
-    /// A mistimed hit off the frame (player +0x3f06): only the frame clank plays.
+    /// A mistimed hit off the frame: only the frame clank plays.
     pub framed: bool,
-    /// A mistimed hit that loses power (+0x3f0c): only the dull hit plays.
+    /// A mistimed hit that loses power: only the dull hit plays.
     pub dull: bool,
-    /// A volley overpowering the incoming shot: the two characters' power gap (+0x3f07/+0x3f08).
+    /// A volley overpowering the incoming shot: the two characters' power gap.
     pub power_gap: Option<i32>,
     /// The game's random bit for an unclean stroke's key (2 or 3).
     pub random_bit: bool,
@@ -103,44 +203,45 @@ pub fn hit_sounds(h: &Hit) -> Vec<Play> {
     let sweet = h.offset.abs() < 2;
     let clean = matches!(h.grade, 1 | 2);
     if h.framed {
-        out.push(play(9, 0, 4, 0x80));
+        out.push(play(slot::SYSTEM, 0, 4, FULL));
     } else if h.dull {
-        out.push(play(0, 6, 3, 0x80));
+        out.push(play(slot::COURT, court::RACKET, racket::DULL, FULL));
     } else if let Some(gap) = h.power_gap.filter(|&g| g > 3) {
         let v = if gap < 7 { 0x46 } else { 0x5a };
-        out.extend([play(0, 6, 8, v), Play { speed: f32::from_bits(0x3f66_6666), ..play(0, 6, 8, v) }]);
+        let p = play(slot::COURT, court::RACKET, racket::OVERPOWER, v);
+        out.extend([p, Play { speed: 0.9, ..p }]);
     }
-    let (program, key, volume) = if h.branch == 4 {
+    let (program, key, volume) = if h.branch == branch::SMASH {
         match h.kind {
-            1 => (6, 5, 0x80),
-            _ => (6, 1, if sweet { 0x80 } else { 0x6c }),
+            kind::SLICE => (court::RACKET, racket::SLICED_SMASH, FULL),
+            _ => (court::RACKET, racket::SMASH, if sweet { FULL } else { 0x6c }),
         }
-    } else if h.kind == 4 {
-        (5, 4, 0x80)
+    } else if h.kind == kind::DROP {
+        (court::FLIGHT, flight::DROP_HIT, FULL)
     } else if clean {
-        (6, if sweet && h.branch != 3 { 0 } else { 2 }, 0x76)
+        (court::RACKET, if sweet && h.branch != branch::DIVE { racket::SWEET } else { racket::STROKE }, 0x76)
     } else if h.random_bit {
-        (6, 3, 0x80)
+        (court::RACKET, racket::DULL, FULL)
     } else {
-        (6, 2, 0x76)
+        (court::RACKET, racket::STROKE, 0x76)
     };
     if !h.framed && !h.dull {
         let speed = match key {
-            1 => f32::from_bits(if sweet { 0x3f86_6666 } else { 0x3f73_3333 }), // 1.05, 0.95
+            racket::SMASH => if sweet { 1.05 } else { 0.95 },
             _ => 1.0,
         };
-        out.push(Play { speed, ..play(0, program, key, volume) });
+        out.push(Play { speed, ..play(slot::COURT, program, key, volume) });
     }
     // ponytail: character 9's lob (slot 9 key 7) is a voice — N3d
     if h.power_gap.is_none_or(|g| g < 4)
-        && h.kind != 3
-        && h.kind != 4
+        && h.kind != kind::LOB
+        && h.kind != kind::DROP
         && clean
         && sweet
-        && h.branch != 3
+        && h.branch != branch::DIVE
         && (h.solo || h.hits != 1 || h.strong_toss)
     {
-        out.push(play(0, 6, 4, 0x62));
+        out.push(play(slot::COURT, court::RACKET, racket::CRISP, 0x62));
     }
     // The ball-speed whooshes (keys 6–8 by km/h) are gated on a per-court table that is all zero on the disc and
     // never written, so they never play.
@@ -153,26 +254,31 @@ pub fn hit_sounds(h: &Hit) -> Vec<Play> {
 /// ponytail: the other strokes' path needs a game flag that normal play never sets, so it is left out.
 pub fn swing_sound(branch: u8, kind: i32, faults: i32) -> Option<u32> {
     match branch {
-        0 if faults == 0 => Some(4),
-        4 if kind != 3 => Some(0),
+        branch::SERVE if faults == 0 => Some(4),
+        branch::SMASH if kind != kind::LOB => Some(0),
         _ => None,
     }
 }
 
 /// The whoosh `swing_sound` plays.
-pub const SWING: Play = play(0, 4, 0, 0x80);
+pub const SWING: Play = play(slot::COURT, court::WHOOSH, 0, FULL);
 
 /// The thud of a dive (court bank program 3 at 0x80, at the diver's model origin), played as the dive starts, whether
-/// it reaches the ball or not, and again `dive_echo` ticks later; key 3 in weather 2 and 3 (court +0x135), else 0.
+/// it reaches the ball or not, and again `dive_echo` ticks later; key 3 in weather 2 and 3 (the court's), else 0.
 pub fn dive_thud(weather: u8) -> Play {
-    play(0, 3, if weather.wrapping_sub(2) < 2 { 3 } else { 0 }, 0x80)
+    play(slot::COURT, court::THUD, thud_key(weather), FULL)
+}
+
+/// The thud's key: 3 in weather 2 and 3, else 0.
+fn thud_key(weather: u8) -> u8 {
+    if weather.wrapping_sub(2) < 2 { 3 } else { 0 }
 }
 
 /// A footfall (`foot::Feet::stepped`) in an instant replay of a singles match, by a running player, while the
 /// camera is a close-up one (mode 0x56..0x59) that [`step_heard`]: the dive thud's program and key at 0x69.
 // ponytail: unchecked against a recording (no singles replay with that camera captured yet)
 pub fn step(weather: u8) -> Play {
-    play(0, 3, if weather.wrapping_sub(2) < 2 { 3 } else { 0 }, 0x69)
+    play(slot::COURT, court::THUD, thud_key(weather), 0x69)
 }
 
 /// The camera at `eye` looking along `look` hears a footfall at the player's origin `at`: level bearing within 50°
@@ -220,24 +326,26 @@ pub type ReactionVoice = (u8, i32, i32, Option<usize>);
 /// 0..99). Singles keys: 7 1..2 (0 in an instant replay), 8 0..1 (2), 9 and 10 0..1; doubles: 7 0..1, the rest 0,
 /// the loser's 8 1 (singles 3..4). With three players nobody voices.
 pub fn reaction_voice(players: u32, motion: i32, lost: bool, replay: bool, roll: impl FnOnce() -> u32) -> Option<ReactionVoice> {
+    use reaction_motion::*;
+    use voice::{CHEER, GROAN, SET_CHEER, SET_GROAN};
     if players < 3 {
         match motion {
-            0x2e => Some((9, 0, 1, Some(4))),
-            0x2f => Some((10, 0, 1, Some(5))),
-            0x2c if replay => Some((7, 0, 0, None)),
-            0x2c => Some((7, 1, 2, None)),
-            0x2d if replay => Some((8, 2, 2, None)),
-            0x2d => Some((8, 0, 1, None)),
-            _ if lost && roll() < 30 => Some((8, 3, 4, Some(3))),
+            GU_SET => Some((SET_CHEER, 0, 1, Some(4))),
+            DI_SET => Some((SET_GROAN, 0, 1, Some(5))),
+            GU if replay => Some((CHEER, 0, 0, None)),
+            GU => Some((CHEER, 1, 2, None)),
+            DI if replay => Some((GROAN, 2, 2, None)),
+            DI => Some((GROAN, 0, 1, None)),
+            _ if lost && roll() < 30 => Some((GROAN, 3, 4, Some(3))),
             _ => None,
         }
     } else if players == 4 {
         match motion {
-            0x2e => Some((9, 0, 0, None)),
-            0x2f => Some((10, 0, 0, None)),
-            0x2c => Some((7, 0, 1, None)),
-            0x2d => Some((8, 0, 0, None)),
-            _ if lost => Some((8, 1, 1, None)),
+            GU_SET => Some((SET_CHEER, 0, 0, None)),
+            DI_SET => Some((SET_GROAN, 0, 0, None)),
+            GU => Some((CHEER, 0, 1, None)),
+            DI => Some((GROAN, 0, 0, None)),
+            _ if lost => Some((GROAN, 1, 1, None)),
             _ => None,
         }
     } else {
@@ -260,12 +368,12 @@ pub fn dive_echo(players: u32) -> u32 {
 pub fn stroke_shout(h: &Hit, character: i32, players: u32, mut roll: impl FnMut() -> u32) -> Option<u8> {
     let chance = if players < 3 { 40 } else { 20 };
     match h.branch {
-        3 => None,
-        _ if h.framed || h.dull => Some(2),
-        0 => (h.strong_toss && matches!(h.grade, 1 | 2)).then_some(0),
-        4 => Some(0),
-        _ if h.offset.abs() < 2 || (h.grade == 2 && roll() < chance) => Some(1),
-        _ if matches!(h.grade, 3 | 4) && roll() < if matches!(character, 9 | 10) { chance / 2 } else { chance } => Some(2),
+        branch::DIVE => None,
+        _ if h.framed || h.dull => Some(voice::STRAIN),
+        branch::SERVE => (h.strong_toss && matches!(h.grade, 1 | 2)).then_some(voice::SHOUT),
+        branch::SMASH => Some(voice::SHOUT),
+        _ if h.offset.abs() < 2 || (h.grade == 2 && roll() < chance) => Some(voice::SWEET_SHOUT),
+        _ if matches!(h.grade, 3 | 4) && roll() < if matches!(character, 9 | 10) { chance / 2 } else { chance } => Some(voice::STRAIN),
         _ => None,
     }
 }
@@ -281,12 +389,12 @@ pub const WHIFF_SHOUT: u8 = 4;
 /// A doubles CPU player's call (program 6 key 3 or 4 by a random bit, 0x80 at the player) as it leaves an incoming
 /// ball to its partner, one time in four.
 pub fn call_out(player: usize, bit: bool) -> Play {
-    play(1 + player as u8, 6, 3 + bit as u8, 0x80)
+    play(slot::voice(player), voice::CALL_OUT, 3 + bit as u8, FULL)
 }
 
 /// The cry of a player the ball hits (program 5 key 0, 0x80 at the player), as the ball touches them.
 pub fn hit_cry(player: usize) -> Play {
-    play(1 + player as u8, 5, 0, 0x80)
+    play(slot::voice(player), voice::HIT_CRY, 0, FULL)
 }
 
 /// The last key of each of the player's six key-memory slots (programs 1 and 2's shouts in 0 and 1, the reaction
@@ -305,10 +413,18 @@ impl Voice {
     /// draw, from 0..=hi other than the program's last — hi 4 for program 1 and 2 for the others with up to two
     /// players, else 1; the whiff's hi is 1 with exactly two players, else 0.
     pub fn shout(&mut self, player: usize, program: u8, players: u32, r: u32) -> Play {
-        let hi = if program == WHIFF_SHOUT { (players == 2) as i32 } else if players > 2 { 1 } else if program == 1 { 4 } else { 2 };
-        let slot = matches!(program, 1 | 2).then(|| program as usize - 1);
+        let hi = if program == WHIFF_SHOUT {
+            (players == 2) as i32
+        } else if players > 2 {
+            1
+        } else if program == voice::SWEET_SHOUT {
+            4
+        } else {
+            2
+        };
+        let slot = matches!(program, voice::SWEET_SHOUT | voice::STRAIN).then(|| program as usize - 1);
         let key = self.key(0, hi, slot, || r).expect("a shout has keys");
-        play(1 + player as u8, program, key as u8, 0x80)
+        play(slot::voice(player), program, key as u8, FULL)
     }
 
     /// A random key from `lo..=hi` other than the last one `slot` remembers (which then keeps it), by `draw` (a
@@ -336,7 +452,7 @@ impl Voice {
     /// Player `player`'s reaction voice (`reaction_voice`), on bank slot 1 + player at 0x80.
     pub fn react(&mut self, player: usize, (program, lo, hi, slot): ReactionVoice, draw: impl FnOnce() -> u32) -> Option<Play> {
         let key = self.key(lo, hi, slot, draw)?;
-        Some(play(1 + player as u8, program, key as u8, 0x80))
+        Some(play(slot::voice(player), program, key as u8, FULL))
     }
 }
 
@@ -350,39 +466,50 @@ pub fn speed_word(speed: f32) -> u32 {
 /// smash still at 85 km/h or more), and the ball effects' sound key of the bounced material (the net's key 2 not
 /// again until the ball meets a playing surface), plus key 0 for materials 0x0d, 0x17 and 0x30. An effect-spawning
 /// material holds the next 4 frames' material sounds off.
-/// ponytail: the rolling scrape (key 3) needs a ball flag (+0x264) never set in the recordings; the menu option
+/// ponytail: the rolling scrape (key 3) needs a ball flag never set in the recordings; the menu option
 /// that swaps key 0 for 0xd and the 10-effect cap (effects expire too fast to reach it) are left out.
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Bounces {
-    /// Frames the material sounds are held off (+0x840).
+    /// Frames the material sounds are held off.
     cooldown: i32,
-    /// The last material sound was a soft obstacle's (effect kind 2, +0x849).
+    /// The last material sound was a soft obstacle's (effect kind `SOFT`).
     soft: bool,
 }
+
+/// A material's effect kinds `Bounces` tells apart: a soft obstacle, and one that makes no sound.
+const SOFT: u8 = 2;
+const SILENT: u8 = 5;
+/// Frames an effect-spawning material holds the next material sounds off.
+const EFFECT_HOLD: i32 = 4;
+/// Materials that also play the playing surface's bounce key.
+const BOUNCE_TOO: [u8; 3] = [0x0d, 0x17, 0x30];
+/// A smash landing at this speed (km/h) or more: the first bounce plays slowed.
+const SMASH_KMH: f32 = 85.0;
 
 impl Bounces {
     /// One frame: `bounce` is the ball's new bounce count and its contact's material, if the count changed;
     /// `smash_kmh` the ball's speed when the shot was a smash with more than one player. Returns the plays.
     pub fn frame(&mut self, bounce: Option<(i32, &crate::ball::Material)>, smash_kmh: Option<f32>) -> Vec<Play> {
         let mut out = Vec::new();
+        let bounce_play = |key| play(slot::COURT, court::BOUNCE, key, FULL);
         if let Some((n, m)) = bounce {
             if (1..4).contains(&n) && m.court {
-                let fast = n == 1 && smash_kmh.is_some_and(|v| v >= 85.0);
-                out.push(Play { speed: if fast { 0.5 } else { 1.0 }, ..play(0, 2, 0, 0x80) });
+                let fast = n == 1 && smash_kmh.is_some_and(|v| v >= SMASH_KMH);
+                out.push(Play { speed: if fast { 0.5 } else { 1.0 }, ..bounce_play(0) });
             }
             if n < 6 && self.cooldown < 1 {
                 self.soft &= !m.court;
-                if !(self.soft && m.effect == 2) && m.effect != 5 {
+                if !(self.soft && m.effect == SOFT) && m.effect != SILENT {
                     if m.effect != 0 {
-                        self.cooldown = 4;
+                        self.cooldown = EFFECT_HOLD;
                     }
                     if m.sound != 0 {
-                        out.push(play(0, 2, m.sound, 0x80));
+                        out.push(bounce_play(m.sound));
                     }
-                    if matches!(m.id, 0x0d | 0x17 | 0x30) {
-                        out.push(play(0, 2, 0, 0x80));
+                    if BOUNCE_TOO.contains(&m.id) {
+                        out.push(bounce_play(0));
                     }
-                    self.soft = m.effect == 2;
+                    self.soft = m.effect == SOFT;
                 }
             }
         }
@@ -401,7 +528,12 @@ pub fn kmh(vel: [f32; 3]) -> f32 {
 /// until the ball's first bounce or the next hit, re-placed at the ball every frame.
 /// `Flight::start` picks it (or the rush) and the special lobs' key and range.
 /// ponytail: the training mode's whistle (its own volume table) is left out.
-pub const FLIGHT: Play = play(0, 5, 2, 0x80);
+pub const FLIGHT: Play = play(slot::COURT, court::FLIGHT, flight::WHISTLE, FULL);
+
+/// Lola's character number (her special slice serve rushes).
+const LOLA: i32 = 10;
+/// A serve or smash this fast (km/h, after the hit) or more rushes.
+const RUSH_KMH: f32 = 140.0;
 
 /// The sound a hit sends with the ball, on the court bank program 5, until its first bounce or the next hit.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -420,35 +552,38 @@ impl Flight {
     /// the top at 8 m.
     /// ponytail: the instant replay's restarts (the app has none, P0b4d) are left out.
     pub fn start(h: &Hit, character: i32, special: bool, kmh: f32) -> Option<Flight> {
+        const SMASH: i32 = 5; // the smash as a kind of its own
         let v = (F(kmh) * 0.9).0;
         let serve = h.hits == 1;
-        let kind = if h.branch == 4 { 5 } else { h.kind };
-        if h.framed && kind != 3 {
-            return Some(Flight::Whistle { key: 2, low: 0.0, top: 10.0 });
+        let shot = if h.branch == branch::SMASH { SMASH } else { h.kind };
+        if h.framed && shot != kind::LOB {
+            return Some(Flight::Whistle { key: flight::WHISTLE, low: 0.0, top: 10.0 });
         }
-        let rush = match kind {
-            0 | 2 => serve && v >= 140.0,
-            1 => character == 10 && special && serve,
-            3 => {
+        let lola = character == LOLA && special;
+        let rush = match shot {
+            kind::TOPSPIN | kind::FLAT => serve && v >= RUSH_KMH,
+            kind::SLICE => lola && serve,
+            kind::LOB => {
                 let s = special.then_some(character);
                 return Some(Flight::Whistle {
-                    key: if matches!(s, Some(5 | 13)) { 5 } else { 2 },
+                    key: if matches!(s, Some(5 | 13)) { flight::SPECIAL_WHISTLE } else { flight::WHISTLE },
                     low: if matches!(s, Some(5 | 6 | 9 | 13)) { 0.3 } else { 0.0 },
                     top: if matches!(s, Some(5 | 6 | 9 | 13)) { 8.0 } else { 10.0 },
                 });
             }
-            4 => false,
-            _ => v >= 140.0,
+            kind::DROP => false,
+            _ => v >= RUSH_KMH,
         };
         if !rush {
             return None;
         }
-        let lola = character == 10 && special;
-        let bands: [i32; 6] = if lola { [0x80; 6] } else if h.branch == 4 { [0x46, 0x50, 0x5a, 100, 0x6e, 0x80] } else { [0x55, 0x5a, 100, 0x6e, 0x73, 0x80] };
+        let smash = h.branch == branch::SMASH;
+        let bands: [i32; 6] = if lola { [FULL; 6] } else if smash { [0x46, 0x50, 0x5a, 100, 0x6e, 0x80] } else { [0x55, 0x5a, 100, 0x6e, 0x73, 0x80] };
         let band = [149.0, 159.0, 169.0, 179.0, 199.0].iter().take_while(|&&t| v > t).count();
+        let key = if lola { flight::LOLA_RUSH } else { flight::RUSH };
         Some(Flight::Rush {
-            play: Play { speed: if lola { 1.5 } else { 1.0 }, ..play(0, 5, if lola { 0 } else { 6 }, bands[band]) },
-            threshold: if lola || h.branch == 4 { 50.0 } else { 100.0 },
+            play: Play { speed: if lola { 1.5 } else { 1.0 }, ..play(slot::COURT, court::FLIGHT, key, bands[band]) },
+            threshold: if lola || smash { 50.0 } else { 100.0 },
             count: 0,
         })
     }
@@ -495,38 +630,53 @@ pub fn flight_speed(height: f32, low: f32, top: f32) -> f32 {
     s.clamp(0.0, 2.0).0
 }
 
-/// The umpire's voice bank slot; the umpire's plays are not positional: 0x80 at the centre (`stereo` at bearing 0).
-const UMPIRE: u8 = 5;
+// The umpire's plays (`slot::UMPIRE`) are not positional: full volume at the centre (`stereo` at bearing 0).
 /// Where a non-positional play sounds as if it were placed: straight ahead of the listener, at full volume.
 pub const CENTRE: [f32; 3] = [0.0, 0.0, -9.0];
-/// The umpire calls the line as the point ends: the judge's call (1 out, 2 fault, 3 double fault, 4 let, 5 out
-/// after the net) is program 1's key call − 1; none for no call (0) or 6.
+/// The umpire calls the line as the point ends: the judge's call (`judge::verdict`: out, fault, double fault,
+/// let, out after the net) is program 1's key call − 1; none for no call (`POINT`) or an illegal hit.
 pub fn line_call(call: u8) -> Option<Play> {
-    (call != 0 && call != 6).then(|| play(UMPIRE, 1, call - 1, 0x80))
+    (call != verdict::POINT && call != verdict::ILLEGAL_HIT).then(|| play(slot::UMPIRE, umpire::LINE, call - 1, FULL))
 }
 /// The umpire's "change ends", as the change-ends phase begins.
-pub const CHANGE_ENDS_CALL: Play = play(UMPIRE, 2, 3, 0x80);
+pub const CHANGE_ENDS_CALL: Play = play(slot::UMPIRE, umpire::CALL, 3, FULL);
 /// The umpire's tiebreak call, as the first tiebreak serve is set up (the game that made 6-all).
-pub const TIEBREAK_CALL: Play = play(UMPIRE, 2, 0, 0x80);
+pub const TIEBREAK_CALL: Play = play(slot::UMPIRE, umpire::CALL, 0, FULL);
 /// The umpire's match call, once the scoreboard has shown the match point (the match ends when it is over).
-pub const MATCH_CALL: Play = play(UMPIRE, 2, 4, 0x80);
+pub const MATCH_CALL: Play = play(slot::UMPIRE, umpire::CALL, 4, FULL);
 
 /// The umpire's score after a point that wins no game (program 0 keys, in order): one word at deuce (9; 13 for the
 /// game's second deuce except on court 5), "advantage" (10) then the server's (11) or the receiver's (12) by who
 /// won the point, nothing in a tiebreak, else the serving team's points (0..3) then "all" (8) or the receiving
 /// team's points (4..7).
 pub fn score_call(s: &crate::score::Score, winner: usize, court: u8) -> Vec<u8> {
+    use word::*;
     let side = (s.server & 1) as usize;
     if s.deuce {
-        vec![if s.deuce_count == 2 && court != 5 { 13 } else { 9 }]
+        vec![if s.deuce_count == 2 && court != 5 { DEUCE_AGAIN } else { DEUCE }]
     } else if s.advantage {
-        vec![10, if winner == side { 11 } else { 12 }]
+        vec![ADVANTAGE, if winner == side { SERVER } else { RECEIVER }]
     } else if s.tiebreak {
         vec![]
     } else {
         let (a, b) = (s.points[side], s.points[side ^ 1]);
-        vec![a as u8, if a == b { 8 } else { b as u8 + 4 }]
+        vec![SERVING + a as u8, if a == b { ALL } else { RECEIVING + b as u8 }]
     }
+}
+
+/// The umpire's score words (program 0's keys).
+mod word {
+    /// The serving team's points 0..=3, then the receiving team's.
+    pub const SERVING: u8 = 0;
+    pub const RECEIVING: u8 = 4;
+    pub const ALL: u8 = 8;
+    pub const DEUCE: u8 = 9;
+    pub const ADVANTAGE: u8 = 10;
+    /// "… server" / "… receiver" after "advantage".
+    pub const SERVER: u8 = 11;
+    pub const RECEIVER: u8 = 12;
+    /// The game's second deuce.
+    pub const DEUCE_AGAIN: u8 = 13;
 }
 
 /// Ticks from the point to the score call's first word (the scoreboard's pause, then the umpire's turn): the
@@ -566,25 +716,42 @@ impl Umpire {
         }
         let key = self.words.remove(0);
         self.wait = gaps[key as usize] - 2;
-        Some(play(UMPIRE, 0, key, 0x80))
+        Some(play(slot::UMPIRE, umpire::SCORE, key, FULL))
     }
 }
 
-/// The gallery's bank slot (the court archive's `galsg` bank).
-const GALLERY: u8 = 6;
+/// The gallery's events (`Reaction::event`); the ones up to `GROAN_SHOUT` play the gallery program of their own
+/// number.
+pub mod event {
+    pub const APPLAUSE: u8 = 0;
+    pub const GROAN: u8 = 1;
+    /// The match's end: the shown side won (the ovation) or lost.
+    pub const WON: u8 = 3;
+    pub const LOST: u8 = 4;
+    /// The shouts after the applause and the groan.
+    pub const APPLAUSE_SHOUT: u8 = 5;
+    pub const GROAN_SHOUT: u8 = 6;
+    /// After the match's end: two cheers (program 7 keys 0, 1) or a sigh (program 8).
+    pub const CHEER: u8 = 7;
+    pub const CHEER_AGAIN: u8 = 8;
+    pub const SIGH: u8 = 9;
+}
+/// The gallery's rolling cheer program, and the cheers' and the sigh's after the match.
+const ROLLING_CHEER: u8 = 10;
+const CHEERS: u8 = 7;
+const SIGH: u8 = 8;
 /// The gallery's bearings (degrees from the listener): the cheer goes round them in order, a reaction shout takes
 /// one at random, the applause plays at the first, fourth and seventh at once.
 const STANDS: [i32; 8] = [0, 180, 45, 225, 90, 270, 135, 325];
 /// The cheer's volume, 0.9 · 128 (the game's level table is 0.9 at every level).
-const CHEER: i32 = 115;
+const CHEER_VOLUME: i32 = 115;
 /// The applause's and groan's volume, and the shouts'.
 const CROWD: i32 = 0x4c;
 const SHOUT: i32 = 0x66;
 
 /// How the gallery takes a decided point: `cheer` (the rolling cheer, at once without an `event`, else once the
-/// event's shout has had its time), `event` (0 applause, 1 groan; at the match's end 3 the shown side won, 4 it
-/// lost) and `chain` (a shout follows: 5 after the applause, 6 after the groan; after the match-end 3 two cheers
-/// (program 7 keys 0, 1), after 4 a sigh (program 8)).
+/// event's shout has had its time), `event` ([`event`]: the applause or groan; at the match's end won or lost)
+/// and `chain` (a shout follows the applause or groan; after the match's end two cheers or a sigh).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Reaction {
     pub cheer: bool,
@@ -597,25 +764,26 @@ pub struct Reaction {
 /// won outright (`play::popups::Finish::applause`) — `Some(true)` with a shout after it (plain points only).
 /// `errors` counts the errors in a row (every second one draws a shout); none for a fault or let.
 pub fn reaction(call: u8, game: bool, applause: Option<bool>, errors: &mut u32) -> Option<Reaction> {
-    let error = matches!(call, 1 | 3 | 5 | 6);
+    use event::{APPLAUSE, GROAN};
+    let error = matches!(call, verdict::OUT | verdict::DOUBLE_FAULT | verdict::NET_OUT | verdict::ILLEGAL_HIT);
     match call {
-        2 | 4 => None,
+        verdict::FAULT | verdict::LET => None,
         _ if game && error => {
             *errors += 1;
-            Some(Reaction { cheer: true, event: Some(1), chain: false })
+            Some(Reaction { cheer: true, event: Some(GROAN), chain: false })
         }
         _ if game => {
             *errors = 0;
-            Some(Reaction { cheer: true, event: applause.map(|_| 0), chain: false })
+            Some(Reaction { cheer: true, event: applause.map(|_| APPLAUSE), chain: false })
         }
-        6 => Some(Reaction { cheer: false, event: Some(1), chain: false }),
+        verdict::ILLEGAL_HIT => Some(Reaction { cheer: false, event: Some(GROAN), chain: false }),
         _ if error => {
             *errors += 1;
-            Some(Reaction { cheer: false, event: Some(1), chain: *errors % 2 == 0 })
+            Some(Reaction { cheer: false, event: Some(GROAN), chain: *errors % 2 == 0 })
         }
         _ => {
             *errors = 0;
-            Some(Reaction { cheer: true, event: applause.map(|_| 0), chain: applause == Some(true) })
+            Some(Reaction { cheer: true, event: applause.map(|_| APPLAUSE), chain: applause == Some(true) })
         }
     }
 }
@@ -630,7 +798,7 @@ pub fn favoured(human: &[bool]) -> [bool; 2] {
     if side[0] == side[1] { [true; 2] } else { side }
 }
 
-/// The gallery (slot 6): after a point the cheer, program 10 at the next stand every 12–40 ticks (21–70 on court
+/// The gallery (`slot::GALLERY`): after a point the cheer, program 10 at the next stand every 12–40 ticks (21–70 on court
 /// 5) at a random pitch, and the applause or groan (programs 0 and 1 from three stands), perhaps followed by a
 /// shout (5 or 6 from a random stand). `roll` is the game's random number generator.
 /// At the match's end (`event` 3/4) the ovation or groan (program 3 or 4 from three stands) and its follow-ups.
@@ -669,9 +837,9 @@ impl Gallery {
             self.cheering = false;
             self.pending = r.cheer;
             self.chain = r.chain;
-            self.wait = if e == 4 || e < 2 { 1 } else { 0x8c };
+            self.wait = if e == event::LOST || e < event::WON { 1 } else { 0x8c };
             self.event = Some(e);
-            self.start = self.wait + if e == 1 { 0x3c } else { 0x1e };
+            self.start = self.wait + if e == event::GROAN { 0x3c } else { 0x1e };
         }
     }
 
@@ -710,7 +878,7 @@ impl Gallery {
                 };
                 self.count += 1;
                 let speed = (F(roll() as f32) * 2.3283064e-10 * (F(1.25) - 0.875) + 0.875).0;
-                out.push((Play { speed, ..play(GALLERY, 10, key, CHEER) }, STANDS[self.stand]));
+                out.push((Play { speed, ..play(slot::GALLERY, ROLLING_CHEER, key, CHEER_VOLUME) }, STANDS[self.stand]));
                 self.stand = (self.stand + 1) % 8;
                 let every = if court == 5 { 70.0 } else { 40.0 };
                 self.next = (F(every) * (1.0 - 0.7 * F(roll() as f32) * 2.3283064e-10)).0 as i32;
@@ -728,35 +896,37 @@ impl Gallery {
             self.last[p] = (self.last[p] + 1) % n;
             self.last[p] as u8
         };
+        use event::*;
         match e {
-            0 | 1 => {
+            APPLAUSE | GROAN => {
                 let key = turn(e as usize, 3 - e as i32);
-                out.extend([0, 3, 6].map(|s| (play(GALLERY, e, key, CROWD), STANDS[s])));
+                out.extend([0, 3, 6].map(|s| (play(slot::GALLERY, e, key, CROWD), STANDS[s])));
             }
-            5 | 6 => {
-                let key = turn(e as usize, if e == 5 { 3 } else { 2 });
-                out.push((play(GALLERY, e, key, SHOUT), STANDS[(roll() >> 16 & 7) as usize]));
+            APPLAUSE_SHOUT | GROAN_SHOUT => {
+                let key = turn(e as usize, if e == APPLAUSE_SHOUT { 3 } else { 2 });
+                out.push((play(slot::GALLERY, e, key, SHOUT), STANDS[(roll() >> 16 & 7) as usize]));
             }
-            // the game picks 3 when the shown side is the winner, else 4: the ceremony's event says the same
-            3 | 4 => out.extend([0, 3, 6].map(|s| (play(GALLERY, e, 0, CROWD), STANDS[s]))),
-            7..=9 => {
-                let program = if e == 9 { 8 } else { 7 };
-                out.push((play(GALLERY, program, (e == 8) as u8, SHOUT), STANDS[(roll() >> 16 & 7) as usize]));
+            // the game picks WON when the shown side is the winner, else LOST: the ceremony's event says the same
+            WON | LOST => out.extend([0, 3, 6].map(|s| (play(slot::GALLERY, e, 0, CROWD), STANDS[s]))),
+            CHEER..=SIGH => {
+                let program = if e == SIGH { self::SIGH } else { CHEERS };
+                out.push((play(slot::GALLERY, program, (e == CHEER_AGAIN) as u8, SHOUT), STANDS[(roll() >> 16 & 7) as usize]));
             }
             _ => {}
         }
         let next = match e {
-            0 | 1 => Some(e + 5),
-            3 => Some(7),
-            4 => Some(9),
-            7 => Some(8),
+            APPLAUSE => Some(APPLAUSE_SHOUT),
+            GROAN => Some(GROAN_SHOUT),
+            WON => Some(CHEER),
+            LOST => Some(SIGH),
+            CHEER => Some(CHEER_AGAIN),
             _ => None,
         };
         if let Some(n) = next.filter(|_| self.chain) {
             self.event = Some(n);
             self.wait = match n {
-                9 => 0x78,
-                7 | 8 => 0x3c,
+                SIGH => 0x78,
+                CHEER | CHEER_AGAIN => 0x3c,
                 _ if game => 0xa0,
                 _ => 0x3c,
             };
