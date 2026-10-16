@@ -1197,16 +1197,6 @@ fn n0_relays() -> iroh::RelayMap {
     iroh::RelayMap::try_from_iter(urls.iter().map(String::as_str)).expect("n0 relay urls")
 }
 
-/// B515: a timed `/ping` of a relay, dotted and not, for the log while no home relay turns up
-#[cfg(target_arch = "wasm32")]
-async fn ping_relays() {
-    for u in ["https://use1-1.relay.n0.iroh.link./ping", "https://use1-1.relay.n0.iroh.link/ping"] {
-        let t = n0_future::time::Instant::now();
-        let r = n0_future::time::timeout(Duration::from_secs(10), async { reqwest::Client::new().get(u).send().await.map(|r| r.status()) }).await;
-        bevy::log::warn!("relay ping {u}: {r:?} in {:?}", t.elapsed());
-    }
-}
-
 #[cfg(target_arch = "wasm32")]
 pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, ()), String> {
     let mode = match relay {
@@ -1645,8 +1635,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         // yet (the latency probes didn't finish) or the picked one's last error
                         let st = iroh::Watcher::get(&mut ep.home_relay_status());
                         bevy::log::warn!("no home relay yet: {st:?}");
-                        #[cfg(target_arch = "wasm32")]
-                        ping_relays().await;
                         let why = match st.iter().find_map(|r| r.last_error()) {
                             Some(e) => format!("relay error: {e}"),
                             None if st.is_empty() => "no relay picked yet".into(),
