@@ -360,6 +360,11 @@ pub fn tparam(iso: &mut Iso, m: &Mod) -> Result<Vec<String>, String> {
     let arc = Archive::parse(&data).map_err(|e| e.0)?;
     let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).ok_or("no TParam.csv")?;
     let csv = arc.read(e).map_err(|e| e.0)?;
+    tparam_row(&csv, m)
+}
+
+/// M113: [`tparam`] on the disc's TParam.csv already read (`csv`).
+pub fn tparam_row(csv: &[u8], m: &Mod) -> Result<Vec<String>, String> {
     let tag = format!("{},", m.base);
     let row = csv.split(|&b| b == b'\n').find(|l| l.starts_with(tag.as_bytes())).ok_or("no TParam.csv row")?;
     let mut cells: Vec<String> = row.split(|&b| b == b',').map(|c| String::from_utf8_lossy(c).trim().to_string()).collect();

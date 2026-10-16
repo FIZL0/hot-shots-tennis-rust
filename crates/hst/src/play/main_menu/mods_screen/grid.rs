@@ -584,7 +584,8 @@ pub(super) fn lay(g: &super::super::Grid) -> Lay {
     };
     let h = b - LEGEND - cy;
     let (card, detail) = if portrait {
-        let ch = (h * 0.56).max(220.0 * PY);
+        // (M113: the chosen mod's panel keeps room for its stats card while the grid's keeps its least)
+        let ch = (h * 0.56).min(h - DETAIL_MIN * PY - gap * PY).max(220.0 * PY);
         ([x0, cy, w, ch], [x0, cy + ch + gap * PY, w, h - ch - gap * PY])
     } else {
         let dw = (360.0 * PX).min(w * 0.42);
@@ -1509,8 +1510,8 @@ struct Shown {
     loading: bool,
     /// Its badge on the picture (Installed, Update, New; an upload's state).
     badge: Option<(&'static str, [f32; 3])>,
-    /// Its play style and grades (a character).
-    stats: Option<(usize, Option<[u8; 5]>)>,
+    /// A character's card: its play style and grades (None: the listing doesn't say; the card shows "?").
+    stats: Option<(Option<usize>, Option<[u8; 5]>)>,
     facts: Vec<String>,
     /// The green verified line (None: not reviewed).
     verified: Option<bool>,
@@ -1532,9 +1533,22 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
         }
         return detail_text(d, a, b, &name, &about, "");
     };
-    // the strip: the picture as big as a share of the panel allows
-    let strip_h = (h / PY * 0.42).clamp(96.0, 230.0);
+    // the foot first (drawn over the panel after it): the buttons (or the question), then the facts over them
+    let n0 = d.out.len();
+    let foot = buttons(d, m, b, v.child.as_ref());
+    let foot_q = d.out.split_off(n0);
+    let fgap = 18.0 * PY;
+    let nf = sh.facts.len() + usize::from(sh.verified.is_some());
+    let fy = foot - 10.0 * PY - fgap * nf as f32;
+    let style = sh.stats.and_then(|(st, _)| st).map(|st| STYLE_NAMES[st.min(3)]);
+    let lined = sh.stats.is_some() || [&sh.by, &sh.left, &sh.right].iter().any(|s| !s.is_empty());
+    // M113: the strip: the picture as big as a share of the panel allows; a character's stats card keeps its spot
+    // under the grey line, the strip giving up height before the card shrinks from its comfortable size, then the
+    // card's rows thinning (letters scaled) to `CARD[0]`, then it hides
+    let want = (h / PY * 0.42).clamp(96.0, 230.0);
+    let (strip_h, card_h) = card_room(b[1], want, fy, lined, sh.stats.is_some());
     let [sx, sy, sw, shh] = look::panel(d, b, strip_h, a);
+    d.out.extend(foot_q);
     let inner = [sx + 8.0 * PX, sy + 6.0 * PY, sw - 16.0 * PX, shh - 12.0 * PY];
     if v.shot {
         // the bake's 4:5 (M8f9: a court's or umpire's own shape), as big as the box allows
@@ -1560,9 +1574,8 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
     // the grey line: who shared it, costumes and hand; the play style on its right
     let is = 13.0 * PY;
     let line = [sh.by.as_str(), sh.left.as_str(), sh.right.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" - ");
-    let style = sh.stats.map(|(st, _)| STYLE_NAMES[st.min(3)]);
     let stw = style.map_or(0.0, |s| d.width(s, is) + 10.0 * PX);
-    if !line.is_empty() || style.is_some() {
+    if lined {
         d.text(&ellipsis(d, &line, is, tw - stw), tx, ty, is, look::c(look::MUTED));
         if let Some(s) = style {
             let sx = tx + tw - d.width(s, is);
@@ -1571,12 +1584,7 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
         }
         ty += 22.0 * PY;
     }
-    // the foot first: the buttons (or the question), then the facts over them; the stats card fills what's between
-    let foot = buttons(d, m, b, v.child.as_ref());
     let fs = 12.5 * PY;
-    let fgap = 18.0 * PY;
-    let nf = sh.facts.len() + usize::from(sh.verified.is_some());
-    let fy = foot - 10.0 * PY - fgap * nf as f32;
     let mut ly = fy;
     for f in &sh.facts {
         let f = ellipsis(d, f, fs, tw);
@@ -1591,14 +1599,34 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
             d.text(&ellipsis(d, "Not reviewed yet: live on the store as uploaded", fs, tw), tx, ly, fs, look::c(look::MUTED));
         }
     }
-    let room = fy - 8.0 * PY - ty;
-    if let Some((_, grades)) = sh.stats
-        && room >= 70.0 * PY
-    {
-        let card = [tx, ty, tw, room.min(150.0 * PY)];
+    if let (Some((_, grades)), Some(ch)) = (sh.stats, card_h) {
+        let card = [tx, ty, tw, ch * PY];
         roster::ringed(d, [card[0] - 2.0 * PX, card[1] - 2.0 * PY, card[2] + 4.0 * PX, card[3] + 4.0 * PY], 12.0, 2.0, look::c(look::INK), look::c(look::INK));
         roster::stats(d, grades, card);
     }
+}
+
+/// M113: the stats card's height (mockup px): at least, comfortable, at most.
+const CARD: [f32; 3] = [80.0, 120.0, 150.0];
+/// The picture strip's least height (mockup px) when the card needs its room: the name and the badge over it.
+const STRIP_MIN: f32 = 56.0;
+/// The chosen mod's panel's least height on a portrait view (mockup px): a character's least strip and card, the
+/// grey line, three facts and the three buttons, so the card shows whenever the grid's panel can spare it.
+const DETAIL_MIN: f32 = 2.0 * RIM + STRIP_MIN + 12.5 + 22.0 + CARD[0] + 8.0 + 3.0 * 18.0 + 10.0 + 74.0 + PAD;
+
+/// M113: the chosen mod's panel at `top` (screen units): the picture strip's height (mockup px, `want` if it can) and
+/// the stats card's (None: no `card`, or no room even with the strip at its least), the facts starting at `fy`, a grey
+/// line under the strip if `lined`.
+fn card_room(top: f32, want: f32, fy: f32, lined: bool, card: bool) -> (f32, Option<f32>) {
+    if !card {
+        return (want, None);
+    }
+    // what the card gets under a strip `s` high: the rim, the strip's rule and gap, the grey line, a gap over the facts
+    let room = |s: f32| (fy - top) / PY - RIM - s - 2.5 - 10.0 - if lined { 22.0 } else { 0.0 } - 8.0;
+    let strip = (want - (CARD[1] - room(want)).max(0.0)).max(STRIP_MIN.min(want));
+    let r = room(strip);
+    // (a hair under: the panel's least height leaves the card exactly its least)
+    (strip, (r >= CARD[0] - 0.5).then(|| r.clamp(CARD[0], CARD[2])))
 }
 
 /// The panel's foot: an open question's box and its buttons (the cursor's yellow), else the page's three buttons (a
@@ -1728,7 +1756,7 @@ fn shown(m: &Menu) -> Option<Shown> {
             face: mod_face(m, md),
             loading: false,
             badge: v.ups.get(&md.dir).map(up_badge),
-            stats: stats.filter(|_| player),
+            stats: player.then(|| stats.map_or((None, None), |(st, g)| (Some(st), g))),
             facts,
             verified: None,
         });
@@ -1754,9 +1782,24 @@ fn shown(m: &Menu) -> Option<Shown> {
         face,
         loading,
         badge: state_badge(v, e),
-        stats: mt.style.map(|st| (st as usize, mt.grades)),
+        stats: card(v, e),
         facts,
         verified: Some(e.verified),
+    })
+}
+
+/// M113: a store character's card: its listing's style and grades, else its installed copy's (the select's), else
+/// what the listing has with "?" for the rest (an upload from before the card went up with it); None: not a character.
+fn card(v: &View, e: &Entry) -> Option<(Option<usize>, Option<[u8; 5]>)> {
+    let mt = &e.meta;
+    if !mt.kind.is_character() {
+        return None;
+    }
+    let own = v.have.get(&e.key()).and_then(|(_, dir)| v.stats.get(dir));
+    Some(match (mt.style, mt.grades, own) {
+        (Some(st), Some(g), _) => (Some(st as usize), Some(g)),
+        (_, _, Some(&(st, g))) => (Some(st), Some(g)),
+        (st, g, None) => (st.map(usize::from), g),
     })
 }
 
@@ -1953,6 +1996,44 @@ pub(super) fn cache_dir() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M113: the card keeps its spot: a tall panel leaves the strip as wanted and the card at most `CARD[2]`; a short
+    /// one takes the strip down (to `STRIP_MIN`) before the card goes under its comfortable height, then thins the
+    /// card to its least, then hides it; a mod with no card leaves the strip alone.
+    #[test]
+    fn the_strip_gives_way_before_the_card() {
+        // the fixed parts under the strip: rim, rule and gap, grey line, gap over the facts
+        let fixed = RIM + 12.5 + 22.0 + 8.0;
+        let fy = |strip: f32, card: f32| (fixed + strip + card) * PY;
+        assert_eq!(card_room(0.0, 200.0, fy(200.0, 400.0), true, true), (200.0, Some(CARD[2])));
+        assert_eq!(card_room(0.0, 200.0, fy(200.0, 400.0), true, false), (200.0, None));
+        let (s, c) = card_room(0.0, 200.0, fy(150.0, CARD[1]), true, true);
+        assert!((s - 150.0).abs() < 1e-3 && (c.unwrap() - CARD[1]).abs() < 1e-3, "{s} {c:?}");
+        let (s, c) = card_room(0.0, 200.0, fy(STRIP_MIN, CARD[0] + 5.0), true, true);
+        assert!(s == STRIP_MIN && (c.unwrap() - CARD[0] - 5.0).abs() < 1e-3, "{s} {c:?}");
+        assert_eq!(card_room(0.0, 200.0, fy(STRIP_MIN, CARD[0] - 5.0), true, true), (STRIP_MIN, None));
+        // a portrait panel of its least height fits the least card
+        let r = DETAIL_MIN - 3.0 * 18.0 - 10.0 - 74.0 - PAD - RIM;
+        assert!(card_room(0.0, 200.0, r * PY, true, true).1.is_some());
+    }
+
+    /// M113: a store character's card: the listing's style and grades, else the installed copy's, else "?".
+    #[test]
+    fn a_listing_without_grades_takes_the_installed_copys() {
+        let mut v = View::default();
+        let e = |style: Option<u8>, grades: Option<[u8; 5]>, kind: modstore::Kind| Entry {
+            meta: modstore::Meta { id: "a".into(), author: "b".into(), style, grades, kind, ..Default::default() },
+            rev: "main".into(),
+            verified: false,
+        };
+        let ch = modstore::Kind::Character;
+        assert_eq!(card(&v, &e(Some(2), Some([1, 2, 3, 4, 5]), ch)), Some((Some(2), Some([1, 2, 3, 4, 5]))));
+        assert_eq!(card(&v, &e(None, None, ch)), Some((None, None)));
+        assert_eq!(card(&v, &e(None, None, modstore::Kind::Court)), None);
+        v.have.insert("b/a".into(), (String::new(), "mods/a".into()));
+        v.stats.insert("mods/a".into(), (3, [5; 5]));
+        assert_eq!(card(&v, &e(None, None, ch)), Some((Some(3), Some([5; 5]))));
+    }
 
     /// B444: a long title rests at its start, slides at `ROLL_SPEED` until its end shows, rests there, starts over.
     #[test]
