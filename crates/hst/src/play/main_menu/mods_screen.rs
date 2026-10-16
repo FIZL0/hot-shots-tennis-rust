@@ -132,6 +132,19 @@ pub(super) struct View {
     inst: Vec<Entry>,
     /// B383: the last press was a pad's (the search box's ✕ then opens the keyboard on screen).
     pub(super) pad: bool,
+    /// B420: the iOS / Android app, which can't start itself again: Reload closes it instead (the player opens it
+    /// again) and the popup asks to close.
+    app: PhoneApp,
+}
+
+/// B420: whether this is the phone apps' build (`View::app`); `HST_APP=1` makes a desktop `--shot` show theirs.
+#[derive(Clone, Copy, Debug)]
+struct PhoneApp(bool);
+
+impl Default for PhoneApp {
+    fn default() -> Self {
+        PhoneApp(cfg!(any(target_os = "ios", target_os = "android")))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -975,7 +988,7 @@ impl Menu {
             self.add.status = "Choose a mod .zip file: a character, court or umpire.".into();
             out.push(Sound(2));
         } else if s == 1 {
-            if let Err(e) = reload(out) {
+            if let Err(e) = reload(self.add.app.0, out) {
                 self.add.status = e;
             }
         } else if s == 2 {
@@ -1039,8 +1052,13 @@ fn ours(m: &Mod) -> bool {
 }
 
 /// Reload: the browser reloads the page; the desktop game starts itself again with the same arguments and closes (the
-/// select's roster, the mods' textures and sounds are all read at startup).
-fn reload(out: &mut Vec<Effect>) -> Result<(), String> {
+/// select's roster, the mods' textures and sounds are all read at startup). B420: the iOS / Android app (`app`) can't
+/// start itself, so it only closes, at once (an `AppExit` doesn't end an iOS app); the player opens it again. Mods and
+/// settings are on disk already.
+fn reload(app: bool, out: &mut Vec<Effect>) -> Result<(), String> {
+    if app {
+        std::process::exit(0);
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = out;
@@ -1073,7 +1091,7 @@ impl Menu {
             out.push(Effect::Sound(0));
         } else if k.ok && a == 0 {
             out.push(Effect::Sound(2));
-            if let Err(e) = reload(out) {
+            if let Err(e) = reload(self.add.app.0, out) {
                 // the desktop couldn't start itself again: say so on the Mods row's note and close
                 self.add.status = e;
                 self.add.ask = None;
@@ -1090,6 +1108,28 @@ impl Menu {
 /// B372: the legend on Browse (None: another page, or a child or popup up).
 pub(super) fn browse_legend(m: &Menu) -> Option<Vec<(super::legend::Act, &'static str)>> {
     (m.add.grid() && !m.add.empty_kind() && m.add.child.is_none() && m.add.nophone.is_none() && m.add.wipe.is_none()).then(|| grid::legend(m))
+}
+
+/// B420: the popup's question and its two pills: the phone apps can only close.
+fn ask_words(v: &View) -> (&'static str, [&'static str; 2], &'static str) {
+    if v.app.0 {
+        (
+            "Close the game to use them?",
+            ["Close game", "Later"],
+            "Mod changes take effect when the game starts, and the app can't restart itself. Close game shuts it now: open it again to play with them. Later carries on without them.",
+        )
+    } else {
+        ("Reload now to use them?", ["Reload", "Later"], "Mod changes take effect after a restart. Reload restarts the game now; Later carries on without them.")
+    }
+}
+
+/// B420: what the Mods page's Reload pill does, for its description.
+pub(super) fn reload_said(v: &View) -> &'static str {
+    if v.app.0 {
+        "Close the game so your mod changes take effect: open it again and new mods join the select screens, removed ones leave."
+    } else {
+        "Restart the game so your mod changes take effect: new mods join the select screens, removed ones leave."
+    }
 }
 
 pub(super) fn reload_due(m: &Menu) -> bool {
@@ -1176,8 +1216,9 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     d.anchor = super::Anchor::Centre;
     d.box3([160.0, ASK_TOP - 70.0, 320.0, 70.0 + 72.0 + 16.0], 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
     d.outlined(|d| d.label("Mods changed.", 320.0, ASK_TOP - 56.0, 22.0, 288.0, WHITE));
-    d.outlined(|d| d.label("Reload now to use them?", 320.0, ASK_TOP - 32.0, 22.0, 288.0, WHITE));
-    for (k, word) in ["Reload", "Later"].into_iter().enumerate() {
+    let (ask, words, said) = ask_words(&m.add);
+    d.outlined(|d| d.label(ask, 320.0, ASK_TOP - 32.0, 22.0, 288.0, WHITE));
+    for (k, word) in words.into_iter().enumerate() {
         let y = ASK_TOP + 40.0 * k as f32;
         let on = k == a;
         d.pill_at([176.0, y, 288.0, 32.0], [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
@@ -1185,7 +1226,7 @@ pub(super) fn ask_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
     }
     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0 + hand_x, ASK_TOP + 40.0 * a as f32, 64.0, 32.0], WHITE, 128.0);
-    d.said = "Mod changes take effect after a restart. Reload restarts the game now; Later carries on without them.".into();
+    d.said = said.into();
 }
 
 /// The list box and the side panel on the view `g` fits, from under the title band down to the legend strip: the
@@ -1696,7 +1737,7 @@ fn nophone(d: &mut Draw, row: &str) {
 /// `HST_MENU=browsemods` (Browse, its entries made up from the installed mods: Verified, Installed and Update all
 /// shown, someone's folded; with `HST_CHILD=1` narrowed to FIZL0's, B255's Download all under way) / `mymods` (My public mods, the same made-up entries, one's Take down open; `HST_CHILD=wipe`: B445's Remove all uploads warning) / `uploadmods` (Upload, Upload
 /// all open, the first mods tagged with each upload state; `HST_CHILD=0`: none open, the first mod hovered) / `signinmods` (Upload signed out, Sign in's buttons open) / `addmods` with `HST_CHILD=1` (Installed, a
-/// mod's Remove open; B383: the Installed grid) / `reloadmods` (the main menu, B205's popup up): for `--shot`s.
+/// mod's Remove open; B383: the Installed grid) / `reloadmods` (the main menu, B205's popup up; `HST_APP=1`: the phone apps' Close game one): for `--shot`s.
 pub(super) fn sample(m: &mut Menu, screen: &str) {
     let v = &mut m.add;
     v.refresh();
@@ -1782,6 +1823,10 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         }
     } else if screen == "reloadmods" {
         (v.changed, v.ask) = (true, Some(0));
+        // B420: `HST_APP=1`: the phone apps' popup (Close game)
+        if std::env::var_os("HST_APP").is_some() {
+            v.app = PhoneApp(true);
+        }
         m.sel = 3;
     } else if screen == "uploadmods" {
         v.page = Page::Upload;
@@ -2632,6 +2677,25 @@ mod tests {
     /// B208: on a phone Add mod (B383: Installed's word) and the header's Upload are greyed and put up the popup
     /// instead (no picker, no page), as does Show → My uploads; ✕, ○ or a tap anywhere closes it; the other Shows
     /// still open; the file input stays off.
+    /// B420: the phone apps can't restart, so the popup asks to close the game (Later still closes only the popup) and
+    /// the Reload pill says it closes; the desktop's keeps Reload.
+    #[test]
+    fn app_popup_closes_the_game() {
+        let mut m = Menu { screen: Screen::Main, ..default() };
+        assert_eq!(ask_words(&m.add).1, ["Reload", "Later"]);
+        assert!(reload_said(&m.add).starts_with("Restart"));
+        m.add.app = PhoneApp(true);
+        let (ask, words, said) = ask_words(&m.add);
+        assert_eq!((ask, words), ("Close the game to use them?", ["Close game", "Later"]));
+        assert!(said.contains("can't restart") && reload_said(&m.add).starts_with("Close the game"));
+        (m.add.changed, m.add.ask) = (true, Some(0));
+        let mut out = Vec::new();
+        assert!(m.ask_step(Press { down: true, ..default() }, &mut out));
+        assert!(m.ask_step(ok(), &mut out));
+        assert_eq!((m.add.ask, m.add.changed), (None, true));
+        assert_eq!(out, [Effect::Sound(0), Effect::Sound(1)]);
+    }
+
     #[test]
     fn phone_rows_greyed() {
         let mut m = Menu { screen: Screen::Mods, ..default() };
