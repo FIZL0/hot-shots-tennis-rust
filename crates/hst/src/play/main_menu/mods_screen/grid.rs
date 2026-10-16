@@ -928,7 +928,10 @@ impl Menu {
                     out.push(Sound(2));
                 }
                 "Download all" => match v.by.clone() {
-                    Some(b) => self.download_all(Some(&b.author), b.list, out),
+                    Some(b) => {
+                        let list = b.list.into_iter().filter(|e| e.meta.kind == v.kind).collect();
+                        self.download_all(Some(&b.author), list, out);
+                    }
                     // B493: the whole store's: the mods on view (search, Show and filters), in any sort
                     None => {
                         let list = v.items().into_iter().cloned().collect();
