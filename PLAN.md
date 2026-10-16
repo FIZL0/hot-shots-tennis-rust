@@ -93,7 +93,7 @@ README *Character mods* — links the mods repo (../opentennis-mods: standard, t
 - camera: `camera.rs` match camera mode 0 · `cutaway.rs` post-point cut-aways
 - `replay.rs` fixture reader · `bin/replay.rs` replay CLI · `bin/state_hash.rs` per-tick hash, same on x86_64/aarch64/wasm32 (`tests/platforms.rs`); transcendentals only via `libm` (game's) or `musl`, never std
 - tests: `ball_path flights live world` (ball) · `shot_tables swing serve` · `player motion` · `score replay` ·
-  `camera cutaway`
+  `camera cutaway` · `line_calls shot_params`
 
 `crates/hst-oracle` — test-only function oracle: `hst.rs` (disc check, `HstEe::game`/`from_ram`, `addr`) on our
 `ps2-oracle` interpreter (../ps2-oracle); tests compare ports to the game's own functions
@@ -104,7 +104,7 @@ README *Character mods* — links the mods repo (../opentennis-mods: standard, t
   strike/serve/locomote/advance_stroke, bot, simulate, react/next_point, camera, draw, motions, balloons, hud ·
   `character.rs` disc characters, rig, animate · `sandbox.rs` · `ui_pool.rs` overlay quad pools only while shown (P39) ·
   `ui_census.rs` `HST_UI_CENSUS=1` UI node counts/changes per root
-- tests: `line_calls.rs`, `shot_params.rs`
+- no `tests/` dir on purpose: any file there makes `cargo test -p hst` build the whole game a second time (as a binary for it); sim-only tests go in hst-sim
 
 `tools/` — `pcsx2-hst.sh` launch · `pine.py` RAM/states · `vpad.py` virtual pad · `screenshot.sh` ·
 `record_p2m2.py` `record_live.py` `record_camera.py` `record_cutaway.py` `trace_live.py` `trace_shots.py`
