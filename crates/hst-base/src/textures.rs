@@ -31,6 +31,11 @@ pub fn ours(id: AssetId<Image>, scale: Vec2) {
 }
 
 pub fn init(iso: &str) {
+    // P57: never in the browser, like `set` (the menu decoded every sheet for a look-up with no pack: ~110 ms of its
+    // start there)
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     let root = Path::new(iso)
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
