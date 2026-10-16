@@ -273,7 +273,7 @@ fn log_pipelines(cache: Res<bevy::render::render_resource::PipelineCache>, mut s
     for p in &all[(*seen).min(all.len())..] {
         let PipelineDescriptor::RenderPipelineDescriptor(d) = &p.descriptor else { continue };
         let defs = |v: &[bevy::shader::ShaderDefVal]| v.iter().map(|d| format!("{d:?}").replace("Bool(\"", "").replace("\", true)", "")).collect::<Vec<_>>().join(" ");
-        eprintln!(
+        crate::stall::diag!(
             "pipeline at {:.2} s: {} | {} vertex buffers ({} attrs) | samples {} | vs [{}] | fs [{}]",
             f32::from_bits(NOW.load(Ordering::Relaxed)),
             d.label.as_deref().unwrap_or("?"),
@@ -304,7 +304,7 @@ fn log_passes(d: Res<bevy::diagnostic::DiagnosticsStore>, time: Res<Time<Real>>,
         .collect();
     passes.sort_by(|a, b| b.0.total_cmp(&a.0));
     let top: Vec<String> = passes.iter().take(10).map(|(ms, p)| format!("{p} {ms:.2}")).collect();
-    eprintln!("passes {kind} ms at {t:.0} s: {}", top.join(", "));
+    crate::stall::diag!("passes {kind} ms at {t:.0} s: {}", top.join(", "));
 }
 
 /// `HST_PASSES=1` (P48): every 5 s, what Bevy's `bin_unpacking` compute pass did last frame: one dispatch per batch
@@ -329,7 +329,7 @@ fn log_unpacking(b: Res<bevy::render::batching::gpu_preprocessing::BinUnpackingB
             biggest = biggest.max(j.mesh_instance_count);
         }
     }
-    eprintln!("bin unpacking at {t:.0} s: {jobs} dispatches over {} (view, phase)s of {} views, {instances} instances (largest batch set {biggest})", b.view_phase_buffers.len(), views.len());
+    crate::stall::diag!("bin unpacking at {t:.0} s: {jobs} dispatches over {} (view, phase)s of {} views, {instances} instances (largest batch set {biggest})", b.view_phase_buffers.len(), views.len());
 }
 
 /// The Mesh setting where the loaders read it (`MESH`).
@@ -374,7 +374,7 @@ fn log_draws(
         }
     }
     let cast: Vec<Vec<usize>> = cascades.iter().flat_map(|c| c.entities.values()).map(|v| v.iter().map(|c| c.entities.len()).collect()).collect();
-    eprintln!("draws at {now:.0} s: {} of {} cameras active, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().filter(|(_, c)| c.is_active).count(), cams.iter().count(), pairs.len(), npc_pairs.len());
+    crate::stall::diag!("draws at {now:.0} s: {} of {} cameras active, {seen} meshes seen ({} mesh/material pairs), npcs {npcs} ({} pairs), shadow casters per view and cascade {cast:?}", cams.iter().filter(|(_, c)| c.is_active).count(), cams.iter().count(), pairs.len(), npc_pairs.len());
 }
 
 /// When this frame reached: 0 its start (`First`), 1/2 the fixed-step simulation's start/end, 3 the end of the
@@ -434,7 +434,7 @@ fn log_split(time: Res<Time<Real>>, mut log: ResMut<SplitLog>, mut next: Local<f
     if n > 0.0 {
         let a = |v: f32| v / n;
         let gpu = if gpu_n > 0.0 { format!("{:.2}", gpu / gpu_n) } else { "n/a".into() };
-        eprintln!(
+        crate::stall::diag!(
             "frame split ms: frame {:.2} (worst {worst:.1}) game {:.2} sim {:.2} prep {:.2} acquire {:.2} enc {:.2} submit {:.2} idle {:.2} gpu {gpu}",
             a(frame),
             a(game),

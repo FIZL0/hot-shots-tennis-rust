@@ -108,11 +108,20 @@ pub fn run(pack: js_sys::Uint8Array) {
     // SAFETY: copy_to_uninit filled every byte
     hst_data::iso::mount(PACK, unsafe { bytes.assume_init() });
     let mut argv = vec![PACK.to_string()];
+    // B453: the site's "Frame log" box (index.html), or `?fps` below
+    if web_sys::window().unwrap().local_storage().ok().flatten().and_then(|s| s.get_item("hst-fps").ok().flatten()).as_deref() == Some("1") {
+        crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if let Ok(q) = web_sys::window().unwrap().location().search() {
         for kv in q.trim_start_matches('?').split('&').filter(|s| !s.is_empty()) {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
             // the page's own (`index.html`)
             if k == "webgl2" {
+                continue;
+            }
+            // B453: the `HST_FPS` log (frame rate, stalls, pipelines) into the console
+            if k == "fps" {
+                crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
                 continue;
             }
             if k == "code" {
