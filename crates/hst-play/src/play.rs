@@ -35,6 +35,7 @@ use hst_sim::shot::{Bounds, Table, lookup};
 use hst_sim::sound;
 use hst_sim::swing::{self, PathPoint, Reach};
 use hst_sim::umpire::Umpire;
+use hst_sim::{ai::style, lines::{DEG, SERVICE_LINE}, rally::msg, shot::{branch, class, kind}};
 
 use crate::audio::{
     CourtBank, GalleryBank, MusicBanks, Sound, SoundBank, VoiceBanks, umpire_bank, voice_bank,
@@ -98,6 +99,7 @@ mod court_mod_match;
 mod replay_pace;
 mod weather;
 pub mod no_hud;
+mod phase_code;
 pub use hst_base::widescreen;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
@@ -775,7 +777,7 @@ fn record_spin(g: &mut Game, record: &[f32], class: u8, kind: i32, at: V3, targe
 /// A stroke's (class 1) or volley's (class 2, volleys and dives) launch from player `who`'s character tables (the
 /// hitter's own, or on a counter the incoming hitter's).
 fn rally_lookup(g: &Game, who: usize, class: u8, kind: i32, at: V3, target: V3) -> hst_sim::shot::Lookup {
-    let (volley, k) = (class == 2, kind as usize);
+    let (volley, k) = (class == class::VOLLEY, kind as usize);
     let bounds = if volley {
         Bounds::volley(kind, at[2])
     } else {
@@ -1042,7 +1044,7 @@ fn reach(iso: &mut Iso) -> Reach {
         smash_ahead: 0.3578,
         body_low: 0.5535,
         body_high: 0.5828,
-        // ponytail: character 0's timing grades (player +0x1510, 28-frame horizon); their source is P3
+        // ponytail: character 0's timing grades (28-frame horizon); their source is P3
         grades: vec![
             0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
         ],
@@ -1179,7 +1181,7 @@ fn emitters(iso: &mut Iso, n: usize, players: u32, rng: &mut Mt) -> Vec<npc::Emi
 fn serve_tables(iso: &mut Iso, params: &ShotParams, c: usize) -> [Vec<(Table, f32, f32)>; 2] {
     let r = params::record_of(c);
     let dw1 = serve_variant_weights(iso, c, 1);
-    let turn = |rec: &[f32]| (params::spin(rec), hst_sim::ps2::mul(rec[10], 0.017453292));
+    let turn = |rec: &[f32]| (params::spin(rec), hst_sim::ps2::mul(rec[params::field::SIDE], DEG));
     let base = character_tables(iso, c, "A", "serv", "", 4)
         .into_iter()
         .enumerate()
@@ -1201,7 +1203,7 @@ fn serve_variant_weights(iso: &mut Iso, c: usize, v: usize) -> [f32; 4] {
     );
     let game = hst_data::exe::Game::new(&cnf, &bin).expect("supported disc");
     let mut w = [0.0; 4];
-    for e in game.shot_variants(c).iter().filter(|e| e.class == 0 && e.uses[v] != 0) {
+    for e in game.shot_variants(c).iter().filter(|e| e.class == class::SERVE as usize && e.uses[v] != 0) {
         w[e.kind] = e.weight;
     }
     w
@@ -1221,7 +1223,7 @@ fn serve_specials(iso: &mut Iso, params: &ShotParams, c: usize) -> (hst_data::ex
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&file)).expect("up1 slice serve table");
         let rec = params.variant(0, 1, params::record_of(c), serve_variant_weights(iso, c, 0)[1]);
         let table = Table::parse(&arc.read(e).expect("table bytes")).expect("16^3 table");
-        (table, params::spin(&rec), hst_sim::ps2::mul(rec[10], 0.017453292))
+        (table, params::spin(&rec), hst_sim::ps2::mul(rec[params::field::SIDE], DEG))
     });
     (effects, up1)
 }
@@ -1784,19 +1786,19 @@ fn strike(
 ) {
     // one hit per team per ball, as the original: only the other team's ball can be struck (see `theirs`)
     debug_assert!(
-        class == 0 || g.last_hitter < 0 || g.last_hitter & 1 != who as i32 & 1,
+        class == class::SERVE || g.last_hitter < 0 || g.last_hitter & 1 != who as i32 & 1,
         "player {who} struck its own team's ball"
     );
     let at = g.flight.ball.pos;
     let weak = (g.serving.toss == Some(Toss::Weak) && serve::dw1(&g.serve_data[who])) as usize;
     // a slow contact's mis-hit roll; a framed hit lobs to a wild spot
-    let miss = g.mis_hit.take().filter(|_| class == 1 || class == 2);
+    let miss = g.mis_hit.take().filter(|_| class == class::STROKE || class == class::VOLLEY);
     let framed = miss.filter(|m| m.wild).map(|_| timing::wild(g, who));
     g.players[who].framed = framed.is_some();
-    let (kind, target) = framed.map_or((kind, target), |f| (3, f.0));
+    let (kind, target) = framed.map_or((kind, target), |f| (kind::LOB, f.0));
     // launched as a volley (class 2: the volley tables and bounds, the high-ball blend), as the original
     let inside_high = swing::high_volley(branch, kind, framed.is_some(), g.players[who].aim_from[1], -at[1]);
-    let class = if inside_high { 2 } else { class };
+    let class = if inside_high { class::VOLLEY } else { class };
     let power_gap = g.finish.strike(who, branch, kind, offset, g.players.len(), inside_high);
     // a counter launches from the incoming hitter's tables and shot record, as the original
     let src = match power_gap {
@@ -1805,36 +1807,36 @@ fn strike(
     };
     // a rally shot's aim is pulled inside the lines before anything uses it (the timing scatter comes after);
     // ponytail: the smash's deep mode and the powered shots' unscaled margins are not modelled (low, special false)
-    let target = if class == 0 {
+    let target = if class == class::SERVE {
         target
     } else {
         let doubles = g.rules.players > 2;
         g.margins.inside(class, kind, false, doubles, g.chars[src] as usize, false, at, target)
     };
     let error = g.timing_error.take().or(framed.map(|_| swing::TimingError::default()));
-    let timed = error.filter(|_| class == 1 || class == 2).map(|e| {
+    let timed = error.filter(|_| class == class::STROKE || class == class::VOLLEY).map(|e| {
         timing::launch(g, who, src, class, kind, (branch, grade), e, framed.map(|f| (f.1, f.2)), power_gap.is_some(), at, target)
     });
     let target = timed.as_ref().map_or(target, |t| t.target);
     // a smash's timing scatter, its table looked up from the aim (see `timing::smash`)
-    let smash = g.smash_scatter.take().filter(|_| class == 3).map(|(sx, sz)| (target, serve::scatter_along(sx, sz, at, target)));
+    let smash = g.smash_scatter.take().filter(|_| class == class::SMASH).map(|(sx, sz)| (target, serve::scatter_along(sx, sz, at, target)));
     let target = smash.map_or(target, |(t, sc)| [hst_sim::ps2::add(t[0], sc[0]), t[1], hst_sim::ps2::add(t[2], sc[2])]);
-    let sent = if class == 0 {
+    let sent = if class == class::SERVE {
         let s = g.serving.scatter;
         [hst_sim::ps2::add(target[0], s[0]), target[1], hst_sim::ps2::add(target[2], s[2])]
     } else {
         target
     };
     let effect = shot_effect(g, who, src, class, kind, (branch, grade, offset), at, sent);
-    let launched = if class == 0 {
+    let launched = if class == class::SERVE {
         // the special slice serve flies by its up1 table
         let (table, spin, side) = match &g.specials[who].1 {
-            Some(up1) if kind == 1 && effect.0 != 0.0 => up1,
+            Some(up1) if kind == kind::SLICE && effect.0 != 0.0 => up1,
             _ => &g.serve_tables[who][weak][kind as usize],
         };
         serve::launch(
             table,
-            kind == 3,
+            kind == kind::UNDERHAND,
             hst_sim::ball::Params::default().radius,
             at,
             target,
@@ -1845,7 +1847,7 @@ fn strike(
     } else {
         let l = if let Some((aim, sc)) = smash {
             lookup(&g.smash_tables[who][kind as usize], &Bounds::smash(kind), [hst_sim::ps2::sub(at[0], sc[0]), at[1], hst_sim::ps2::sub(at[2], sc[2])], aim)
-        } else if class == 3 {
+        } else if class == class::SMASH {
             lookup(
                 &g.smash_tables[who][kind as usize],
                 &Bounds::smash(kind),
@@ -1872,7 +1874,7 @@ fn strike(
     let side = hst_sim::shot::side_axis(at, sent);
     g.shot.side = [side[0], side[1], side[2]];
     g.shots += 1;
-    // B69: a lock that comes due after the point's call (a fault's receiver, before the reaction's 0x19 cancels it)
+    // B69: a lock that comes due after the point's call (a fault's receiver, before the reaction message cancels it)
     // still hits, but the point stays over: the original's hit check runs only in the rally phase
     let live = g.phase != Phase::Post;
     if live {
@@ -1894,7 +1896,7 @@ fn strike(
         strong_toss: g.serving.toss == Some(Toss::Strong),
         solo: g.rules.players == 1,
         // the sound generator's bit is drawn only for an unclean stroke (not a smash or drop)
-        random_bit: branch != 4 && kind != 4 && !matches!(grade, 1 | 2) && g.rng.sound.bit(),
+        random_bit: branch != branch::SMASH && kind != kind::DROP && !swing::grade::clean(grade) && g.rng.sound.bit(),
         framed: framed.is_some(),
         dull: miss.is_some_and(|m| m.dull),
         ..default()
@@ -1902,7 +1904,7 @@ fn strike(
     g.sounds
         .extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
     let n = g.players.len() as u32;
-    // the launch's fresh random (+0x3b9c, read only by the close-up camera's quiet-stroke shout)
+    // the launch's fresh random (read only by the close-up camera's quiet-stroke shout)
     g.rng.shared.next();
     if let Some(program) =
         sound::stroke_shout(&hit, g.chars[who], n, || g.rng.shared.r15() % 100)
@@ -1911,8 +1913,8 @@ fn strike(
         let shout = g.voices[who].shout(who, program, n, r);
         g.whooshes.push((0, who, shout));
     }
-    g.smashed = branch == 4 && g.rules.players > 1;
-    g.last_sweet = branch != 3 && offset.abs() < 2;
+    g.smashed = branch == branch::SMASH && g.rules.players > 1;
+    g.last_sweet = branch != branch::DIVE && offset.abs() < 2;
     g.instant.timing[who] = offset;
     match_stats::hit(g, who, branch, grade, offset);
     flight_sound(g, who, &hit, class, vel);
@@ -1922,8 +1924,8 @@ fn strike(
         (false, g.whistle.1)
     };
     let spin = match class {
-        0 => launched.spin,
-        3 => g.smash_spins[who][kind as usize],
+        class::SERVE => launched.spin,
+        class::SMASH => g.smash_spins[who][kind as usize],
         _ => match timed.as_ref().and_then(|t| t.record) {
             Some(r) => record_spin(g, &r, class, kind, at, target),
             None => rally_spin(g, src, class, kind, at, target),
@@ -1937,7 +1939,7 @@ fn strike(
     g.marks.red = (g.rules.players == 1 || g.shots > 1).then_some([target[0], target[2]]);
     // each receiving human with its own character's heights; not on the serve (the game sets the search up from
     // the serve return on, or in practice); a lob onto bots too (B507, ours)
-    let heights = smash_marker::receivers(g, who, class == 1 && kind == 3);
+    let heights = smash_marker::receivers(g, who, class == class::STROKE && kind == kind::LOB);
     g.marks.smash = (!heights.is_empty() && (g.rules.players == 1 || g.shots > 1)).then(|| {
         let mut f = g.flight;
         let mut path = vec![path_entry(&f)];
@@ -1950,7 +1952,7 @@ fn strike(
     g.marks.fresh = true;
     g.hit_effect = Some(effects::Hit {
         kind,
-        smash: class == 3,
+        smash: class == class::SMASH,
         pos: at,
         vel,
     });
@@ -1971,7 +1973,7 @@ fn strike(
         g.phase = Phase::Rally;
         g.umpire.rally();
     }
-    doubles_ai::heard(g, 0x15);
+    doubles_ai::heard(g, msg::HIT);
     cancel_locks(g, Some(who));
 }
 
@@ -2126,7 +2128,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         g.serving.scatter = serve::scatter(d, toss, miss, error, hit, target);
         // the stick toward the net turns a topspin serve flat
         let sw = ServeSwing {
-            kind: hst_sim::shot::stick_kind(0, sw.kind, [aim.x, aim.y], end),
+            kind: hst_sim::shot::stick_kind(branch::SERVE, sw.kind, [aim.x, aim.y], end),
             ..sw
         };
         debug!(
@@ -2136,7 +2138,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
         g.players[i].balloon = serve::balloon(sw.grade, sw.offset, false).map(|b| (b, 0));
         g.players[i].serve_anim = None;
         g.players[i].stance = pos[0].abs();
-        strike(g, i, 0, sw.kind, target, (0, sw.grade, sw.offset));
+        strike(g, i, class::SERVE, sw.kind, target, (branch::SERVE, sw.grade, sw.offset));
         g.finish.strong = toss == Toss::Strong;
         let p = &mut g.players[i];
         p.served = Some(0);
@@ -2383,7 +2385,7 @@ fn aim_target(g: &mut Game, i: usize, stick: Vec2, branch: u8, kind: i32, offset
     let p = &g.players[i];
     let h = hst_sim::shot::Hitter { end: p.end, branch, kind, offset, body, from: p.aim_from, height };
     // the ball being struck was a slice (not a smash) in a rally under way: the angle narrows
-    let incoming = (g.shots > 0 && g.shot.class != 3 && g.shot.kind == 1).then_some(g.last_sweet);
+    let incoming = (g.shots > 0 && g.shot.class != class::SMASH && g.shot.kind == kind::SLICE).then_some(g.last_sweet);
     // ponytail: bots aim through this too with a random stick; the original AI's own aim is P11
     g.aim = hst_sim::shot::aim(&h, &g.aim_stats[i], [stick.x, stick.y], g.rules.players == 4, false, incoming, &mut || g.rng.shared.next());
     g.aim.target
@@ -2471,12 +2473,12 @@ fn find_dive(g: &Game, i: usize) -> Option<swing::Dive> {
     )
 }
 
-/// The game's contact-search branch number (+0x3ec1).
+/// The contact-search branch as the shot code numbers it (`shot::branch`).
 fn branch_code(b: swing::Branch) -> u8 {
     match b {
-        swing::Branch::Ground => 1,
-        swing::Branch::Volley => 2,
-        swing::Branch::Smash => 4,
+        swing::Branch::Ground => branch::GROUND,
+        swing::Branch::Volley => branch::VOLLEY,
+        swing::Branch::Smash => branch::SMASH,
     }
 }
 
@@ -2498,12 +2500,7 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
     let n = g.players.len();
     let sc = loco::Scene {
         players: n as i32,
-        phase: match g.phase {
-            Phase::ChangeEnds(_) => 1,
-            Phase::Serve => 2,
-            Phase::Rally => 3,
-            Phase::Post => 4,
-        },
+        phase: g.phase.code(),
         last_hitter: g.last_hitter,
         team: i as i32,
         forward: g.players[i].end,
@@ -2695,7 +2692,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
     if let Some(ik) = p.ik.as_mut() {
         let mut pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
         let end = p.end;
-        // ponytail: the mover's partner check is skipped for the server in the original (game +0x1fc); kept here
+        // ponytail: the mover's partner check is skipped for the server in the original; kept here
         let (w, unit) = ik.tick(&mut pos, |at, d| {
             let to = loco::mover([at[0], at[1], at[2]], [d[0], d[1], d[2]], end, mate, false);
             let free =
@@ -2727,14 +2724,14 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
                 hst_sim::shot::stick_kind(branch, g.players[i].kind, [stick.x, stick.y], end);
             let target = aim_target(g, i, stick, branch, kind, c.offset, c.swing.body, c.swing.ball[1]);
             // a smash has its own class and kinds: △ (the lob button) smashes kind 1, the others kind 0
-            let (class, kind) = if branch == 4 {
-                (3, (kind == 3) as i32)
+            let (class, kind) = if branch == branch::SMASH {
+                (class::SMASH, (kind == kind::LOB) as i32)
             } else {
-                (if branch == 2 { 2 } else { 1 }, kind)
+                (if branch == branch::VOLLEY { class::VOLLEY } else { class::STROKE }, kind)
             };
-            g.timing_error = (branch < 3).then(|| timing::error(g, i, &c, branch, g.players[i].kind == 3));
-            g.smash_scatter = (branch == 4).then(|| timing::smash(g, i, &c, kind == 0));
-            g.mis_hit = (1..4).contains(&branch).then(|| timing::mis_hit(g, i, (branch, c.grade, kind), c.swing.forehand));
+            g.timing_error = (branch < branch::DIVE).then(|| timing::error(g, i, &c, branch, g.players[i].kind == kind::LOB));
+            g.smash_scatter = (branch == branch::SMASH).then(|| timing::smash(g, i, &c, kind == 0));
+            g.mis_hit = branch::rally(branch).then(|| timing::mis_hit(g, i, (branch, c.grade, kind), c.swing.forehand));
             strike(
                 g,
                 i,
@@ -2834,18 +2831,18 @@ fn dive_frame(g: &mut Game, i: usize, aim: &impl Fn(&mut Game) -> Vec2) {
     }
     if d.contact && n == d.frame {
         let stick = aim(g);
-        let kind = hst_sim::shot::stick_kind(3, g.players[i].kind, [stick.x, stick.y], end);
+        let kind = hst_sim::shot::stick_kind(branch::DIVE, g.players[i].kind, [stick.x, stick.y], end);
         let (grade, offset) = swing::dive_lock(d.frame);
-        let target = aim_target(g, i, stick, 3, kind, offset, false, 0.0);
-        g.timing_error = Some(timing::dive_error(g, i, &d, g.players[i].kind == 3));
-        g.mis_hit = Some(timing::mis_hit(g, i, (3, grade, kind), true));
+        let target = aim_target(g, i, stick, branch::DIVE, kind, offset, false, 0.0);
+        g.timing_error = Some(timing::dive_error(g, i, &d, g.players[i].kind == kind::LOB));
+        g.mis_hit = Some(timing::mis_hit(g, i, (branch::DIVE, grade, kind), true));
         strike(
             g,
             i,
-            2,
+            class::VOLLEY,
             kind,
             target,
-            (3, grade, offset),
+            (branch::DIVE, grade, offset),
         );
         if g.phase == Phase::Rally && g.players.len() > 1 {
             let p = &mut g.players[i];
@@ -2963,9 +2960,9 @@ fn whiff(g: &mut Game, i: usize, miss: bool, quiet: bool) {
     let middle = (g.reaches[i].smash_top + g.reaches[i].smash_bottom) / 2.0;
     let (b, p) = (g.flight.ball, &mut g.players[i]);
     let base = match p.kind {
-        1 => 0x12,
-        3 => 0x14,
-        _ => 0x10,
+        kind::SLICE => swing::anim::SLICE as i32,
+        kind::LOB => swing::anim::LOB as i32,
+        _ => swing::anim::TOPSPIN as i32,
     };
     let d = [p.pos[0] - b.pos[0], p.pos[2] - b.pos[2]];
     let right = d[1] * b.vel[0] - d[0] * b.vel[2] > 0.0;
@@ -2973,7 +2970,7 @@ fn whiff(g: &mut Game, i: usize, miss: bool, quiet: bool) {
     let anim = if !miss {
         base
     } else if swing::smash_whiff(&path, b.pos, p.pos, middle) {
-        0x1f
+        swing::anim::SMASH as i32
     } else {
         base + other as i32
     };
@@ -3147,7 +3144,7 @@ fn ai_draw(g: &mut Game, i: usize, shots: Option<hst_sim::ai::Shots>) {
 fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
     // the AI's shot kinds are the hitter's branch: 0 serve, 1 ground stroke, 2 volley, 3 dive, 4 smash
     let kind = branch as i32;
-    let lob = branch != 0 && g.players[who].kind == 3;
+    let lob = branch != branch::SERVE && g.players[who].kind == kind::LOB;
     for i in 0..g.players.len() {
         if g.humans.get(i) == Some(&true) {
             continue;
@@ -3157,14 +3154,14 @@ fn ai_heard_hit(g: &mut Game, who: usize, branch: u8, vel: V3) {
         let p = &mut g.players[i];
         let shots = if i & 1 != who & 1 {
             let last = hst_sim::ai::Seen { kind, vel };
-            if kind == 0 {
+            if kind == branch::SERVE as i32 {
                 p.ai_serves = [Some(vel), p.ai_serves[0]];
             }
             p.ai_seen = [Some(last), p.ai_seen[0]];
             Some(hst_sim::ai::Shots { last, before: p.ai_seen[1], serve_before: p.ai_serves[1] })
         } else {
             p.ai_hit = true;
-            p.ai_dove = Some(who == i && branch == 3);
+            p.ai_dove = Some(who == i && branch == branch::DIVE);
             None
         };
         ai_draw(g, i, shots);
@@ -3183,8 +3180,8 @@ fn ai_draw_guess(g: &mut Game, i: usize, kind: i32, lob: bool) {
     let mut roll = || rng.next();
     let p = &mut g.players[i];
     let last = hst_sim::ai::Seen { kind, vel: [0.0; 3] };
-    p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, special_serve, beside_human, p.pos[2].abs() <= 6.4, &mut roll);
-    let guess = p.ai.guess(&p.ai_timing, kind == 0, !beside_human, &mut roll);
+    p.ai_hold = p.ai.reaction(&p.ai_timing, &last, lob, special_serve, beside_human, p.pos[2].abs() <= SERVICE_LINE, &mut roll);
+    let guess = p.ai.guess(&p.ai_timing, kind == branch::SERVE as i32, !beside_human, &mut roll);
     p.ai_guess = guess.map(|q| (q, [p.pos[0], p.pos[2]]));
     if guess.is_some() {
         p.ai_hold = p.ai.guess[1];
@@ -3198,7 +3195,7 @@ fn ai_draw_guess(g: &mut Game, i: usize, kind: i32, lob: bool) {
 /// AI's own approach run (P7f).
 fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Option<V3> {
     use hst_sim::ai::Verdict;
-    let (ad, p) = (g.score.side == 1, g.players[i]);
+    let (ad, p) = (g.score.side == hst_sim::score::AD_COURT, g.players[i]);
     if !coming {
         return None;
     }
@@ -3233,12 +3230,7 @@ fn ai_guessing(g: &mut Game, i: usize, coming: bool, contact: Option<V3>) -> Opt
 /// step), as stick bytes and back.
 fn bot_run(g: &Game, i: usize, goal: V3) -> Vec2 {
     let p = &g.players[i];
-    let phase = match g.phase {
-        Phase::ChangeEnds(_) => 1,
-        Phase::Serve => 2,
-        Phase::Rally => 3,
-        Phase::Post => 4,
-    };
+    let phase = g.phase.code();
     let body = loco::Body { pos: p.pos, ..p.body };
     let (d, _) = body.toward(&p.stats, [goal[0], goal[2]], g.players.len() as i32, phase, false);
     let [x, z] = loco::stick_dir(loco::bot_stick(d), phase);
@@ -3414,8 +3406,8 @@ fn ai_stand_x(g: &mut Game, i: usize, b: V3) -> f32 {
             let rng = &mut g.rng.ai;
             let run = p.ai.run_round(beside_human, &mut || rng.next());
             let width = run.then(|| p.ai.run_round_width(g.players.len() == 2));
-            // the strong side is TParam's hand (the game's +0x12dc ignores the select-screen hand toggle)
-            let strong = if g.strong_hand[i] >= 0.0 { 1 } else { 2 };
+            // the strong side is TParam's hand (the AI's own strong side ignores the select-screen hand toggle)
+            let strong = if g.strong_hand[i] >= 0.0 { hst_sim::ai::strong::MINUS } else { hst_sim::ai::strong::PLUS };
             let spot = Some((1, [b[0], b[2]]));
             let at = [p.pos[0], p.pos[2]];
             let minus = hst_sim::ai::stand_side(spot, spot, at, reach, p.end, 0.0, strong, width) == Some(true);
@@ -3454,7 +3446,7 @@ fn ai_wait(g: &mut Game, i: usize) -> Option<V3> {
     let pl = &mut g.players[i];
     if pl.ai_form.lane == 0 {
         let starter = g.score.server == i as i32 || g.score.receiver == i as i32;
-        pl.ai_form = Formation::start(&t, starter, g.score.side == 1);
+        pl.ai_form = Formation::start(&t, starter, g.score.side == hst_sim::score::AD_COURT);
         pl.ai_back = Return::new(rate, &mut roll);
         pl.ai_shot = g.shots;
     }
@@ -3502,14 +3494,14 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
         None => {
             // from no shots seen: the first look takes in the serve (or its own return)
             pl.ai_shot = 0;
-            let net = p.ai.style == 1 || p.ai.style == 3 && (roll() >> 16 & 0x7fff) % 100 < 50;
+            let net = p.ai.style == style::NET || p.ai.style == style::ALL && hst_sim::rng::r15(roll()) % 100 < 50;
             Single::start(&c, net, &mut roll)
         }
     };
     if std::mem::replace(&mut pl.ai_shot, g.shots) != g.shots {
-        let net_row = p.ai.style != 2;
+        let net_row = p.ai.style != style::BASE;
         if g.last_hitter != i as i32 {
-            if net_row && p.ai_seen[0].is_some_and(|x| x.kind == 3) {
+            if net_row && p.ai_seen[0].is_some_and(|x| x.kind == branch::DIVE as i32) {
                 s.go_in(&c);
             }
         } else if g.shots == 1 {
@@ -3539,7 +3531,7 @@ fn ai_wait_singles(g: &mut Game, i: usize) -> Option<V3> {
 /// ponytail: the original aims the frame before the contact; the server stands still, so this aims at the press.
 fn bot_serve(g: &mut Game, i: usize) {
     if g.serving.bot_due.is_none() {
-        let (end, ad, doubles) = (g.players[i].end, g.score.side == 1, g.players.len() == 4);
+        let (end, ad, doubles) = (g.players[i].end, g.score.side == hst_sim::score::AD_COURT, g.players.len() == 4);
         let mut roll = ai_roll(&mut g.rng);
         let level0 = g.players[i].ai_picks.serve_level == 0;
         let spot = hst_sim::ai::serve_spot(level0, doubles, end, ad, &mut roll);
@@ -3593,14 +3585,14 @@ fn bot_serve(g: &mut Game, i: usize) {
 /// ponytail: the exhibition level is always 3 (P11a), the mark is the opponent's spot, the reach heights are the contact's own (never low), the singles return of serve
 /// and the short-ball flag aren't kept; the kind-1 contact (its own search) isn't told apart from a ground stroke.
 fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
-    use hst_sim::aim::{Look, Pair};
+    use hst_sim::aim::{Look, Pair, contact};
     let p = g.players[i];
     let at = |j: usize| [g.players[j].pos[0], g.players[j].pos[2]];
     let kind = match (p.dive.is_some(), p.contact.map(|c| c.swing.branch)) {
-        (true, _) => 4,
-        (_, Some(swing::Branch::Volley)) => 2,
-        (_, Some(swing::Branch::Smash)) => 3,
-        _ => 0,
+        (true, _) => contact::DIVE,
+        (_, Some(swing::Branch::Volley)) => contact::VOLLEY,
+        (_, Some(swing::Branch::Smash)) => contact::SMASH,
+        _ => contact::TIERED,
     };
     let rng = &mut g.rng;
     let stick = if g.players.len() == 4 {
@@ -3641,12 +3633,12 @@ fn ai_press_kind(g: &mut Game, i: usize) -> i32 {
     button_kind(b)
 }
 
-/// A pad button (1 ✕, 2 ○, 4 △) as the app's shot kind.
+/// A pad button (`aim::button`: ✕, ○, △) as the app's shot kind.
 fn button_kind(b: u8) -> i32 {
     match b {
-        2 => 1,
-        4 => 3,
-        _ => 0,
+        hst_sim::aim::button::CIRCLE => kind::SLICE,
+        hst_sim::aim::button::TRIANGLE => kind::LOB,
+        _ => kind::TOPSPIN,
     }
 }
 
@@ -3677,9 +3669,9 @@ fn ai_toss_kind(g: &mut Game, i: usize) -> i32 {
 /// A serving computer player's swing (`AiParams::serve_swing`), kept for its aim.
 fn ai_serve_kind(g: &mut Game, i: usize, toss: Toss) -> i32 {
     let toss = match toss {
-        Toss::Strong => 1,
-        Toss::Weak => 0,
-        Toss::Under => 2,
+        Toss::Strong => hst_sim::aim::plan::TOSS_STRONG,
+        Toss::Weak => hst_sim::aim::plan::TOSS_WEAK,
+        Toss::Under => hst_sim::aim::plan::TOSS_UNDER,
     };
     let swing = g.players[i].ai.serve_swing(toss, &mut ai_roll(&mut g.rng));
     g.players[i].ai_serve_swing = Some(swing);
@@ -3692,7 +3684,7 @@ fn ai_serve_aim(g: &mut Game, i: usize) {
     let Some(swing) = g.players[i].ai_serve_swing.take() else { return };
     let p = g.players[i];
     let mut roll = ai_roll(&mut g.rng);
-    let ad = g.score.side == 1;
+    let ad = g.score.side == hst_sim::score::AD_COURT;
     let (s, dash) = if g.players.len() == 2 {
         // the app's AI is always level 3
         let reach = hst_sim::ai::Choice::new(0, 0, false).reach;
@@ -3859,7 +3851,7 @@ fn simulate(mut g: ResMut<Game>) {
                 None => g.post = Some(post),
                 Some(Next::Serve) => return next_point(g, true),
                 Some(Next::ChangeEnds) => {
-                    doubles_ai::heard(g, 0xc);
+                    doubles_ai::heard(g, msg::CHANGE_ENDS);
                     reseed_sound(g);
                     g.gallery.hush();
                     g.umpire.start(true, g.flight.ball.pos);
@@ -3893,7 +3885,7 @@ fn simulate(mut g: ResMut<Game>) {
     }
     if touched == 0 && g.flight.special_contacts > 0 {
         g.path_base = g.hit_flight.predicted_contacts(&shot, surface, g.since_hit);
-        doubles_ai::heard(g, 0x16);
+        doubles_ai::heard(g, msg::NEW_PATH);
     }
     // bounce sounds stop once the point is decided (the deciding bounce still plays)
     let (n, (at, material)) = (g.flight.bounces, g.flight.landing);
@@ -4006,8 +3998,8 @@ fn simulate(mut g: ResMut<Game>) {
 /// point ends a game), in doubles sometimes a team reaction instead, each player's own pick.
 /// ponytail: the app's random numbers stand in for the game's
 fn react(g: &mut Game, event: Event) {
-    doubles_ai::heard(g, 0x19);
-    // the players' handler: 0x19 cancels every lock (B128)
+    doubles_ai::heard(g, msg::REACTION);
+    // the players' handler: the reaction cancels every lock (B128)
     cancel_locks(g, None);
     let n = g.players.len() as i32;
     let winner = g.post_winner;
@@ -4072,7 +4064,7 @@ fn next_point(g: &mut Game, fresh: bool) {
     g.last_hitter = -1;
     g.marks = Marks::default();
     g.phase = Phase::Serve;
-    doubles_ai::heard(g, 0xe);
+    doubles_ai::heard(g, msg::SERVE);
     g.message.clear();
     reset_positions(g);
     g.finish.new_point(&g.score, &g.rules);
@@ -4229,7 +4221,7 @@ fn start_effects(
 }
 
 /// Whether the landing markers may show: the original's marker manager drops both on the players' reaction to the
-/// point (message 0x19), so they're gone through the rest of the point-over and the change of ends (B193); `g.marks`
+/// point (the reaction message), so they're gone through the rest of the point-over and the change of ends (B193); `g.marks`
 /// itself is kept until the next point (the AI reads it).
 fn landing_shown(g: &Game) -> bool {
     !matches!(g.phase, Phase::ChangeEnds(_)) && !g.post.as_ref().is_some_and(|p| p.reacted)
@@ -4245,7 +4237,7 @@ fn bounce_recorded(g: &Game) -> bool {
 }
 
 /// Whether the ball marks age this tick: from the serve's swing (the play phase's enter) until the players react
-/// to the point (message 0x19); after a fault, until the next serve's set-up. Nothing else clears them: a mark goes
+/// to the point (the reaction message); after a fault, until the next serve's set-up. Nothing else clears them: a mark goes
 /// when its 1800 ticks run out or a 21st pushes it off.
 fn marks_age(g: &Game) -> bool {
     match g.phase {
@@ -4440,7 +4432,7 @@ fn flight_sound(g: &mut Game, who: usize, h: &sound::Hit, class: u8, vel: V3) {
     let special = hst_sim::shot::special(class, h.kind, h.strong_toss, h.grade, h.offset);
     let c = g.chars[who];
     g.flight_sound = sound::Flight::start(h, c, special, sound::kmh(vel));
-    g.special_serve = class == 0 && h.strong_toss && h.offset.abs() < 2 && matches!((h.kind, c), (0, 11 | 12) | (1, 10));
+    g.special_serve = class == class::SERVE && h.strong_toss && h.offset.abs() < 2 && matches!((h.kind, c), (kind::TOPSPIN, 11 | 12) | (kind::SLICE, 10));
 }
 
 /// Plays the sounds due on the court's bank, each once however often its tick runs (`heard`).

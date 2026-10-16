@@ -1,7 +1,7 @@
 //! The character select's hand toggle (Select / −): a player whose toggle is on plays their character with the other
 //! hand. The original keeps it as the model's left-hand flag = (TParam's 利き腕 is left) XOR the toggle, and the
-//! player's hand (+0x12b4, ±1) follows the flag: mirrored model and racket hand, forehand/backhand sides, reach,
-//! serve walk and toss. The AI's strong side (+0x12dc) stays TParam's (`Game::strong_hand`).
+//! player's hand (±1) follows the flag: mirrored model and racket hand, forehand/backhand sides, reach,
+//! serve walk and toss. The AI's strong side stays TParam's (`Game::strong_hand`).
 
 use super::Game;
 use bevy::prelude::*;

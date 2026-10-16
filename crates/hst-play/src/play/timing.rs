@@ -8,7 +8,7 @@ use hst_sim::ball::V3;
 use hst_sim::params::{self, ShotParams};
 use hst_sim::player::ReachStats;
 use hst_sim::ps2;
-use hst_sim::shot::{Bounds, Lookup, Table, lookup};
+use hst_sim::shot::{Bounds, Lookup, Table, branch, class, kind, lookup};
 use hst_sim::swing::{self, TimingError};
 
 use super::{Contact, Game, SWEET_FRAME};
@@ -38,7 +38,7 @@ pub fn load(iso: &mut Iso, params: &ShotParams, c: usize) -> Timing {
         .collect();
     let mut variants = vec![];
     for x in exe.shot_variants(c) {
-        let stem = if x.class == 1 { "strk" } else { "voly" };
+        let stem = if x.class == class::STROKE as usize { "strk" } else { "voly" };
         for v in (0..4).filter(|&v| x.uses[v] == 1) {
             let file = format!("tr_pc{c:02}_{stem}{}{}.dat", x.kind, ["_up1", "_dw1", "_dw2", "_dw3"][v]);
             let table = archives.iter().find_map(|a| {
@@ -111,7 +111,7 @@ pub fn mis_hit(g: &mut Game, who: usize, (branch, grade, kind): (u8, u8, i32), f
     let height = -g.flight.ball.pos[1];
     let rng = &mut g.rng.shared;
     let (_, awkward) = swing::launch_motion(branch, p.cmd.id as i32);
-    swing::mis_hit(grade, branch, kind, stamina < 10, awkward, height, || rng.next())
+    swing::mis_hit(grade, branch, kind, stamina < hst_sim::player::TIRED, awkward, height, || rng.next())
 }
 
 /// A framed hit's lob for player `who`: (aim, side, depth error), as `swing::wild_aim`.
@@ -130,18 +130,18 @@ pub fn launch(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, g
         Some((side, depth)) => (side, depth, 0.0),
         None => swing::timing_launch(&t.stats, branch, kind, grade, e, g.aim.nudge, g.aim.short_only),
     };
-    if branch == 1 && class == 2 {
+    if branch == branch::GROUND && class == class::VOLLEY {
         blend = swing::high_blend(&t.stats);
     }
     if counter {
         blend = 0.0;
     }
     let mode = swing::table_mode(class, t.character, grade, kind, blend, &t.down2);
-    let variant = if kind == 3 { swing::lob_variant(&s.stats, grade) } else { swing::mode_variant(mode) };
+    let variant = if kind == kind::LOB { swing::lob_variant(&s.stats, grade) } else { swing::mode_variant(mode) };
     // the bounds are taken from the hit moved back by the scatter, as the lookup's
     let sc = hst_sim::serve::scatter_along(sx, sz, at, target);
     let hz = ps2::sub(at[2], sc[2]);
-    let (base, bounds) = if class == 1 { (0, Bounds::stroke(kind, hz)) } else { (1, Bounds::volley(kind, hz)) };
+    let (base, bounds) = if class == class::STROKE { (0, Bounds::stroke(kind, hz)) } else { (1, Bounds::volley(kind, hz)) };
     let picked = variant.and_then(|v| s.variants.iter().find(|x| x.0 == (class as usize, kind as usize, v)));
     let table = picked.map_or(&g.rally_tables[src][base][kind as usize], |x| &x.1);
     let l = lookup(table, &bounds, [ps2::sub(at[0], sc[0]), at[1], hz], target);

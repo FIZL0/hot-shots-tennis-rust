@@ -21,15 +21,15 @@
 //! middle of the winners' half when they react ([`npc::walker_facing`]).
 //!
 //! The trigger creatures hear the match as the original sends it ([`npc::Trigger::hear`]): 0xc entering the change of
-//! ends (all reset), 0xe at each serve set-up (`next_point`; after a change of ends only the passing ball resets, and
-//! rolls). Each is drawn while active, on and its +0x274 is not 0; the passing ball fades by it, court 8's startled
+//! ends (all reset), the serve message at each serve set-up (`next_point`; after a change of ends only the passing ball resets, and
+//! rolls). Each is drawn while active, on and its speed is not 0; the passing ball fades by it, court 8's startled
 //! creatures by their weight.
 
 use std::sync::Arc;
 
 use bevy::prelude::*;
 use hst_data::{exe, iso::Iso, layout, xb::Archive};
-use hst_sim::{npc, sound};
+use hst_sim::{npc, rally::msg, sound};
 
 use super::{Game, Phase};
 use crate::character::{self, CharacterData, Motion};
@@ -65,10 +65,10 @@ pub(super) struct Npcs {
     decided: bool,
     /// The players' and ball's positions the creatures startle at, and the types already startled this point.
     near: npc::Near,
-    /// Changing ends last tick, and in the serve phase last tick (entering it is the serve set-up, message 0xe).
+    /// Changing ends last tick, and in the serve phase last tick (entering it is the serve set-up, the serve message).
     ends: bool,
     serving: bool,
-    /// The fading creatures' GS draws with their own alpha and key: the passing ball's, faded by its +0x274
+    /// The fading creatures' GS draws with their own alpha and key: the passing ball's, faded by its speed
     /// (`npc::Trigger::speed`), and court 8's startled ones', by their weight.
     #[serde(skip)]
     fade: Vec<(Entity, Vec<(Handle<crate::gs::GsMaterial>, f32, crate::gs::GsKey)>)>,
@@ -362,7 +362,7 @@ fn step(
     let ball = [m[0], m[1], m[2], at(g.flight.ball.pos)];
     // its speed from its last move, kept while it stands
     // (the original's obstacles run before the ball and players move: what they see then is this, after this tick's
-    // moves, and their message 0x14's step off them comes before the ball's next own step either way)
+    // moves, and their strike message's step off them comes before the ball's next own step either way)
     npcs.near.kmh = npc::ball_kmh(g.flight.last);
     npcs.near.boxes = g.players.iter().map(player).chain([ball]).collect();
     let (motion, over, players, serve) = (g.umpire.motion, g.umpire.over, g.rules.players as u32, g.phase == Phase::Serve);
@@ -453,7 +453,7 @@ fn step(
         }
         home_walkers(&mut npcs.walkers, &g.players);
     }
-    // the serve set-up's message (0xe, every new point and the match's first serve): in the match's state 0 (its
+    // the serve set-up's message (every new point and the match's first serve): in the match's state 0 (its
     // start) or 1 (after a change of ends) only the passing ball resets, and only in state 1 its reset rolls; else every
     // creature but type 37
     if serve && !npcs.serving {
@@ -461,7 +461,7 @@ fn step(
         (npcs.near.ends, npcs.near.players) = (phase == 1, players);
         let games = g.match_stats.games;
         for (_, t, row) in &mut npcs.triggers {
-            heard.extend(t.hear(row, 0xe, false, phase, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+            heard.extend(t.hear(row, msg::SERVE as u32, false, phase, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
             // B261: court 3's type 10 sounds at its reset here once every second game (the games so far even)
             if t.ty == 10 && phase == 4 && games != 0 && games % 2 == 0 && games != npcs.games {
                 heard.push((row.sound, t.ty, t.pos3()));
@@ -473,12 +473,12 @@ fn step(
         npcs.near.ends = false;
     }
     npcs.serving = serve;
-    // entering the change of ends (message 0xc): every creature hears the game's end (8) and resets
+    // entering the change of ends (the change-ends message): every creature hears the game's end (8) and resets
     if ends && !npcs.ends {
         npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
         npcs.cheers.clear();
         for (_, t, row) in &mut npcs.triggers {
-            heard.extend(t.hear(row, 0xc, false, 4, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+            heard.extend(t.hear(row, msg::CHANGE_ENDS as u32, false, 4, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
         }
     }
     npcs.ends = ends;
@@ -573,12 +573,12 @@ fn step(
             let scale = tf.scale;
             *tf = Transform::from_matrix(Mat4::from_cols_array_2d(&t.world)).with_scale(scale);
         }
-        // drawn while active and on with its +0x274 (`speed`) not 0; its draw's countdown (`stage`) is in its tick
-        // ponytail: the draw's own off switch (+0x282, cleared by a new match's messages) is never set here: not found
+        // drawn while active and on with its `speed` not 0; its draw's countdown (`stage`) is in its tick
+        // ponytail: the draw's own off switch (cleared by a new match's messages) is never set here: not found
         if let Ok(mut v) = shown.get_mut(*e) {
             v.set_if_neq(if t.active && t.on && t.speed != 0.0 { Visibility::Inherited } else { Visibility::Hidden });
         }
-        // the passing ball's +0x274 is also its model's alpha (it fades over its last 10 frames); court 8's startled
+        // the passing ball's speed is also its model's alpha (it fades over its last 10 frames); court 8's startled
         // creatures' alpha is their weight (in and out over a path's ends; type 31 unseen at its reset's 0)
         // ponytail: types 0, 1, 5 and 39 (other courts) take theirs too in the original; not looked at, so not faded
         let fade = match t.ty {
@@ -611,14 +611,14 @@ fn step(
                 }
             }
         }
-        // struck by the ball (27–29): message 0x14, the ball's step back off it before its next own step
+        // struck by the ball (27–29): the strike message, the ball's step back off it before its next own step
         // (a struck toss too: the plane step's miss stops it dead, and its bounce has the server toss again);
         // the players, the AI and the path object hear 0x14 in `hear`; the landing markers hide
         if t.struck {
             (g.marks.red, g.marks.smash) = (None, None);
             let (shot, material) = (g.shot, g.world.1[0]);
             g.flight.step_plane(&shot, &hst_sim::ball::COURTS[g.court], material);
-            g.doubles_ai.hear(&g.players, 0x14);
+            g.doubles_ai.hear(&g.players, msg::STRIKE);
         }
         if let Ok((_, mut m)) = q.get_mut(*e) {
             // type 38 plays its second clip after a fast ball

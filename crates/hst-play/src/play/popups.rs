@@ -1132,7 +1132,7 @@ pub(super) struct Finish {
     /// Set (false) or Match (true) Point on show: stage and ticks; and whether the last new point wasn't one.
     point: Option<(bool, u8, i32)>,
     armed: bool,
-    /// The branches of the last shot and the one before (5 none yet this point), the scoreboard's +0x1a0/+0x1a1.
+    /// The branches of the last shot and the one before (5 none yet this point), as the scoreboard keeps them.
     branches: [u8; 2],
     /// The last serve was off a strong toss.
     pub strong: bool,
@@ -1202,7 +1202,7 @@ impl Finish {
     /// banners: `hitter_won`, no net cord), a dive (shout when on the line or answering a smash, and no body hit), a
     /// ground stroke or volley on the line (with the shout). On the line: `on_the_line`, never after a body hit on
     /// the first court contact. Call after `point_over`.
-    // ponytail: the scoreboard's "called branch" (rally block +0x14) that moves the ace/return kinds one shot on is
+    // ponytail: the scoreboard's "called branch" (the rally's) that moves the ace/return kinds one shot on is
     // not ported (as the banners)
     pub fn applause(&self, rally: &Rally, hitter_won: bool, body_hit: bool, contacts: i32, doubles: bool) -> Option<bool> {
         let line = (!body_hit || contacts > 1) && on_the_line(self.mark, rally.shots < 2, doubles);

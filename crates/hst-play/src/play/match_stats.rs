@@ -78,7 +78,7 @@ const FADE: [[f32; 3]; 2] = [[111.0, 114.0, 58.0], [127.0, 127.0, 127.0]];
 
 /// The struck shot's counts: shot number, contact branch, the forehand side, the sweet balloon, the net distance.
 pub(super) fn hit(g: &mut Game, who: usize, branch: u8, grade: u8, offset: i32) {
-    let sweet = serve::balloon(grade, offset, branch == 3) == Some(Balloon::Sweet);
+    let sweet = serve::balloon(grade, offset, branch == hst_sim::shot::branch::DIVE) == Some(Balloon::Sweet);
     let (forehand, z) = (!g.players[who].backhand, g.players[who].pos[2]);
     g.match_stats.hit(who, g.shots, g.score.server as usize, branch, forehand, sweet, z);
 }

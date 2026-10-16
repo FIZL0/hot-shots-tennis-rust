@@ -163,27 +163,43 @@ mod tests {
         let (Ok(ram), true) = (std::fs::read(ram), Path::new(ISO).is_file()) else {
             return eprintln!("no ISO or s03.bin, skipped");
         };
-        let u = |a: usize| u32::from_le_bytes(ram[(a & 0x1ff_ffff)..][..4].try_into().unwrap()) as usize;
+        // where slot 3's RAM keeps the match: the select screen's character picks (one 12-byte row each), the
+        // match object and its player pointers, and the serve fields in each player object
+        const RAM_MASK: usize = 0x1ff_ffff;
+        const PICKS: usize = 0x2ef7f4;
+        const PICK_ROW: usize = 12;
+        const MATCH: usize = 0x422f80;
+        const PLAYERS: usize = 0xa8;
+        const OVER: [usize; 3] = [0x13cc, 0x13d0, 0x13d4];
+        const UNDER: [usize; 3] = [0x13d8, 0x13dc, 0x13e0];
+        const REACH: [usize; 2] = [0x1364, 0x1368];
+        const POWER: usize = 0x12e4;
+        const LOW_POWER: usize = 0x1398;
+        const SHORT_MISS: usize = 0x13a8;
+        /// A toss's timing table: (grades, biases, entry count).
+        const STRONG: (usize, usize, usize) = (0x1644, 0x1554, 0x1680);
+        const WEAK: (usize, usize, usize) = (0x1774, 0x1684, 0x17b0);
+        let u = |a: usize| u32::from_le_bytes(ram[(a & RAM_MASK)..][..4].try_into().unwrap()) as usize;
         let f = |a: usize| f32::from_bits(u(a) as u32);
-        let chars: Vec<usize> = (0..4).map(|p| ram[0x2ef7f4 + 12 * p] as usize).collect();
+        let chars: Vec<usize> = (0..4).map(|p| ram[PICKS + PICK_ROW * p] as usize).collect();
         let app = set_up(chars.clone());
         let g = app.world().resource::<Game>();
         for p in 0..4 {
-            let obj = u(u(0x422f80) + 0xa8 + 4 * p);
+            let obj = u(u(MATCH) + PLAYERS + 4 * p);
             let d = &g.serve_data[p];
-            let table = |g: usize, b: usize, n: usize| -> (Vec<u8>, Vec<i32>) {
+            let table = |(g, b, n): (usize, usize, usize)| -> (Vec<u8>, Vec<i32>) {
                 let n = u(obj + n);
-                (ram[(obj + g) & 0x1ff_ffff..][..n].to_vec(), (0..n).map(|k| u(obj + b + 4 * k) as i32).collect())
+                (ram[(obj + g) & RAM_MASK..][..n].to_vec(), (0..n).map(|k| u(obj + b + 4 * k) as i32).collect())
             };
             let at = |o: [usize; 3]| o.map(|o| f(obj + o));
             assert_eq!(
                 (d.over, d.under, d.reach, d.power, d.low_power, d.short_miss),
-                (at([0x13cc, 0x13d0, 0x13d4]), at([0x13d8, 0x13dc, 0x13e0]), [0x1364, 0x1368].map(|o| u(obj + o) as i32), u(obj + 0x12e4) as i32, u(obj + 0x1398) as i32, f(obj + 0x13a8)),
+                (at(OVER), at(UNDER), REACH.map(|o| u(obj + o) as i32), u(obj + POWER) as i32, u(obj + LOW_POWER) as i32, f(obj + SHORT_MISS)),
                 "p{p} character {}",
                 chars[p]
             );
-            assert_eq!((d.strong_grades.clone(), d.strong_bias.clone()), table(0x1644, 0x1554, 0x1680), "p{p} strong");
-            assert_eq!((d.weak_grades.clone(), d.weak_bias.clone()), table(0x1774, 0x1684, 0x17b0), "p{p} weak");
+            assert_eq!((d.strong_grades.clone(), d.strong_bias.clone()), table(STRONG), "p{p} strong");
+            assert_eq!((d.weak_grades.clone(), d.weak_bias.clone()), table(WEAK), "p{p} weak");
         }
     }
 
@@ -263,8 +279,8 @@ mod tests {
 
     /// B270: two whiffed serves, a double fault: once the players react, the server plays its `di` (0x2d) and the
     /// receiver its `gu` (0x2c), not the whiff's miss motion; that runs out first and the server stands (motion 0),
-    /// as `context/b270/run1` (slot 3: miss motion to t 83, stance, the reaction at message 0x19). The original's
-    /// message 0x19 puts every player into the reaction, whatever its serve state (a body-hit one plays `re_ball`).
+    /// as `context/b270/run1` (slot 3: miss motion to t 83, stance, then the reaction). The original's
+    /// reaction message puts every player into the reaction, whatever its serve state (a body-hit one plays `re_ball`).
     #[test]
     fn a_whiffed_double_fault_plays_the_reactions() {
         if !Path::new(ISO).is_file() {

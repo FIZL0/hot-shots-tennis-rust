@@ -23,8 +23,9 @@ pub const SEEN: usize = PATH_MAX;
 /// How many ball-lost frames the player logs.
 pub const LOST_LOG: usize = 50;
 
-/// The match phase as the routines read it (`World::phase`).
+/// The match phase as the routines read it (`World::phase`; the mover's `player::Scene::phase` too).
 pub mod phase {
+    pub const CHANGE_ENDS: u8 = 1;
     pub const SERVE: u8 = 2;
     pub const RALLY: u8 = 3;
     pub const POINT_OVER: u8 = 4;

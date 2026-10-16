@@ -1,6 +1,6 @@
 //! The instant replay's decision at each decided point (`hst_sim::instant::decide`), fed from the port's state.
 //!
-//! The run (`run`, the serve phase's entry, message 0xe): each serve set-up keeps the whole match state
+//! The run (`run`, the serve phase's entry, the serve message): each serve set-up keeps the whole match state
 //! (`snapshot::save`; the original's copies of its match globals, rally block and RNG seed) and the tick's pads from
 //! then on. At the next serve set-up with a replay pending it puts that state back and plays the logged pads again:
 //! the point, its post-point phase and the serve set-up replay as they went, the scoreboard awards the point onto the
@@ -17,21 +17,22 @@
 use super::{Game, Phase, snapshot, tick_input};
 use bevy::prelude::*;
 use hst_sim::instant::{self, Decision, Point};
+use hst_sim::shot::kind;
 use hst_sim::score::Event;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-const CROSS: u16 = 0x2000;
-const CIRCLE: u16 = 0x4000;
-const TRIANGLE: u16 = 0x1000;
-const SQUARE: u16 = 0x8000;
+const CROSS: u16 = hst_sim::replay::Pad::CROSS;
+const CIRCLE: u16 = hst_sim::replay::Pad::CIRCLE;
+const TRIANGLE: u16 = hst_sim::replay::Pad::TRIANGLE;
+const SQUARE: u16 = hst_sim::replay::Pad::SQUARE;
 /// A rally this long (match-handler ticks) cancels its replay.
 const LONG_RALLY: i32 = 1800;
 
 /// The decision's own state across a point.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Instant {
-    /// Match-handler ticks since the serve was set up (gm+0x36c).
+    /// Match-handler ticks since the serve was set up.
     pub ticks: i32,
     /// Per player: the last swing's timing offset (frames off perfect, signed), as the shot recorder keeps it.
     pub timing: [i32; 4],
@@ -42,16 +43,16 @@ pub(super) struct Instant {
     pub decision: Decision,
     /// The serve was set up this tick (`run` takes it).
     pub set_up: bool,
-    /// A replay is playing (gm+0x344): its point makes no decision.
+    /// A replay is playing: its point makes no decision.
     pub replaying: bool,
-    /// Replays shown this match (gm+0x358), and those a button asked for (gm+0x354, P0b4d5).
+    /// Replays shown this match, and those a button asked for (P0b4d5).
     pub replays: i32,
     pub asked: i32,
-    /// The rally ran too long for a replay (gm+0x347).
+    /// The rally ran too long for a replay.
     pub cancelled: bool,
-    /// A replay starts at the end of this tick (gm+0x345).
+    /// A replay starts at the end of this tick.
     pub pending: bool,
-    /// `ticks` as the scoreboard's pause ran out, outside a replay; 0 before (gm+0x360).
+    /// `ticks` as the scoreboard's pause ran out, outside a replay; 0 before.
     pub shown: i32,
     /// `ticks` at each shot of the point (the shot recorder's records, for ✕'s skip).
     pub shot_ticks: Vec<i32>,
@@ -133,9 +134,9 @@ fn presses(w: &mut World) -> u16 {
     let mut b = 0;
     for s in &mut pads.slots {
         b |= match s.shot.take() {
-            Some(0) => CROSS,
-            Some(1) => CIRCLE,
-            Some(3) => TRIANGLE,
+            Some(kind::TOPSPIN) => CROSS,
+            Some(kind::SLICE) => CIRCLE,
+            Some(kind::LOB) => TRIANGLE,
             _ => 0,
         };
         b |= if std::mem::take(&mut s.serve) { SQUARE } else { 0 };
@@ -240,7 +241,7 @@ fn end_queue(w: &mut World) {
     }
 }
 
-/// The serve's set-up (message 0xe without a replay pending): the match block from +0x340 is cleared (allowed,
+/// The serve's set-up (the serve message without a replay pending): the match's replay state is cleared (allowed,
 /// cancelled, the tick count), so are `recorded` and the ball mark.
 pub(super) fn new_point(g: &mut Game) {
     let i = &mut g.instant;
@@ -288,8 +289,8 @@ pub(super) fn point(g: &mut Game, team: usize, event: Option<Event>, call: u8) {
         demo: false,
         match_won: g.score.match_over,
         // ponytail: the original's option byte (1 in every save state); the app has no option for it yet
-        option: 1,
-        controller: if hitter.is_some_and(|h| g.humans.get(h).copied().unwrap_or(false)) { 0 } else { 0x20 },
+        option: instant::option::ON,
+        controller: if hitter.is_some_and(|h| g.humans.get(h).copied().unwrap_or(false)) { 0 } else { instant::FIRST_CPU },
         timing: hitter.map_or(0, |h| g.instant.timing[h]),
         event: match event {
             Some(Event::Game) => 1,
