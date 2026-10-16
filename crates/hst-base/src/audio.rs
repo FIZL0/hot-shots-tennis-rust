@@ -1298,6 +1298,32 @@ mod tests {
         assert!(render(20) > 0.01, "the whistle goes on");
     }
 
+    /// N3c7: the whistle's tail after the bounce is the game's. At the bounce the game keys its voice off (ring cmd 2
+    /// word 8 in `hits_s05.bin`, all five whistles), keyed on with ADSR 0xa5ff/0x9fed: a held sustain at full level,
+    /// then an exponential release at shift 13, which the SPU2 takes 0.93 s (56 frames) to silence, −20 dB after 0.65 s.
+    #[test]
+    fn whistle_rings_out_as_the_game_releases_it() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
+        let bank = court_bank(&mut iso, 10).0.unwrap();
+        let id = sound.play_at(&bank, sound::FLIGHT, [1.0, 2.0, 5.0]);
+        let render = || sound.0.lock().unwrap().render(&mut Vec::new());
+        let voice = || sound.0.lock().unwrap().voices.iter().find(|v| v.2 == id).map(|v| (v.0.adsr, v.0.phase, v.0.level));
+        (0..30).for_each(|_| render());
+        assert_eq!(voice(), Some(((0xa5ff, 0x9fed), 3, 0x7fff)), "keyed as the game keys it, held at full level");
+        sound.stop(id);
+        let mut tail = Vec::new();
+        while let Some((_, phase, level)) = voice() {
+            assert_eq!(phase, 4, "released");
+            render();
+            tail.push(level);
+        }
+        assert_eq!(tail.len(), 56, "silent after 0.93 s");
+        assert!(tail[38] > 0x7fff / 10 && tail[40] < 0x7fff / 10, "−20 dB after 0.65 s: {tail:x?}");
+    }
+
     /// A RIFF PCM16 wav of `frames` (interleaved).
     fn wav(frames: &[[i16; 2]], rate: u32) -> Vec<u8> {
         let data: Vec<u8> = frames.iter().flatten().flat_map(|s| s.to_le_bytes()).collect();
