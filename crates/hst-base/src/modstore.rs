@@ -962,7 +962,7 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>, iso: &str) -> Result<Pa
 /// M5c: texture pack `m` (its `files`) against the disc `iso`: refused when any of its pictures is the disc's
 /// texture for its key unchanged (the same pixels, or them only scaled up by whole factors with nearest-neighbour:
 /// a pack mustn't ship the disc's textures), naming them; else its count of textures and its before/after picture
-/// (the largest texture it replaces, the disc's beside the pack's, [`before_after`]).
+/// (the texture it replaces with the most opaque pixels, the disc's beside the pack's, [`before_after`]).
 fn pack_check(m: &Mod, files: &[(String, Vec<u8>)], iso: &str) -> Result<(u32, Option<Vec<u8>>), String> {
     let pack = crate::mods_textures::read(&m.dir)?;
     let mut disc = hst_data::iso::Iso::open(iso).map_err(|e| format!("can't read the disc to check the pack against: {e}"))?;

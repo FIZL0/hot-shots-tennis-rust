@@ -322,11 +322,17 @@ pub fn disc_textures(iso: &mut crate::iso::Iso, mut f: impl FnMut(DiscTexture)) 
     }
 }
 
+/// A picture's pixels that aren't fully transparent.
+fn opaque(rgba: &[u8]) -> usize {
+    rgba.chunks_exact(4).filter(|p| p[3] != 0).count()
+}
+
 /// M5c: what an upload's pack check keeps of a disc texture: its size and [`pixels_hash`].
 pub type Print = (u32, u32, u64);
 
 /// M5c: the disc textures under `keys`, in one pass over the disc ([`disc_textures`]): each one's [`Print`], and
-/// the largest of them whole (its path breaks a tie), for the pack's before/after picture.
+/// the one with the most opaque pixels whole (its path breaks a tie), for the pack's before/after picture: by area
+/// alone it was a font sheet, mostly see-through.
 pub fn disc_prints(
     iso: &mut crate::iso::Iso,
     keys: &std::collections::HashSet<String>,
@@ -340,7 +346,7 @@ pub fn disc_prints(
             t.key.clone(),
             (t.width, t.height, pixels_hash(t.width, t.height, &t.rgba)),
         );
-        let size = |t: &DiscTexture| (t.width * t.height, std::cmp::Reverse(t.path.clone()));
+        let size = |t: &DiscTexture| (opaque(&t.rgba), std::cmp::Reverse(t.path.clone()));
         if big.as_ref().is_none_or(|b| size(&t) > size(b)) {
             big = Some(t);
         }
@@ -619,7 +625,7 @@ mod tests {
         let (prints, big) = disc_prints(&mut iso, &keys);
         assert_eq!(prints.len(), keys.len());
         let big = big.unwrap();
-        assert!(all.iter().filter(|a| keys.contains(&a.0)).all(|a| a.1 * a.2 <= big.width * big.height));
+        assert!(all.iter().filter(|a| keys.contains(&a.0)).all(|a| opaque(&a.3) <= opaque(&big.rgba)));
         let (_, w, h, rgba) = all.iter().find(|a| a.0 == big.key).unwrap();
         assert!(is_disc_copy(*w, *h, rgba, prints[&big.key]));
     }
