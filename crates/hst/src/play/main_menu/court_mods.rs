@@ -111,7 +111,7 @@ impl Menu {
 
     /// The picked court's mod flags for the match (`--court-mod DIR`), if it's a mod.
     pub(super) fn court_mod_flags(&self) -> Vec<String> {
-        self.court_mod_of(self.court).map(|x| vec!["--court-mod".to_string(), x.dir.display().to_string()]).unwrap_or_default()
+        self.court_mod_of(self.court_pick()).map(|x| vec!["--court-mod".to_string(), x.dir.display().to_string()]).unwrap_or_default()
     }
 
     /// M8f8: the court card's name for online room `r`: the host's own pick, a guest's the room's mod when it's
@@ -209,6 +209,13 @@ mod tests {
         // a disc pick: no mod flag
         m.court = 3;
         assert!(!m.args(&[]).contains(&"--court-mod".to_string()));
+        // Random draws from the disc eleven and the mods: roll 11 / 12 land on the two mods, with their flag
+        m.court = COURTS;
+        m.roll = COURTS as u64 + 1;
+        assert_eq!((m.court_pick(), m.venue().0), (COURTS + 2, 9));
+        assert!(m.args(&[]).contains(&"mods/gag_c03".to_string()));
+        m.roll = 4;
+        assert_eq!(m.court_pick(), 4);
         m.court = COURTS + 2;
         m.court_mods.pop();
         m.court_in_range();

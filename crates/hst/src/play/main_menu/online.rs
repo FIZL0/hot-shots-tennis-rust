@@ -332,13 +332,13 @@ impl Menu {
 
     /// M8f3: the host's umpire mod (id, name) to everyone, or none.
     fn umpire_mod_fx(&self) -> Effect {
-        let u = self.umpire_mod_of(self.umpire as usize).map(|x| (x.id.clone(), x.name.clone()));
+        let u = self.umpire_mod_of(self.umpire_pick()).map(|x| (x.id.clone(), x.name.clone()));
         Effect::Online(Fx::Net(Cmd::UmpireMod(u)))
     }
 
     /// M8f8: the host's court mod (id, name), or none.
     fn court_mod_wire(&self) -> Option<(String, String)> {
-        self.court_mod_of(self.court).map(|x| (x.id.clone(), x.name.clone()))
+        self.court_mod_of(self.court_pick()).map(|x| (x.id.clone(), x.name.clone()))
     }
 
     /// The host's court, sets, games and umpire (and their mods) to everyone.

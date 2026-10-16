@@ -341,7 +341,7 @@ mod tests {
             m.umpire = u as u8;
             assert_eq!(hear(&mut m), voiced, "umpire {u}");
             assert_eq!(axes(&m).2, voiced);
-            let hint = legend::acts(&m, Dev::Keys).iter().any(|(a, l)| *a == legend::Act::Card && l == "Hear voice");
+            let hint = super::super::legend::acts(&m, Dev::Keys).iter().any(|(a, l)| *a == super::super::legend::Act::Card && l == "Hear voice");
             assert_eq!(hint, voiced, "umpire {u}: legend");
         }
     }

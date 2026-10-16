@@ -147,7 +147,7 @@ impl Menu {
 
     /// The picked umpire's mod flags for the match (`--umpire-mod DIR`), if it's a mod.
     pub(super) fn umpire_mod_flags(&self) -> Vec<String> {
-        self.umpire_mod_of(self.umpire as usize).map(|x| vec!["--umpire-mod".to_string(), x.dir.display().to_string()]).unwrap_or_default()
+        self.umpire_mod_of(self.umpire_pick()).map(|x| vec!["--umpire-mod".to_string(), x.dir.display().to_string()]).unwrap_or_default()
     }
 
     /// A pick past the installed mods (one taken away since): Random.
@@ -203,6 +203,13 @@ mod tests {
         // a disc pick: no mod flag
         m.umpire = 3;
         assert!(!m.args(&[]).contains(&"--umpire-mod".to_string()));
+        // Random draws from the disc five and the mods (roll's high bits): 5 / 6 are the mods, as their donors
+        m.umpire = UMPIRES as u8;
+        m.roll = 6 * 0x1_0000;
+        assert_eq!((m.umpire_pick(), m.venue().1), (UMPIRES + 2, 0));
+        assert!(m.args(&[]).contains(&"mods/gag_ump01".to_string()));
+        m.roll = 3 * 0x1_0000;
+        assert_eq!(m.umpire_pick(), 3);
         m.umpire = UMPIRES as u8 + 2;
         m.umpire_mods.pop();
         m.umpire_in_range();

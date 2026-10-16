@@ -1452,9 +1452,25 @@ impl Menu {
 
     /// The court and umpire the match gets: a random choice resolved by `roll`.
     fn venue(&self) -> (usize, u8) {
-        let court = if self.court == COURTS { (self.roll % COURTS as u64) as usize } else { self.court_layout(self.court) };
-        let umpire = if self.umpire as usize == UMPIRES { (self.roll / COURTS as u64 % UMPIRES as u64) as u8 } else { self.umpire_donor(self.umpire as usize) as u8 };
-        (court, umpire)
+        (self.court_layout(self.court_pick()), self.umpire_donor(self.umpire_pick()) as u8)
+    }
+
+    /// The court value the match gets: Random drawn by `roll` from the disc courts and the court mods on the picker.
+    fn court_pick(&self) -> usize {
+        if self.court != COURTS {
+            return self.court;
+        }
+        let all: Vec<usize> = (0..COURTS).chain(court_mods::values(self)).collect();
+        all[(self.roll % all.len() as u64) as usize]
+    }
+
+    /// The umpire value the match gets: Random drawn by `roll` from the disc umpires and the umpire mods.
+    fn umpire_pick(&self) -> usize {
+        if self.umpire as usize != UMPIRES {
+            return self.umpire as usize;
+        }
+        let all: Vec<usize> = (0..UMPIRES).chain(umpire_mods::values(self)).collect();
+        all[(self.roll / 0x1_0000 % all.len() as u64) as usize]
     }
 
     /// The match's flags (`pads`: each device's index among the sorted gamepads).
