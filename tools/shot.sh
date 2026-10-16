@@ -9,6 +9,8 @@
 # more frames from one run with HST_KEYS='20:shot=a.png 21:shot=b.png' (real-time seconds), any aspect with HST_SIZE.
 # A/B shots: pin the match seed (HST_WEATHER_SEED=1234, or HST_WEATHER=0): a clock-picked one rolls the
 # weather, and a cloudy roll draws the open court ~7.5 % darker than a clear one (B404).
+# Any --shot (or HST_MENU) run reads no gamepad and no real key (P62): other agents' tools/vpad.py pads can't join
+# seats or move menus; only HST_KEYS drives it.
 set -e
 cd "$(dirname "$0")/.."
 out=$(realpath -m "$1"); shift
