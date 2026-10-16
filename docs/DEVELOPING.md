@@ -18,6 +18,9 @@ cargo run --release -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 - `HST_AUTOPLAY=1`: every player is a CPU.
 - `HST_TEXTURE_RELOAD=1`: re-read changed `mods/texture-replacements/` files while running (texture authoring).
 
+The released builds (built with `--features ship`) ignore the `HST_*` variables except `HST_TEXTURE_RELOAD`,
+`HST_FPS` (frame log) and `HST_TRACE` (menu input trace); `cargo run` builds honour them all.
+
 Controls: see the [README](../README.md#controls).
 
 ### In the browser

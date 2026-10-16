@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/.."
 build() {
-  CARGO_TARGET_DIR=$PWD/target-wasm cargo build -p hst --target wasm32-unknown-unknown --release $2
+  CARGO_TARGET_DIR=$PWD/target-wasm cargo build -p hst --target wasm32-unknown-unknown --release --features ship $2
   wasm-bindgen --target web --no-typescript --out-dir "web/$1" target-wasm/wasm32-unknown-unknown/release/hst.wasm
   # B121: WebKit's getMappedRange hands back a 0-byte ArrayBuffer for a mapped-at-creation buffer on a lost device (or one
   # it couldn't allocate), and wgpu's view over it threw "Length out of range of buffer" through the game before Bevy

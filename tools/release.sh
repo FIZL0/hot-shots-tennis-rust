@@ -49,6 +49,10 @@ tools/dev_stats.py >/dev/null
 git add research/dev-stats.json web/stats.json
 git diff --cached --quiet || git commit -q -m "Dev stats for $tag" research/dev-stats.json web/stats.json
 
+# B492: every player build drops the dev-only HST_* variables and debug logs (hst's `ship` feature)
+for f in tools/build.sh tools/apk.sh tools/ios-ipa.sh; do
+    grep -q 'features[ =].*ship' "$f" || { echo "$f doesn't build with --features ship (B492)" >&2; exit 1; }
+done
 HST_VERSION=$tag tools/build.sh all  # B374: update.rs compares this tag
 HST_VERSION=$tag tools/apk.sh
 out=dist/release

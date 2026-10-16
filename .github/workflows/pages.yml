@@ -103,7 +103,7 @@ jobs:
       - env:
           HST_SITE: ${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
         run: |
-          cargo build --release -p hst
+          cargo build --release -p hst --features ship
           mkdir -p dist/linux
           strip -o dist/linux/opentennis target/release/hst
           cp crates/hst/icon/hst.png dist/linux/opentennis.png
@@ -126,7 +126,7 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -yq gcc-mingw-w64-x86-64
           export HST_SITE=${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc RUSTFLAGS="-C target-feature=+crt-static" \
-            cargo build --release -p hst --target x86_64-pc-windows-gnu
+            cargo build --release -p hst --features ship --target x86_64-pc-windows-gnu
           x86_64-w64-mingw32-strip -o opentennis.exe target/x86_64-pc-windows-gnu/release/hst.exe
           zip -q opentennis-windows-x86_64.zip opentennis.exe
       - uses: actions/upload-artifact@v4
