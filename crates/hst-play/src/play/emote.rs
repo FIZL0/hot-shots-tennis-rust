@@ -1,9 +1,10 @@
 //! Right-stick emotes (B145, ours, layered on top): a human flicks the right stick fully up / down / left / right
 //! (keys 1–4) and their player plays one of four of the character's own motions with its voice line, standing: no
 //! run, no stroke and no swing press until the motion is out. A ball that comes meanwhile goes by unhit — that's the
-//! cost. In a rally, waiting for a serve, serving before the toss and in the post-point time (after a fault too),
-//! not mid-stroke; the point's reaction ends one, the next point's placement doesn't (B278); not after a point that
-//! wins a game or set (B363). The flick is part of the match input (`tick_input`'s right stick bytes), so replays and online play see it alike; bots never emote. Nothing here draws from the match's generators.
+//! cost. In live play only: in a rally, waiting for a serve and serving before the toss, not mid-stroke. Never
+//! started between points (B472: the post-point time, a fault's or let's call included, and the changes of ends);
+//! one started in the rally plays on into the post-point time until the point's reaction ends it (B278), and
+//! not at all once the point has won a game or set (B363). The flick is part of the match input (`tick_input`'s right stick bytes), so replays and online play see it alike; bots never emote. Nothing here draws from the match's generators.
 
 use bevy::prelude::*;
 use hst_sim::score::Event;
@@ -48,7 +49,7 @@ pub fn is_touch(name: &str) -> bool {
 pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
     // the server too, until its toss (B228: online the host is 1P, who serves first)
     let serving = g.phase == Phase::Serve && g.score.server == i as i32;
-    // B278: the post-point time too (a fault's or let's call included); the reaction (`react`) ends an emote
+    // B278: one from the rally plays on into the post-point time; the reaction (`react`) ends it
     // B363: not once the point has won a game or set (the match too): the game's and set's reactions and show
     let open = match g.phase {
         Phase::Rally => true,
@@ -60,7 +61,9 @@ pub(super) fn tick(g: &mut Game, i: usize, start: Option<u8>) -> bool {
         g.players[i].emote = 0;
         return false;
     }
+    // B472: only live play starts one, never the time between points
     if let Some(d) = start
+        && g.phase != Phase::Post
         && g.players[i].emote == 0
         && idle(g, i)
         && let Some(clip) = g.data[i].motions.get(&MOTIONS[d as usize])
@@ -373,55 +376,11 @@ mod match_tests {
         }
     }
 
-    /// B278: 1P tosses and swings as the ball drops past (a whiff: a fault), and emotes in the call's post-point time: the emote plays out
-    /// through the serve's placement into the next serve, the server's ball in hand, then the stance comes back.
+    /// B472 (B363 before it): 1P tosses and swings as the ball drops past (a whiff: a fault); the same flick in the
+    /// call's post-point time starts nothing, nor in one that won a game (the fault's post-point turned into one) or
+    /// a set; once the next serve's wait is on, it does.
     #[test]
-    fn an_emote_after_a_fault_plays_on_into_the_second_serve() {
-        if !std::path::Path::new(ISO).is_file() {
-            return eprintln!("no ISO, skipped");
-        }
-        let flick = Pad { rx: 0, ry: 0x80, ..IDLE };
-        let cross = Pad { buttons: 0x2000, ..IDLE };
-        let n = 900;
-        let post = {
-            let mut pads = vec![[IDLE; 4]; n];
-            (pads[10][0], pads[134][0]) = (cross, cross);
-            let mut a = seated([true, false, false, false], pads);
-            (0..n).find(|_| {
-                a.world_mut().run_schedule(FixedUpdate);
-                a.world().resource::<Game>().phase == Phase::Post
-            })
-            .expect("the fault's call")
-        };
-        let len = seated([true, false, false, false], vec![]).world().resource::<Game>().data[0].motions[&MOTIONS[2]].length.ceil() as usize;
-        let at = post + 3;
-        let mut pads = vec![[IDLE; 4]; n];
-        (pads[10][0], pads[134][0]) = (cross, cross);
-        pads[at][0] = flick;
-        let mut a = seated([true, false, false, false], pads);
-        let mut served = None;
-        for t in 0..at + len + 5 {
-            a.world_mut().run_schedule(FixedUpdate);
-            let g = a.world().resource::<Game>();
-            let p = &g.players[0];
-            if served.is_none() && g.phase == Phase::Serve && t > at {
-                served = Some(t);
-            }
-            if (at..at + len).contains(&t) {
-                assert_eq!((p.emote as usize, p.cmd.id), (at + len - 1 - t, MOTIONS[2]), "tick {t}, {:?}", g.phase);
-            }
-        }
-        let g = a.world().resource::<Game>();
-        let s = served.expect("no serve after the call");
-        assert!(s < at + len, "the call outlasted the emote ({s} ≥ {}): nothing crossed the placement", at + len);
-        assert!(g.phase == Phase::Serve && (0x20..=0x22).contains(&g.players[0].cmd.id), "no stance after the emote: {:#x}", g.players[0].cmd.id);
-        eprintln!("call at {post}, emote {at}..{}, serve from {s}, faults {}", at + len, g.rally.faults);
-    }
-
-    /// B363: the same flick in the post-point time of a point that won a game (the fault's post-point turned into
-    /// one) starts nothing; then a set; the fault's own post-point still takes it.
-    #[test]
-    fn no_emote_once_a_game_is_won() {
+    fn no_emote_between_points() {
         if !std::path::Path::new(ISO).is_file() {
             return eprintln!("no ISO, skipped");
         }
@@ -449,8 +408,31 @@ mod match_tests {
                 a.world_mut().run_schedule(FixedUpdate);
             }
             let g = a.world().resource::<Game>();
-            assert_eq!(g.phase, Phase::Post);
-            assert_eq!(g.players[0].emote > 0, event.is_none(), "{event:?}");
+            assert_eq!((g.phase.clone(), g.players[0].emote), (Phase::Post, 0), "{event:?}");
         }
+        // the same flick held through the post-point time, then let go and flicked again in the second serve's wait
+        let mut a = seated([true, false, false, false], pads.clone());
+        let mut serve = None;
+        for t in 0..n {
+            let phase = a.world().resource::<Game>().phase.clone();
+            if serve.is_none() && t > at && phase == Phase::Serve {
+                serve = Some(t);
+            }
+            a.world_mut().resource_mut::<Replay>().0.front_mut().map(|p| p[0] = match serve {
+                Some(s) if t == s + 2 => flick,
+                Some(_) => IDLE,
+                None if t >= at => flick,
+                None => p[0],
+            });
+            a.world_mut().run_schedule(FixedUpdate);
+            let g = a.world().resource::<Game>();
+            if serve.is_none() {
+                assert_eq!(g.players[0].emote, 0, "emoted between points, tick {t}");
+            } else if serve.is_some_and(|s| t == s + 2) {
+                assert!(g.players[0].emote > 0, "no emote waiting to serve, tick {t}");
+                return;
+            }
+        }
+        panic!("no second serve");
     }
 }
