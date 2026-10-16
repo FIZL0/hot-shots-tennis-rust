@@ -2,13 +2,13 @@
 // picks the ISO (import into OPFS), visit 2 (same profile) must start the game. Console + screenshots into OUT.
 // Usage: node tools/web_zen.mjs ISO OUT [query] [seconds]  (serve web/ on :8765 first: python3 -m http.server -d web
 // 8765; WEB_PORT/BIDI_PORT pick other ports). ISO `-`: OUT's profile already has the pack, only visit 2 runs.
-// ZEN=path another Firefox-family browser. Headless; the page picks WebGL2 on Gecko unless the renderer says otherwise.
+// SHOT_EVERY=N a screenshot every N s (10). ZEN=path another Firefox-family browser. Headless; the page picks WebGL2 on Gecko unless the renderer says otherwise.
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const [iso, out, query = 'play', secs = '40'] = process.argv.slice(2);
-const web = process.env.WEB_PORT ?? 8765, port = process.env.BIDI_PORT ?? 9334;
+const every = +(process.env.SHOT_EVERY ?? 10), web = process.env.WEB_PORT ?? 8765, port = process.env.BIDI_PORT ?? 9334;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 mkdirSync(`${out}/profile`, { recursive: true });
 // headless windows count as hidden: Gecko throttles their frames to 1 a second unless told otherwise
@@ -71,7 +71,7 @@ async function visit(n, pick) {
   }
   for (let t = 1; t <= +secs; t++) {
     await sleep(1000);
-    if (t % 10 == 0 || t == +secs) { await shot(`visit${n}-${t}s`); log.push(`[${n}] ${t}s frames ${await evaluate('window.__frames')}`); }
+    if (t % every == 0 || t == +secs) { await shot(`visit${n}-${t}s`); log.push(`[${n}] ${t}s frames ${await evaluate('window.__frames')}`); }
   }
   log.push(`[${n}] status: ${await evaluate("document.getElementById('status')?.textContent")}`, `[${n}] ${await evaluate('document.visibilityState')} url ${await evaluate('location.href')} text: ${(await evaluate('document.body.innerText'))?.slice(0, 300)}`);
   // the page's own console (BiDi's log events miss some of it)
