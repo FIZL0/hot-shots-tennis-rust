@@ -228,6 +228,7 @@ impl Menu {
             Act::Store(_) => {}
             Act::Name(p, i) => out = self.name_point(p, i, tap),
             Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
+            Act::Kind(i) if tap && self.screen == Screen::Controls => self.controls_tab(i == 1, &mut out),
             Act::Kind(_) => {}
             Act::Show(i) if tap && self.screen == Screen::Mods => self.show_tap(i, &mut out),
             Act::Show(_) => {}

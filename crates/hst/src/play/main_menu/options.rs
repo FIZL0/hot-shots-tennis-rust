@@ -6,10 +6,10 @@
 
 use super::super::widescreen::{ASPECTS, aspect_choices};
 use super::roster::{self, PX, PY, rounded};
-use super::{look, CHAT, EMOTE_VOICES, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{legend, look, CHAT, EMOTE_VOICES, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
-use bevy::prelude::default;
+use bevy::prelude::{KeyCode, default};
 
 /// One option row.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -579,10 +579,20 @@ impl Menu {
         }
     }
 
+    /// B291: the Controls page's Keyboard & Mouse tab (`keys`) or its Controller tab, with the soft cursor tick.
+    pub(super) fn controls_tab(&mut self, keys: bool, out: &mut Vec<Effect>) {
+        if self.keys_tab != keys {
+            self.keys_tab = keys;
+            out.push(Effect::Sound(0));
+        }
+    }
+
     /// B442: open Settings tab `page` (L1 / R1, a tap on its pill) with the soft cursor tick, not the select cue.
     pub(super) fn go_tab(&mut self, page: Screen, out: &mut Vec<Effect>) {
         self.screen = page;
         self.sel = 0;
+        // B291: Controls opens on the tab of the device last used (a phone has no keyboard)
+        self.keys_tab = !super::legend::MOBILE && super::legend::last_style() == super::legend::Style::Keys;
         out.push(Effect::Sound(0));
     }
 }
@@ -695,14 +705,13 @@ fn chrome(d: &mut Draw, m: &Menu, n: usize, name: &str, foot: &str) -> ([f32; 4]
     // the page's name outlined white and its count of rows on the strip
     let (ix, iw) = (sx + look::PAD * PX, sw - 2.0 * look::PAD * PX);
     let hs = 20.0 * PY;
-    let count = format!("{n} {}", if m.screen == Screen::Controls { "actions" } else if n == 1 { "option" } else { "options" });
+    // (B291: Controls' tabs take the strip after its name instead of a count)
+    let count = if m.screen == Screen::Controls { String::new() } else { format!("{n} {}", if n == 1 { "option" } else { "options" }) };
     let cs = 13.0 * PY;
     let cw = d.width(&count, cs);
     let title = roster::ellipsis(d, name, hs, iw - cw - 12.0 * PX);
     look::bold(d, &title, [ix, sy + (sh - hs) / 2.0], hs, WHITE);
-    // (Controls' column headings take the strip's right: the count follows the name)
-    let cx = if m.screen == Screen::Controls { ix + d.width(&title, hs) + 10.0 * PX } else { ix + iw - cw };
-    look::bold(d, &count, [cx, sy + (sh - cs) / 2.0], cs, WHITE);
+    look::bold(d, &count, [ix + iw - cw, sy + (sh - cs) / 2.0], cs, WHITE);
     let fs = 12.5 * PY;
     let fy = list[1] + list[3] - (look::RIM + look::PAD + FOOT) * PY;
     d.q(Tex::Solid, [0.0; 4], [ix, fy + 2.0 * PY, iw, 2.0 * PY], look::c(look::RULE), 128.0);
@@ -987,44 +996,56 @@ fn webgl2_reach(fps: f64, play: bool, refresh: Option<f64>) -> String {
     }
 }
 
-/// The Controls page: each action with its keys and its pad buttons in two columns of pills (✕ rebinds: the next key
-/// or button pressed replaces that column's); the chosen one's bindings in the side column.
+/// B291: the Controller tab's button pills' dark fill.
+const PAD_WELL: u32 = 0x4a4560;
+
+/// B291: the Controls page's tabs, Controller first.
+pub(super) const CONTROLS_TABS: [&str; 2] = ["Controller", "Keyboard & Mouse"];
+
+/// The Controls page: its two tabs (Controller, Keyboard & Mouse; B291) on the list's strip between L2 / R2, each
+/// action a row with its pad buttons as the pad's own button icons (the stick that always does it beside them) or its
+/// keys as key caps in a white pill on the right (✕ rebinds: the next button or key pressed replaces the tab's); the
+/// chosen one's bindings in the side column.
 pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings, _hand_x: f32) {
     let names: Vec<String> = controls::action_names().map(|n| n[..1].to_uppercase() + &n[1..].replace('_', " ")).collect();
     let n = names.len() + 1;
     let z = zoom(&m.grid).1;
     look::backdrop(d);
     let n0 = d.out.len();
-    let (list, side) = chrome(d, m, n, "Controls", "Saved to controls.txt");
+    let (list, side) = chrome(d, m, n, "Controls", "Saved to controls.txt, shared by every player");
     let body = controls_body(list);
     let waiting = m.rebinding.is_some();
-    let col = |r: [f32; 4], c: usize| {
-        let vw = r[2] * 0.3;
-        [r[0] + r[2] - 5.0 * PX - (2 - c) as f32 * vw - (1 - c) as f32 * 6.0, vw]
-    };
-    // the columns' headings on the list's strip, over their pills
-    let r0 = row(body, n, 0);
-    let hs = 12.0 * PY;
-    let sy = list[1] + (look::RIM + strip(list, n) / 2.0) * PY - hs / 2.0;
-    for (c, head) in ["KEYBOARD", "CONTROLLER"].into_iter().enumerate() {
-        let [cx, vw] = col(r0, c);
-        d.outlined(|d| d.centred(head, cx + vw / 2.0, sy, hs, WHITE));
+    let style = legend::pad_style_shown();
+    {
+        // the tabs on the strip, after the page's name
+        let inset = (look::RIM + look::PAD) * PX;
+        let x = list[0] + inset + d.width("Controls", 20.0 * PY) + 16.0 * PX;
+        let y = list[1] + (look::RIM + (strip(list, n) - look::PILL) / 2.0) * PY;
+        let words: Vec<String> = CONTROLS_TABS.iter().map(|s| s.to_string()).collect();
+        let on = usize::from(m.keys_tab);
+        look::tabs(d, [x, y, list[0] + list[2] - inset - x], &words, look::Tabs::Strip, Some(on), None, Some((0, 1)), [on == 0, on == 1], pointer::Act::Kind);
     }
     for (i, nm) in names.iter().enumerate() {
-        let r @ [x, y, _, h] = row(body, n, i);
+        let r @ [x, y, w, h] = row(body, n, i);
         let on = i == m.sel;
-        let vh = (h - 10.0 * PY).min(26.0 * PY);
-        let size = row_pill(d, r, on, nm, col(r, 0)[0] - x - 20.0 * PX, false);
-        let (pads, keys): (Vec<String>, Vec<String>) = bind.names(i).into_iter().partition(|n| n.starts_with("Pad"));
-        for (c, v) in [keys, pads].into_iter().enumerate() {
-            let [cx, vw] = col(r, c);
-            let t = if on && waiting { "press...".to_string() } else if v.is_empty() { "-".to_string() } else { v.iter().map(|n| shown(n)).collect::<Vec<_>>().join("  ") };
-            let b = [cx, y + (h - vh) / 2.0, vw, vh];
-            // B471: white key caps in a dark outline; the one waiting for a key blue
-            let wait = on && waiting;
-            look::outlined_pill(d, b, if wait { look::c(look::BLUE) } else { WHITE }, 2.0);
-            let ink = if wait { WHITE } else if v.is_empty() { look::c(look::MUTED) } else { look::c(look::INK) };
-            d.label(&t, cx + vw / 2.0, b[1] + (vh - size * 0.9) / 2.0, size * 0.9, vw - 16.0 * PX, ink);
+        let vh = (h - 8.0 * PY).min(30.0 * PY);
+        let vw = (w * 0.5).min(300.0 * PX);
+        let b = [x + w - vw - 5.0 * PX, y + (h - vh) / 2.0, vw, vh];
+        let size = row_pill(d, r, on, nm, b[0] - x - 20.0 * PX, false);
+        // B471: a white pill in a dark outline; the one waiting for a key or button blue
+        let wait = on && waiting;
+        // (B291: the Controller tab's dark, so the pad art's white arms and arrows show)
+        let fill = if wait { look::c(look::BLUE) } else if m.keys_tab { WHITE } else { look::c(PAD_WELL) };
+        look::outlined_pill(d, b, fill, 2.0);
+        if wait {
+            let say = if m.keys_tab { "Press a key..." } else { "Press a button..." };
+            d.label(say, b[0] + vw / 2.0, b[1] + (vh - size * 0.9) / 2.0, size * 0.9, vw - 16.0 * PX, WHITE);
+        } else if m.keys_tab {
+            key_caps(d, b, &bind.keys_of(i).into_iter().map(key_name).collect::<Vec<_>>(), size * 0.85);
+        } else {
+            let mut icons: Vec<u8> = bind.pads_of(i).into_iter().filter_map(legend::button_glyph).collect();
+            icons.extend(controls::fixed_stick(i).map(|(right, dir)| legend::stick_glyph(right, dir)));
+            button_icons(d, b, style, &icons, size);
         }
         d.hit(r, pointer::Act::Row(i, pointer::OK));
     }
@@ -1035,14 +1056,86 @@ pub(super) fn controls_layout(d: &mut Draw, m: &Menu, bind: &controls::Bindings,
         row_pill(d, r, i == m.sel, "Reset to defaults", r[2] - 30.0 * PX, false);
         d.hit(r, pointer::Act::Row(i, pointer::OK));
     }
+    let sh = strip(list, n);
     if let Some(nm) = names.get(m.sel) {
-        let about = if waiting { "Press the new key or button for it (Escape cancels). A key replaces its keys, a button its buttons." } else { "Choose it to rebind it: the next key or button you press." };
-        let chips: Vec<String> = bind.names(m.sel).iter().map(|n| shown(n).to_string()).collect();
-        side_panel(d, side, strip(list, n), nm, about, "Bound to", &chips, None, "");
+        let (about, chips, note) = if m.keys_tab {
+            let about = if waiting { "Press the new key for it (Escape cancels). It replaces the action's keys; its controller buttons stay." } else { "Choose it to rebind it: the next key you press." };
+            let note = "The mouse points, clicks and scrolls in the menus. Enter, Esc, Q / E and Tab always work there.";
+            (about, bind.keys_of(m.sel).into_iter().map(key_name).collect::<Vec<_>>(), note)
+        } else {
+            let about = if waiting { "Press the new button on any controller (Escape or a tap cancels). It replaces the action's buttons; its keys stay." } else { "Choose it to rebind it: the next button you press on any controller." };
+            let mut chips: Vec<String> = bind.pads_of(m.sel).into_iter().map(|b| legend::button_word(style, b)).collect();
+            chips.extend(controls::fixed_stick(m.sel).map(|(right, _)| (if right { "Right stick" } else { "Left stick" }).to_string()));
+            let note = match controls::fixed_stick(m.sel) {
+                Some((false, _)) => "The left stick always moves as well; it can't be rebound.",
+                Some((true, _)) => "The right stick, flicked fully that way, always plays it as well; it can't be rebound.",
+                None => "",
+            };
+            (about, chips, note)
+        };
+        side_panel(d, side, sh, nm, about, "Bound to", &chips, None, note);
     } else {
-        side_panel(d, side, strip(list, n), "Reset to defaults", "Puts every key and button back as it was first.", "", &[], None, "");
+        let about = "Puts every key and button back as it was first.";
+        side_panel(d, side, sh, "Reset to defaults", about, "", &[], None, "");
     }
     z.apply(d, n0);
+}
+
+/// B291: key caps `names` in a row, centred in the pill `b` (narrower where they'd run past it): each a light cap in a
+/// dark outline with its name; a dash for none.
+fn key_caps(d: &mut Draw, [x, y, w, h]: [f32; 4], names: &[String], size: f32) {
+    if names.is_empty() {
+        d.label("-", x + w / 2.0, y + (h - size) / 2.0, size, w, look::c(look::MUTED));
+        return;
+    }
+    let ch = h - 8.0 * PY;
+    let gap = 6.0 * PX;
+    let ws: Vec<f32> = names.iter().map(|s| (d.width(s, size) + 18.0 * PX).max(34.0 * PX)).collect();
+    let total = ws.iter().sum::<f32>() + gap * (ws.len() - 1) as f32;
+    let k = ((w - 16.0 * PX) / total).min(1.0);
+    let mut cx = x + (w - total * k) / 2.0;
+    for (s, cw) in names.iter().zip(ws) {
+        let c = [cx, y + (h - ch) / 2.0, cw * k, ch];
+        look::outlined_pill(d, c, look::c(look::TILE), 2.0);
+        look::pill_words(d, c, s, size * k.max(0.7), look::c(look::INK));
+        cx += (cw + gap) * k;
+    }
+}
+
+/// B291: the button icons `icons` (`Tex::Glyph` indices of `style`'s art) in a row, centred in the pill `b`
+/// (smaller where they'd run past it); a dash for none.
+fn button_icons(d: &mut Draw, [x, y, w, h]: [f32; 4], style: legend::Style, icons: &[u8], size: f32) {
+    if icons.is_empty() {
+        d.label("-", x + w / 2.0, y + (h - size) / 2.0, size, w, WHITE);
+        return;
+    }
+    let gh = h - 2.0 * PY;
+    let gap = 6.0 * PX;
+    let ws: Vec<f32> = icons.iter().map(|&i| gh * legend::glyph_aspect(style, i)).collect();
+    let total = ws.iter().sum::<f32>() + gap * (ws.len() - 1) as f32;
+    let k = ((w - 16.0 * PX) / total).min(1.0);
+    let mut cx = x + (w - total * k) / 2.0;
+    for (&i, gw) in icons.iter().zip(ws) {
+        d.q(Tex::Glyph(style, i), [0.0; 4], [cx, y + (h - gh * k) / 2.0, gw * k, gh * k], WHITE, 128.0);
+        cx += (gw + gap) * k;
+    }
+}
+
+/// B291: a key's name as its cap shows it: `KeyW` W, `Digit1` 1, `ArrowLeft` Left, `Numpad4` Num 4, `ShiftLeft`
+/// L Shift (controls.txt keeps Bevy's names).
+fn key_name(k: KeyCode) -> String {
+    let n = format!("{k:?}");
+    if let Some(r) = n.strip_prefix("Numpad") {
+        return format!("Num {r}");
+    }
+    for (side, short) in [("Left", "L"), ("Right", "R")] {
+        for (m, word) in [("Shift", "Shift"), ("Control", "Ctrl"), ("Alt", "Alt")] {
+            if n == format!("{m}{side}") {
+                return format!("{short} {word}");
+            }
+        }
+    }
+    ["Key", "Digit", "Arrow"].iter().find_map(|p| n.strip_prefix(p).filter(|r| !r.is_empty())).unwrap_or(&n).to_string()
 }
 
 /// The Controls page's rows' box: the list (B471: its column headings on the strip).
@@ -1050,10 +1143,6 @@ pub(super) fn controls_body(list: [f32; 4]) -> [f32; 4] {
     list
 }
 
-/// A binding's name as the page shows it: `KeyW` W, `Digit1` 1, `PadDPadUp` DPadUp (controls.txt keeps the full ones).
-fn shown(n: &str) -> &str {
-    ["Pad", "Key", "Digit"].iter().find_map(|p| n.strip_prefix(p).filter(|r| !r.is_empty())).unwrap_or(n)
-}
 
 #[cfg(test)]
 mod tests {
@@ -1104,6 +1193,27 @@ mod tests {
     }
 
     /// B442: changing tab (R1, L1, a tap on a pill) plays the soft cursor tick, never the select cue.
+    #[test]
+    fn controls_tabs() {
+        // B291: L2 / R2 and a tap on a tab switch Controller / Keyboard & Mouse; ✕ still rebinds the row
+        let mut m = Menu { screen: Screen::Controls, ..Menu::default() };
+        assert!(!m.keys_tab);
+        assert_eq!(m.step(Dev::Keys, press(|k| &mut k.kind_next)), [Effect::Sound(0)]);
+        assert!(m.keys_tab);
+        m.step(Dev::Keys, press(|k| &mut k.kind_prev));
+        assert!(!m.keys_tab);
+        m.point(Dev::Keys, pointer::Act::Kind(1), true);
+        assert!(m.keys_tab);
+        assert!(m.point(Dev::Keys, pointer::Act::Kind(1), true).is_empty(), "already on it");
+        m.sel = 4;
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        assert_eq!((m.rebinding, m.keys_tab, m.screen), (Some(4), true, Screen::Controls));
+        assert_eq!(key_name(KeyCode::ArrowLeft), "Left");
+        assert_eq!(key_name(KeyCode::Numpad4), "Num 4");
+        assert_eq!(key_name(KeyCode::ShiftLeft), "L Shift");
+        assert_eq!(key_name(KeyCode::KeyJ), "J");
+    }
+
     #[test]
     fn a_tab_change_ticks() {
         let mut m = Menu::default();
