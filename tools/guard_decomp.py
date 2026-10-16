@@ -50,11 +50,17 @@ if t.get('tool_name') == 'Bash' and SWEEP.search(cmd):
 # the runner is testing a merge it made in main (tools/parallel.py MARK): committing or pushing on top of it sends
 # out an untested merge, and a failed or stopped test then rewinds main under the commit (2026-10-16)
 MARK = os.path.join(ROOT, '.git/runner-merge')
+GITOPS = re.compile(r'\bgit\b[^;&|]*\b(commit|push|merge|reset|pull|rebase|cherry-pick|stash)(?![\w-])[^;&|]*')
+# plan/journal-only commits are safe on top of the untested merge: the runner skips the rerun for .md-only diffs and
+# replays commits made during its tests after a rewind (2026-10-16: the marker held main ~37% of the day)
+# ponytail: shell-word heuristic; quoted paths with spaces get refused
+PLANONLY = re.compile(r'git\s+commit\b(?:(?!\s-[a-zA-Z]*a\b|\s--all\b).)*?\s--((?:\s+(?:plan/|research/journal/)\S*\.md)+)', re.S)
 if t.get('tool_name') == 'Bash' and os.path.exists(MARK) and time.time() - os.path.getmtime(MARK) < 3 * 3600 \
-        and re.search(r'\bgit\b[^;&|]*\b(commit|push|merge|reset|pull|rebase|cherry-pick|stash)(?![\w-])', cmd):
+        and any(not PLANONLY.fullmatch(g.group(0).strip()) for g in GITOPS.finditer(cmd)):
     if git_dirs(cmd)[0] == MAIN_GIT:
         sys.exit(print(f'The runner is testing its merge of task/{open(MARK).read().strip()} in main (a few minutes): '
-                       'don\'t commit, push or move main until .git/runner-merge is gone; do other work, then retry.',
+                       'don\'t commit, push or move main until .git/runner-merge is gone; do other work, then retry '
+                       '(plan/journal .md commits with explicit paths, git commit -m … -- plan/TODO.md, are allowed).',
                        file=sys.stderr) or 2)
 upd = {}
 if t.get('tool_name') == 'Bash' and TESTS.search(cmd) and not i.get('run_in_background'):
