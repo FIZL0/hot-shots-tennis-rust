@@ -246,7 +246,7 @@ fn scene_off(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob:
             }
             let m = s.meshes.add(m);
             for mat in &mats[p.material().index().unwrap_or(mats.len() - 1)] {
-                let mut e = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(mat.clone()), Transform::default(), ChildOf(nodes[&n.index()])));
+                let mut e = commands.spawn((Mesh3d(m.clone()), MeshMaterial3d(mat.clone()), Transform::default(), ChildOf(nodes[&n.index()]), crate::court_layers()));
                 if let Some(sk) = &skinned {
                     e.insert((sk.clone(), crate::cull::Cullable));
                     if let Some(cv) = clear.and_then(|c| clears.get_mut(&c)) {
