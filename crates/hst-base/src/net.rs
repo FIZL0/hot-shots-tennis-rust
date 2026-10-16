@@ -2646,6 +2646,35 @@ pub const SITE: &str = match option_env!("HST_SITE") {
 /// The pkarr relay the browser reads and writes short codes through (it allows the site's origin); native hosts put
 /// theirs there too.
 const PKARR: &str = "https://relay.pkarr.org";
+/// B528: our own pkarr relay (the user's server, `tools/pkarr-relay/`), asked first: [`PKARR`]'s rate limit (10 at
+/// once per network, then ~2 a second) is shared by everyone behind the same address. Down or slow, the public one is
+/// used for [`OWN_PAUSE`]; both put to the same DHT, so a record written through either is read through the other.
+const OWN: &str = "https://pkarr.opentennis.dev";
+const OWN_PAUSE: i64 = 60_000_000;
+static OWN_DOWN_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// `ask` on [`OWN`] with `secs` to answer (a PUT waits for the relay's own DHT put, 5-20 s: B151): None (and OWN
+/// skipped for [`OWN_PAUSE`]) if it didn't.
+async fn own<T>(secs: u64, ask: impl std::future::Future<Output = Result<T, String>>) -> Option<T> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if unix_micros() < OWN_DOWN_UNTIL.load(Relaxed) {
+        return None;
+    }
+    let why = match n0_future::time::timeout(Duration::from_secs(secs), ask).await {
+        Ok(Ok(t)) => return Some(t),
+        Ok(Err(e)) => e,
+        Err(_) => format!("no answer in {secs} s"),
+    };
+    bevy::log::warn!("{OWN}: {why}; {PKARR} for a minute");
+    OWN_DOWN_UNTIL.store(unix_micros() + OWN_PAUSE, Relaxed);
+    None
+}
+
+/// A relay's answer to a GET: signature, seq (big-endian), the packet.
+fn relay_record(b: &[u8]) -> Option<(String, i64)> {
+    let seq = b.get(64..72).and_then(|s| s.try_into().ok()).map(i64::from_be_bytes)?;
+    Some((b.get(72..).and_then(txt_of)?, seq))
+}
 
 pub fn is_short(code: &str) -> bool {
     code.len() == SHORT && code.bytes().all(|b| SYMBOLS.contains(&b))
@@ -2751,6 +2780,18 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
     // B467: the relay lets one address make 10 requests at once, then about one a second (429, Retry-After: 1); two
     // phones on one Wi-Fi (a host's slot reads and puts, a guest's Find) share that, so a refusal waits and asks again
     // (the callers' timeouts end it sooner). In the browser a refusal is a failed fetch (`relay_trouble`): those too.
+    let path = format!("{}?t={}", code_key(code).public().to_z32(), unix_micros());
+    let ours = own(8, async {
+        let r = crate::modstore::client().get(format!("{OWN}/{path}")).send().await.map_err(|e| e.to_string())?;
+        match r.status().as_u16() {
+            404 => Ok(None),
+            s if (200..300).contains(&s) => Ok(relay_record(&r.bytes().await.map_err(|e| e.to_string())?)),
+            s => Err(format!("HTTP {s}")),
+        }
+    });
+    if let Some(r) = ours.await {
+        return Ok(r);
+    }
     let mut why = relay_trouble(Some(429), "");
     // B524: four tries (2 + 4 + 8 s of pauses) end inside `resolve`'s lookups, so it hears why
     for k in 0..4 {
@@ -2774,9 +2815,7 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
             s if !(200..300).contains(&s) => return Err(relay_trouble(Some(s), "")),
             _ => {
                 let b = r.bytes().await.map_err(|e| relay_trouble(None, &e.to_string()))?;
-                // the relay's payload: signature, seq (big-endian), the packet
-                let seq = b.get(64..72).and_then(|s| s.try_into().ok()).map(i64::from_be_bytes);
-                return Ok(seq.zip(b.get(72..).and_then(txt_of)).map(|(s, t)| (t, s)));
+                return Ok(relay_record(&b));
             }
         }
     }
@@ -2818,6 +2857,14 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
     // BEP 44's signed form: bencoded seq and v
     let sig = key.sign(&[format!("3:seqi{seq}e1:v{}:", v.len()).into_bytes(), v.clone()].concat());
     let body = [sig.to_bytes().to_vec(), seq.to_be_bytes().to_vec(), v].concat();
+    let ours = own(25, async {
+        let r = crate::modstore::client().put(format!("{OWN}/{}", key.public().to_z32())).body(body.clone()).send().await.map_err(|e| e.to_string())?;
+        let s = r.status().as_u16();
+        if (200..300).contains(&s) { Ok(()) } else { Err(format!("HTTP {s}")) }
+    });
+    if ours.await.is_some() {
+        return Ok(());
+    }
     // B467: a refusal for too many requests (`relay_get`) waits and tries again
     let mut why = String::new();
     for k in 0..5 {

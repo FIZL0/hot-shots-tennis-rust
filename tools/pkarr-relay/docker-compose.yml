@@ -1,0 +1,33 @@
+# B528: our own pkarr relay (the game tries https://pkarr.opentennis.dev first, relay.pkarr.org if it's down).
+# TrueNAS: Apps → Discover → ⋮ → Install via YAML, paste this. nginx (nginx.conf here) terminates TLS in front.
+name: pkarr-relay
+services:
+  relay:
+    build: https://github.com/pubky/pkarr.git#v8.1.0
+    restart: unless-stopped
+    command: pkarr-relay --config=/config.toml
+    ports:
+      - "6881:6881/tcp"   # HTTP API (nginx proxies here)
+      - "6881:6881/udp"   # mainline DHT
+    volumes:
+      - cache:/cache
+    configs:
+      - source: relay
+        target: /config.toml
+configs:
+  relay:
+    content: |
+      [http]
+      port = 6881
+      [mainline]
+      port = 6881
+      [cache]
+      path = "/cache"
+      size = 1_000_000
+      # Generous limits: a whole house of devices behind one IP must fit (the public relay's 10 didn't).
+      [rate_limiter]
+      behind_proxy = true
+      quota = "20r/s"
+      burst = 200
+volumes:
+  cache:
