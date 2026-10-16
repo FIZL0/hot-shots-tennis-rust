@@ -9,6 +9,7 @@ use hst_sim::cutaway::{IDENTITY, Shot};
 use hst_sim::flow::CHANGE_ENDS;
 
 use super::{Game, Phase};
+use crate::character::Motion;
 
 #[derive(Resource, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Swing {
@@ -83,6 +84,30 @@ pub(super) fn server(g: &Game) -> Option<usize> {
     Some(s.server as usize)
 }
 
+/// Whether player `i` stands idle through the change of ends (B535): everyone but the next server (and a player
+/// playing an emote out, B278). The placement leaves them a one-shot ready stance that the sim's own stand motion
+/// takes over a few ticks in, with a crossfade (or that runs out mid-move); the user wants them idle all through,
+/// as the server's stance is held. Presentation only: the sim's motion commands are untouched.
+pub(super) fn idle(g: &Game, i: usize) -> bool {
+    matches!(g.phase, Phase::ChangeEnds(_)) && server(g) != Some(i) && g.players[i].emote == 0
+}
+
+/// Plays the looping stand (`ad00`) on an idle player's figure without restarting it: a cut on the phase's first
+/// tick (the players jump to their new ends), a crossfade if an emote hands back mid-move. Its serial is one no
+/// motion command carries, so the next point's first command (the placement resets them) takes over as before.
+pub(super) fn hold_idle(g: &Game, m: &mut Motion) {
+    let stand = hst_sim::motion::id::STAND as usize;
+    if m.id != stand && g.phase == Phase::ChangeEnds(CHANGE_ENDS) {
+        // not looping: a cut, no crossfade
+        m.set(stand, 1.0, false, None, m.serial);
+    }
+    m.play(stand, 1.0, true);
+    m.serial = HELD;
+}
+
+/// The serial of a figure held idle (motion commands count up from 0 at each placement).
+const HELD: u32 = u32::MAX;
+
 impl super::snapshot::Wire for Swing {}
 
 #[cfg(test)]
@@ -99,7 +124,7 @@ mod tests {
     /// on the phase's last tick, staying behind the new end's baseline (skipped without the ISO).
     #[test]
     fn change_of_ends_glides() {
-        glide(None, None);
+        glide(None, None, &[6, 1]);
     }
 
     /// B174: the same on the indoor Grand Palais with the camera following player 0 (the human's view), whose
@@ -107,10 +132,16 @@ mod tests {
     /// behind the new end (the original's shot 2) instead of swinging round the court through the hall's walls.
     #[test]
     fn change_of_ends_glides_on_the_players_side() {
-        glide(Some(7), Some(0));
+        glide(Some(7), Some(0), &[6, 1]);
     }
 
-    fn glide(stage: Option<u32>, owner: Option<usize>) {
+    /// B535: the same in doubles, where the server's partner and both receivers stand idle through the move.
+    #[test]
+    fn change_of_ends_glides_in_doubles() {
+        glide(None, None, &[6, 1, 2, 3]);
+    }
+
+    fn glide(stage: Option<u32>, owner: Option<usize>, chars: &[usize]) {
         if !std::path::Path::new(ISO).is_file() {
             return eprintln!("no ISO, skipped");
         }
@@ -119,7 +150,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
-        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage, play: true, singles: chars.len() == 2, chars: chars.to_vec(), outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
         app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
         app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
         app.add_plugins((cutaway::plugin, super::plugin));
@@ -127,6 +158,7 @@ mod tests {
         app.add_systems(FixedUpdate, (remember, control, move |mut g: ResMut<Game>| g.cam_owner = owner.or(g.cam_owner), simulate, motions, character::tick, played_out, held_ball).chain());
         app.update();
         let (mut views, mut to, mut after, mut aimed) = (Vec::new(), None, None, false);
+        let mut idle = std::collections::HashMap::new();
         for frame in 0..60 * 600 {
             let ends = app.world().resource::<Game>().score.swapped;
             app.world_mut().run_schedule(FixedUpdate);
@@ -149,8 +181,14 @@ mod tests {
                 // (y points down: the stance bounces it between about 0.06 and 0.6 m up)
                 assert!(ball[1] < -0.05 && (ball[0] - at[0]).hypot(ball[2] - at[2]) < 1.0, "tick {n}: ball {ball:?} not in the hand of {at:?}");
                 let w = app.world_mut();
-                let m = w.query::<(&Figure, &Motion)>().iter(w).find(|(f, _)| f.0 == i).map(|(_, m)| m.id);
+                let figures: Vec<(usize, Motion)> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, *m)).collect();
+                let m = figures.iter().find(|(f, _)| *f == i).map(|(_, m)| m.id);
                 assert_eq!(m, Some(0x20), "tick {n}: server's motion");
+                // B535: everyone else stands idle, the looping stand from the phase's first tick, never restarted
+                for (f, m) in figures.iter().filter(|(f, _)| *f != i) {
+                    assert!(m.id == 0 && m.clock.looping, "tick {n}: player {f} plays {:#x} (looping {})", m.id, m.clock.looping);
+                    assert_eq!(*idle.entry(*f).or_insert(m.sets), m.sets, "tick {n}: player {f}'s stand restarted");
+                }
                 let g = app.world().resource::<Game>();
                 views.push((n, g.prev_view, g.cam.view));
                 to = app.world().resource::<Swing>().run.map(|r| r.1);
@@ -159,7 +197,9 @@ mod tests {
                 break;
             }
         }
-        assert!(aimed, "the point before the change had a red landing marker to hide");
+        // (the singles match's last point before the change has one; the doubles match's needn't)
+        assert!(aimed || chars.len() == 4, "the point before the change had a red landing marker to hide");
+        assert_eq!(idle.len(), chars.len() - 1, "every player but the server held idle");
         // 80 down to 0, as the game's 81 change-ends ticks
         assert_eq!(views.len() as u32, hst_sim::flow::CHANGE_ENDS + 1, "a whole change-ends phase");
         let to = to.expect("the move ran to its end view");
