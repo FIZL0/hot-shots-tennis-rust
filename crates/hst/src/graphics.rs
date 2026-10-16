@@ -1,4 +1,4 @@
-//! Video settings (remaster-only): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA and the original
+//! Video settings (remaster-only; P53: the Auto preset, picked per device and timed in matches, below): borderless fullscreen or a window, frame limit, Show FPS, vsync, render resolution scale, shadow quality, MSAA and the original
 //! 640×448 mode (`hud_gamma.rs` draws it; it also fixes the aspect ratio to 4:3 and turns upscaled textures off, `main.rs`).
 //! The menu edits the [`Graphics`] resource (applied live) and passes it to a match as flags
 //! (`--windowed`, `--fps N`, `--vsync`, `--scale N`, `--shadows off|low|high`, `--msaa off|2x|4x`, `--original`, `--mesh N`). The simulation stays a fixed
@@ -43,6 +43,10 @@ pub struct Graphics {
     /// B364: the share of the characters' triangles drawn, in percent (`lod.rs`; 100 = their own meshes). Applies to
     /// models loaded after a change. Set by a preset (B412).
     pub mesh: u32,
+    /// P53: the Auto preset: picked from the device (`pick`) and, while on, the first seconds of each match's play
+    /// timed and the scale and shadows stepped down (`cheaper`) until 60 fps holds (`auto_tune`). Any change to a
+    /// graphics row turns it off. Not part of a preset, like the window.
+    pub auto: bool,
 }
 
 /// `Graphics::mesh` for the loaders, which have no world (`character.rs`, `mods.rs`); kept in step by `mesh_detail`.
@@ -63,29 +67,29 @@ const FEWER_SHADOWS: bool = true;
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }
+        Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100, auto: false }
     }
 }
 
 impl Graphics {
     /// The Steam Deck's: its native 1280×800, cheaper shadows, vsync on (picked on a Deck's first run).
-    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
+    pub const STEAM_DECK: Graphics = Graphics { fps: 0, vsync: true, scale: 100, shadows: Shadows::Low, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100, auto: false };
     /// A phone's or tablet's (B351, picked on the browser build's first run on a touch screen and the iOS app's first
     /// run): Low shadows, which also drop the small props' and the spectators' (`shadow::Minor`), at 67% scale with 2x
     /// MSAA. M91: an iPhone 15 Pro at 100%/2x is GPU-bound on the Grand Indoor Palace (40 fps); a phone's dense screen
     /// hides the lower scale. B413: with Fewer Shadows and Skip Off-Screen on (the speed-ups that measurably help);
     /// Mesh stays 100%: 75% and 50% showed no gain native (dGPU, iGPU) or in a 4x-throttled phone browser, as the
     /// characters' few thousand triangles aren't what a phone's frame waits on.
-    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
+    pub const PHONE: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 2, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100, auto: false };
     /// The cheapest that still looks like the game: for weak GPUs.
-    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 };
+    pub const LOW: Graphics = Graphics { fps: 60, vsync: false, scale: 67, shadows: Shadows::Low, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100, auto: false };
     /// B414: below Low, for the weakest devices: half scale, no shadows or MSAA, the characters at a quarter of their
     /// triangles, every speed-up on. 60, like every preset: 30 is unplayable (user 2026-10-15), never a default.
-    pub const LOWEST: Graphics = Graphics { fps: 60, vsync: false, scale: 50, shadows: Shadows::Off, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: true, cull: true, mesh: 25 };
+    pub const LOWEST: Graphics = Graphics { fps: 60, vsync: false, scale: 50, shadows: Shadows::Off, msaa: 1, original: false, windowed: false, show_fps: 0, fewer_shadows: true, cull: true, mesh: 25, auto: false };
     /// B412: the best look, with every speed-up off (Fewer Shadows, Skip Off-Screen; full meshes). Default is the
     /// balanced one: the same picture with the speed-ups on.
-    pub const HIGH: Graphics = Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: false, cull: false, mesh: 100 };
-    pub const PRESETS: [(&str, Graphics); 6] = [("High", Self::HIGH), ("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100 }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Lowest", Self::LOWEST), ("Phone", Self::PHONE)];
+    pub const HIGH: Graphics = Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: false, cull: false, mesh: 100, auto: false };
+    pub const PRESETS: [(&str, Graphics); 6] = [("High", Self::HIGH), ("Default", Graphics { fps: 0, vsync: false, scale: 100, shadows: Shadows::High, msaa: 4, original: false, windowed: false, show_fps: 0, fewer_shadows: FEWER_SHADOWS, cull: true, mesh: 100, auto: false }), ("Steam Deck", Self::STEAM_DECK), ("Low", Self::LOW), ("Lowest", Self::LOWEST), ("Phone", Self::PHONE)];
 
     /// Read one `key = value` (settings.txt or a flag's name and value); false if the key isn't one of these.
     pub fn set(&mut self, key: &str, v: &str) -> bool {
@@ -102,6 +106,7 @@ impl Graphics {
             "mesh" => self.mesh = v.trim_end_matches('%').trim().parse::<u32>().map_or(self.mesh, |m| m.clamp(10, 100)),
             "shadows" => self.shadows = SHADOWS.into_iter().find(|s| s.name() == v).unwrap_or(self.shadows),
             "fewer_shadows" | "fewer-shadows" => self.fewer_shadows = v != "off",
+            "auto_graphics" => self.auto = v == "on",
             _ => return false,
         }
         true
@@ -112,7 +117,7 @@ impl Graphics {
         let fps = if self.fps == 0 { "uncapped".to_string() } else { self.fps.to_string() };
         let on = |b: bool| if b { "on" } else { "off" };
         format!(
-            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\ncull = {}\nmesh = {}\n",
+            "frame_limit = {fps}\nvsync = {}\nrender_scale = {}\nshadows = {}\nanti_aliasing = {}\noriginal = {}\nwindowed = {}\nshow_fps = {}\nfewer_shadows = {}\ncull = {}\nmesh = {}\nauto_graphics = {}\n",
             on(self.vsync),
             self.scale,
             self.shadows.name(),
@@ -122,7 +127,8 @@ impl Graphics {
             ["off", "on", "detailed"][self.show_fps.min(2) as usize],
             on(self.fewer_shadows),
             on(self.cull),
-            self.mesh
+            self.mesh,
+            on(self.auto)
         )
     }
 
@@ -160,9 +166,9 @@ impl Graphics {
         Self::PRESETS.iter().find(|(_, g)| self.keep(*g) == *self).map_or("Custom", |(n, _)| n)
     }
 
-    /// Preset `p` with this one's settings that no preset sets (the window, Show FPS).
+    /// Preset `p` with this one's settings that no preset sets (the window, Show FPS, Auto).
     pub fn keep(&self, p: Graphics) -> Graphics {
-        Graphics { windowed: self.windowed, show_fps: self.show_fps, ..p }
+        Graphics { windowed: self.windowed, show_fps: self.show_fps, auto: self.auto, ..p }
     }
 
     pub fn present_mode(&self) -> PresentMode {
@@ -205,6 +211,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(First, mesh_detail)
         .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), fps_counter))
         .add_systems(Last, limit)
+        .add_systems(Last, auto_tune.run_if(crate::play::match_on()))
         .add_systems(PreStartup, cpu_clusters)
         .add_systems(PostUpdate, unclustered.before(bevy::light::SimulationLightSystems::AssignLightsToClusters));
     // Show FPS → Detailed: where the frame's time goes (`frame_start`)
@@ -724,6 +731,286 @@ fn limit_present(mut next: Local<Option<Instant>>) {
 /// `limit_present`'s last sleep, µs (for Show FPS → Detailed's split).
 static SLEPT_US: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+// ---------------------------------------------------------------- P53: Auto
+
+/// What the Auto preset picks from (`pick`). iOS Safari hides the model and the GPU, so the browser gives the screen
+/// (CSS px and DPR), the cores, `deviceMemory` (Chromium only) and WebGPU's `maxBufferSize` (`web::device`); the apps
+/// give the model and the memory.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Device {
+    /// A phone or tablet: the browser on a touch screen, the iOS or Android app.
+    pub touch: bool,
+    pub steam_deck: bool,
+    /// The app's device model: iOS's `hw.machine` (`iPhone14,5`), Android's `Build.MODEL`.
+    pub model: Option<String>,
+    /// The screen in CSS px, portrait (narrow side first); 0 unknown.
+    pub css: [u32; 2],
+    /// Device pixels per CSS px; 0 unknown.
+    pub dpr: f32,
+    /// CPU cores; 0 unknown.
+    pub cores: u32,
+    /// Memory in MB; 0 unknown (Safari, Firefox).
+    pub ram_mb: u32,
+    /// WebGPU's `maxBufferSize` in MB; 0 unknown (WebGL2, the apps).
+    pub gpu_buffer_mb: u32,
+}
+
+impl Device {
+    /// This device (`touch`: the page or app is played by touch).
+    pub fn here(touch: bool) -> Device {
+        let mut d = Device { touch: touch || cfg!(any(target_os = "ios", target_os = "android")), steam_deck: std::env::var("SteamDeck").is_ok_and(|v| v == "1"), ..default() };
+        #[cfg(target_arch = "wasm32")]
+        crate::web::device(&mut d);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            d.cores = std::thread::available_parallelism().map_or(0, |n| n.get() as u32);
+        }
+        #[cfg(target_os = "ios")]
+        {
+            d.model = sysctl_string(c"hw.machine");
+            d.ram_mb = sysctl_u64(c"hw.memsize").map_or(0, |b| (b >> 20) as u32);
+        }
+        #[cfg(target_os = "android")]
+        {
+            d.model = crate::android::model();
+            // SAFETY: plain sysconf queries
+            let (pages, size) = unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };
+            d.ram_mb = if pages > 0 && size > 0 { ((pages as u64 * size as u64) >> 20) as u32 } else { 0 };
+        }
+        d
+    }
+
+    /// How many `cheaper` steps below Phone a phone or tablet starts (0–5). Biased high: the timing in a match steps
+    /// down from there but never up, so only signs of a weaker device lower it.
+    fn steps(&self) -> u32 {
+        let mut n = match self.model.as_deref().and_then(ios_tier) {
+            Some(n) => n,
+            None => {
+                let mut n = 0;
+                // Chromium's deviceMemory or the app's: a cores count only means something beside it (Safari's isn't the
+                // device's)
+                if self.ram_mb > 0 {
+                    if self.ram_mb <= 3 * 1024 || (1..=4).contains(&self.cores) {
+                        n = 2;
+                    } else if self.ram_mb <= 4 * 1024 {
+                        n = 1;
+                    }
+                } else if self.model.is_none() {
+                    // the browser on an iPhone: its screen size narrows down the generation (an iPhone 13 ran ~30 fps
+                    // at Phone in Safari)
+                    n = iphone_screen_tier(self.css, self.dpr);
+                }
+                if (1..=256).contains(&self.gpu_buffer_mb) {
+                    n = n.max(1);
+                }
+                n
+            }
+        };
+        // a tablet's many pixels: one more
+        let px = self.css[0] as f32 * self.css[1] as f32 * self.dpr * self.dpr;
+        if px > 4.5e6 {
+            n += 1;
+        }
+        n.min(5)
+    }
+}
+
+/// An iOS model identifier's steps below Phone: an iPhone 15 Pro (`iPhone16,1`) or newer, or an M1 iPad or newer, 0
+/// (M91: a 15 Pro holds 60 at Phone in the app); an iPhone 13/14 (A15/A16, `iPhone14`/`15`) 1; older 2.
+fn ios_tier(model: &str) -> Option<u32> {
+    let (kind, rest) = model.split_at(model.find(|c: char| c.is_ascii_digit())?);
+    let major: u32 = rest.split(',').next()?.parse().ok()?;
+    match kind {
+        "iPhone" => Some(if major >= 16 { 0 } else if major >= 14 { 1 } else { 2 }),
+        "iPad" => Some(if major >= 13 { 0 } else { 2 }),
+        _ => None,
+    }
+}
+
+/// The browser on an iPhone, by its screen (CSS px at DPR 2 or 3): the sizes only iPhones up to the 14 and 16e have
+/// (A15/A16 and older) 1, the pre-X ones and the XR/11 2, anything else (14 Pro and newer, not an iPhone) 0.
+fn iphone_screen_tier([w, h]: [u32; 2], dpr: f32) -> u32 {
+    if dpr < 2.0 {
+        return 0;
+    }
+    match (w, h) {
+        (375, 667) | (414, 736) | (414, 896) => 2,
+        (375, 812) | (360, 780) | (390, 844) | (428, 926) => 1,
+        _ => 0,
+    }
+}
+
+/// The Auto preset's first pick on `d`: Steam Deck's on a Deck (without Auto: its preset is tuned by hand and SteamOS
+/// may cap it below 60), Default elsewhere off a touch screen, Phone stepped down by `Device::steps` on a phone or tablet.
+pub fn pick(d: &Device) -> Graphics {
+    if d.steam_deck {
+        return Graphics::STEAM_DECK;
+    }
+    if !d.touch {
+        return Graphics { auto: true, ..default() };
+    }
+    let mut g = Graphics::PHONE;
+    for _ in 0..d.steps() {
+        g = cheaper(g).unwrap_or(g);
+    }
+    Graphics { auto: true, ..g }
+}
+
+/// One step cheaper, every preset's 60 fps kept (30 is unplayable, user 2026-10-15): the speed-ups on, then the scale
+/// down to 67 %, Low shadows, MSAA halved to off, half scale, no shadows, quarter meshes (from Phone: Low, then down to
+/// Lowest). `None` at the bottom.
+pub fn cheaper(g: Graphics) -> Option<Graphics> {
+    let mut c = g;
+    if !g.fewer_shadows || !g.cull {
+        (c.fewer_shadows, c.cull) = (true, true);
+    } else if g.scale > 67 && !g.original {
+        c.scale = SCALES.into_iter().rev().find(|&s| s < g.scale)?;
+    } else if g.shadows == Shadows::High {
+        c.shadows = Shadows::Low;
+    } else if g.msaa > 1 {
+        c.msaa = g.msaa / 2;
+    } else if g.scale > 50 && !g.original {
+        c.scale = 50;
+    } else if g.shadows == Shadows::Low {
+        c.shadows = Shadows::Off;
+    } else if g.mesh > 25 {
+        c.mesh = 25;
+    } else {
+        return None;
+    }
+    if (1..60).contains(&c.fps) {
+        c.fps = 60;
+    }
+    Some(c)
+}
+
+/// No Auto timing in `--shot` and unattended (HST_BG) runs (`main.rs`).
+pub static NO_AUTO: AtomicBool = AtomicBool::new(false);
+
+/// `auto_tune`: the play before timing starts (the match's loading hitches), one timed window, the wait after a step
+/// for it to take hold, the most timed play per match.
+const AUTO_SKIP: f32 = 3.0;
+const AUTO_WINDOW: f32 = 2.0;
+const AUTO_SETTLE: f32 = 1.0;
+const AUTO_SPAN: f32 = 16.0;
+
+#[derive(Default)]
+struct Tune {
+    /// The frame this ran last (a gap: a new match).
+    frame: u32,
+    /// The match's play time so far, s.
+    played: f32,
+    /// Timed play this match, s.
+    timed: f32,
+    /// Waiting after a step until this play time.
+    settle: f32,
+    /// The window's frame times.
+    window: Vec<f32>,
+    /// Windows in a row that held.
+    held: u32,
+    /// Through for this match.
+    done: bool,
+    /// What it last saw or set (another change, e.g. the pause menu's save, starts its timing over).
+    seen: Option<Graphics>,
+}
+
+/// The rate a window held: frames over its time without its slowest 5 % (a shader compile or a GC pause isn't the
+/// device's pace).
+fn held_fps(window: &mut [f32]) -> f32 {
+    window.sort_by(f32::total_cmp);
+    let keep = &window[..window.len() - window.len() / 20];
+    keep.len() as f32 / keep.iter().sum::<f32>().max(1e-6)
+}
+
+/// The Auto preset (`Graphics::auto`) in a match: after its first seconds, times 2 s windows and steps one notch
+/// cheaper (`cheaper`, saved to settings.txt so the next match starts there) after each that falls under 93 % of 60
+/// fps (or of the display's rate when that's lower: a browser in Low Power Mode at 30 Hz isn't the game's fault),
+/// until two in a row hold, the bottom is reached, or 16 s have been timed. Never steps up; each match checks again
+/// (a heavier court). Drawing only: the simulation's tick and RNG don't see it.
+fn auto_tune(mut g: ResMut<Graphics>, time: Res<Time<Real>>, frames: Res<bevy::diagnostic::FrameCount>, monitors: Query<&bevy::window::Monitor>, args: Option<Res<crate::Args>>, mut t: Local<Tune>) {
+    let new_match = frames.0 != t.frame.wrapping_add(1);
+    t.frame = frames.0;
+    if !g.auto || NO_AUTO.load(Ordering::Relaxed) {
+        return;
+    }
+    if new_match {
+        *t = Tune { frame: frames.0, ..default() };
+    }
+    #[cfg(target_arch = "wasm32")]
+    let hz = crate::web::refresh().unwrap_or(60.0) as f32;
+    #[cfg(not(target_arch = "wasm32"))]
+    let hz = monitors.iter().filter_map(|m| m.refresh_rate_millihertz).max().map_or(60.0, |m| m as f32 / 1000.0);
+    let _ = &monitors;
+    if let Some(c) = t.frame_time(*g, time.delta_secs(), hz.min(60.0)) {
+        *g = c;
+        if let Some(a) = &args {
+            crate::play::main_menu::save_graphics(&a.iso, c);
+        }
+    }
+}
+
+impl Tune {
+    /// One frame of a match's play, `dt` s, at the `target` rate: the cheaper settings to switch to, if any.
+    fn frame_time(&mut self, g: Graphics, dt: f32, target: f32) -> Option<Graphics> {
+        self.played += dt;
+        let mine = |g: &Graphics| Graphics { windowed: false, show_fps: 0, ..*g };
+        if self.seen.is_some_and(|s| s != mine(&g)) {
+            (self.window, self.held, self.settle) = (Vec::new(), 0, self.played + AUTO_SETTLE);
+        }
+        self.seen = Some(mine(&g));
+        if self.done || self.played < AUTO_SKIP.max(self.settle) {
+            return None;
+        }
+        // a hidden page or a suspended app: its gap isn't a frame
+        if dt > 0.25 {
+            self.window.clear();
+            return None;
+        }
+        self.window.push(dt);
+        self.timed += dt;
+        if self.window.iter().sum::<f32>() < AUTO_WINDOW {
+            return None;
+        }
+        let fps = held_fps(&mut self.window);
+        self.window.clear();
+        self.done = self.timed >= AUTO_SPAN;
+        if fps >= target * 0.93 {
+            self.held += 1;
+            self.done |= self.held >= 2;
+            if self.held >= 2 {
+                info!("auto graphics: {fps:.0} fps holds at {} ({}% scale, shadows {}, msaa {})", g.preset(), g.scale, g.shadows.name(), msaa_name(g.msaa));
+            }
+            return None;
+        }
+        let Some(c) = cheaper(g) else {
+            info!("auto graphics: {fps:.0} fps of {target:.0} at the cheapest");
+            self.done = true;
+            return None;
+        };
+        info!("auto graphics: {fps:.0} fps of {target:.0}: {}% scale, shadows {}, msaa {}, mesh {}", c.scale, c.shadows.name(), msaa_name(c.msaa), c.mesh);
+        (self.held, self.settle, self.seen) = (0, self.played + AUTO_SETTLE, Some(mine(&c)));
+        Some(c)
+    }
+}
+
+#[cfg(target_os = "ios")]
+fn sysctl_string(name: &std::ffi::CStr) -> Option<String> {
+    let mut buf = [0u8; 64];
+    let mut len = buf.len();
+    // SAFETY: `buf` holds `len` bytes; sysctlbyname writes at most that and sets `len`
+    let r = unsafe { libc::sysctlbyname(name.as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) };
+    (r == 0).then(|| String::from_utf8_lossy(&buf[..len]).trim_end_matches('\0').to_string())
+}
+
+#[cfg(target_os = "ios")]
+fn sysctl_u64(name: &std::ffi::CStr) -> Option<u64> {
+    let mut v = 0u64;
+    let mut len = std::mem::size_of::<u64>();
+    // SAFETY: as above, into a u64
+    let r = unsafe { libc::sysctlbyname(name.as_ptr(), (&mut v as *mut u64).cast(), &mut len, std::ptr::null_mut(), 0) };
+    (r == 0).then_some(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,7 +1018,7 @@ mod tests {
     #[test]
     fn text_and_flags_round_trip() {
         for (_, p) in Graphics::PRESETS {
-            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, cull: !p.cull, mesh: 50 };
+            let mut g = Graphics { fps: 7, vsync: !p.vsync, scale: 30, shadows: Shadows::Off, msaa: 3, original: !p.original, windowed: true, show_fps: 1, fewer_shadows: !FEWER_SHADOWS, cull: !p.cull, mesh: 50, auto: !p.auto };
             for (k, v) in p.text().lines().filter_map(|l| l.split_once('=')) {
                 assert!(g.set(k, v), "{k}");
             }
@@ -779,5 +1066,90 @@ mod tests {
         assert!(Graphics::LOWEST.fewer_shadows && Graphics::LOWEST.cull && Graphics::LOWEST.mesh == MESHES[0] && Graphics::LOWEST.scale == SCALES[0]);
         let names: Vec<_> = Graphics::PRESETS.iter().map(|(n, _)| *n).collect();
         assert_eq!(names, ["High", "Default", "Steam Deck", "Low", "Lowest", "Phone"]);
+    }
+
+    /// P53: the Auto preset's device pick and its step-down ladder never cap at 30, and the timing steps down until
+    /// 60 holds.
+    #[test]
+    fn auto_picks_and_steps_down_at_60() {
+        // the ladder: Default down to Phone's look, Low, then Lowest; every rung at 60 or uncapped
+        let mut g = Graphics::default();
+        let mut rungs = vec![g];
+        while let Some(c) = cheaper(g) {
+            assert!(c.fps == 0 || c.fps >= 60, "{c:?}");
+            g = c;
+            rungs.push(g);
+        }
+        let look = |g: &Graphics| (g.scale, g.shadows, g.msaa, g.mesh);
+        let scales: Vec<_> = rungs.iter().map(|g| g.scale).collect();
+        assert_eq!(scales, [100, 85, 75, 67, 67, 67, 67, 50, 50, 50]);
+        for p in [Graphics::PHONE, Graphics::LOW, Graphics::LOWEST] {
+            assert!(rungs.iter().any(|r| look(r) == look(&p)), "{p:?}");
+        }
+        assert_eq!(cheaper(Graphics::PHONE), Some(Graphics::LOW));
+        assert_eq!((cheaper(Graphics::LOW).unwrap().scale, cheaper(Graphics::LOWEST)), (50, None));
+        assert_eq!(cheaper(Graphics::HIGH), Some(Graphics::default()));
+        assert_eq!(cheaper(Graphics { fps: 30, ..Graphics::LOW }).unwrap().fps, 60);
+        // the pick: a Deck its own (no timing), a desktop Default, a phone Phone or below; never a 30 cap
+        let phone = Device { touch: true, ..default() };
+        assert_eq!(pick(&Device { steam_deck: true, ..default() }), Graphics::STEAM_DECK);
+        assert_eq!(pick(&Device::default()), Graphics { auto: true, ..default() });
+        assert_eq!(pick(&phone), Graphics { auto: true, ..Graphics::PHONE });
+        let steps = |d: Device| d.steps();
+        assert_eq!(steps(Device { model: Some("iPhone16,1".into()), ..phone.clone() }), 0);
+        assert_eq!(steps(Device { model: Some("iPhone14,5".into()), ..phone.clone() }), 1);
+        assert_eq!(steps(Device { model: Some("iPhone12,1".into()), ..phone.clone() }), 2);
+        assert_eq!(steps(Device { model: Some("iPad8,1".into()), ..phone.clone() }), 2);
+        // Safari on an iPhone 13 (390×844 @3): one down, Low; a 15 Pro's 393×852 stays at Phone
+        assert_eq!(pick(&Device { css: [390, 844], dpr: 3.0, cores: 4, ..phone.clone() }), Graphics { auto: true, ..Graphics::LOW });
+        assert_eq!(steps(Device { css: [393, 852], dpr: 3.0, ..phone.clone() }), 0);
+        // Chromium's memory and cores; a tablet's pixels one more
+        assert_eq!(steps(Device { ram_mb: 8192, cores: 8, ..phone.clone() }), 0);
+        assert_eq!(steps(Device { ram_mb: 4096, cores: 8, ..phone.clone() }), 1);
+        assert_eq!(steps(Device { ram_mb: 8192, cores: 4, ..phone.clone() }), 2);
+        assert_eq!(steps(Device { css: [1024, 1366], dpr: 2.0, ..phone.clone() }), 1);
+        for d in [phone.clone(), Device { ram_mb: 2048, css: [1024, 1366], dpr: 2.0, gpu_buffer_mb: 256, ..phone.clone() }] {
+            let g = pick(&d);
+            assert!(g.auto && g.fps == 60, "{g:?}");
+        }
+        assert!(ios_tier("Android").is_none() && ios_tier("iPhone").is_none());
+    }
+
+    /// P53: `Tune` waits out the match's first seconds, steps down after a slow window, waits for the step to take,
+    /// and is through after two windows that hold (a hitch or a hidden page's gap doesn't count).
+    #[test]
+    fn auto_timing() {
+        let run = |t: &mut Tune, g: &mut Graphics, dt: f32, secs: f32| {
+            let mut steps = 0;
+            for _ in 0..(secs / dt).round() as u32 {
+                if let Some(c) = t.frame_time(*g, dt, 60.0) {
+                    *g = c;
+                    steps += 1;
+                }
+            }
+            steps
+        };
+        // 30 fps: one step per window plus the wait after it, from Phone to the bottom within the 16 s
+        let (mut t, mut g) = (Tune::default(), Graphics { auto: true, ..Graphics::PHONE });
+        assert_eq!(run(&mut t, &mut g, 1.0 / 30.0, AUTO_SKIP - 0.1), 0);
+        assert_eq!(run(&mut t, &mut g, 1.0 / 30.0, 2.2), 1);
+        assert_eq!(g, Graphics { auto: true, ..Graphics::LOW });
+        assert_eq!(run(&mut t, &mut g, 1.0 / 30.0, 30.0), 3);
+        assert_eq!((g, t.done), (Graphics { auto: true, ..Graphics::LOWEST }, true));
+        // 60 fps with a hitch: no step, through after two windows
+        let (mut t, mut g) = (Tune::default(), Graphics { auto: true, ..Graphics::PHONE });
+        let mut steps = run(&mut t, &mut g, 1.0 / 60.0, 4.0);
+        assert!(t.frame_time(g, 0.2, 60.0).is_none() && t.frame_time(g, 5.0, 60.0).is_none());
+        steps += run(&mut t, &mut g, 1.0 / 60.0, 3.0);
+        assert!(!t.done);
+        steps += run(&mut t, &mut g, 1.0 / 60.0, 2.0);
+        assert_eq!((steps, t.done, g.scale), (0, true, 67));
+        // a 30 Hz display (Low Power Mode) holds at 30
+        let (mut t, g) = (Tune::default(), Graphics::PHONE);
+        assert!((0..300).all(|_| t.frame_time(g, 1.0 / 30.0, 30.0).is_none()) && t.done);
+        // the window's slowest 5 % left out
+        let mut w = vec![1.0 / 60.0; 95];
+        w.extend([0.2; 5]);
+        assert!((held_fps(&mut w) - 60.0).abs() < 0.01);
     }
 }

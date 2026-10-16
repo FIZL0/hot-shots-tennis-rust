@@ -4559,3 +4559,8 @@ fn serve_character(iso: &mut Iso, n: usize, aim: hst_sim::shot::AimStats, d: &mu
     d.miss = serve::miss_of(hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").serve_miss(), n);
     d.max_angle = aim.con[2] as f32;
 }
+
+/// P53: a match is on (`graphics::auto_tune` times its first seconds).
+pub(crate) fn match_on() -> impl bevy::ecs::schedule::SystemCondition<()> {
+    IntoSystem::into_system(resource_exists::<Game>)
+}

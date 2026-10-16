@@ -377,6 +377,7 @@ fn start(argv: Vec<String>) {
     // borderless fullscreen on the current monitor unless `--windowed`/settings say otherwise; test windows stay windows
     // (a browser only allows fullscreen from a click, so the web build stays in its page)
     graphics::KEEP_WINDOWED.store(windowed || bg || cfg!(target_arch = "wasm32"), std::sync::atomic::Ordering::Relaxed);
+    graphics::NO_AUTO.store(bg, std::sync::atomic::Ordering::Relaxed);
     let mode = gfx.window_mode();
     // `HST_WINDOW="3840 2160"`: the window's size in physical pixels (unattended shots at a set resolution)
     let mut resolution = bevy::window::WindowResolution::default();

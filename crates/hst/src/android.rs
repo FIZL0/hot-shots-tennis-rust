@@ -207,6 +207,17 @@ pub fn background(w: &mut World, mut seen: Local<u32>) {
     }
 }
 
+/// P53: `Build.MODEL` (the Auto graphics preset's log).
+pub fn model() -> Option<String> {
+    let app = bevy::android::ANDROID_APP.get()?;
+    // SAFETY: as `invoke`
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
+    let mut env = vm.attach_current_thread_permanently().ok()?;
+    let v = env.get_static_field("android/os/Build", "MODEL", "Ljava/lang/String;").ok()?.l().ok()?;
+    let s: String = env.get_string(&jni::objects::JString::from(v)).ok()?.into();
+    Some(s)
+}
+
 /// A method of the running `HstActivity` (no arguments, returns `int` or `void`: 0), on the calling thread (attached to
 /// the VM for good). `None` if the call failed.
 fn call(name: &str, sig: &str) -> Option<i32> {
