@@ -408,7 +408,7 @@ struct Press {
 enum Screen {
     /// B516: the press-start splash a fresh start opens on (`splash.rs`): its first press takes 1P.
     Press,
-    /// `bgmm_04` plays on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
+    /// `bgmm_03` plays on `Press` (the original's title screen), `bgmm_04` on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
     /// switch, measured per screen).
     Main,
     /// B290/B294: the Settings tabs (`options.rs`).
@@ -3454,7 +3454,7 @@ fn snap(start: f32, len: f32, p: f32) -> (f32, f32) {
     (a, edge(start + len) - a)
 }
 
-/// The menu's BGM tracks, `bgmm_04`..`bgmm_06`.
+/// The menu's BGM tracks, `bgmm_03`..`bgmm_06` (`bgmm_03`: the original's title screen, on our press-start splash).
 #[derive(Resource)]
 struct MenuBgm(Vec<Option<(Arc<SoundBank>, Vec<u8>)>>);
 
@@ -3462,11 +3462,12 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Press | Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile => Some(0),
-            Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
-            Screen::Confirm => Some(2),
-            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
-            Screen::Mods | Screen::Extras => Some(0),
+            Screen::Press => Some(0),
+            Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile => Some(1),
+            Screen::Mode | Screen::Assign | Screen::Chars => Some(2),
+            Screen::Confirm => Some(3),
+            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(1),
+            Screen::Mods | Screen::Extras => Some(1),
             Screen::Playing => None,
         }
     }
@@ -3474,7 +3475,7 @@ impl Screen {
 
 fn load_bgm(mut commands: Commands, args: Res<Args>) {
     let Ok(mut iso) = Iso::open(&args.iso) else { return };
-    let tracks = (4..=6).map(|n| SoundBank::music(&mut iso, "Menu", &format!("bgmm_{n:02}")).map(|(b, m)| (Arc::new(b), m))).collect();
+    let tracks = (3..=6).map(|n| SoundBank::music(&mut iso, "Menu", &format!("bgmm_{n:02}")).map(|(b, m)| (Arc::new(b), m))).collect();
     commands.insert_resource(MenuBgm(tracks));
 }
 
@@ -3632,8 +3633,8 @@ mod tests {
 
     #[test]
     fn bgm_per_screen() {
-        let t = [Screen::Main, Screen::Display, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Playing].map(Screen::bgm);
-        assert_eq!(t, [Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), Some(2), None]);
+        let t = [Screen::Press, Screen::Main, Screen::Display, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Playing].map(Screen::bgm);
+        assert_eq!(t, [Some(0), Some(1), Some(1), Some(1), Some(2), Some(2), Some(2), Some(3), None]);
     }
 
     fn press(f: impl FnOnce(&mut Press) -> &mut bool) -> Press {
