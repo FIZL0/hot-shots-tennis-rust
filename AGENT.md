@@ -43,7 +43,9 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
 - Tests: `tools/check.sh [-p crate --test name]`, not bare `cargo test`; full log in `context/notes/check.log`.
   Keep each test under ~10 s: share one match between checks, force the rare case (e.g. set the replay camera's
   closing-shot list) instead of playing on until it happens. Slower ones are `#[ignore]` with a doc line saying
-  how and when to run them (`tools/check.sh -p hst <name> -- --ignored`): the full-match netplay/rollback runs,
+  how and when to run them (`tools/check.sh -p hst <name> -- --ignored`). `check.sh` skips the netplay match tests
+  (`play::netplay::tests::matches`) unless `HST_NETPLAY=1` or the filter names netplay/rollback/synctest: touch netplay,
+  net or the snapshot → `HST_NETPLAY=1 tools/check.sh -p hst netplay`. Ignored: the full-match netplay/rollback runs,
   `synctest_through_a_change_of_ends` (snapshot/change of ends), `a_silent_peer_rejoins_and_a_silent_host_ends_it`
   (`recover.rs`), `short_code_on_a_testnet` (DHT/short codes). Touch those areas → run the matching one.
 - Function oracle (`crates/hst-oracle`): for a pure function of its arguments and RAM (math, AI decisions, table
