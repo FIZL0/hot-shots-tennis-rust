@@ -226,10 +226,14 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 
+/// M22: the online build id (`handshake::build`), version and commit, the same for every platform built from one commit.
+const BUILD_ID: &str = concat!(env!("CARGO_PKG_VERSION"), " ", env!("HST_COMMIT"));
+
 /// Page (`web.rs`): start the game from the pack read in (`web::pack_begin`), with the URL's flags.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn run() -> Result<(), wasm_bindgen::JsValue> {
+    handshake::set_build(BUILD_ID);
     use web::{FILLING, PACK, paste};
     let (bytes, at) = FILLING.with(|f| f.borrow_mut().take()).ok_or("run before pack_begin")?;
     if at != bytes.len() {
@@ -288,6 +292,7 @@ fn dev_env() {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     dev_env();
+    handshake::set_build(BUILD_ID);
     #[cfg(target_os = "ios")]
     ios::log_to_documents(&disc::data_dir());
     // `hst net …`: the lobby flow in a terminal (`net::cli`)
@@ -313,6 +318,7 @@ fn main() {
 #[unsafe(no_mangle)]
 fn android_main(app: bevy::android::android_activity::AndroidApp) {
     dev_env();
+    handshake::set_build(BUILD_ID);
     let dir = app.external_data_path().expect("no external files dir");
     android::log_to_files(&dir);
     let _ = bevy::android::ANDROID_APP.set(app);
