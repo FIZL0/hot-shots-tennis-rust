@@ -14,6 +14,8 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 #disc[hidden], #disc [hidden] { display: none !important; }
+/* M107: a visit going straight into the game (index.html head) */
+html[data-game] #disc { display: none !important; }
 /* the page scrolls and its text can be selected and copied, unlike the game's canvas (the `*` rules above) */
 #disc, #disc *, #disc *::before, #disc *::after { touch-action: manipulation; user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; }
 #disc button, #disc .pill { user-select: none; -webkit-user-select: none; }
@@ -36,6 +38,9 @@
 #disc .band .title { flex: 1 1 300px; min-width: 0; }
 #disc .band h1 { margin: 0 0 .3em; font-weight: 800; line-height: 1.08; font-size: clamp(30px, 5.2vw, 68px);
   -webkit-text-stroke: .1em var(--ink); paint-order: stroke fill; text-shadow: 0 .08em 0 var(--ink); }
+/* M107: the name and what it remasters, over the tagline (in the h1 for search engines) */
+#disc .band h1 .kicker { display: block; margin-bottom: .45em; font-size: clamp(14px, 1.7vw, 18px); font-weight: 700; line-height: 1.2;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--gold); -webkit-text-stroke: 0; text-shadow: 0 1px 2px #000; }
 #disc .band .lede { font-size: clamp(15px, 1.8vw, 19px); max-width: 34em; text-shadow: 0 1px 2px #000; }
 #disc .band .row { display: flex; flex-wrap: wrap; gap: .6em; margin-top: 1em; }
 

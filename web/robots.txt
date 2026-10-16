@@ -1,0 +1,5 @@
+# M107: everything may be crawled; the page's canonical link is https://opentennis.dev/
+User-agent: *
+Allow: /
+
+Sitemap: https://opentennis.dev/sitemap.xml
