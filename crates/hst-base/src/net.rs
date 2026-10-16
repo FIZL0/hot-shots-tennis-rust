@@ -1188,10 +1188,29 @@ fn watch_lan(_: ()) -> Lan {
 #[cfg(target_arch = "wasm32")]
 async fn announce(_: &Ctx, _: u16, _: &Room) {}
 
+/// B515: n0's relays without their hostnames' trailing dot (`use1-1.relay.n0.iroh.link.`): iOS Safari's fetch and
+/// WebSocket never reach the dotted form, so its latency probes never finished and no home relay was ever picked
+#[cfg(target_arch = "wasm32")]
+fn n0_relays() -> iroh::RelayMap {
+    let urls: Vec<RelayUrl> = iroh::defaults::prod::default_relay_map().urls();
+    let urls: Vec<String> = urls.iter().map(|u| u.to_string().replace("iroh.link./", "iroh.link/")).collect();
+    iroh::RelayMap::try_from_iter(urls.iter().map(String::as_str)).expect("n0 relay urls")
+}
+
+/// B515: a timed `/ping` of a relay, dotted and not, for the log while no home relay turns up
+#[cfg(target_arch = "wasm32")]
+async fn ping_relays() {
+    for u in ["https://use1-1.relay.n0.iroh.link./ping", "https://use1-1.relay.n0.iroh.link/ping"] {
+        let t = n0_future::time::Instant::now();
+        let r = n0_future::time::timeout(Duration::from_secs(10), async { reqwest::Client::new().get(u).send().await.map(|r| r.status()) }).await;
+        bevy::log::warn!("relay ping {u}: {r:?} in {:?}", t.elapsed());
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, ()), String> {
     let mode = match relay {
-        Relay::N0 => RelayMode::Default,
+        Relay::N0 => RelayMode::Custom(n0_relays()),
         Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
         Relay::Off => unreachable!("the browser's LAN is WebRTC (`bind`)"),
     };
@@ -1626,6 +1645,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         // yet (the latency probes didn't finish) or the picked one's last error
                         let st = iroh::Watcher::get(&mut ep.home_relay_status());
                         bevy::log::warn!("no home relay yet: {st:?}");
+                        #[cfg(target_arch = "wasm32")]
+                        ping_relays().await;
                         let why = match st.iter().find_map(|r| r.last_error()) {
                             Some(e) => format!("relay error: {e}"),
                             None if st.is_empty() => "no relay picked yet".into(),
