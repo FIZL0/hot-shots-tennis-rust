@@ -52,7 +52,8 @@ pub static MESH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::ne
 pub static KEEP_WINDOWED: AtomicBool = AtomicBool::new(false);
 
 /// P44: 240/360/480 for high-refresh monitors (the sim stays 60 Hz; drawing interpolates between ticks).
-pub const FPS: [u32; 8] = [30, 60, 120, 144, 240, 360, 480, 0];
+/// 90 for the OLED Steam Deck's 90 Hz screen.
+pub const FPS: [u32; 9] = [30, 60, 90, 120, 144, 240, 360, 480, 0];
 pub const SCALES: [u32; 5] = [50, 67, 75, 85, 100];
 pub const SHADOWS: [Shadows; 3] = [Shadows::Off, Shadows::Low, Shadows::High];
 pub const MSAA: [u32; 3] = [1, 2, 4];
