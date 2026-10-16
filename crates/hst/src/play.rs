@@ -83,6 +83,7 @@ mod replay_camera;
 mod surprise;
 pub(crate) mod snapshot;
 mod serve_check;
+mod partner_ball;
 mod tick_input;
 mod timing;
 mod tornado;
@@ -2394,15 +2395,11 @@ fn predicted_path(g: &Game, frames: usize) -> Vec<PathPoint> {
     path
 }
 
-/// Whether `i`'s ball is the other team's, in play, and not already taken by `i`'s partner: the original never
-/// has both teammates locked onto a ball (match_s05, lob_smash_s05), so a teammate's lock leaves `i` nothing to
-/// hit, not a second stroke that would lose the point as an illegal hit.
+/// Whether `i`'s ball is the other team's and in play. As the original's search, nothing about `i`'s partner: a
+/// teammate may lock onto a ball its partner is swinging or diving at (a dive falling short of it, B479); the
+/// first strike cancels every other lock (`cancel_locks`), so there is never a second stroke.
 fn theirs(g: &Game, i: usize) -> bool {
-    let mate = g.players.get(i ^ 2).filter(|_| g.players.len() == 4);
-    g.phase == Phase::Rally
-        && g.last_hitter >= 0
-        && g.last_hitter & 1 != i as i32 & 1
-        && mate.is_none_or(|m| m.contact.is_none() && m.dive.is_none())
+    g.phase == Phase::Rally && g.last_hitter >= 0 && g.last_hitter & 1 != i as i32 & 1
 }
 
 /// The original's contact search for player `i` (smash, volley, ground stroke), only while the other team's
@@ -2979,11 +2976,15 @@ fn whiff(g: &mut Game, i: usize, miss: bool, quiet: bool) {
     p.facing = base_yaw(p.end);
 }
 
-/// Every locked swing but `but`'s is cancelled: the ball touched the net (or a hit) after it locked.
+/// Every locked swing but `but`'s is cancelled: the ball touched the net (or a hit) after it locked. A dive that
+/// would reach the ball slides on without striking it (its motion has no miss motion).
 fn cancel_locks(g: &mut Game, but: Option<usize>) {
     for (_, p) in g.players.iter_mut().enumerate().filter(|(j, _)| Some(*j) != but) {
         if let Some(c) = p.contact.as_mut() {
             c.cancelled = true;
+        }
+        if let Some(d) = p.dive.as_mut() {
+            d.contact = false;
         }
     }
 }
