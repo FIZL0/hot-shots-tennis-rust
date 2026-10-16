@@ -7,7 +7,8 @@
 //!   with a random lobby number as the port, and puts its listing (endpoint ID, name, singles/doubles, court, seats,
 //!   time) as a BEP 44 mutable item under the well-known [`BOARD`] key, salted with that number and signed again
 //!   with its own endpoint key. Find = `get_peers(TOPIC)`, then each lobby number's listing; listings older than
-//!   [`STALE`] are dropped. Republished every [`REPUBLISH`] and on change (the Halo CE port's 30 s / 90 s).
+//!   [`STALE`] are dropped. Republished every [`REPUBLISH`] and on change (B527: 60 s / 150 s, the Halo CE port's
+//!   30 s / 90 s halved the requests on the pkarr relay; older builds' 90 s still counts a 60 s republish fresh).
 //! - **LAN** (M2j): every endpoint also advertises itself by mDNS (service [`MDNS`]), so bare IDs resolve on a shared
 //!   network with no internet (a router, or one phone's hotspot with no mobile data); a host puts its listing in the
 //!   mDNS record's user data too, and Find lists those first, before the DHT has answered (or with no internet at all).
@@ -64,8 +65,8 @@ const MDNS: &str = "hst";
 const LAN_TAG: &str = "hst1";
 /// How long Find listens on the LAN before it shows what it has (mDNS answers come within a second or two).
 const LAN_WAIT: Duration = Duration::from_secs(3);
-const REPUBLISH: Duration = Duration::from_secs(30);
-const STALE: u64 = 90;
+const REPUBLISH: Duration = Duration::from_secs(60);
+const STALE: u64 = 150;
 /// B518: the shortest gap between two of a host's lobby listings outside a republish.
 const LIST_GAP: Duration = Duration::from_secs(10);
 /// The build peers must share (M22: the handshake's, version and commit; M2e checks the disc pack, rules and mods).
@@ -2840,6 +2841,11 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
 /// A short code for the lobby with `ticket`, `code` first: a free one, published (Err: why the DHT or relay
 /// didn't take it). Each code tried after a taken one goes to `show`.
 async fn roll(dht: &Dht, mut code: String, ticket: &str, show: impl Fn(&str)) -> Result<String, String> {
+    // ponytail: B527: the browser doesn't check (a relay request each, on its rate limit): a fresh code is one of
+    // 32^4 ≈ 1M, so with a few hundred open lobbies a clash is ~1 in 3000 hosts; check here again if that grows
+    if cfg!(target_arch = "wasm32") {
+        return publish(dht, &code, ticket).await.map(|_| code);
+    }
     for _ in 0..5 {
         match n0_future::time::timeout(Duration::from_secs(15), lookup(dht, &code)).await {
             Ok(Ok(Some((_, seq)))) if fresh(seq) => {
@@ -2883,7 +2889,28 @@ async fn read_slots(dht: &Dht) -> Vec<Result<Option<(Listing, i64)>, String>> {
 
 /// The open lobbies in the board slots, each with its short code, and (B467) why some slots couldn't be read.
 async fn find_slots(dht: &Dht) -> (Vec<Listing>, Option<String>) {
-    let all = read_slots(dht).await;
+    // B527: the browser reads every slot through the pkarr relay (SLOTS requests of its ~10 per network): a Find, the
+    // Online screen's list and Quick play within FIND_CACHE share one read
+    #[cfg(target_arch = "wasm32")]
+    {
+        thread_local!(static LAST: std::cell::RefCell<Option<(n0_future::time::Instant, Vec<Result<Option<(Listing, i64)>, String>>)>> = const { std::cell::RefCell::new(None) });
+        const FIND_CACHE: Duration = Duration::from_secs(15);
+        let all = match LAST.with_borrow(|l| l.clone().filter(|(t, all)| t.elapsed() < FIND_CACHE && all.iter().all(Result::is_ok))) {
+            Some((_, all)) => all,
+            None => {
+                let all = read_slots(dht).await;
+                LAST.set(Some((n0_future::time::Instant::now(), all.clone())));
+                all
+            }
+        };
+        return slots_list(all);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    slots_list(read_slots(dht).await)
+}
+
+/// The open lobbies in `all` (the board slots' answers) and why some couldn't be read.
+fn slots_list(all: Vec<Result<Option<(Listing, i64)>, String>>) -> (Vec<Listing>, Option<String>) {
     let bad: Vec<&String> = all.iter().filter_map(|r| r.as_ref().err()).collect();
     let why = bad.first().map(|e| if bad.len() == SLOTS { e.to_string() } else { format!("{} of its {SLOTS} slots unread, {e}", bad.len()) });
     if let Some(w) = &why {
@@ -2907,9 +2934,16 @@ async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &List
     let ours = |r: &Result<Option<(Listing, i64)>, String>| r.as_ref().ok().and_then(|r| r.as_ref()).is_none_or(|(o, seq)| o.id == l.id || !fresh(*seq));
     let mut i = slot.load(Relaxed);
     if i >= SLOTS || !ours(&read_slot(dht, i).await) {
-        let all = read_slots(dht).await;
+        // B527: one slot at a time from the one its ID picks, not all of them at once: usually a single request on
+        // the pkarr relay instead of SLOTS
         let start = l.id.parse().map_or(0, |id| lobby_number(id) as usize);
-        i = (0..SLOTS).map(|k| (start + k) % SLOTS).find(|&k| ours(&all[k])).unwrap_or(SLOTS);
+        i = SLOTS;
+        for k in (0..SLOTS).map(|k| (start + k) % SLOTS) {
+            if ours(&read_slot(dht, k).await) {
+                i = k;
+                break;
+            }
+        }
         slot.store(i, Relaxed);
     }
     if i < SLOTS {
@@ -2948,7 +2982,8 @@ async fn resolve(dht: &Dht, code: &str) -> Result<String, String> {
         if n0_future::time::Instant::now() + Duration::from_secs(20) >= until {
             return Err(missed(code, r.map(|r| r.map(|(_, seq)| seq))));
         }
-        n0_future::time::sleep(Duration::from_secs(3)).await;
+        // B527: every 5 s, not 3 (each a request on the pkarr relay in the browser)
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -4109,7 +4144,7 @@ mod tests {
         let c = new_short();
         assert!(is_short(&c), "{c}");
         assert_ne!(code_key("AAAA").public(), code_key("AAAB").public());
-        assert!(fresh(unix_micros() - 80_000_000) && !fresh(unix_micros() - 100_000_000));
+        assert!(fresh(unix_micros() - 140_000_000) && !fresh(unix_micros() - 160_000_000));
     }
 
     /// A local DHT testnet, two lobbies through a short code (~20 s): `tools/check.sh -p hst short_code_on_a_testnet

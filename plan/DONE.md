@@ -779,6 +779,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B521** Online status/error text is cut off: the bottom bar's message runs off the right edge (seen on the Online menu: 'Open a lobby for players over the inte…'). Status and error lines wrap or shrink to fit, never truncated, at any aspect ratio and on mobile (user 2026-10-16) — crates/hst/src/play/main_menu/online.rs, crates/hst/src/play/main_menu/legend.rs — folded into B522 (user 2026-10-16), not done on its own
 - [x] **B520** Host turns mods off in the online lobby: the host's own modded character is swapped for a disc one too (not only the guests'). Random still works for every seat and every random pick (character, costume, court, umpire) but draws only from the disc options while mods are off (user 2026-10-16) — crates/hst/src/play/main_menu/online.rs, crates/hst-base/src/mods_online.rs — folded into B522 (user 2026-10-16), not done on its own
 - [x] **B524** Browser join 'Couldn't look up CV88: relay.pkarr.org didn't answer in 2 s': refused relay lookups retried every 1-3 s (spent the network's allowance) and the last short lookup's timeout hid the real reason — crates/hst-base/src/net.rs
+- [x] **B527** Minimise pkarr relay requests (user: as much as possible, it has to work): no taken-code check in the browser, first listing reads one slot at a time, republish 60 s / stale 150 s, browser Find slot reads cached 15 s, code lookups every 5 s — crates/hst-base/src/net.rs
 
 
 ### Shots
