@@ -80,6 +80,7 @@ LEAN = [] if os.environ.get('HST_LEAN') == '0' else \
 SHARED = {'play.rs'}  # ponytail: files tasks may edit at once; the master resolves the clashes
 MAX_HOLD = int(os.environ.get('HST_PCSX2_MAX_HOLD', 1200))  # seconds one agent may hold PCSX2 at a time
 NOTES = os.path.join(ROOT, 'context/notes')
+MARK = os.path.join(ROOT, '.git/runner-merge')  # main holds an untested runner merge
 TASK = re.compile(r'^- \[ \] \*\*([^*\s]+)\*\*(.*)')
 PROMPT = """Parallel unattended run: nobody will answer questions. Do task {id} only — `tools/ctx.py {id}` — following \
 PLAN.md's rules and AGENT.md. Other agents are working on other tasks at the same time in other worktrees. You are in a \
@@ -375,84 +376,96 @@ def merge(tid):
             if time.time() - t0 > 60 * 60:  # hard stop: left for the master instead of stalling the run
                 return 'main stayed busy (the master, or unmerged paths) for 60 min'
             time.sleep(10)
-        # someone's uncommitted edits in main (PLAN.md, TODO notes): out of the way for the merge, back right after it
-        stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) \
-            and not git('stash', 'push', '-q', '-m', f'runner {tid}').returncode
-        # merges go into main whatever the checkout is on: slots start from main and picks read main's TODO.md, so a
-        # merge onto another branch (split-1v1, 2026-10-14) left main stale and its tasks open
-        if (cur := git('branch', '--show-current').stdout.strip()) != 'main':
-            if git('checkout', '-q', 'main').returncode:
-                return f'the main checkout is on {cur or "a detached HEAD"} and could not switch to main'
-            # commits made there meanwhile (the master's fixes, plan edits) belong on main too, when they fast-forward
-            ff = cur and not git('merge', '-q', '--ff-only', cur).returncode
-            log(f'{tid}: the main checkout was on {cur or "a detached HEAD"}; switched it to main for the merge'
-                + (f' (main fast-forwarded to {cur})' if ff else f' ({cur} does not fast-forward: its commits stay there)'))
+        # while main holds a merge the tests haven't passed yet, sessions must not commit or push on it: a push sent
+        # B472's untested merge out, and a stopped runner then rewound main under it (2026-10-16); the guard hook
+        # (tools/guard_decomp.py) refuses git commit/push/merge/reset/pull in the main checkout while this file exists
+        open(MARK, 'w').write(tid)
         try:
-            pre = git('rev-parse', 'HEAD').stdout.strip()
-            if git('merge', '--no-edit', f'task/{tid}').returncode:
-                files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
-                if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, tid):
-                    git('merge', '--abort')
-                    return f'conflicts in {", ".join(files)}'
-                git('commit', '-q', '--no-edit')
-                log(f'{tid}: the runner joined both sides of {", ".join(files)}')
-            sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'archive'], cwd=ROOT, capture_output=True)
-            plan = ['plan/TODO.md', 'plan/DONE.md']  # only these: never sweep someone's edits into the commit (-a did)
-            if git('status', '--porcelain', '--', *plan).stdout.strip():
-                git('commit', '-qm', f'{tid}: archive ticked tasks into plan/DONE.md', '--', *plan)
+            return merge_locked(tid)
         finally:
-            if stashed and git('stash', 'pop', '-q').returncode:
-                git('reset', '-q', '--hard')  # only the half-applied pop goes; the stash itself stays
-                log(f'{tid}: main\'s uncommitted changes clash with the merge: they are kept in git stash "runner {tid}"')
-        if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
-            return 'the merge did not land in main (main changed under it); merge it again'
-        merged = git('rev-parse', 'HEAD').stdout.strip()
-        # the agent's done.sh passed the tests on its branch: rerun them only if main's code differs from the branch's
-        tested = all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split())
-        chk = sp.CompletedProcess([], 0, '', '') if tested else \
-            sp.run([os.path.join(ROOT, 'tools/check.sh')], cwd=ROOT, capture_output=True, text=True)
-        # ponytail: the net:: tests time out under the slots' load; one rerun of just the failures before it counts
-        if chk.returncode and (names := re.findall(r'^---- (\S+) stdout ----', chk.stdout, re.M)):
-            again = sp.run([os.path.join(ROOT, 'tools/check.sh'), '--', '--exact', *names],
-                           cwd=ROOT, capture_output=True, text=True)
-            if not again.returncode:
-                log(f'{tid}: {", ".join(names)} failed under load, passed on a rerun')
-                chk = again
-        inherited = ''
-        later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
-        if chk.returncode:
-            rewind(pre, tid)
-            # main already failed that way without the branch (B231's flake, a disc test, main's own broken build):
-            # not the branch's fault, so merge it anyway and say so instead of spending a model on it
-            # ponytail: name-level match only; a branch that breaks an already-failing test differently slips through
-            names = re.findall(r'^---- (\S+) stdout ----', chk.stdout, re.M)
-            build = 'BUILD FAILED' in chk.stdout
-            if not later and (names or build):
-                base = sp.run([os.path.join(ROOT, 'tools/check.sh'), *([] if build else ['--', '--exact', *names])],
-                              cwd=ROOT, capture_output=True, text=True)
-                still = set(re.findall(r'^---- (\S+) stdout ----', base.stdout, re.M))
-                if base.returncode and ('BUILD FAILED' in base.stdout if build else still >= set(names)):
-                    rewind(merged, tid)
-                    inherited = 'main\'s build already failed' if build else 'already failing on main: ' + ', '.join(names)
-                    log(f'{tid}: {inherited}; merged anyway')
-        if chk.returncode and not inherited:  # HEAD is at pre already
-            if later and git('cherry-pick', *later).returncode:
-                git('cherry-pick', '--abort')
-                rewind(later[-1], tid)  # can't replay them alone: keep them with the merge, master sorts it
-                return 'tests fail after the merge, and main got commits meanwhile: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
-            return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
-        git('branch', '-d', f'task/{tid}')
-        pushed = git('push', '-q', 'origin', 'main').returncode == 0
-        added = git('diff', pre, 'HEAD', '--', 'plan/TODO.md').stdout
-        line = next((l for l in open(os.path.join(ROOT, 'plan/TODO.md')) if f'**{tid}**' in l), '')
-        state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
-        sus = [l[1:].strip()[:200] for l in added.splitlines() if l.startswith('+') and SUSPECT.search(l)]
-        note = f'{tid}: merged by the runner, {state}' + ('' if pushed else ', push failed') + \
-               (f'; tests fail but {inherited}' if inherited else '') + \
-               (f'; SUSPECT BLOCK (PCSX2 runs unattended), recheck: {sus[0]}' if sus else '')
-        open(os.path.join(NOTES, 'master.md'), 'a').write(note + '\n')
-        log(note)
-        return None
+            os.remove(MARK)
+
+
+def merge_locked(tid):
+    """merge()'s body, under MERGE and the marker."""
+    # someone's uncommitted edits in main (PLAN.md, TODO notes): out of the way for the merge, back right after it
+    stashed = bool(git('status', '--porcelain', '--untracked-files=no').stdout.strip()) \
+        and not git('stash', 'push', '-q', '-m', f'runner {tid}').returncode
+    # merges go into main whatever the checkout is on: slots start from main and picks read main's TODO.md, so a
+    # merge onto another branch (split-1v1, 2026-10-14) left main stale and its tasks open
+    if (cur := git('branch', '--show-current').stdout.strip()) != 'main':
+        if git('checkout', '-q', 'main').returncode:
+            return f'the main checkout is on {cur or "a detached HEAD"} and could not switch to main'
+        # commits made there meanwhile (the master's fixes, plan edits) belong on main too, when they fast-forward
+        ff = cur and not git('merge', '-q', '--ff-only', cur).returncode
+        log(f'{tid}: the main checkout was on {cur or "a detached HEAD"}; switched it to main for the merge'
+            + (f' (main fast-forwarded to {cur})' if ff else f' ({cur} does not fast-forward: its commits stay there)'))
+    try:
+        pre = git('rev-parse', 'HEAD').stdout.strip()
+        if git('merge', '--no-edit', f'task/{tid}').returncode:
+            files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
+            if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, tid):
+                git('merge', '--abort')
+                return f'conflicts in {", ".join(files)}'
+            git('commit', '-q', '--no-edit')
+            log(f'{tid}: the runner joined both sides of {", ".join(files)}')
+        sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'archive'], cwd=ROOT, capture_output=True)
+        plan = ['plan/TODO.md', 'plan/DONE.md']  # only these: never sweep someone's edits into the commit (-a did)
+        if git('status', '--porcelain', '--', *plan).stdout.strip():
+            git('commit', '-qm', f'{tid}: archive ticked tasks into plan/DONE.md', '--', *plan)
+    finally:
+        if stashed and git('stash', 'pop', '-q').returncode:
+            git('reset', '-q', '--hard')  # only the half-applied pop goes; the stash itself stays
+            log(f'{tid}: main\'s uncommitted changes clash with the merge: they are kept in git stash "runner {tid}"')
+    if git('merge-base', '--is-ancestor', f'task/{tid}', 'HEAD').returncode:
+        return 'the merge did not land in main (main changed under it); merge it again'
+    merged = git('rev-parse', 'HEAD').stdout.strip()
+    # the agent's done.sh passed the tests on its branch: rerun them only if main's code differs from the branch's
+    tested = all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', 'HEAD').stdout.split())
+    chk = sp.CompletedProcess([], 0, '', '') if tested else \
+        sp.run([os.path.join(ROOT, 'tools/check.sh')], cwd=ROOT, capture_output=True, text=True)
+    # ponytail: the net:: tests time out under the slots' load; one rerun of just the failures before it counts
+    if chk.returncode and (names := re.findall(r'^---- (\S+) stdout ----', chk.stdout, re.M)):
+        again = sp.run([os.path.join(ROOT, 'tools/check.sh'), '--', '--exact', *names],
+                       cwd=ROOT, capture_output=True, text=True)
+        if not again.returncode:
+            log(f'{tid}: {", ".join(names)} failed under load, passed on a rerun')
+            chk = again
+    inherited = ''
+    later = git('rev-list', '--reverse', f'{merged}..HEAD').stdout.split()  # committed on main during the tests
+    if chk.returncode:
+        rewind(pre, tid)
+        # main already failed that way without the branch (B231's flake, a disc test, main's own broken build):
+        # not the branch's fault, so merge it anyway and say so instead of spending a model on it
+        # ponytail: name-level match only; a branch that breaks an already-failing test differently slips through
+        names = re.findall(r'^---- (\S+) stdout ----', chk.stdout, re.M)
+        build = 'BUILD FAILED' in chk.stdout
+        if not later and (names or build):
+            base = sp.run([os.path.join(ROOT, 'tools/check.sh'), *([] if build else ['--', '--exact', *names])],
+                          cwd=ROOT, capture_output=True, text=True)
+            still = set(re.findall(r'^---- (\S+) stdout ----', base.stdout, re.M))
+            if base.returncode and ('BUILD FAILED' in base.stdout if build else still >= set(names)):
+                rewind(merged, tid)
+                inherited = 'main\'s build already failed' if build else 'already failing on main: ' + ', '.join(names)
+                log(f'{tid}: {inherited}; merged anyway')
+    if chk.returncode and not inherited:  # HEAD is at pre already
+        if later and git('cherry-pick', *later).returncode:
+            git('cherry-pick', '--abort')
+            rewind(later[-1], tid)  # can't replay them alone: keep them with the merge, master sorts it
+            return 'tests fail after the merge, and main got commits meanwhile: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
+        return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
+    git('branch', '-d', f'task/{tid}')
+    pushed = git('push', '-q', 'origin', 'main').returncode == 0
+    added = git('diff', pre, 'HEAD', '--', 'plan/TODO.md').stdout
+    line = next((l for l in open(os.path.join(ROOT, 'plan/TODO.md')) if f'**{tid}**' in l), '')
+    state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
+    sus = [l[1:].strip()[:200] for l in added.splitlines() if l.startswith('+') and SUSPECT.search(l)]
+    note = f'{tid}: merged by the runner, {state}' + ('' if pushed else ', push failed') + \
+           (f'; tests fail but {inherited}' if inherited else '') + \
+           (f'; SUSPECT BLOCK (PCSX2 runs unattended), recheck: {sus[0]}' if sus else '')
+    open(os.path.join(NOTES, 'master.md'), 'a').write(note + '\n')
+    log(note)
+    return None
 
 
 def finish(tid, n, sid, commits):
@@ -695,6 +708,8 @@ def main():
     # branches a previous runner never merged: sessions that ended while no runner watched (B347), or finished ones
     # still waiting in its merge queue when it was stopped (B326/B355…, 2026-10-14). Merge them like any finished slot;
     # skip ones handed to the master, checked out somewhere (running slots, other worktrees) or not open tasks.
+    if os.path.exists(MARK):  # a runner killed mid-merge never removed it; its merge thread is gone
+        os.remove(MARK)
     held = {l.removeprefix('branch refs/heads/') for l in git('worktree', 'list', '--porcelain').stdout.splitlines()
             if l.startswith('branch ')}
     handed = open(os.path.join(NOTES, 'overnight.log'), errors='replace').read() if os.path.exists(

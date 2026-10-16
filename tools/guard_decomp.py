@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse hook: stop whole-file reads of the 16 MB decompile dumps (context/decomp/*.c) before they flood
 the context. Exit 2 = block, stderr goes back to the agent."""
-import json, re, sys
+import json, os, re, sys, time
 
 t = json.load(sys.stdin)
 i = t.get('tool_input', {})
@@ -38,6 +38,18 @@ if t.get('tool_name') == 'Bash' and SWEEP.search(cmd):
         sys.exit(print('Main checkout is shared with other sessions: stage and commit only your own paths '
                        '(git add <paths>; git commit -m ... -- <paths>), never add -A/./-u or commit -a. '
                        'Bigger work: git worktree add ../opentennis-<slug>.', file=sys.stderr) or 2)
+# the runner is testing a merge it made in main (tools/parallel.py MARK): committing or pushing on top of it sends
+# out an untested merge, and a failed or stopped test then rewinds main under the commit (2026-10-16)
+MARK = os.path.join(ROOT, '.git/runner-merge')
+if t.get('tool_name') == 'Bash' and os.path.exists(MARK) and time.time() - os.path.getmtime(MARK) < 3 * 3600 \
+        and re.search(r'\bgit\b[^;&|]*\b(commit|push|merge|reset|pull|rebase|cherry-pick|stash)(?![\w-])', cmd):
+    import subprocess
+    d = [subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=t.get('cwd') or ROOT, capture_output=True,
+                        text=True).stdout.strip() for f in ('--git-dir', '--git-common-dir')]
+    if d[0] and d[0] == d[1]:
+        sys.exit(print(f'The runner is testing its merge of task/{open(MARK).read().strip()} in main (a few minutes): '
+                       'don\'t commit, push or move main until .git/runner-merge is gone; do other work, then retry.',
+                       file=sys.stderr) or 2)
 upd = {}
 if t.get('tool_name') == 'Bash' and TESTS.search(cmd) and not i.get('run_in_background'):
     upd['timeout'] = 3600000
