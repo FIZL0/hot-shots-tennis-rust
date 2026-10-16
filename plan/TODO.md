@@ -41,8 +41,6 @@ index out of bounds: the len is 0 but the index is 0"
 
 ### Match
 
-- [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
-
 ### Presentation
 
 - [~] **P16** Camera (other modes open; court views P16c, pick and wiring P16a) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
