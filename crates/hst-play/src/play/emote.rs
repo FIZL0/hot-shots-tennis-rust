@@ -262,7 +262,15 @@ mod match_tests {
     }
 
     fn seated(seats: [bool; 4], pads: Vec<[Pad; 4]>) -> App {
+        modded(seats, pads, None)
+    }
+
+    /// `seated` with 2P playing mod `m`.
+    fn modded(seats: [bool; 4], pads: Vec<[Pad; 4]>, m: Option<crate::mods::Mod>) -> App {
         let mut app = App::new();
+        if let Some(m) = m {
+            app.insert_resource(crate::mods::MatchMod(vec![None, Some(m)]));
+        }
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
         app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
@@ -462,6 +470,39 @@ mod match_tests {
         a.world_mut().resource_mut::<Game>().lines.push(super::Line::Reaction(0, p));
         step(&mut a);
         assert!(!sound.playing(lines[1]) && sound.playing(sound.plays()), "the reaction didn't cut the emote line");
+    }
+
+    /// A mod character's emotes speak its own takes (programs 9, 10, 7, 8): each of the four flicks plays a line.
+    /// Needs the ISO and the mods repo's packaged mods in `mods/hst-mods` (skipped without).
+    #[test]
+    fn a_mod_emote_speaks() {
+        const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods/");
+        if !std::path::Path::new(ISO).is_file() || !std::path::Path::new(ROOT).is_dir() {
+            return eprintln!("no ISO or mods/hst-mods, skipped");
+        }
+        for id in ["opentee2_pc10_carly", "opentee2_pc03_shu", "oob_pc12_anya"] {
+            let m = crate::mods::read(&std::path::Path::new(ROOT).join(id)).unwrap();
+            let mut a = modded([false, true, false, false], vec![], Some(m));
+            let len = (0..4).map(|d| a.world().resource::<Game>().data[1].motions.get(&MOTIONS[d]).map_or(0, |c| c.length.ceil() as usize)).max().unwrap();
+            let ats: Vec<usize> = (0..4).map(|d| 10 + d * (len + 5)).collect();
+            let mut pads = vec![[IDLE; 4]; ats[3] + 2];
+            for (d, &at) in ats.iter().enumerate() {
+                pads[at][1] = [Pad { rx: 0x80, ry: 0, ..IDLE }, Pad { rx: 0x80, ry: 0xff, ..IDLE }, Pad { rx: 0, ry: 0x80, ..IDLE }, Pad { rx: 0xff, ry: 0x80, ..IDLE }][d];
+            }
+            a.insert_resource(Replay(pads.into_iter().collect()));
+            let sound = crate::audio::Sound::test(&mut hst_data::iso::Iso::open(ISO).unwrap());
+            a.insert_resource(sound.clone());
+            a.add_plugins(heard::plugin);
+            a.add_systems(FixedUpdate, super::play_lines.after(held_ball));
+            for t in 0..=ats[3] {
+                let before = sound.plays();
+                let (_, emote, ..) = step(&mut a);
+                if let Some(d) = ats.iter().position(|&at| at == t) {
+                    assert!(emote > 0, "{id}: flick {d} started no emote");
+                    assert_eq!(sound.plays(), before + 1, "{id}: flick {d}'s emote spoke no line");
+                }
+            }
+        }
     }
 
     /// B472 (B363 before it): 1P tosses and swings as the ball drops past (a whiff: a fault); the same flick in the
