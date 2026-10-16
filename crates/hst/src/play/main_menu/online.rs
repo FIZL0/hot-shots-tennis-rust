@@ -4,14 +4,13 @@
 //! machine's 1–3 players take their controllers (no more than the lobby's open seats) and join (or open) the lobby on
 //! placeholder picks, which holds their seats while they pick on the same character select as Local (B195; no
 //! computer players: the open seats are for the other peers). The lobby: its seats (who, their name, picking or
-//! ready), the code and QR to share, Start (the open seats to the computer), Ready, Characters (pick again), Court
+//! ready), the code and link to share, Start (the open seats to the computer), Ready, Characters (pick again), Court
 //! (the host's confirm screen: court, sets, games, umpire, until Start), Leave and taking a player out. The host adds a
 //! computer player to an open seat and picks its character, costume and level on the select with its own cursor
 //! (B216; △ removes it); its pick goes into the room like a person's. The player's
 //! name (Name, `online.txt`'s `name`) is typed on Join by Code's keys.
 
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -90,8 +89,6 @@ pub struct View {
     pub spin: f32,
     /// B467: why the Online screen's own search came up empty (the lobby list couldn't be read); its card says it.
     pub why: String,
-    /// B370: the lobby's QR shown big (the code pill's OK or a tap; any press closes it).
-    pub qr_big: bool,
     /// B396: the last press came from a pad (the lobby's Chat opens the phrases, not the typed line).
     pub pad: bool,
     /// B216: the host's computer player (its seat) whose character it's picking on the select.
@@ -140,7 +137,7 @@ fn row_rects(extra: f32) -> Vec<[f32; 4]> {
 /// The lobby's buttons: the host's, a seated guest's (Ready shows "Not Ready" once ready), and with no lobby. B214:
 /// no Vote button (B226 removes lobby voting).
 /// B213: "Public" is the host's Public/Private switch (labelled with what the lobby is).
-/// B370: "Code" is the invite box's QR and code (OK opens the QR big).
+/// B370: "Code" is the invite box's code (OK copies the link, as Copy Link).
 /// B396: in the side panel's invite box and the bottom bar; "Chat" (when chat's on) goes before Start / Ready; a
 /// player's own seat card is where they pick again (no Characters button).
 const HOST_BUTTONS: [&str; 5] = ["Code", "Copy Link", "Public", "Leave", "Start"];
@@ -458,7 +455,7 @@ impl Menu {
             Item::Button("Chat") => "Chat",
             Item::Set(_) => "Change",
             Item::Button("Copy Link") => return shared(&self.net).map(|_| "Copy Link"),
-            Item::Button("Code") => return shared(&self.net).map(|_| "Show QR"),
+            Item::Button("Code") => return shared(&self.net).map(|_| "Copy Link"),
             Item::Button("Start" | "Ready") if self.counting() > 0 => "Cancel",
             Item::Button("Ready") if self.net.prepared => "Not Ready",
             Item::Button("Public") if self.net.room.as_ref().is_some_and(|r| r.private) => "Make Public",
@@ -886,13 +883,6 @@ impl Menu {
                     out.push(Sound(if self.net.entry.pop().is_some() { 1 } else { 0 }));
                 }
             }
-            Screen::Lobby if self.net.qr_big => {
-                // B370: the QR big: any press puts it away
-                if k.ok || k.back || k.card || k.up || k.down || k.left || k.right {
-                    self.net.qr_big = false;
-                    out.push(Sound(1));
-                }
-            }
             Screen::Lobby if let Some(h) = self.net.ask.filter(|_| !k.back) => {
                 rows(ASK_ROWS.len(), &mut self.sel, out);
                 if k.ok {
@@ -1012,10 +1002,7 @@ impl Menu {
                     let p = !r.private;
                     self.net.cfg.get_or_insert_with(Online::default).private = p;
                     out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Private(p))), Effect::Online(Fx::SaveCfg)]);
-                } else if item == Item::Button("Code") && shared(&self.net).is_some() {
-                    self.net.qr_big = true;
-                    out.push(Sound(2));
-                } else if item == Item::Button("Copy Link") && shared(&self.net).is_some() {
+                } else if matches!(item, Item::Button("Code" | "Copy Link")) && shared(&self.net).is_some() {
                     out.extend([Sound(2), Effect::Online(Fx::Copy)]);
                 } else if matches!(item, Item::Button("Start" | "Ready")) && self.counting() > 0 {
                     // B215: stop the countdown for everyone
@@ -1137,7 +1124,7 @@ impl Menu {
         self.net.short.clear();
         self.net.room = None;
         (self.net.hosting, self.net.prepared, self.net.pick_next, self.net.fit, self.net.first) = (false, false, false, 0, false);
-        (self.net.me, self.net.sent, self.net.edit, self.net.qr_big) = (String::new(), None, None, false);
+        (self.net.me, self.net.sent, self.net.edit) = (String::new(), None, None);
         self.screen = Screen::Online;
         out.push(Effect::Sound(1));
     }
@@ -1261,7 +1248,7 @@ impl Menu {
             Event::Room(r) => {
                 // the lobby's singles or doubles is everyone's (a code join didn't choose)
                 self.doubles = r.doubles;
-                // B322: a guest shows the host's short code and its QR (the host's own comes as `Event::Short`)
+                // B322: a guest shows the host's short code and its link (the host's own comes as `Event::Short`)
                 if !v.hosting && !r.short.is_empty() {
                     v.short = r.short.clone();
                 }
@@ -1778,8 +1765,7 @@ fn failed(d: &mut Draw, y: f32, title: &str, line: &str) {
     panel(d, y, title, [128.0, 50.0, 40.0], line, false);
 }
 
-/// What the lobby's QR and Copy Link share: the short code's link, or the browser's LAN offer (scanned, nothing else
-/// reaches it). The long iroh ticket (B224: useless to type) only as a link while the short code can't be put
+/// What the lobby's Copy Link shares: the short code's link, or the browser's LAN offer (nothing else reaches it). The long iroh ticket (B224: useless to type) only as a link while the short code can't be put
 /// online (B321, `ticket_only`).
 fn shared(v: &View) -> Option<String> {
     if !v.short.is_empty() {
@@ -1794,28 +1780,6 @@ fn shared(v: &View) -> Option<String> {
 /// B321: hosting, and the short code's put failed (it's retried): the code is the whole ticket, shared as a link.
 fn ticket_only(v: &View) -> bool {
     v.hosting && v.short.is_empty() && crate::net::is_ticket(&v.code)
-}
-
-/// The lobby code's QR, drawn as `Tex::Qr`.
-#[derive(Resource)]
-pub struct QrImage(pub Handle<Image>, String);
-
-/// `code` as a QR: black modules on white, 4 modules of quiet zone, one texel a module (drawn with nearest
-/// sampling would be sharper; the menu's linear filter blurs edges a little at small sizes).
-fn qr(code: &str) -> Option<Image> {
-    let q = qrcode::QrCode::new(code.as_bytes()).ok()?;
-    let n = q.width();
-    let side = n + 8;
-    let mut rgba = vec![255u8; side * side * 4];
-    for (i, c) in q.to_colors().iter().enumerate() {
-        if *c == qrcode::Color::Dark {
-            let (x, y) = (i % n + 4, i / n + 4);
-            rgba[(y * side + x) * 4..][..3].fill(0);
-        }
-    }
-    let mut img = Image::new(Extent3d { width: side as u32, height: side as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD);
-    img.sampler = bevy::image::ImageSampler::nearest();
-    Some(img)
 }
 
 /// Room `r`'s mod with looks `h`: its name, and whether it's the court (else a pick).
@@ -1870,12 +1834,10 @@ pub(super) fn draw_ask_over(d: &mut Draw, m: &Menu) {
     ask_popup(d, name, court, room.wait, m.net.ask_row, Some(Act::Press(Press { back: true, ..Default::default() })));
 }
 
-/// The network's events into the menu, and the QR of the menu's code whenever the code changes.
+/// The network's events into the menu.
 pub(super) fn poll(
     net: Option<Res<Net>>,
     mut menu: ResMut<Menu>,
-    mut images: ResMut<Assets<Image>>,
-    made: Option<Res<QrImage>>,
     gamepads: Query<(Entity, &Gamepad)>,
     args: Res<crate::Args>,
     time: Res<Time>,
@@ -1917,12 +1879,6 @@ pub(super) fn poll(
                 menu.net.sent = Some(lives);
             }
         }
-    }
-    if let Some(code) = &shared(&menu.net)
-        && made.is_none_or(|m| m.1 != *code)
-        && let Some(img) = qr(code)
-    {
-        commands.insert_resource(QrImage(images.add(img), code.clone()));
     }
 }
 
@@ -2038,7 +1994,7 @@ pub(super) fn touch_typing() -> bool {
     osk::mobile()
 }
 
-/// A made-up lobby and lobby list for `HST_MENU=lobby|lobbies` shots: two seats taken, a code (for the QR).
+/// A made-up lobby and lobby list for `HST_MENU=lobby|lobbies` shots: two seats taken, a code (for the link).
 pub(super) fn sample(m: &mut Menu) {
     let pick = |char| Pick::disc(char, 0);
     let menu = std::env::var("HST_MENU").unwrap_or_default();
@@ -2494,7 +2450,7 @@ mod tests {
         assert_eq!(m.screen, Screen::Lobby);
         m.heard(Event::Room(Room { doubles: false, seats: vec![None; 2], ..Default::default() }));
         assert_eq!((m.screen, m.doubles, m.players()), (Screen::Chars, false, 2));
-        // B322: the guest shows the host's short code and its QR once the host's code is online
+        // B322: the guest shows the host's short code and its link once the host's code is online
         assert_eq!(shared(&m.net), None);
         m.heard(Event::Room(Room { doubles: false, seats: vec![None; 2], short: "K7QX".into(), ..Default::default() }));
         assert_eq!((m.net.short.as_str(), shared(&m.net)), ("K7QX", Some(crate::net::link("K7QX"))));
@@ -2939,8 +2895,8 @@ mod tests {
     }
 
     /// B370: ←→ go along the seat cards (a computer's card onto its ✕ and back), ↓ from a card to the bottom row, ↑ to
-    /// the settings row, and from the settings row on up to the top bar; the code pill's OK shows the QR big, any
-    /// press puts it away.
+    /// the settings row, and from the settings row on up to the top bar; the code pill's OK copies the link (as
+    /// Copy Link).
     #[test]
     fn arrows_cross_the_lobby_cards() {
         let dev = super::super::Dev::Keys;
@@ -2973,13 +2929,12 @@ mod tests {
         for i in 0..4 {
             assert!(!items.iter().any(|&it| it != Item::Seat(i) && go(it, |k| k.right = true) == Item::Remove(i) && !matches!(it, Item::Remove(_))), "only its own card reaches the ✕");
         }
-        // the code pill: its QR big, then any press closes it (Back doesn't leave the lobby)
+        // the code pill: OK copies the link
         let mut c = m.clone();
         c.sel = at(Item::Button("Code"));
-        c.step(dev, Press { ok: true, ..default() });
-        assert!(c.net.qr_big);
-        c.step(dev, Press { back: true, ..default() });
-        assert_eq!((c.net.qr_big, c.screen), (false, Screen::Lobby));
+        let out = c.step(dev, Press { ok: true, ..default() });
+        assert!(out.iter().any(|e| matches!(e, Effect::Online(Fx::Copy))), "{out:?}");
+        assert_eq!(c.screen, Screen::Lobby);
     }
 
     /// B201: the select's panels are the lobby's seats (this machine's player in the one it holds, the others' live

@@ -1,17 +1,17 @@
 //! LAN play between browsers (M2k): a browser can't send UDP, so with the relay Off the browser build connects by
 //! WebRTC instead of iroh, with no server at all (no STUN, no signalling: host candidates only, i.e. a shared network).
 //!
-//! The offer and answer go by QR code: the host's lobby shows its offer as a link (`…?code=rtco…`); a guest scans it
-//! (the phone's camera opens the game with the code, as Join by Code), and its lobby shows the answer as a link
-//! (`…?code=rtca…`) for the host to scan. That opens a second tab on the host's device, which hands the answer to
+//! The offer and answer go by copied link: the host's lobby shares its offer as a link (`…?code=rtco…`); a guest
+//! opens it (the game starts with the code, as Join by Code), and its lobby shares the answer as a link
+//! (`…?code=rtca…`) for the host to open. That opens a second tab on the host's device, which hands the answer to
 //! the game's tab (a `BroadcastChannel`, `web/index.html`) and stops; pasting either code on the page works too. The
 //! host then shows a fresh offer for the next guest. Once connected it's the same lobby protocol as iroh's
 //! (`net.rs`): JSON messages on a reliable, ordered data channel, rollback's datagrams on an unordered one with no
 //! retransmits, both negotiated up front (ids 0 and 1) so the codes carry nothing but ICE and DTLS.
 //!
 //! A code is the description's essentials only (ICE ufrag and password, the DTLS fingerprint, the host candidates;
-//! an answer also the offer's ufrag it answers), binary, base64url: ~100 bytes instead of a ~600-byte SDP, so the QR
-//! stays small enough to scan off a phone's screen. [`Sig::sdp`] builds a minimal description back from it.
+//! an answer also the offer's ufrag it answers), binary, base64url: ~100 bytes instead of a ~600-byte SDP, so the link
+//! stays short. [`Sig::sdp`] builds a minimal description back from it.
 
 use data_encoding::BASE64URL_NOPAD;
 

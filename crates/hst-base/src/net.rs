@@ -2909,7 +2909,7 @@ fn missed(code: &str, last: Result<Option<i64>, String>) -> String {
             let ago = if m < 2 { "about a minute".into() } else if m < 120 { format!("{m} minutes") } else { "hours".into() };
             format!("The lobby {code} stopped answering {ago} ago: the host left it, or their game was closed or went to the background (on a phone the host's game has to stay open on screen). Ask for the code their lobby shows now.")
         }
-        Ok(None) => format!("No open lobby has the code {code}: check it against the host's screen (the code under the QR)."),
+        Ok(None) => format!("No open lobby has the code {code}: check it against the host's screen (the code in its lobby)."),
         Err(e) => format!("Couldn't look up {code}: {e}."),
     }
 }

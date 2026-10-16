@@ -24,12 +24,10 @@ serde = { version = "1", features = ["derive"] }
 wgpu-types = { version = "29", features = ["serde"] }
 # the select cards' PNG encode (`play/main_menu/previews.rs`; bevy's own image crate)
 image = { version = "0.25", default-features = false, features = ["png"] }
-# join codes as QR (`play/main_menu/online.rs`)
-qrcode = { version = "0.14", default-features = false }
 # the menus' remastered art (`play/menu_art.rs`): vector labels from an OFL font (both already in the lock via bevy)
 tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
 ab_glyph = "0.2"
-# netplay transport (`net.rs`): iroh QUIC (relay-only in the browser), tickets for codes/QR; tasks and timers through
+# netplay transport (`net.rs`): iroh QUIC (relay-only in the browser), tickets for codes/links; tasks and timers through
 # n0-future (tokio natively, the browser's event loop on wasm)
 iroh = "1.3"
 iroh-tickets = "1"
