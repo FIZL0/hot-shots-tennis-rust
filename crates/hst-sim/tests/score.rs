@@ -475,8 +475,9 @@ fn disc_timing(ee: Option<&[u8]>) -> Option<hst_data::exe::ScoreboardTiming> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let cnf = std::fs::read(format!("{root}/context/iso/SYSTEM.CNF")).ok()?;
     let bin = std::fs::read(format!("{root}/context/iso/ZZBIN/GAME.BIN")).ok()?;
-    let (language, umpire) = ee.map_or((0, 4), |ram| (ram[0x2ef110], ram[0x2ef7de]));
-    Some(hst_data::exe::Game::new(&cnf, &bin).unwrap().scoreboard_timing(language, umpire))
+    // slot 3 (no RAM fixture): umpire 2 voice a, read live
+    let (voice, umpire) = ee.map_or((0, 2), |ram| (ram[0x2ef7df], ram[0x2ef7de]));
+    Some(hst_data::exe::Game::new(&cnf, &bin).unwrap().scoreboard_timing(voice, umpire))
 }
 
 /// The point-over phase of every point of the slot-5 bot match (P0b4, P12a): scored points, the umpire's
@@ -511,6 +512,15 @@ fn post_point_replay(name: &str, ee: &str, min: usize, min_changes: usize) {
     let (checked, lines) = post_points(&frames, &timing);
     eprintln!("{name}: {checked} point-over phases (call line ends {lines:?}), {changes} change-ends phases");
     assert!(checked > min && !lines.is_empty() && changes >= min_changes);
+    if name == "match_s05" {
+        // umpire 4 a's line calls (out, fault, double fault, let, out after net; hst-base's `call_clips`): each
+        // heard stopping `VOICE_LAG` ticks after its clip, a tick sooner now and then (the driver isn't frame-locked)
+        let clip = [0, 34, 39, 54, 30, 32];
+        let after = |&(c, v): &(u8, u32)| v - clip[c as usize];
+        let lag = hst_sim::umpire::VOICE_LAG;
+        assert!(lines.iter().all(|l| after(l) == lag || after(l) == lag - 1), "{lines:?}");
+        assert!(lines.iter().filter(|l| after(l) == lag).count() * 2 > lines.len(), "{lines:?}");
+    }
 }
 
 /// The point-over phases of a match with a human (`new_recording.bin`, slot 3): a face-button press ends the
@@ -662,4 +672,35 @@ fn every_match_length_ends() {
             }
         }
     }
+}
+
+/// The match-ending point of the slot-5 match, from its second point-over phase (the first one leaves for the
+/// instant replay): after the scoreboard's pause the players stop and the umpire calls the match (program 2 key 4,
+/// umpire 4 a: 58 frames, `hst_base`'s `call_clips`), and the match-over phase is asked for on the tick the game
+/// hears that voice stop: clip + `VOICE_LAG` − 1 ticks after the call (the match's own read is a tick ahead of
+/// hers). Nothing before then ends the phase: the score show runs out unheeded.
+#[test]
+fn match_s05_match_over() {
+    use hst_sim::flow::PostPoint;
+    use hst_sim::replay::frames_live;
+    let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
+    let (Ok(data), Ok(ram)) = (std::fs::read(format!("{dir}/match_s05.bin")), std::fs::read(format!("{dir}/slot5_ee.bin"))) else {
+        return eprintln!("match_s05.bin or slot5_ee.bin absent, skipped");
+    };
+    let Some(t) = disc_timing(Some(&ram)) else { return eprintln!("disc files absent, skipped") };
+    let frames = frames_live(&data);
+    let k = (1..frames.len()).rev().find(|&k| frames[k].gm()[0x55] == 4 && frames[k - 1].gm()[0x55] != 4).unwrap();
+    assert!(score_at(frames[k]).match_over, "the last point-over phase ends the match");
+    // the tick the match call starts: the pause's end
+    let (mut score, mut rally) = (score_at(frames[k]), rally_block(frames[k]));
+    let mut pp = PostPoint::new(Event::Set);
+    while !pp.calling_match {
+        assert!(pp.step(&mut score, &mut rally, &t).is_none());
+    }
+    let call = pp.tick - 1;
+    assert_eq!(call, 31);
+    let heard = call + 58 + hst_sim::umpire::VOICE_LAG - 1;
+    assert_eq!(post_point(&frames[k..], &t, Some(heard + 1)), Ok(heard + 1));
+    // a voice heard stopping any earlier asks earlier
+    assert!(post_point(&frames[k..], &t, Some(heard)).is_err());
 }

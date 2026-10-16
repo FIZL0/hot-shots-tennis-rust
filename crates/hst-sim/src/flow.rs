@@ -45,6 +45,9 @@ pub struct PostPoint {
     pub shown: bool,
     /// The score the board shows until `shown` (the caller keeps it: the score before the point).
     pub before: Option<Score>,
+    /// The match is over and the scoreboard has paused: the players have stopped and the umpire calls the match
+    /// (`Umpire::call_match`); the match-over phase follows once her voice has stopped. Instead of `reacted`.
+    pub calling_match: bool,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -89,7 +92,7 @@ struct Show {
 impl PostPoint {
     /// The point that produced `event` was just scored, without an umpire call.
     pub fn new(event: Event) -> Self {
-        PostPoint { tick: 0, event: Some(event), board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None }
+        PostPoint { tick: 0, event: Some(event), board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None, calling_match: false }
     }
 
     /// The point ended on the judge's `call` (1 out, 2 fault, 3 double fault, 4 let, 5 out after net, 6
@@ -97,7 +100,7 @@ impl PostPoint {
     /// call sprite first (its countdown from `t.call_wait`); out, out after net and double fault then chain into
     /// the score show, a fault or let ends the phase.
     pub fn called(event: Option<Event>, call: u8, t: &ScoreboardTiming) -> Self {
-        let mut p = PostPoint { tick: 0, event, board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None };
+        let mut p = PostPoint { tick: 0, event, board: Board::Pause(0), pause: PAUSE, reacted: false, shown: false, before: None, calling_match: false };
         if (1..=5).contains(&call) {
             let chain = matches!(call, 1 | 3 | 5);
             p.board = Board::Call(CallShow { call, frames: 0, anim_end: 0.0, chain, countdown: t.call_wait[call as usize], settled: false, held: 0, fade: -1 });
@@ -137,16 +140,22 @@ impl PostPoint {
     /// One tick: the match checks the scoreboard, then the scoreboard runs. Returns where the match goes,
     /// on the tick it decides (the phase changes on the next one). After `Serve` or `ChangeEnds` the caller
     /// moves to the next point (`Score::next_point`, `Rally::next_point`). `voice_idle`: the umpire's call
-    /// line has ended (settles the call sprite). `press`: a human pressed a face button this tick (ends the
-    /// phase once the score has settled).
+    /// line has ended (settles the call sprite; after `calling_match`, her match call has: the match is over).
+    /// `press`: a human pressed a face button this tick (ends the phase once the score has settled).
     pub fn step_with(&mut self, score: &mut Score, rally: &mut Rally, t: &ScoreboardTiming, voice_idle: bool, press: bool) -> Option<Next> {
         let mut next = None;
-        if !self.reacted && self.event.is_some() && !matches!(self.board, Board::Call(_) | Board::Pause(_)) {
-            // ponytail: the match-over branch waits on the umpire's voice line (P0b4c)
-            self.reacted = true;
+        if self.event.is_some() && !matches!(self.board, Board::Call(_) | Board::Pause(_)) {
+            if !score.match_over {
+                self.reacted = true;
+            } else if !self.calling_match {
+                // the players stop instead of reacting; her match call starts, and is first listened to next tick
+                self.calling_match = true;
+            } else if voice_idle {
+                next = Some(Next::MatchOver);
+            }
         }
-        if self.reacted && score.match_over {
-            next = Some(Next::MatchOver);
+        if self.calling_match {
+            // the match waits on her voice alone: neither the show's end nor a press moves on
         } else if matches!(self.board, Board::Done) || (press && self.event.is_some() && self.settled()) {
             score.second_serve = rally.faults == 1;
             score.let_ = rally.let_;
