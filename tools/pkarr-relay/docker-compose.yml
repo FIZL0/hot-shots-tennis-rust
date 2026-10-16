@@ -29,5 +29,10 @@ configs:
       behind_proxy = true
       quota = "20r/s"
       burst = 200
+      # All four are required (the relay won't start without them).
+      dht_quota = "10r/s"
+      dht_burst = 50
+      user_dht_quota = "10r/s"
+      user_dht_burst = 100
 volumes:
   cache:
