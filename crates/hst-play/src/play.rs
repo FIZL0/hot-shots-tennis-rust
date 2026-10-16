@@ -1736,7 +1736,9 @@ pub fn read_input(
         .map(|(e, ..)| e)
         .collect();
     list.sort();
-    held.update(&list);
+    // B516: the keyboard's seat takes only an on-screen pad, never an idle real one
+    let touch: Vec<_> = gamepads.iter().filter(|(_, _, n)| n.is_some_and(|n| emote::is_touch(n))).map(|(e, ..)| e).collect();
+    held.update_with(&list, &touch);
     for (slot, e) in held.0.iter().enumerate() {
         let Some(Ok((_, g, name))) = e.map(|e| gamepads.get(e)) else {
             continue;
