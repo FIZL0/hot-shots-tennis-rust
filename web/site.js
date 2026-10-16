@@ -290,11 +290,45 @@ function prefs() {
   if (other.length) groups.push(['Other', other.map(([k, v]) => [k, k, [v], v])]);
   groups.forEach(([name, rows], i) => {
     const d = el('details', { className: 'group', open: i === 0 }, el('summary', { textContent: name }));
-    for (const [key, label, kind, def] of rows) d.append(el('div', { className: 'r' }, el('span', { textContent: label }), control(key, kind, def)));
+    for (const [key, label, kind, def] of rows) {
+      d.append(el('div', { className: 'r' }, el('span', { textContent: label }), control(key, kind, def)));
+      if (key === 'renderer') {
+        const note = el('p', { className: 'note', hidden: true });
+        d.append(note);
+        rendererNote(value(text, key) ?? def).then(t => { if (t) { note.replaceChildren(...t); note.hidden = false; } });
+      }
+    }
     box.append(d);
   });
   if (!none) box.append(el('div', { className: 'r' }, el('span', { className: 'note', textContent: 'Back to the defaults (a phone gets its graphics preset again).' }),
     pill('Reset settings', () => { if (confirm('Reset every setting to its default?')) { try { localStorage.removeItem(SETTINGS); } catch {} prefs(); } }, 'red')));
+}
+
+// P56: why Auto plays on WebGL2 here, and how to get WebGPU when the browser has it but keeps it off. Chrome on Linux
+// (152, RX 9070 XT) has `navigator.gpu` but hands out no adapter until Vulkan is on in chrome://flags; with only the
+// unsafe-WebGPU flag it hands out SwiftShader (software), which Auto skips (index.html). The page's own probe plus what
+// the last start found (`hst-renderer-why`) and a WebGPU build that stopped and fell back (`hst-webgpu-stopped`)
+async function rendererNote(setting) {
+  let why, stopped;
+  try { why = localStorage.getItem('hst-renderer-why'); stopped = localStorage.getItem('hst-webgpu-stopped'); } catch {}
+  const ua = navigator.userAgent, gecko = ua.includes('Firefox');
+  const chromium = /Chrome\//.test(ua) && !gecko, linux = /Linux/.test(ua) && !/Android|CrOS/.test(ua);
+  let a = null;
+  if (navigator.gpu && !gecko) a = await Promise.race([navigator.gpu.requestAdapter().catch(() => null), new Promise(r => setTimeout(r, 3000, null))]);
+  const sw = !!a && (a.isFallbackAdapter || a.info?.isFallbackAdapter || a.info?.architecture === 'swiftshader');
+  const code = t => el('code', { textContent: t });
+  if (stopped && setting !== 'webgl2')
+    return [`WebGPU stopped the last time it ran (${stopped}), so the game went on with WebGL2. Auto tries WebGPU again on the next start.`];
+  if (setting === 'webgl2' || gecko) return null;
+  if (a && !sw) return why && why !== 'webgpu' && why !== 'forced' && setting === 'auto' ? ['WebGPU is available now: Auto uses it from the next start.'] : null;
+  if (!navigator.gpu) return ['This browser has no WebGPU, so the game uses WebGL2. Chrome, Edge and Safari 26 or newer have it.'];
+  if (chromium && linux) return [
+    sw ? 'Chrome is only offering software WebGPU here (slower than WebGL2), so Auto uses WebGL2. ' : 'Chrome on Linux keeps WebGPU off for most graphics cards, so Auto uses WebGL2. ',
+    'To turn it on: open ', code('chrome://flags/#enable-vulkan'), ', set Vulkan to Enabled and relaunch Chrome. Auto then picks WebGPU by itself; ',
+    code('chrome://gpu'), ' should list WebGPU as "Hardware accelerated".'];
+  if (chromium) return [sw ? 'The browser is only offering software WebGPU here, so Auto uses WebGL2. ' : 'The browser has WebGPU but no graphics card for it here, so Auto uses WebGL2. ',
+    'Check ', code('chrome://gpu'), ': WebGPU should say "Hardware accelerated" (turn on graphics acceleration in the browser\'s settings and update the GPU driver).'];
+  return [sw ? 'The browser is only offering software WebGPU here, so Auto uses WebGL2.' : 'The browser has WebGPU but no graphics card for it here, so Auto uses WebGL2.'];
 }
 
 // ---------------------------------------------------------------- OPFS

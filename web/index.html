@@ -641,8 +641,18 @@ if (gecko && !seen) {
   n.onclick = () => { n.remove(); try { localStorage.setItem('hst-gecko-notice', '1'); } catch {} };
 }
 const adapter = renderer !== 'webgl2' && (!gecko || renderer === 'webgpu') && navigator.gpu ? Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(r, 5000, null))]) : null;
-const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!await adapter?.catch(() => null);
-console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'} (renderer setting: ${renderer})`);
+// P56: under Auto a software adapter (SwiftShader, what Chrome on Linux hands out with only the unsafe-WebGPU flag
+// on) is slower than hardware WebGL2: that one gets WebGL2 too. Why WebGL2 was picked goes to localStorage
+// `hst-renderer-why` for the site's Settings (site.js `rendererNote`)
+const software = a => !!a && (a.isFallbackAdapter || a.info?.isFallbackAdapter || a.info?.architecture === 'swiftshader');
+const got = await adapter?.catch(() => null);
+const webgpu = !new URLSearchParams(location.search).has('webgl2') && !!got && (renderer === 'webgpu' || !software(got));
+{
+  const why = webgpu ? 'webgpu' : new URLSearchParams(location.search).has('webgl2') ? 'forced' : renderer === 'webgl2' ? 'setting'
+    : gecko && renderer !== 'webgpu' ? 'gecko' : !navigator.gpu ? 'no-api' : !got ? 'no-adapter' : 'software';
+  try { localStorage.setItem('hst-renderer-why', why); if (webgpu) localStorage.removeItem('hst-webgpu-stopped'); } catch {}
+  console.info(`hst: ${webgpu ? 'WebGPU' : 'WebGL2'} (renderer setting: ${renderer}; ${why})`);
+}
 // P53: what the game's Auto graphics preset picks from (iOS Safari hides the model and GPU; `web::device`)
 {
   const a = webgpu ? await adapter.catch(() => null) : null;
@@ -676,6 +686,7 @@ window.hstRenderer = word => {
 window.hstWebGL2 = why => {
   if (!webgpu || renderer === 'webgpu') return false;
   console.warn(`hst: WebGPU stopped (${why ?? 'before the first frame'}), reloading with WebGL2`);
+  try { localStorage.setItem('hst-webgpu-stopped', `${why ?? 'before the first frame'}`.slice(0, 200)); } catch {}
   const q = new URLSearchParams(location.search);
   q.set('webgl2', '');
   location.search = q.toString();
