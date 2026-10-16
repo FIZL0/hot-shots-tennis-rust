@@ -505,6 +505,45 @@ fn receive_matches_the_game_long() {
     }
 }
 
+/// P11k4: the receive branches only a human's serves reach, slot 3 with P1 serving from the pad (`HST_DRIVE=1
+/// HST_SERVE=cross HST_SERVE_Y=1 HST_SERVE_WALK=0`: short sliced serves to the receiver's sideline; journal
+/// 2026-10-07-p11-ai 23). Every call replays bit for bit, and each fixture must run its branch, read from the game's
+/// own exits: `_wide`/`_wide_b` the out-of-court aims (plans 11 and 10, the receiver past the doubles sideline as it
+/// aims; `_b` waits 47 polls before its first serve, `HST_SERVE_DELAY`, for another roll);
+/// `_last` the last-entry pick (players at 0.3 speed so the search misses, and the path object stopped growing past
+/// z 9 as at its 600-entry cap, which no point lasts long enough to reach: copies of 1..=11 entries); `_smash` a
+/// smash find (the receivers' stroke height 0.01 and smash window 0.8..1.8 m poked into their character records,
+/// which the records carry, as no serve kicks up to the real 1.9 m).
+#[test]
+fn vpad_serves_receive_matches_the_game() {
+    let (mut plans, mut short, mut smash) = ([0; 2], 0, 0);
+    for name in ["ai_rally_vpad_wide.bin", "ai_rally_vpad_wide_b.bin", "ai_rally_vpad_last.bin", "ai_rally_vpad_smash.bin"] {
+        let Some(n) = replay(name, 1) else { return eprintln!("{name} or disc missing, skipped") };
+        eprintln!("{name}: calls, per substate: {n:?}");
+        let d = std::fs::read(format!("{}/context/fixtures/{name}", root())).unwrap();
+        let mut counts = [0; 4];
+        for (_, _, e, x) in calls(&d, &[1]) {
+            let (from, to, plan) = (e[A + 0x56], x[A + 0x56], x[A + 0xb2]);
+            if from == 2 && to == 3 && (10..=11).contains(&plan) {
+                counts[(plan - 10) as usize] += 1;
+            }
+            if from == 0 && to == 0 && (1..=11).contains(&i32_at(x, A + 0x3c)) {
+                counts[2] += 1;
+            }
+            if from == 0 && to == 1 && x[A + 0x9a] == 3 {
+                counts[3] += 1;
+            }
+        }
+        match name {
+            _ if name.contains("wide") => plans = [plans[0] + counts[0], plans[1] + counts[1]],
+            "ai_rally_vpad_last.bin" => short = counts[2],
+            _ => smash = counts[3],
+        }
+    }
+    eprintln!("plans 10/11 {plans:?}, short copies {short}, smash finds {smash}");
+    assert!(plans[0] > 0 && plans[1] > 0 && short > 0 && smash > 0);
+}
+
 #[test]
 fn net_and_base_match_the_game() {
     for (tag, what) in [(2, "NET"), (3, "BASE")] {

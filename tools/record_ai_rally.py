@@ -275,6 +275,29 @@ if "HST_MARGIN" in os.environ:
         pl = p.read32(gm0 + 0xa8 + 4 * k)
         ai = pl and p.read32(pl + 0x80)
         if ai: p.write32(p.read32(ai + 0xc) + 0x90, struct.unpack("<I", struct.pack("<f", float(os.environ["HST_MARGIN"])))[0])
+# HST_CHAR=k:off:value[,...] (P11k4): player k's character record (*(ai+8), the record's 0x300 region is +0xd0..)
+# float at +off takes value, e.g. 1:0xe0:0.01 shrinks the stroke height (+0xe0) so the tier searches miss a serve
+# still in the smash window; tests replaying such a fixture read the poked record from it
+for spec in filter(None, os.environ.get("HST_CHAR", "").split(",")):
+    k, off, v = spec.split(":")
+    rec = p.read32(p.read32(p.read32(gm0 + 0xa8 + 4 * int(k)) + 0x80) + 8)
+    p.write32(rec + int(off, 0), struct.unpack("<I", struct.pack("<f", float(v)))[0])
+# HST_PATH_STOP=<z> (P11k4): once per serve, when the served ball is past |z| = z on the receiver's half, the path
+# object stops growing (+0x5c = 0, as at its 600-entry cap), so the AI's copy runs down below 12 entries
+PATH_STOP = float(os.environ.get("HST_PATH_STOP", "0"))
+stopped = None
+def path_stop():
+    global stopped
+    if p.read32(0x423060) != 1:
+        stopped = None
+        return
+    b = p.read32(gm0 + 0x88)
+    z = struct.unpack("<f", struct.pack("<I", p.read32(b + 0x128)))[0]
+    rz = struct.unpack("<f", struct.pack("<I", p.read32(p.read32(gm0 + 0xa8 + 4 * p.read32(0x423054)) + 0x3d78)))[0]
+    if stopped is None and z * (1 if rz > 0 else -1) > PATH_STOP:
+        path = p.read32(gm0 + 0xa4)
+        p.write32(path + 0x5c, p.read32(path + 0x5c) & ~0xff)
+        stopped = True
 # HST_DRIVE=1 (P11k7): P1 (slot 3/4, human) is driven by the virtual pad as it records: it holds 4 m off the net,
 # steers to an incoming ball's x and z and presses ○ once per ball within 2.5 m of it, so its own swings claim
 # the path and its record sees volleys; serving it stands and presses ○ every 25 polls (idle, every 60). Needs tools/vpad.py serve.
@@ -292,9 +315,60 @@ if DRIVE:
 WIDE = os.environ.get("HST_WIDE") == "1"
 REACH = float(os.environ.get("HST_REACH", "2.5"))
 BTN = os.environ.get("HST_BTN", "circle")  # the shot button P1 presses (triangle = lob)
+# HST_SERVE=<buttons> (P11k4): serving, P1 holds the stick toward the receiver's sideline (it walks out along the
+# baseline, then the serve goes wide) and serves with these buttons in turn, e.g. circle,triangle,cross; wide serves
+# pull the CPU receiver past the doubles sideline (the out-of-court aims), some are aces (the last-entry pick)
+SERVE = [b for b in os.environ.get("HST_SERVE", "").split(",") if b]
+serves, was_serving, phase, walk, prev_y = 0, False, 0, 0, 0.0
+WALK = os.environ.get("HST_SERVE_WALK", "1") == "1"  # 0: serve from where the point puts P1
+# HST_SERVE_X=<0..1>, HST_SERVE_Y=<-1..1> (down +): the stick while the ball is up (✕ at (1, 1) is short, lands in
+# and slices away: the receiver is at |x| ≈ 6.2 as it bounces, in slot 3)
+SERVE_X = float(os.environ.get("HST_SERVE_X", "1"))
+SERVE_Y = float(os.environ.get("HST_SERVE_Y", "0"))
+# HST_SERVE_DELAY=<polls>: the first serve waits this long (the AI's draws go on meanwhile: another roll for its aim)
+DELAY = int(os.environ.get("HST_SERVE_DELAY", "0"))
 aiming, wide_side = 0, 1
+def serve(me, side):
+    """One poll of P1's wide serve: walk out (a varying number of polls), press for the toss, hold the stick toward
+    the receiver's sideline from a few polls after the press (earlier, it walks the server) through the hit, and hit
+    as the ball rises past a height that varies by serve (pressed falling, it whiffs)."""
+    global serves, was_serving, phase, walk, prev_y, held
+    if not was_serving:
+        serves, phase, walk = serves + 1, 0, 0
+    was_serving = True
+    btn = SERVE[serves % len(SERVE)]
+    by = f32(ball + 0x124)  # y is down
+    mx = f32(me + 0x3d70)
+    rx = f32(p.read32(gm0 + 0xa8 + 4 * p.read32(0x423054)) + 0x3d70)
+    out = (1 if mx > 0 else -1) if abs(mx) > 0.3 else (-1 if rx > 0 else 1)
+    wide = (-side * (1 if rx > 0 else -1) * SERVE_X, SERVE_Y)
+    stick = (0, 0)
+    walk += 1
+    walking = WALK and walk < 4 + (serves * 7) % 30
+    if phase == 0:
+        if walking:
+            stick = (-side * out, 0)
+        elif walk % 12 == 0 and (serves > 1 or walk > DELAY):
+            send(f"press {btn} 60")
+        elif walk % 12 >= 5 and not walking and walk > 12:
+            stick = wide
+        if by < -1.0:
+            phase = 1
+    if phase == 1:
+        stick = wide
+        if by < -1.6 - 0.25 * (serves % 5) or by > prev_y:
+            send(f"press {btn} 60")
+            phase, walk = 2, 0
+    elif phase == 2:
+        stick = wide if walk < 20 else (0, 0)
+        if walk >= 20 and by > -0.6:
+            phase, walk = 0, 0  # whiffed: the ball is back in hand
+    prev_y = by
+    if stick != held:
+        held = stick
+        send(f"stick l {stick[0]} {stick[1]}")
 def drive():
-    global held, pressed_for, idle, aiming, wide_side
+    global held, pressed_for, idle, aiming, wide_side, was_serving
     if aiming:
         aiming -= 1
         return
@@ -308,6 +382,9 @@ def drive():
     dx, dz = tx - mx, tz - mz
     d = (dx * dx + dz * dz) ** 0.5
     stick = (round(-side * dx / d, 1), round(side * dz / d, 1)) if d > 0.4 else (0, 0)  # camera behind P1
+    if SERVE and p.read32(0x42304c) == 0 and (serving and p.read32(0x423060) == 0 or was_serving and phase == 2 and walk < 20):
+        return serve(me, side)
+    was_serving = False
     if stick != held:
         held = stick
         send(f"stick l {stick[0]} {stick[1]}")
@@ -355,6 +432,7 @@ try:
     while p.read32(VSYNC) - v0 < want and p.read32(GM_PTR) == gm0:
         time.sleep(0.03 if DRIVE else 0.1)
         if DRIVE: drive()
+        if PATH_STOP: path_stop()
         if p.read32(PTR) > BUF + (END - BUF) // 3:
             p.pause()
             chunks.append(drain())
