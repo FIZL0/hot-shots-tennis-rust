@@ -426,22 +426,21 @@ fn device_tiles(d: &mut Draw, seats: &[(&str, String)], [x, y, w, _]: [f32; 4]) 
                 d.box3(r, 8.0, [None, None, Some([40.0, 36.0, 44.0])], 40.0);
                 dashed(d, r, 8.0, [72.0, 66.0, 78.0]);
                 d.centred(&p, cx, r[1] + 22.0, 16.0, WHITE);
-                // B362: "Press ✕ / Enter" in the pads' and the keyboard's button art; no Enter once the keyboard holds a seat
-                let keys = !seats.iter().any(|(g, _)| *g == "keys");
-                press_hint(d, "", cx, r[1] + 49.0, 8.5, tw - 8.0, WHITE, keys);
+                // B362: "Press ✕" in the pads' button art; B434: Enter still joins but isn't shown (the keyboard is 1P's
+                // if anyone's)
+                press_hint(d, "", cx, r[1] + 49.0, 8.5, tw - 8.0, WHITE);
                 d.centred("to join", cx, r[1] + 62.0, 8.5, WHITE);
             }
         }
     }
 }
 
-/// B362: "Press" and each connected pad's ✕ then the keyboard's Enter, a slash between, in the legend's button art
-/// (`legend::join_styles`, as the Button Icons setting has them), then `tail`: centred on `cx`, the words `size`
-/// high from `y`, the buttons a little taller around their middle, all shrunk as one to fit `max` wide.
-/// `keys`: the keyboard's Enter too (left out when it already holds a seat).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn press_hint(d: &mut Draw, tail: &str, cx: f32, y: f32, size: f32, max: f32, rgb: [f32; 3], keys: bool) {
-    let styles = legend::join_styles(keys);
+/// B362: "Press" and each connected pad's ✕, a slash between, in the legend's button art (`legend::join_styles`, as
+/// the Button Icons setting has them), then `tail`: centred on `cx`, the words `size` high from `y`, the buttons a
+/// little taller around their middle, all shrunk as one to fit `max` wide. B434: never the keyboard's Enter (it still
+/// joins; the keyboard is 1P's if anyone's).
+pub(super) fn press_hint(d: &mut Draw, tail: &str, cx: f32, y: f32, size: f32, max: f32, rgb: [f32; 3]) {
+    let styles = legend::join_styles();
     if styles.is_empty() {
         d.label("Connect a controller to join", cx, y, size, max, rgb);
         return;

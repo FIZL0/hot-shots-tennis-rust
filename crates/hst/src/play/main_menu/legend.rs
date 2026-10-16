@@ -11,7 +11,7 @@
 //! B362: a pad's style follows the pad (PlayStation by Sony's vendor id, Switch by Nintendo's, Steam Deck by Valve's,
 //! else Xbox) unless the Button Icons setting (Settings → Display, `button_icons` in settings.txt) picks one for
 //! every pad: PlayStation, Xbox, Switch or Generic (position dots, numbered shoulders). The same art stands in the
-//! menus' "Press ✕ / Enter to join" hints ([`Buttons`], [`join_styles`]).
+//! menus' "Press ✕ to join" hints ([`Buttons`], [`join_styles`]).
 //!
 //! `HST_LEGEND=keys|xbox|ps|deck|switch|generic` draws every device in that style (for `--shot`s without the pad).
 
@@ -609,18 +609,14 @@ pub(crate) fn glyph_aspect(style: Style, i: u8) -> f32 {
     w[Style::ALL.iter().position(|s| *s == style).unwrap_or(0)].get(i as usize).copied().unwrap_or(1.0)
 }
 
-/// B362: the styles a "press ✕ / Enter to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if
-/// it names one, for `--shot`s without the pad), then the keyboard's Enter.
-/// `keys`: the keyboard's Enter too (never on a phone build).
-pub(crate) fn join_styles(keys: bool) -> Vec<Style> {
-    let mut v = PADS.lock().map(|p| p.clone()).unwrap_or_default();
-    if let Some(s) = forced().filter(|s| *s != Style::Keys) {
-        v = vec![s];
+/// B362: the styles a "press ✕ to join" hint shows: each connected pad's ✕ (`HST_LEGEND`'s pad style, if it names
+/// one, for `--shot`s without the pad); B434: not the keyboard's Enter, which joins all the same.
+pub(crate) fn join_styles() -> Vec<Style> {
+    let v = PADS.lock().map(|p| p.clone()).unwrap_or_default();
+    match forced().filter(|s| *s != Style::Keys) {
+        Some(s) => vec![s],
+        None => v,
     }
-    if keys && !MOBILE {
-        v.push(Style::Keys);
-    }
-    v
 }
 
 /// A phone build (iOS / Android): no keyboard shortcuts anywhere in the menus.
