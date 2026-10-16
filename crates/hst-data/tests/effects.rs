@@ -51,6 +51,10 @@ fn court10_wind_and_clouds() {
     assert_eq!(game.gusts(10), (2, 2));
     assert_eq!(game.weather_odds(10), [5, 2, 3, 0, 1, 3, 0, 1, 0]);
     assert_eq!(game.weather_odds(11), [20, 2, 3, 30, 2, 4, 0, 0, 1]);
+    // B480: the courts that rain, one spell a match lasting min..=max games (rain chance, min, max, heavy)
+    let rain = |c| (game.weather_odds(c)[3], game.weather_odds(c)[4], game.weather_odds(c)[5], game.weather_odds(c)[8]);
+    assert_eq!([1, 8, 9, 11].map(rain), [(20, 2, 3, 0), (40, 1, 2, 1), (15, 1, 2, 0), (30, 2, 4, 1)]);
+    assert!((1..=11).filter(|c| ![1, 8, 9, 11].contains(c)).all(|c| game.weather_odds(c)[3] == 0));
     assert_eq!(game.wind(7), (vec![0.0], 0.0));
     assert_eq!(game.rain_clouds(), (200, [50.0, -2.0, -5.0]));
     assert_eq!(game.weather_looks()[3], [1.0, 0.7, 0.6, 40.0, 150.0, 0.65]);
