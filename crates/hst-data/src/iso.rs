@@ -101,11 +101,17 @@ impl Iso {
         Ok(hash)
     }
 
-    /// `write_pack` into any writer (the browser's OPFS file); the caller makes it durable.
-    pub fn write_pack_to(&mut self, w: &mut (impl Write + Seek), mut progress: impl FnMut(usize, usize)) -> io::Result<u64> {
+    /// Is this the supported disc (SCUS-97610, US 1.00)? The import page's first step (`write_pack_to` checks too).
+    pub fn check(&mut self) -> io::Result<()> {
         let invalid = |e: crate::xb::Error| io::Error::new(io::ErrorKind::InvalidData, e.0);
         let (cnf, bin) = (self.read("SYSTEM.CNF")?, self.read("ZZBIN/GAME.BIN")?);
         crate::exe::Game::new(&cnf, &bin).map_err(invalid)?;
+        Ok(())
+    }
+
+    /// `write_pack` into any writer (the browser's OPFS file); the caller makes it durable.
+    pub fn write_pack_to(&mut self, w: &mut (impl Write + Seek), mut progress: impl FnMut(usize, usize)) -> io::Result<u64> {
+        self.check()?;
         let names: Vec<String> = self.files.keys().filter(|p| packed(p)).cloned().collect();
         let mut index = (names.len() as u32).to_le_bytes().to_vec();
         let index_len = 20 + names.iter().map(|n| 14 + n.len() as u64).sum::<u64>();

@@ -88,41 +88,78 @@ export async function landing(dir, hasPack) {
 // ---------------------------------------------------------------- the ISO
 
 function importer(done, dir) {
-  const input = $('#iso'), status = $('#status'), bar = $('.progress'), fill = bar.firstElementChild;
-  input.onchange = () => {
-    const file = input.files[0];
-    input.value = '';
-    if (!file) return;
+  const input = $('#iso'), status = $('#status'), stages = $('.stages'), bar = stages.querySelector('.progress'), fill = bar.firstElementChild;
+  const drop = $('.drop'), panel = drop.closest('.panel');
+  // M18: each step's state ('' waiting, on, ok, err), the ones before it ticked
+  const stage = (name, state) => {
+    let before = true;
+    for (const li of stages.children) {
+      const it = li.dataset.stage === name;
+      li.className = it ? state : before ? 'ok' : '';
+      if (it) before = false;
+    }
+  };
+  const fail = (file, e) => {
+    bar.classList.remove('busy');
+    drop.classList.remove('busy');
+    status.className = 'err';
+    status.textContent = `Couldn't import ${file.name}: ${e}`;
+  };
+  const start = file => {
+    if (!file || drop.classList.contains('busy')) return;
     status.className = '';
     // B466: iOS fetches an iCloud file before the worker's first read returns; nothing to count until then
     status.textContent = `Reading ${file.name}…`;
-    bar.hidden = false;
+    stages.hidden = false;
+    drop.classList.add('busy');
+    stage('check', 'on');
     bar.classList.add('busy');
     fill.style.width = '0';
     const w = new Worker('./worker.js', { type: 'module' });
+    let checked = false;
     w.onmessage = ({ data }) => {
       if (data.progress) {
+        // the pack writer checks the disc before it copies the first file
+        if (!checked) { checked = true; stage('copy', 'on'); }
         bar.classList.remove('busy');
         const p = Math.floor(100 * data.progress[0] / data.progress[1]);
         fill.style.width = `${p}%`;
         status.textContent = `Importing… ${p}%`;
       } else if (data.error) {
         w.terminate();
-        bar.hidden = true;
-        status.className = 'err';
-        status.textContent = `Couldn't import ${file.name}: ${data.error}`;
+        stage(checked ? 'copy' : 'check', 'err');
+        fail(file, data.error);
       } else if (data.hash) {
         w.terminate();
         // B457: no OPFS, the pack in memory for this visit (index.html's memory folder)
         if (data.pack) dir.put('disc.pack', data.pack);
         fill.style.width = '100%';
+        stage('done', 'ok');
         status.textContent = 'Imported. The ISO is no longer needed; you can delete it. Starting…';
         done();
       }
     };
-    w.onerror = e => { bar.hidden = true; status.className = 'err'; status.textContent = `Couldn't import ${file.name}: ${e.message ?? e}`; };
+    w.onerror = e => { stage(checked ? 'copy' : 'check', 'err'); fail(file, e.message ?? e); };
     w.postMessage(dir.memory ? { file, memory: true } : file);
   };
+  input.onchange = () => {
+    const file = input.files[0];
+    input.value = '';
+    start(file);
+  };
+  // a file dragged anywhere over the panel lights the drop area; let go of it there, it's picked
+  let depth = 0;
+  const files = e => [...(e.dataTransfer?.types ?? [])].includes('Files');
+  panel.addEventListener('dragenter', e => { if (!files(e)) return; e.preventDefault(); depth++; drop.classList.add('over'); });
+  panel.addEventListener('dragover', e => { if (!files(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  panel.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; drop.classList.remove('over'); } });
+  panel.addEventListener('drop', e => {
+    if (!files(e)) return;
+    e.preventDefault();
+    depth = 0;
+    drop.classList.remove('over');
+    start(e.dataTransfer.files[0]);
+  });
 }
 
 // ---------------------------------------------------------------- player
