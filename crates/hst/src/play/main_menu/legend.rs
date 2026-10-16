@@ -189,6 +189,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let s = m.sel;
     match m.screen {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose")]),
+        _ if m.mod_asking() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Stand-in")]),
         _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
         Screen::Main if m.main_rows().get(s) == Some(&super::home::Row::Update) => v.extend([(Act::UpDown, "Move"), (Act::Ok, crate::update::button()), (Act::Back, "Later")]),
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if m.main_rows().get(s) == Some(&super::home::Row::Quit) { if cfg!(target_arch = "wasm32") { "Launcher" } else { "Quit" } } else { "Choose" })]),
@@ -1263,6 +1264,12 @@ mod tests {
         let mut m = online(Screen::Lobby);
         m.net.ask = Some(7);
         starts.push((m, Dev::Keys));
+        // B484: the prompt over the select and the confirm
+        for s in [Screen::Chars, Screen::Confirm] {
+            let mut m = online(s);
+            m.net.ask = Some(7);
+            starts.push((m, Dev::Keys));
+        }
         let mut m = online(Screen::Lobby);
         m.net.hosting = false;
         starts.push((m, Dev::Keys));

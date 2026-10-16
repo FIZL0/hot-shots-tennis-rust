@@ -146,7 +146,7 @@ fn plate(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], p: usize, rect: [
         None => "Computer".into(),
     };
     let sub = if random { "Picked at the start".to_string() } else { format!("{} · {}", frame::style_short(text, who), if m.hand(text, p) < 0.0 { "Left" } else { "Right" }) };
-    let mod_note = m.remote_mod_name(p).map(|n| format!("{n} mod: you'll see a stand-in"));
+    let mod_note = m.remote_mod_note(p);
     let plate = Plate {
         p,
         owner: &owner,

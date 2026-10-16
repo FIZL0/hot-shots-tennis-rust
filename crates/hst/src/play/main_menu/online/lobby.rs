@@ -311,7 +311,7 @@ fn plate(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32, foc
         State::Waiting => (Chip::Waiting, "Not ready".to_string()),
     };
     let sub = if random { "Picked at the start".to_string() } else { format!("{} · {}", frame::style_short(text, who), if m.hand(text, i) < 0.0 { "Left" } else { "Right" }) };
-    let mod_note = m.remote_mod_name(i).map(|n| format!("{n} mod: you'll see a stand-in"));
+    let mod_note = m.remote_mod_note(i);
     let pl = Plate {
         p: i,
         owner: &owner,

@@ -54,6 +54,8 @@ pub struct View {
     pub looks: HashMap<u64, Option<PathBuf>>,
     pub wanted: HashSet<u64>,
     pub ask: Option<u64>,
+    /// B484: the prompt's cursor when it's asked over the select or the confirm (the lobby's is `sel`).
+    pub ask_row: usize,
     pub ready: Option<u32>,
     /// B281: what this machine last told the host about still choosing about a mod.
     pub deciding: bool,
@@ -467,6 +469,26 @@ impl Menu {
         (!self.mods.iter().any(|m| m.id == id) && !name.is_empty()).then_some(name)
     }
 
+    /// B484: the note under a `remote_mod_name` seat: what this machine does about that mod's looks (fetching them,
+    /// asking, a stand-in only once declined or unavailable).
+    pub(super) fn remote_mod_note(&self, p: usize) -> Option<String> {
+        let n = self.remote_mod_name(p)?;
+        let s = self.remote(p)?;
+        // the seat's pick names the looks once it's in the lobby; a player still choosing only names the mod
+        let h = s.pick.r#mod.as_deref().filter(|w| w.name == n).map(|w| w.looks);
+        let what = match h {
+            Some(h) if self.net.looks.get(&h).is_some_and(|d| d.is_none()) => "you'll see a stand-in",
+            Some(h) if self.net.wanted.contains(&h) => "downloading its looks...",
+            Some(h) if self.net.ask == Some(h) => "download its looks?",
+            _ => match self.settings.4 {
+                Ask::Never => "you'll see a stand-in",
+                Ask::Always => "its looks download once picked",
+                Ask::Each => "you'll be asked to download it",
+            },
+        };
+        Some(format!("{n} mod: {what}"))
+    }
+
     /// B201: the select's panels as the lobby's seats: this machine's players moved into the seats it holds (in
     /// order), every other seat showing its player's live place (a computer's pick, ready; an open seat empty).
     pub(super) fn align(&mut self) {
@@ -838,17 +860,7 @@ impl Menu {
             Screen::Lobby if let Some(h) = self.net.ask.filter(|_| !k.back) => {
                 rows(ASK_ROWS.len(), &mut self.sel, out);
                 if k.ok {
-                    let (_, fetch, remember) = ASK_ROWS[self.sel];
-                    self.net.ask = None;
-                    if fetch {
-                        self.net.wanted.insert(h);
-                        out.push(Effect::Online(Fx::Net(Cmd::Want(h))));
-                    } else {
-                        self.net.looks.insert(h, None);
-                    }
-                    // B289: kept with the settings (Settings → Online Mod Downloads changes it later)
-                    self.settings.4 = remember;
-                    out.extend([Sound(2), Effect::SaveSettings]);
+                    self.answer_ask(h, self.sel, out);
                 }
             }
             Screen::Lobby => {
@@ -1270,7 +1282,14 @@ impl Menu {
                 }
                 Ask::Never => drop(self.net.looks.insert(h, None)),
                 _ if room.stand_in => drop(self.net.looks.insert(h, None)),
-                _ if self.net.ask.is_none() => (self.net.ask, self.sel) = (Some(h), 0),
+                _ if self.net.ask.is_none() => {
+                    self.net.ask = Some(h);
+                    self.net.ask_row = 0;
+                    // B484: on the select or the confirm their own cursors stay put
+                    if self.screen == Screen::Lobby {
+                        self.sel = 0;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1278,6 +1297,43 @@ impl Menu {
             self.net.ready = Some(room.ver);
             net.send(Cmd::Ready(room.ver));
         }
+    }
+
+    /// The prompt's row `i` chosen for the mod `h`: its looks asked for, or a stand-in, and the answer remembered.
+    fn answer_ask(&mut self, h: u64, i: usize, out: &mut Vec<Effect>) {
+        let (_, fetch, remember) = ASK_ROWS[i];
+        self.net.ask = None;
+        if fetch {
+            self.net.wanted.insert(h);
+            out.push(Effect::Online(Fx::Net(Cmd::Want(h))));
+        } else {
+            self.net.looks.insert(h, None);
+        }
+        // B289: kept with the settings (Settings → Online Mod Downloads changes it later)
+        self.settings.4 = remember;
+        out.extend([Effect::Sound(2), Effect::SaveSettings]);
+    }
+
+    /// B484: the prompt for the other side's mod is up over the select or the confirm (this side still picking).
+    pub(super) fn mod_asking(&self) -> bool {
+        self.online() && self.net.ask.is_some() && matches!(self.screen, Screen::Chars | Screen::Confirm)
+    }
+
+    /// B484: a press while `mod_asking`: it answers the prompt (○: a stand-in this time), whoever's device it is;
+    /// false when no prompt is up there.
+    pub(super) fn mod_ask_step(&mut self, k: Press, out: &mut Vec<Effect>) -> bool {
+        let Some(h) = self.net.ask.filter(|_| self.mod_asking()) else { return false };
+        let n = ASK_ROWS.len();
+        if k.up || k.down {
+            self.net.ask_row = if k.down { (self.net.ask_row + 1) % n } else { (self.net.ask_row + n - 1) % n };
+            out.push(Effect::Sound(0));
+        }
+        if k.back {
+            self.answer_ask(h, 2, out);
+        } else if k.ok {
+            self.answer_ask(h, self.net.ask_row.min(n - 1), out);
+        }
+        true
     }
 
     /// B281: a mod in the lobby this machine hasn't chosen to download or not (asked, or not asked yet).
@@ -1443,23 +1499,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 // a mod this machine doesn't have: its looks, or its donor recoloured, asked over the lobby; the gold
                 // pill is the cursor, and it has to be answered
                 lobby::draw(d, m, status.as_deref());
-                let help = match room.filter(|r| r.wait > 0) {
-                    Some(r) => format!("The match is waiting: choose within {} s, or it plays as the character it's based on, in other colours.", r.wait),
-                    None => "Download its looks, or play it as the character it's based on, in other colours.".into(),
-                };
-                d.popup(None);
-                let (sw, sh) = (260.0, 230.0);
-                let (sx, sy) = (320.0 - sw / 2.0, 224.0 - sh / 2.0);
-                d.box3([sx, sy, sw, sh], 14.0, [Some(super::INK), Some(WHITE), Some(super::CREAM)], 128.0);
-                d.label(&format!("{} is a mod you don't have.", w.name), sx + sw / 2.0, sy + 14.0, 14.0, sw - 20.0, super::BROWN);
-                for (i, r) in ASK_ROWS.iter().enumerate() {
-                    let rect = [sx + 10.0, sy + 40.0 + 40.0 * i as f32, sw - 20.0, 32.0];
-                    super::side_button(d, rect, r.0, m.sel == i, false);
-                    d.hit(rect, Act::Row(i, OK));
-                }
-                for (k, l) in super::wrap(&help, 44).iter().take(2).enumerate() {
-                    d.label(l, sx + sw / 2.0, sy + 202.0 + 12.0 * k as f32, 10.0, sw - 20.0, super::BROWN);
-                }
+                ask_popup(d, &w.name, room.map_or(0, |r| r.wait), m.sel, None);
                 return;
             }
             if room.is_some() {
@@ -1703,6 +1743,39 @@ fn qr(code: &str) -> Option<Image> {
     Some(img)
 }
 
+/// A mod this machine doesn't have: its looks, or its donor recoloured, asked over the screen under it; the gold pill
+/// (row `sel`) is the cursor, and it has to be answered (`outside`: what a press off the box does).
+fn ask_popup(d: &mut Draw, name: &str, wait: u32, sel: usize, outside: Option<Act>) {
+    let help = match wait {
+        0 => "Download its looks, or play it as the character it's based on, in other colours.".into(),
+        s => format!("The match is waiting: choose within {s} s, or it plays as the character it's based on, in other colours."),
+    };
+    d.popup(outside);
+    let (sw, sh) = (260.0, 230.0);
+    let (sx, sy) = (320.0 - sw / 2.0, 224.0 - sh / 2.0);
+    d.box3([sx, sy, sw, sh], 14.0, [Some(super::INK), Some(WHITE), Some(super::CREAM)], 128.0);
+    d.label(&format!("{name} is a mod you don't have."), sx + sw / 2.0, sy + 14.0, 14.0, sw - 20.0, super::BROWN);
+    for (i, r) in ASK_ROWS.iter().enumerate() {
+        let rect = [sx + 10.0, sy + 40.0 + 40.0 * i as f32, sw - 20.0, 32.0];
+        super::side_button(d, rect, r.0, sel == i, false);
+        d.hit(rect, Act::Row(i, OK));
+    }
+    for (k, l) in super::wrap(&help, 44).iter().take(2).enumerate() {
+        d.label(l, sx + sw / 2.0, sy + 202.0 + 12.0 * k as f32, 10.0, sw - 20.0, super::BROWN);
+    }
+}
+
+/// B484: the prompt over the select or the confirm (`mod_asking`), dimming what's under it; a press off the box is
+/// ○ (a stand-in this time).
+pub(super) fn draw_ask_over(d: &mut Draw, m: &Menu) {
+    let Some(room) = m.net.room.as_ref().filter(|_| m.mod_asking()) else { return };
+    let Some(w) = m.net.ask.and_then(|h| room.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) else { return };
+    d.anchor = super::Anchor::Span;
+    d.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 64.0);
+    d.anchor = super::Anchor::Centre;
+    ask_popup(d, &w.name, room.wait, m.net.ask_row, Some(Act::Press(Press { back: true, ..Default::default() })));
+}
+
 /// The network's events into the menu, and the QR of the menu's code whenever the code changes.
 pub(super) fn poll(
     net: Option<Res<Net>>,
@@ -1727,7 +1800,9 @@ pub(super) fn poll(
             menu.heard(e);
         }
         // B281: once the host's wait is over, settled on any screen (stand-ins: no prompt, no cursor moved)
-        if menu.screen == Screen::Lobby || menu.net.room.as_ref().is_some_and(|r| r.stand_in) {
+        // B484: on the select and the confirm too, so the other side's mod is fetched (or asked about) while this side
+        // still picks, not only once it is back in the lobby
+        if matches!(menu.screen, Screen::Lobby | Screen::Chars | Screen::Confirm) || menu.net.room.as_ref().is_some_and(|r| r.stand_in) {
             menu.settle(&args.iso, &net);
         }
         let d = menu.undecided();
@@ -2500,6 +2575,50 @@ mod tests {
         b.seats[0] = Some(super::super::Dev::Keys);
         b.align();
         assert_eq!(b.pick(1), (super::super::Who::Mod(0), 0));
+    }
+
+    /// B484: the other side's mod is settled while this side still picks: asked about over the select (its cursors
+    /// kept), answered there (○: a stand-in this time), fetched at once with "always" on the confirm; the seat's note
+    /// says which.
+    #[test]
+    fn remote_mod_asked_on_the_select() {
+        use super::super::Dev;
+        let w = Wire { id: "emi".into(), name: "Emi".into(), donor: 4, hand: 1.0, base: 4, overrides: vec![], ai_row: 4, names: vec![], parent: vec![], rest: vec![], looks: 7, dir: None };
+        let iso = "/nonexistent-b484/hst.iso";
+        let (net, mut rx) = Net::wired();
+        let mut b = Menu { screen: Screen::Chars, ..default() };
+        sample(&mut b);
+        (b.net.me, b.net.go, b.settings.4) = ("host".into(), Some(Go::Code), Ask::Each);
+        b.seats[0] = Some(Dev::Keys);
+        let r = b.net.room.as_mut().unwrap();
+        r.live.clear();
+        r.seats[1].as_mut().unwrap().pick = Pick { r#mod: Some(Box::new(w.clone())), ..Pick::disc(4, 0) };
+        assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: you'll be asked to download it"));
+        b.sel = 3;
+        b.settle(iso, &net);
+        assert_eq!((b.net.ask, b.sel, b.mod_asking()), (Some(7), 3, true), "asked on the select, its cursor left alone");
+        assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: download its looks?"));
+        let cursor = b.players[0].cursor;
+        b.step(Dev::Keys, Press { down: true, ..default() });
+        assert_eq!((b.net.ask_row, b.players[0].cursor), (1, cursor), "the prompt takes the press, not the grid");
+        let out = b.step(Dev::Keys, OK);
+        assert!(out.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Want(7))))), "{out:?}");
+        assert_eq!((b.net.ask, b.net.wanted.contains(&7), b.settings.4, b.mod_asking()), (None, true, Ask::Each, false));
+        assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: downloading its looks..."));
+        // asked again (its looks never came): ○ plays it as a stand-in
+        b.net.wanted.clear();
+        b.settle(iso, &net);
+        assert!(b.mod_asking());
+        b.step(Dev::Keys, Press { back: true, ..default() });
+        assert_eq!((b.screen, b.net.ask, b.net.looks.get(&7)), (Screen::Chars, None, Some(&None)), "○ answers, it doesn't leave the select");
+        assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: you'll see a stand-in"));
+        // "always": fetched with no prompt, on the confirm too
+        while rx.try_recv().is_ok() {}
+        (b.screen, b.settings.4) = (Screen::Confirm, Ask::Always);
+        b.net.looks.clear();
+        b.settle(iso, &net);
+        assert_eq!((b.net.ask, b.net.wanted.contains(&7)), (None, true));
+        assert_eq!(rx.try_recv().ok(), Some(Cmd::Want(7)));
     }
 
     /// B285: a mod pick shows as the mod for its owner (its pick carries it, its looks are its own folder) and, in the
