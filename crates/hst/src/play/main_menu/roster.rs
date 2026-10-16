@@ -495,8 +495,14 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         // B234: another machine's mod this one doesn't have: its own name over the donor's looks
         Who::Disc(ch) => m.remote_mod_name(p).unwrap_or(CHAR_NAMES[ch]).to_string(),
     };
-    let side = if p < (n / 2).max(1) { "Near" } else { "Far" };
-    band(d, &s, at.head, solid, p, &name, &device, side, m.droppable(p));
+    // the side pill: "Swap teams" with the seat's own □ / X / Tab while its device can switch (doubles), else its side
+    let swap = match m.seats[p] {
+        Some(dev @ Dev::Pad(e)) if m.team_switch(dev).is_some() => Some(legend::dev_style(Some(e))),
+        Some(Dev::Keys) if m.team_switch(Dev::Keys).is_some() => Some(legend::dev_style(None)),
+        _ => None,
+    };
+    let side = if swap.is_some() { "Swap teams" } else if p < (n / 2).max(1) { "Near" } else { "Far" };
+    band(d, &s, at.head, solid, p, &name, &device, side, swap, m.droppable(p));
     if mine && m.seats[p].is_some() {
         // B371: a tap on the seat's number or names opens the name picker
         let [hx, hy, hw, hh] = at.head;
@@ -747,9 +753,10 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 
 /// B422: seat `p`'s header band in `[x, y, w, h]`: `solid` the seat's colour (a computer player's dark, its words in
 /// the seat's colour), its top corners the card's; a big `1P`, the character's `name` over `device`, and the `side`
-/// pill on the right (left of the ✕ when `drop`; left out when the column is too narrow for it and a name).
+/// pill on the right (`glyph`'s button art before it; left of the ✕ when `drop`; left out when the column is too
+/// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
-fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, name: &str, device: &str, side: &str, drop: bool) {
+fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
     let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.well, s.ring) };
     rounded(d, [x, y, w, h], 14.0, fill, 128.0);
     d.out.last_mut().unwrap().round = [14.0 * PX, 14.0 * PX, 0.0, 0.0];
@@ -759,11 +766,16 @@ fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, n
     d.text(&tag, tx, y + (h - big) / 2.0 + 2.0 * PY, big, ink);
     let nx = tx + d.width(&tag, big) + 10.0 * PX;
     let (ss, sh) = (12.0 * PY, 20.0 * PY);
-    let sw = d.width(side, ss) + 16.0 * PX;
+    let gh = 14.0 * PY;
+    let gw = glyph.map_or(0.0, |g| gh * legend::glyph_aspect(g, MODE_GLYPH) + 4.0 * PX);
+    let sw = d.width(side, ss) + 16.0 * PX + gw;
     let sx = x + w - 12.0 * PX - sw - if drop { 30.0 } else { 0.0 };
     let end = if sx - 8.0 * PX - nx >= 48.0 * PX {
         rounded(d, [sx, y + (h - sh) / 2.0, sw, sh], 10.0, hex(BG), 128.0);
-        d.centred(side, sx + sw / 2.0, y + (h - ss) / 2.0, ss, WHITE);
+        if let Some(g) = glyph {
+            d.q(Tex::Glyph(g, MODE_GLYPH), [0.0; 4], [sx + 6.0 * PX, y + (h - gh) / 2.0, gw - 4.0 * PX, gh], WHITE, 128.0);
+        }
+        d.centred(side, sx + gw + (sw - gw) / 2.0, y + (h - ss) / 2.0, ss, WHITE);
         sx - 8.0 * PX
     } else {
         x + w - 8.0 * PX - if drop { 30.0 } else { 0.0 }
