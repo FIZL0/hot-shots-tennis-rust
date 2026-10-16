@@ -11,12 +11,25 @@ use crate::audio::VoiceBanks;
 use crate::mods_umpire::{self, MatchUmpire};
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(PostStartup, over_donor.after(super::setup));
+    app.add_systems(PostStartup, over_donor.after(super::setup)).add_systems(Update, over_donor.run_if(not(resource_exists::<Over>)));
 }
 
-/// Slot 5 (`VoiceBanks` index 4): the donor's bank with the mod's calls over it.
-fn over_donor(ump: Option<Res<MatchUmpire>>, args: Res<crate::Args>, voices: Option<ResMut<VoiceBanks>>) {
-    let (Some(ump), Some(mut voices)) = (ump, voices) else { return };
+/// B487: the mod's calls are over the donor's (or there's nothing to put over them).
+#[derive(Resource)]
+struct Over;
+
+/// Slot 5 (`VoiceBanks` index 4): the donor's bank with the mod's calls over it. B487: in the browser the mod's
+/// voices may still be in its storage (an online peer's copy, never wanted before): asked for, and put over the
+/// donor's on the frame they're in (the donor's are heard until then).
+fn over_donor(mut commands: Commands, ump: Option<Res<MatchUmpire>>, args: Res<crate::Args>, voices: Option<ResMut<VoiceBanks>>, over: Option<Res<Over>>) {
+    if over.is_some() {
+        return;
+    }
+    let (Some(ump), Some(mut voices)) = (ump, voices) else { return commands.insert_resource(Over) };
+    if !crate::modfs::ready(&ump.0.dir) {
+        return;
+    }
+    commands.insert_resource(Over);
     if ump.0.donor != args.umpire {
         // online: this peer's copy names another donor than the room's; the room's umpire still times the calls
         warn!("umpire mod {}: donor {} here, umpire {} in the match; heard over umpire {}", ump.0.id, ump.0.donor, args.umpire, args.umpire);
@@ -75,6 +88,40 @@ mod tests {
         w.extend((samples.len() as u32).to_le_bytes());
         w.extend(samples);
         w
+    }
+
+    /// B487: in the browser an umpire mod's voices stay in its storage until wanted (even right after a store
+    /// download): the match hears the donor until they're read in, then the mod's calls, never a bank built from the
+    /// files it couldn't read yet (skipped without the ISO).
+    #[test]
+    fn an_umpire_mod_still_in_the_browsers_storage_is_heard_once_read_in() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let dir = std::env::temp_dir().join(format!("hst-umpire-lazy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mod.json"), r#"{"standard":1,"kind":"umpire","id":"lazy_ump","name":"Gloria","donor":4}"#).unwrap();
+        let files = ["voice/1_1.wav", "voice/0_13.wav"].map(|f| (dir.join(f), wav(600)));
+        for (f, w) in &files {
+            crate::modfs::add_lazy(f, w.len() as u64);
+        }
+        let ump = crate::mods_umpire::read(&dir).unwrap();
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, _) = app(Some(&ump));
+        let takes = |app: &App| app.world().resource::<VoiceBanks>().0[4].as_ref().unwrap().takes.len();
+        app.world_mut().run_system_once(super::over_donor).unwrap();
+        assert_eq!(takes(&app), 0, "the donor's bank alone while the voices are out");
+        // the page reads the folder in
+        for (f, w) in files {
+            crate::modfs::add(&f, w.into());
+        }
+        crate::modfs::loaded(&dir.display().to_string());
+        app.world_mut().run_system_once(super::over_donor).unwrap();
+        assert_eq!(takes(&app), 2, "the mod's calls over the donor's once they're in");
+        app.world_mut().run_system_once(super::over_donor).unwrap();
+        assert_eq!(takes(&app), 2, "put over once");
+        crate::modfs::remove(&dir);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// M8f3: an umpire mod changes what's heard, never the match. Its calls (every key of the call table, the

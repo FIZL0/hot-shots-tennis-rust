@@ -2963,8 +2963,8 @@ fn step(
     mut exit: MessageWriter<AppExit>,
     mut gfx: ResMut<Graphics>,
     (net, mut clipboard, mut pending): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>, Option<ResMut<pointer::Pending>>),
-    // Preview Voice: each umpire's voice bank once read, and the call playing
-    mut voice: Local<(std::collections::HashMap<u8, Option<Arc<crate::audio::SoundBank>>>, Option<u64>)>,
+    // Preview Voice: each umpire's voice bank once read, the call playing, and (B487) one waiting for the browser
+    mut voice: Local<(std::collections::HashMap<u8, Option<Arc<crate::audio::SoundBank>>>, Option<u64>, Option<(u8, u8, u8)>)>,
     // B336: a launch waiting for the browser to read its mods in
     mut launching: Local<bool>,
 ) {
@@ -3077,6 +3077,9 @@ fn step(
         if dev == Dev::Keys && std::mem::take(&mut *launching) {
             fx.push(Effect::Launch);
         }
+        if dev == Dev::Keys && let Some((u, program, key)) = voice.2.take().filter(|h| h.0 == menu.umpire) {
+            fx.push(Effect::Hear(u, program, key));
+        }
         if k == Press::default() && fx.is_empty() {
             continue;
         }
@@ -3111,7 +3114,7 @@ fn step(
                 Effect::Launch => {
                     let a = menu.args(&pads);
                     // every one asked at once (no short-circuit), then tried again next frame
-                    if !a.windows(3).filter(|w| w[0] == "--slot-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[2])) && ok) {
+                    if !a.windows(3).filter(|w| w[0] == "--slot-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[2])) && ok) | !umpire_mods::launch_ready(&a) {
                         *launching = true;
                         continue;
                     }
@@ -3132,6 +3135,11 @@ fn step(
                 }
                 Effect::Hear(u, program, key) => {
                     let Some(s) = &sound else { continue };
+                    // B487: a mod's calls still in the browser's storage: asked for, heard once they're in
+                    if !voice.0.contains_key(&u) && !umpire_mods::voice_ready(&menu, u) {
+                        voice.2 = Some((u, program, key));
+                        continue;
+                    }
                     let bank = voice.0.entry(u).or_insert_with(|| umpire_mods::preview_bank(&args.iso, &menu, u).map(Arc::new)).clone();
                     if let Some(bank) = bank {
                         if let Some(id) = voice.1.take() {

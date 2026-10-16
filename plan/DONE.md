@@ -709,6 +709,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B483** Online screens' background isn't the graph-paper wall the settings and mods screens use (user 2026-10-16): give the online lobby/join/host screens the same paper background — crates/hst/src/play/main_menu/online.rs, crates/hst/src/play/main_menu/online/, crates/hst/src/play/menu_art.rs, crates/hst/src/play/main_menu/mods_screen.rs (reference)
 - [x] **B495** Find and Join by Code screens show the 'Main Menu' title band (frame(0, 5)); title them 'Online' (frame(8, 5)) like the Online screen (seen in B483) — crates/hst/src/play/main_menu/online.rs
 - [x] **B494** netplay test rollback_desync_is_saved_and_play_goes_on resyncs twice (expects 1) when the machine is loaded: ggrs and rollback.rs RESEND run on wall-clock time inside the round-based test harness; make the harness's outcome independent of how long a round takes (P60 journal). Files: crates/hst/src/play/netplay.rs, crates/hst/src/play/rollback.rs
+- [x] **B487** Umpire mods: on web, the downloaded Gloria umpire's "Hear voice" plays Lily's SFX instead of Gloria's calls (user 2026-10-16) — check the browser mod download stores/loads her bank, and the preview uses the mod's bank not the donor's — crates/hst-base/src/mods_umpire.rs, crates/hst/src/play/main_menu/umpire_picker.rs, crates/hst/src/play/main_menu/umpire_mods.rs, crates/hst-base/src/modstore.rs, crates/hst-base/src/audio.rs
 
 
 ### Shots
