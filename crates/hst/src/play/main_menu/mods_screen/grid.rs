@@ -1201,8 +1201,13 @@ pub(super) fn roll_time(mut menu: ResMut<Menu>, time: Res<Time>) {
 /// downloading · 1 queued" (nothing waiting: how many are installed); whether downloads are running (a spinner).
 /// M114: uploads under way (on every page) come before the last action's words: "Uploading A · 2 queued", after the
 /// downloads when both run ("2 downloading · 3 uploading"), then "Uploaded 3 mods · waiting for review" a few seconds.
+/// M115: "Refreshing..." with the spinner while the listing is read again after uploads.
 pub(super) fn status(m: &Menu) -> (String, bool) {
     let v = &m.add;
+    // M115: the listing read again after a batch of uploads (the tiles stay till it's in)
+    if v.refreshing {
+        return ("Refreshing...".into(), true);
+    }
     let (now, ups) = v.uploads();
     let upped = v.upped.1 > 0.0;
     let said = !v.status.is_empty() && v.child.is_none() && !(v.page == Page::Upload && v.status == RULE);
