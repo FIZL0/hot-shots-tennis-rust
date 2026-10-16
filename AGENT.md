@@ -41,6 +41,8 @@ its TODO/DONE line) · `"when blocked"` (a section) · `-f FILE <name>` (any mar
   `research/xref.py <addr> --similar` (look-alike functions; `ported` ones have Rust to copy the shape of). A hook
   blocks reading the 16 MB dumps whole.
 - Tests: `tools/check.sh [-p crate --test name]`, not bare `cargo test`; full log in `context/notes/check.log`.
+  While working, run only the tests you touched (`tools/check.sh -p hst <filter>`): three check slots serve every
+  agent, and a full-suite run holds one for many minutes. The full suite runs once, in `tools/done.sh`.
   Keep each test under ~10 s: share one match between checks, force the rare case (e.g. set the replay camera's
   closing-shot list) instead of playing on until it happens. Slower ones are `#[ignore]` with a doc line saying
   how and when to run them (`tools/check.sh -p hst <name> -- --ignored`). `check.sh` skips the netplay match tests
