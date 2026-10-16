@@ -233,6 +233,16 @@ impl Bindings {
         self.0[i].push(Input::Pad(b));
     }
 
+    /// B291: action `i`'s bound keys, in order.
+    pub fn keys_of(&self, i: usize) -> Vec<KeyCode> {
+        self.0[i].iter().filter_map(|x| if let Input::Key(k) = x { Some(*k) } else { None }).collect()
+    }
+
+    /// B291: action `i`'s bound pad buttons, in order.
+    pub fn pads_of(&self, i: usize) -> Vec<GamepadButton> {
+        self.0[i].iter().filter_map(|x| if let Input::Pad(b) = x { Some(*b) } else { None }).collect()
+    }
+
     /// Whether `k` / `b` can be bound (one of the names `controls.txt` knows).
     pub fn bindable_key(k: KeyCode) -> bool {
         KEYS.contains(&k)
@@ -244,6 +254,27 @@ impl Bindings {
     /// Write these bindings to `controls.txt` beside `iso`.
     pub fn save(&self, iso: &str) -> std::io::Result<()> {
         crate::store::write(path(iso), self.text())
+    }
+}
+
+/// B291: every pad button a binding may name, in `controls.txt`'s order (the legend bakes an icon for each).
+pub fn pad_buttons() -> &'static [GamepadButton] {
+    BUTTONS
+}
+
+/// B291: the stick that always does action `i`, unbindable: the left stick moves (up, down, left, right), the right
+/// stick flicked plays the emotes. `(right stick, direction 0 up 1 down 2 left 3 right)`.
+pub fn fixed_stick(i: usize) -> Option<(bool, usize)> {
+    match ACTIONS.get(i)?.0 {
+        Action::Up => Some((false, 0)),
+        Action::Down => Some((false, 1)),
+        Action::Left => Some((false, 2)),
+        Action::Right => Some((false, 3)),
+        Action::EmoteUp => Some((true, 0)),
+        Action::EmoteDown => Some((true, 1)),
+        Action::EmoteLeft => Some((true, 2)),
+        Action::EmoteRight => Some((true, 3)),
+        _ => None,
     }
 }
 

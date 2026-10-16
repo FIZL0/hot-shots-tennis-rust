@@ -45,9 +45,11 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 v.extend([(Act::Costume, "Page"), (Act::Back, "Back")]);
             }
         }
-        Screen::Controls if m.rebinding.is_some() => v.extend([(Act::Type, "Press the new key or button"), (Act::Cancel, "Cancel")]),
+        // B291: the Keyboard & Mouse tab waits for a key, the Controller tab for a button (no keycap: any pad's)
+        Screen::Controls if m.rebinding.is_some() && m.keys_tab => v.extend([(Act::Type, "Press the new key"), (Act::Cancel, "Cancel")]),
+        Screen::Controls if m.rebinding.is_some() => v.extend([(Act::Key, "Press the new button"), (Act::Cancel, "Cancel")]),
         Screen::Controls => {
-            v.extend([(Act::UpDown, "Action"), (Act::Ok, "Rebind"), (Act::Costume, "Page"), (Act::Back, "Back")]);
+            v.extend([(Act::UpDown, "Action"), (Act::Ok, "Rebind"), (Act::Kind, if m.keys_tab { "Controller" } else { "Keyboard & Mouse" }), (Act::Costume, "Page"), (Act::Back, "Back")]);
         }
         Screen::Mode if host => v.extend([(Act::Move, "Singles / Doubles"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
         Screen::Assign if host => {

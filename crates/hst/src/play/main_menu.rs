@@ -491,6 +491,8 @@ struct Menu {
     roll: u64,
     /// The action waiting for a new key or button (controls screen).
     rebinding: Option<usize>,
+    /// B291: the Controls page's tab: Keyboard & Mouse (else Controller).
+    keys_tab: bool,
     /// The custom roster.
     mods: Vec<crate::mods::Mod>,
     /// M8f3: the installed umpire mods, on the umpire select after the disc five (`umpire_mods`).
@@ -573,6 +575,7 @@ impl Default for Menu {
             umpire: UMPIRES as u8, // B191: Random until a pick is saved
             roll: 0,
             rebinding: None,
+            keys_tab: false,
             mods: Vec::new(),
             umpire_mods: Vec::new(),
             court_mods: Vec::new(),
@@ -1140,7 +1143,10 @@ impl Menu {
                 // the last row resets every binding (a stick on a phone's pad can't be bound back)
                 let n = controls::action_names().count();
                 rows(n + 1, &mut self.sel, &mut out);
-                if k.ok && self.sel == n {
+                if k.kind_prev || k.kind_next {
+                    // B291: L2 / R2 (1 / 3) the other tab, as the Mods page's kinds
+                    self.controls_tab(!self.keys_tab, &mut out);
+                } else if k.ok && self.sel == n {
                     out.extend([ResetControls, Sound(2)]);
                 } else if k.ok {
                     self.rebinding = Some(self.sel);
@@ -1993,7 +1999,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "sound" | "sound-edit" => Screen::Sound,
         "mod-settings" => Screen::ModSettings,
         "mobile" => Screen::Mobile,
-        "controls" => Screen::Controls,
+        "controls" | "controls-keys" | "controls-bind" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" | "assign-moved" => Screen::Assign,
         "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
@@ -2070,6 +2076,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         if let Some(sel) = [("sets", 2), ("games", 3)].iter().find(|r| r.0 == screen).map(|r| r.1) {
             menu.sel = sel;
             menu.picking = Some(if sel == 2 { menu.sets } else { menu.games as usize });
+        }
+        // B291: the Controls page's Keyboard & Mouse tab; its third row waiting for a button
+        menu.keys_tab = screen == "controls-keys";
+        if screen == "controls-bind" {
+            (menu.sel, menu.rebinding) = (2, Some(2));
         }
         // B326: a Settings row picked (Effects Volume)
         if screen == "sound-edit" {
@@ -3029,8 +3040,9 @@ fn step(
             play(1);
             return;
         }
-        let key = keys.get_just_pressed().find(|k| Bindings::bindable_key(**k)).copied();
-        let button = gamepads.iter().filter(|(_, g)| controls::readable(g)).flat_map(|(_, g)| g.get_just_pressed().copied().collect::<Vec<_>>()).find(|b| Bindings::bindable_pad(*b));
+        // B291: the Keyboard & Mouse tab takes a key, the Controller tab a pad button
+        let key = keys.get_just_pressed().find(|k| Bindings::bindable_key(**k)).copied().filter(|_| menu.keys_tab);
+        let button = gamepads.iter().filter(|(_, g)| controls::readable(g)).flat_map(|(_, g)| g.get_just_pressed().copied().collect::<Vec<_>>()).find(|b| Bindings::bindable_pad(*b)).filter(|_| !menu.keys_tab);
         if key.is_some() || button.is_some() {
             if let Some(k) = key {
                 bind.rebind_key(i, k);

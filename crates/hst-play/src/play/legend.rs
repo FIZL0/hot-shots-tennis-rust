@@ -275,10 +275,89 @@ fn page_glyphs(style: Style) -> Vec<Glyph> {
 /// The number of [`page_glyphs`] (`Tex::Glyph(style, i)` for `i` below it).
 pub const PAGE_GLYPHS: usize = 8;
 
-/// B383: [`page_glyphs`]' `i`th one's width / height (`Tex::Glyph(style, i)`'s art).
+/// B291: pad button `b`'s icon in `style` (the Controls page's Controller tab): its face button, shoulder, d-pad arm,
+/// stick click or Select / Start / home, named as the legend names them.
+fn button_glyph_of(style: Style, b: GamepadButton) -> Glyph {
+    use GamepadButton as B;
+    let (ps, sw, xb) = (style == Style::Ps, style == Style::Switch, style == Style::Xbox);
+    let pick = |p: &'static str, s: &'static str, x: &'static str| if sw { s } else if xb { x } else { p };
+    match b {
+        B::South => Glyph::Face(style, 0),
+        B::East => Glyph::Face(style, 1),
+        B::West => Glyph::Face(style, 2),
+        B::North => Glyph::Face(style, 3),
+        B::LeftTrigger => Glyph::Shoulder(pick("L1", "L", "LB")),
+        B::RightTrigger => Glyph::Shoulder(pick("R1", "R", "RB")),
+        B::LeftTrigger2 => Glyph::Shoulder(pick("L2", "ZL", "LT")),
+        B::RightTrigger2 => Glyph::Shoulder(pick("R2", "ZR", "RT")),
+        B::LeftThumb => Glyph::Thumb(pick("L3", "LS", "LS"), [false; 4]),
+        B::RightThumb => Glyph::Thumb(pick("R3", "RS", "RS"), [false; 4]),
+        B::DPadUp => Glyph::Dpad([true, false, false, false]),
+        B::DPadDown => Glyph::Dpad([false, true, false, false]),
+        B::DPadLeft => Glyph::Dpad([false, false, true, false]),
+        B::DPadRight => Glyph::Dpad([false, false, false, true]),
+        B::Select => Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" }),
+        B::Start => Glyph::Small(if ps { "Options" } else if sw { "+" } else if style == Style::Generic { "Start" } else { "Menu" }),
+        B::Mode => Glyph::Small(if ps { "PS" } else if sw { "Home" } else { "Guide" }),
+        B::C => Glyph::Shoulder("C"),
+        B::Z => Glyph::Shoulder("Z"),
+        _ => Glyph::Shoulder("?"),
+    }
+}
+
+/// B291: pad button `b`'s name in `style` as words ("Cross", "L1", "D-pad up"): the Controls page's side panel.
+pub fn button_word(style: Style, b: GamepadButton) -> String {
+    match button_glyph_of(style, b) {
+        Glyph::Face(Style::Ps, i) => ["Cross", "Circle", "Square", "Triangle"][i as usize].into(),
+        Glyph::Face(Style::Generic, i) => ["Bottom", "Right", "Left", "Top"][i as usize].into(),
+        Glyph::Face(Style::Switch, i) => ["B", "A", "Y", "X"][i as usize].into(),
+        Glyph::Face(_, i) => ["A", "B", "X", "Y"][i as usize].into(),
+        Glyph::Dpad(lit) => format!("D-pad {}", ["up", "down", "left", "right"][lit.iter().position(|l| *l).unwrap_or(0)]),
+        Glyph::Thumb(s, _) => format!("{s} (stick click)"),
+        Glyph::Cap(s) => s,
+        Glyph::Shoulder(s) | Glyph::Small(s) => s.into(),
+        Glyph::Stick | Glyph::Slash => String::new(),
+    }
+}
+
+/// B291: every baked glyph of `style`: the [`page_glyphs`], then each bindable pad button's
+/// ([`controls::pad_buttons`]), then the left and the right stick pushed up / down / left / right.
+fn baked(style: Style) -> Vec<Glyph> {
+    let mut v = page_glyphs(style);
+    v.extend(controls::pad_buttons().iter().map(|&b| button_glyph_of(style, b)));
+    for name in ["L", "R"] {
+        v.extend((0..4).map(|d| Glyph::Thumb(name, std::array::from_fn(|k| k == d))));
+    }
+    v
+}
+
+/// B291: pad button `b`'s icon's `Tex::Glyph` index, if it's bindable.
+pub fn button_glyph(b: GamepadButton) -> Option<u8> {
+    controls::pad_buttons().iter().position(|x| *x == b).map(|k| (PAGE_GLYPHS + k) as u8)
+}
+
+/// B291: the left (or `right`) stick pushed toward `dir` (0 up, 1 down, 2 left, 3 right): its `Tex::Glyph` index.
+pub fn stick_glyph(right: bool, dir: usize) -> u8 {
+    (PAGE_GLYPHS + controls::pad_buttons().len() + if right { 4 } else { 0 } + dir) as u8
+}
+
+/// B291: the pad art the Controls page's Controller tab shows: the device last used's, else the first connected pad's,
+/// else the Button Icons setting's (PlayStation on Auto: the original's pad).
+pub fn pad_style_shown() -> Style {
+    let last = last_style();
+    if last != Style::Keys {
+        return last;
+    }
+    if let Some(&s) = PADS.lock().ok().and_then(|p| p.first().copied()).as_ref() {
+        return s;
+    }
+    LAYOUTS.get(LAYOUT.load(Ordering::Relaxed) as usize).and_then(|l| l.2).unwrap_or(Style::Ps)
+}
+
+/// B383: [`baked`]'s `i`th glyph's width / height (`Tex::Glyph(style, i)`'s art).
 pub fn glyph_aspect(style: Style, i: u8) -> f32 {
     static W: std::sync::OnceLock<Vec<Vec<f32>>> = std::sync::OnceLock::new();
-    let w = W.get_or_init(|| Style::ALL.iter().map(|&s| page_glyphs(s).iter().map(|g| draw_glyph(g).width() as f32 / H as f32).collect()).collect());
+    let w = W.get_or_init(|| Style::ALL.iter().map(|&s| baked(s).iter().map(|g| draw_glyph(g).width() as f32 / H as f32).collect()).collect());
     w[Style::ALL.iter().position(|s| *s == style).unwrap_or(0)].get(i as usize).copied().unwrap_or(1.0)
 }
 
@@ -352,7 +431,7 @@ fn bake_buttons(mut images: ResMut<Assets<Image>>, mut buttons: ResMut<Buttons>)
         let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(p), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
         buttons.0.insert(s, (images.add(img), w as f32 / h as f32));
         // B383: the Mods page's kind switch and detail buttons
-        for (i, g) in page_glyphs(s).iter().enumerate() {
+        for (i, g) in baked(s).iter().enumerate() {
             let p = draw_glyph(g);
             let (w, h) = (p.width(), p.height());
             let img = Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(p), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
@@ -395,6 +474,8 @@ pub enum Glyph {
     Small(&'static str),
     /// B422: the right stick, arrows all four ways (B475).
     Stick,
+    /// B291: a stick's cap with its name on it, arrows lit: up, down, left, right (none: the stick clicked).
+    Thumb(&'static str, [bool; 4]),
     /// The d-pad, arms lit: up, down, left, right.
     Dpad([bool; 4]),
     Slash,
@@ -572,40 +653,59 @@ fn draw_glyph(g: &Glyph) -> Pixmap {
             }
             out
         }
-        Glyph::Stick => {
-            // a thumbstick's cap with an R on it, arrows above, below and either side
-            let mut out = pixmap(76.0);
-            let x = 38.0;
-            let p = tiny_skia::PathBuilder::from_circle(x, cy, 17.0).expect("cap");
-            fill_rgb(&mut out, &p, DARK, Transform::identity());
-            stroke_rgb(&mut out, &tiny_skia::PathBuilder::from_circle(x, cy, 16.0).expect("cap"), RIM, 2.0, Transform::identity());
-            words(&mut out, "R", 20.0, x - text_w("R", 20.0) / 2.0, cy, WHITE);
-            for dir in [-1.0, 1.0] {
-                for up in [true, false] {
-                    let mut pb = tiny_skia::PathBuilder::new();
-                    if up {
-                        let tip = cy + dir * 31.0;
-                        pb.move_to(x, tip);
-                        pb.line_to(x + 7.0, tip - dir * 9.0);
-                        pb.line_to(x - 7.0, tip - dir * 9.0);
-                    } else {
-                        let tip = x + dir * 36.0;
-                        pb.move_to(tip, cy);
-                        pb.line_to(tip - dir * 9.0, cy + 7.0);
-                        pb.line_to(tip - dir * 9.0, cy - 7.0);
-                    }
-                    pb.close();
-                    fill_rgb(&mut out, &pb.finish().expect("arrow"), WHITE, Transform::identity());
-                }
-            }
-            out
-        }
+        Glyph::Stick => thumb("R", [true; 4]),
+        Glyph::Thumb(name, lit) => thumb(name, *lit),
         Glyph::Slash => {
             let mut out = pixmap(text_w("/", 28.0) + 2.0);
             words(&mut out, "/", 28.0, 1.0, cy, RIM);
             out
         }
     }
+}
+
+/// A thumbstick's cap with `name` on it and arrows `lit` (up, down, left, right) round it; none lit: the cap pressed
+/// in (a ring round it).
+fn thumb(name: &str, lit: [bool; 4]) -> Pixmap {
+    let cy = H as f32 / 2.0;
+    let mut out = pixmap(76.0);
+    let x = 38.0;
+    let p = tiny_skia::PathBuilder::from_circle(x, cy, 17.0).expect("cap");
+    fill_rgb(&mut out, &p, DARK, Transform::identity());
+    stroke_rgb(&mut out, &tiny_skia::PathBuilder::from_circle(x, cy, 16.0).expect("cap"), RIM, 2.0, Transform::identity());
+    let px = if name.len() > 1 { 16.0 } else { 20.0 };
+    words(&mut out, name, px, x - text_w(name, px) / 2.0, cy, WHITE);
+    if lit == [false; 4] {
+        stroke_rgb(&mut out, &tiny_skia::PathBuilder::from_circle(x, cy, 25.0).expect("ring"), WHITE, 3.0, Transform::identity());
+        return out;
+    }
+    for dir in [-1.0, 1.0] {
+        for up in [true, false] {
+            // (up, down, left, right)
+            if !lit[match (up, dir < 0.0) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            }] {
+                continue;
+            }
+            let mut pb = tiny_skia::PathBuilder::new();
+            if up {
+                let tip = cy + dir * 31.0;
+                pb.move_to(x, tip);
+                pb.line_to(x + 7.0, tip - dir * 9.0);
+                pb.line_to(x - 7.0, tip - dir * 9.0);
+            } else {
+                let tip = x + dir * 36.0;
+                pb.move_to(tip, cy);
+                pb.line_to(tip - dir * 9.0, cy + 7.0);
+                pb.line_to(tip - dir * 9.0, cy - 7.0);
+            }
+            pb.close();
+            fill_rgb(&mut out, &pb.finish().expect("arrow"), WHITE, Transform::identity());
+        }
+    }
+    out
 }
 
 /// One entry's art: each style's glyphs (a slash between styles), then its words.
@@ -790,6 +890,26 @@ pub fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B291: every bindable pad button and each stick direction has its own baked icon, past the page glyphs, in every
+    /// style; PlayStation's face buttons say their shapes.
+    #[test]
+    fn controls_page_icons() {
+        let mut ids: Vec<u8> = controls::pad_buttons().iter().map(|&b| button_glyph(b).unwrap()).collect();
+        ids.extend((0..8).map(|k| stick_glyph(k >= 4, k % 4)));
+        assert!(ids.iter().all(|&i| i as usize >= PAGE_GLYPHS));
+        let n = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), n);
+        for s in Style::ALL {
+            assert_eq!(baked(s).len(), PAGE_GLYPHS + n);
+            assert!(ids.iter().all(|&i| glyph_aspect(s, i) > 0.5));
+        }
+        let words: Vec<String> = [GamepadButton::South, GamepadButton::East, GamepadButton::North, GamepadButton::LeftTrigger, GamepadButton::DPadUp].map(|b| button_word(Style::Ps, b)).into();
+        assert_eq!(words, ["Cross", "Circle", "Triangle", "L1", "D-pad up"]);
+        assert_eq!(button_word(Style::Xbox, GamepadButton::RightTrigger2), "RT");
+    }
 
     /// The hand swap's pill names the pad's Select button: "Select" (not Xbox's "View"), "Create" on a PlayStation pad.
     #[test]
