@@ -1000,9 +1000,6 @@ impl Menu {
                 if let Some(i) = self.kickable().filter(|_| k.card) {
                     // B523: △ on a guest's card: kick them, once confirmed
                     self.ask_kick(i, out);
-                } else if let Some(i) = bot.filter(|&i| k.hand && self.movable(i)) {
-                    // B523: ✕ carries a computer's card: Select picks its character (B216)
-                    self.edit_bot(i, None, out);
                 } else if let Some(i) = bot.filter(|_| k.card) {
                     // B216: △ takes the computer player off its seat
                     out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
@@ -3080,10 +3077,9 @@ mod tests {
         // Cody: Sunny Day is ready on costume 1, so it landed on 2 and R1 took it to 3
         assert_eq!((p.char, p.costume, m.screen, m.net.edit), (c, 2, Screen::Lobby, None));
         m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(6, 0) });
-        // Select on a computer's seat (B523: ✕ carries its card): its pick on the select again; ○ back to the lobby
-        // as it was
+        // OK on a computer's seat: its pick on the select again; ○ back to the lobby as it was
         m.sel = m.items().iter().position(|it| *it == Item::Seat(3)).unwrap();
-        assert_eq!(net(&m.step(dev, Press { hand: true, ..default() })), None);
+        assert_eq!(net(&m.step(dev, ok)), None);
         assert_eq!((m.screen, m.players[3].char(), m.players[3].ready), (Screen::Chars, 6, false));
         assert_eq!(net(&m.step(dev, Press { back: true, ..default() })), None);
         assert_eq!((m.screen, m.net.edit), (Screen::Lobby, None));

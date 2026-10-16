@@ -218,10 +218,6 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             if m.lobby_bot() {
                 v.extend([(Act::Costume, "Costume"), (Act::Card, "Remove")]);
             }
-            // B523: ✕ carries a computer's card, so Select picks its character
-            if m.lobby_bot() && m.lobby_ok() == Some("Move") {
-                v.push((Act::Hand, "Pick"));
-            }
             if m.kickable().is_some() {
                 v.push((Act::Card, "Kick"));
             }

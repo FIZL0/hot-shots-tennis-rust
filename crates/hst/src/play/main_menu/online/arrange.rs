@@ -1,8 +1,9 @@
-//! B523: the host's say over the lobby's players, once the host has picked: any other player's card (a guest's, a
-//! computer's, the host's own 2P..4P) can be picked up (✕), carried to another card (the arrows, or a tap) and put
-//! down on it (✕) to swap those two seats, rearranging the teams (an open seat: the player moves there); ○ puts it
-//! back. △ on a guest's card asks to kick them (a computer's goes off at once, B216). Guests can do neither: the
-//! seats are the host's (`Cmd::Swap` is only heard there).
+//! B523: the host's say over the lobby's players, once the host has picked: any other person's card (a guest's, the
+//! host's own 2P..4P) can be picked up (✕), carried to another card (the arrows, or a tap) and put down on it (✕) to
+//! swap those two seats, rearranging the teams (an open seat or a computer's: the person moves there); ○ puts it
+//! back. A computer's card isn't picked up: its ✕ picks its character, as on the roster (B216). △ on a guest's card
+//! asks to kick them (a computer's goes off at once, B216). Guests can do neither: the seats are the host's
+//! (`Cmd::Swap` is only heard there).
 
 use super::super::{Effect, Menu, Screen};
 use super::{Fx, Item, Press, name_of, pill_step};
@@ -19,11 +20,12 @@ impl Menu {
         self.counting() == 0 && own.is_some_and(|i| super::lobby::state(r, i) != super::lobby::State::Picking)
     }
 
-    /// Seat `i`'s card is one the host may pick up: a player's other than the host's own (its first seat).
+    /// Seat `i`'s card is one the host may pick up: a person's other than the host's own (its first seat); not a
+    /// computer's (its ✕ picks its character).
     pub(in super::super) fn movable(&self, i: usize) -> bool {
         let Some(r) = self.net.room.as_ref().filter(|_| self.host_controls()) else { return false };
         let own = r.seats.iter().position(|s| s.as_ref().is_some_and(|s| s.peer == "host"));
-        r.seats.get(i).is_some_and(Option::is_some) && own != Some(i)
+        r.seats.get(i).is_some_and(|s| s.as_ref().is_some_and(crate::net::Seat::human)) && own != Some(i)
     }
 
     /// The chosen lobby item is a guest's card the host may kick (△).
@@ -223,15 +225,21 @@ mod tests {
         m.step(dev, Press { card: true, ..default() });
         m.step(dev, Press { down: true, ..default() });
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Kick("r8mxw2pa0c1e".into())));
-        // a computer's card: ✕ carries it too, Select picks its character, △ takes it off at once (B216)
+        // a computer's card isn't picked up: ✕ picks its character (as on the roster), △ takes it off at once (B216)
         m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: CPU.into(), pick: Pick::disc(9, 4) });
         to(&mut m, Item::Seat(3));
-        assert!(m.kickable().is_none() && says(&m, "Pick") && says(&m, "Remove"));
+        assert!(!m.movable(3) && m.kickable().is_none() && m.lobby_ok() == Some("Pick") && says(&m, "Remove"));
         assert_eq!(net(&m.step(dev, Press { card: true, ..default() })), Some(Cmd::Bot(3, None)));
         m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: CPU.into(), pick: Pick::disc(9, 4) });
         m.step(dev, ok);
-        to(&mut m, Item::Seat(0));
-        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Swap(3, 0)), "the host swaps itself with the computer");
+        assert_eq!((m.screen, m.net.edit, m.net.grab), (Screen::Chars, Some(3), None));
+        (m.screen, m.net.edit) = (Screen::Lobby, None);
+        // a person dropped on it: they trade seats
+        m.net.room.as_mut().unwrap().seats[1] = Some(Seat { peer: "k51qzi5uqu5d".into(), pick: Pick::disc(1, 0) });
+        to(&mut m, Item::Seat(1));
+        m.step(dev, ok);
+        to(&mut m, Item::Seat(3));
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Swap(1, 3)), "onto the computer's seat");
         // not before the host has picked, nor during the countdown
         m.net.room.as_mut().unwrap().picking.insert("host".into());
         assert!((0..4).all(|i| !m.movable(i)));
