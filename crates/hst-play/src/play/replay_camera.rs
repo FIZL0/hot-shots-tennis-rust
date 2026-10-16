@@ -165,13 +165,7 @@ fn live(g: &Game, q: &Query<(&Figure, &Motion)>, i: usize) -> [M4; 5] {
 /// A bone of player `p` as drawn (B366): a mod's own clip for the motion (its reactions can face another way than
 /// the donor's the game plays) on its own clock, else the gameplay clip, so a shot frames the body on screen.
 fn drawn_bone(p: &Player, data: &crate::character::CharacterData, m: &Motion, pos: [f32; 4], name: &str) -> Option<M4> {
-    let t = if data.visual.contains_key(&m.id) { m.drawn.sampled } else { m.clock.sampled };
-    let sk = &data.skeleton;
-    let c = data.drawn(m.id)?;
-    let n = sk.names.iter().position(|s| s == name)?;
-    let mut w = super::player_matrix(p);
-    w[3] = pos;
-    Some(hst_sim::pose::node_world(sk, &c.locals(sk, t.min(c.length)), n, &w))
+    super::cutaway::bone(p, data, m.id, super::cutaway::drawn_time(data, m), pos, name)
 }
 
 /// The recorder's [`At`] of player `i` now.
