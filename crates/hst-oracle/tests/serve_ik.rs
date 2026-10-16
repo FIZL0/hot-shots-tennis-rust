@@ -18,9 +18,8 @@ fn uni(seed: &mut u64, lo: f32, hi: f32) -> f32 {
     lo + (hi - lo) * (rng(seed) as f32 / u32::MAX as f32)
 }
 
-/// The player at `pl`'s smash, overhead serve and underhand serve tables, from the costume whose arm nodes have the
-/// player's rest translations.
-fn tables(iso: &mut Iso, ee: &Ee, pl: u32) -> [ServeArm; 3] {
+/// The player at `pl`'s skeleton (the costume whose arm nodes have the player's rest translations) and character.
+fn skeleton(iso: &mut Iso, ee: &Ee, pl: u32) -> (Skeleton, usize) {
     let u = |a: u32| ee.read(a, 4) as u32;
     let c = u(pl + 0x12bc) as usize;
     let rest_of = |k: u32| [0, 4, 8].map(|o| u(u(u(u(pl + 0x17f0 + 4 * k) + 0x108) + 0x10) + 0x70 + o));
@@ -36,17 +35,28 @@ fn tables(iso: &mut Iso, ee: &Ee, pl: u32) -> [ServeArm; 3] {
         })
         .find(|sk| names.iter().zip(&want).all(|(n, w)| sk.names.iter().position(|x| x == n).map(|i| [0, 1, 2].map(|j| sk.rest[i][3][j].to_bits())) == Some(*w)))
         .unwrap_or_else(|| panic!("no costume of character {c} matches"));
+    (sk, c)
+}
+
+/// Character `c`'s motions by number from the disc.
+fn motions<const N: usize>(iso: &mut Iso, c: usize, ms: [usize; N]) -> [ani::Anim; N] {
     let data = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
     let arc = Archive::parse(&data).unwrap();
-    let anim = |m: usize| {
+    ms.map(|m| {
         let stem = ani::motion_name(m, c).unwrap().to_ascii_lowercase();
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap();
         ani::parse(&arc.read(e).unwrap()).unwrap()
-    };
+    })
+}
+
+/// The player at `pl`'s smash, overhead serve and underhand serve tables.
+fn tables(iso: &mut Iso, ee: &Ee, pl: u32) -> [ServeArm; 3] {
+    let (sk, c) = skeleton(iso, ee, pl);
+    let [s, s_jump, o, o_jump, u] = motions(iso, c, [0x1f, 0x30, 0x25, 0x31, 0x26]);
     // the smash's and the serve's jump paths (`*_s_n_dummy`, `*_serve_t_dummy`)
-    [(0x1f, Some(0x30)), (0x25, Some(0x31)), (0x26, None)].map(|(m, jump)| {
-        let jump = jump.and_then(|j| Path::new(&anim(j)));
-        serve_arm(&sk, &Clip::new(&sk, &anim(m)), jump.as_ref(), m == 0x26)
+    [(&s, Some(&s_jump)), (&o, Some(&o_jump)), (&u, None)].map(|(m, jump)| {
+        let jump = jump.and_then(Path::new);
+        serve_arm(&sk, &Clip::new(&sk, m), jump.as_ref(), jump.is_none())
     })
 }
 
@@ -65,6 +75,10 @@ fn check_table(ee: &Ee, pl: u32, a: &ServeArm, i: usize, ctx: &str) {
     assert_eq!(a.shoulder.map(f32::to_bits).to_vec(), bits(sh, 4), "{ctx} table {i} shoulder");
     if i < 2 {
         assert_eq!(a.radius.to_bits(), ee.read(pl + 0x38e0 + 4 * i as u32, 4) as u32, "{ctx} table {i} radius");
+    }
+    // the smash's racket point (the contact search's smash_ahead is its z)
+    if i == 0 {
+        assert_eq!(a.point.map(f32::to_bits).to_vec(), bits(pl + 0x38f0, 4), "{ctx} smash racket point");
     }
 }
 
@@ -221,5 +235,78 @@ fn serve_ik_captures() {
     }
     eprintln!("{serves} serves, {ticks} ticks");
     assert!(serves >= 4);
+}
+
+
+/// The contact dive's slide against the original through the oracle: each RAM image player's dive arm (the
+/// receive motion at time 5: racket and right upper arm model matrices, `pose::dive_arm`) bit-exact against the
+/// one it built at load, then `swing::arm_slide` against the game's over random balls, directions and player
+/// matrices (the dive's own, side = up × direction by the hand, and arbitrary ones), with the game's arm.
+#[test]
+fn dive_slide() {
+    use hst_sim::pose::{M4, dive_arm};
+    use hst_sim::swing::arm_slide;
+    let iso_path = root().join("Hot Shots Tennis (USA).iso");
+    if !iso_path.is_file() {
+        return eprintln!("skip: no ISO");
+    }
+    let slide = addr("dive_arm_slide");
+    let (mut n, mut moved, mut bad) = (0, 0, vec![]);
+    for (si, s) in ["s03", "s04", "s05", "s08", "s09"].into_iter().enumerate() {
+        let mut iso = Iso::open(&iso_path).unwrap();
+        let Some(mut ee) = Ee::from_ram(&format!("{s}.bin")) else { return eprintln!("skip: no context/iso or {s}.bin") };
+        let gm = ee.read(0x422f80, 4) as u32;
+        let pls: Vec<u32> = (0..4).map(|p| ee.read(gm + 0xa8 + 4 * p, 4) as u32).collect();
+        let f = |ee: &Ee, a: u32| f32::from_bits(ee.read(a, 4) as u32);
+        let mat = |ee: &Ee, a: u32| -> M4 { std::array::from_fn(|i| std::array::from_fn(|j| f(ee, a + 0x10 * i as u32 + 4 * j as u32))) };
+        let mut arms = vec![];
+        for (p, &pl) in pls.iter().enumerate() {
+            let (sk, c) = skeleton(&mut iso, &ee, pl);
+            let [receive] = motions(&mut iso, c, [0x1e]);
+            let arm = dive_arm(&sk, &Clip::new(&sk, &receive));
+            let game = [mat(&ee, pl + 0x3060), mat(&ee, pl + 0x30a0)];
+            let bits = |m: &[M4; 2]| m.as_flattened().as_flattened().iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&arm), bits(&game), "{s} p{p} char {c}: dive arm");
+            arms.push(arm);
+        }
+        let mut seed = 0x2545_f491_4f6c_dd1du64 ^ si as u64;
+        let (ball_at, dir_at) = (ee.scratch(0), ee.scratch(1));
+        for _ in 0..2400 {
+            let sd = &mut seed;
+            let p = rng(sd) as usize % 4;
+            let a = uni(sd, -3.1416, 3.1416);
+            let dir = [a.sin(), a.cos()];
+            let hand = if rng(sd) % 2 == 0 { 1.0f32 } else { -1.0 };
+            let pos = [uni(sd, -5.0, 5.0), uni(sd, -0.1, 0.1), uni(sd, -13.0, 13.0), 1.0];
+            let m: M4 = if rng(sd) % 4 == 0 {
+                std::array::from_fn(|_| std::array::from_fn(|_| uni(sd, -1.5, 1.5)))
+            } else {
+                [[dir[1] * hand, 0.0, -dir[0] * hand, 0.0], [0.0, 1.0, 0.0, 0.0], [dir[0], 0.0, dir[1], 0.0], pos]
+            };
+            // the ball (y down) up to 3 m off the player and up to 2.5 m up
+            let ball = [pos[0] + uni(sd, -3.0, 3.0), -uni(sd, 0.0, 2.5), pos[2] + uni(sd, -3.0, 3.0)];
+            for (i, row) in m.iter().enumerate() {
+                for (j, v) in row.iter().enumerate() {
+                    ee.set_f32(pls[p] + 0x3d40 + 0x10 * i as u32 + 4 * j as u32, *v);
+                }
+            }
+            for (j, v) in [ball[0], ball[1], ball[2], 1.0].into_iter().enumerate() {
+                ee.set_f32(ball_at + 4 * j as u32, v);
+            }
+            for (j, v) in [dir[0], 0.0, dir[1], 0.0].into_iter().enumerate() {
+                ee.set_f32(dir_at + 4 * j as u32, v);
+            }
+            ee.call(slide, &[pls[p] as u64, ball_at as u64, dir_at as u64, ee.scratch(2) as u64, ee.scratch(3) as u64], &[], 1_000_000);
+            let (want, got) = (ee.f0(), arm_slide(&arms[p], &m, ball, dir));
+            moved += (want != 0.0) as usize;
+            if want.to_bits() != got.to_bits() {
+                bad.push(format!("{s} p{p} m {m:?} ball {ball:?} dir {dir:?}: game {want} port {got}"));
+            }
+            n += 1;
+        }
+    }
+    eprintln!("{n} slides, {moved} nonzero, {} differ", bad.len());
+    assert!(n >= 10_000 && moved > n / 4);
+    assert!(bad.is_empty(), "{} of {n} differ:\n{}", bad.len(), bad[..bad.len().min(4)].join("\n"));
 }
 

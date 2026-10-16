@@ -677,6 +677,24 @@ pub fn arm_table(sk: &Skeleton, clips: &[Clip], character: i32) -> ArmTable {
     ArmTable { poses, reach: reach.0, side: side.0, hand_x: hand_x.0 }
 }
 
+/// The dive arm the game measures at player load from the receive motion (0x1e) at time 5: the model matrices
+/// of the racket and of the right upper arm (`swing::Reach::dive_arm`).
+pub fn dive_arm(sk: &Skeleton, clip: &Clip) -> [M4; 2] {
+    let [racket, upper] = [ARM_NODES[0], ARM_NODES[3]].map(|n| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no node {n}")));
+    let local = clip.locals(sk, clip.wrap(5.0, false));
+    // each walks up the parents, the racket from its own local, the upper arm from the identity (then its local)
+    let up = |mut acc: M4, n: usize| {
+        let mut p = sk.parent[n];
+        while let Some(i) = p {
+            acc = vmul(&acc, &local[i]);
+            p = sk.parent[i];
+        }
+        acc
+    };
+    let id: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    [up(local[racket], racket), vmul(&local[upper], &up(id, upper))]
+}
+
 /// Rotation about `axis` from its cosine and the sine's sign (sine = sign·√(1 − c²)).
 pub fn axis_cos(c: f32, sign: f32, axis: [f32; 3]) -> M4 {
     axis_rotation(c, (F(sign) * (F::ZERO + 1.0).msub(c, c).sqrt()).0, axis)

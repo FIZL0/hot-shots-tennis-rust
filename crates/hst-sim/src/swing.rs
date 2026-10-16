@@ -4,6 +4,7 @@
 #![deny(clippy::float_arithmetic)]
 
 use crate::lines::{BASELINE, SERVICE_LINE, sideline};
+use crate::pose::M4;
 use crate::ps2::{F, utof};
 use crate::rng::{TWO_POW_M32, coin, r15};
 use crate::serve::SWEET_FRAME;
@@ -84,9 +85,9 @@ pub struct Reach {
     pub grades: Vec<u8>,
     /// +1 right-handed, −1 left-handed.
     pub hand: f32,
-    /// Dive arm in the player's frame (x right, y down, z forward): shoulder and racket tip.
-    pub shoulder: [f32; 3],
-    pub tip: [f32; 3],
+    /// The dive arm: model matrices of the racket and the right upper arm in the receive motion at time 5
+    /// (`pose::dive_arm`).
+    pub dive_arm: [M4; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -240,38 +241,44 @@ pub fn dive(r: &Reach, path: &[PathPoint], pos: [f32; 3], end: f32, face: [f32; 
         _ => return None,
     };
     let (dx, dz) = ((F(path[k].pos[0]) - pos[0]).0, (F(path[k].pos[2]) - pos[2]).0);
-    let inv = (1.0 / (F(dz) * dz + F(dx) * dx + 0.0).sqrt()).0;
+    let inv = (1.0 / (F::ZERO * 0.0).madd(dx, dx).madd(dz, dz).sqrt()).0;
     let dir = [(F(dx) * inv).0, (F(dz) * inv).0];
-    let slide = if contact { arm_slide(r, dir, sub3(path[k].pos, pos)) } else { miss.unwrap().2 };
+    // the game's predicted path holds the ball with y up
+    let ball = [path[k].pos[0], (-F(path[k].pos[1])).0, path[k].pos[2]];
+    let slide = if contact { arm_slide(&r.dive_arm, &dive_matrix(pos, dir, r.hand), ball, dir) } else { miss.unwrap().2 };
     Some(Dive { frame: k, contact, dir, slide, tick: 0, start: [pos[0], pos[2]], prev: [0.0; 2], origin: k, stopped: false, cut: false })
 }
 
-fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [(F(a[0]) - b[0]).0, (F(a[1]) - b[1]).0, (F(a[2]) - b[2]).0]
-}
-
-fn len3(v: [f32; 3]) -> f32 {
-    (F(v[0]) * v[0] + F(v[1]) * v[1] + F(v[2]) * v[2]).sqrt().0
-}
-
-/// How far a contact dive slides so the arm (shoulder to racket tip, turned to `dir`) reaches the ball at `d`
-/// from the player: 0 when it already does.
-fn arm_slide(r: &Reach, dir: [f32; 2], d: [f32; 3]) -> f32 {
-    let world = |v: [f32; 3]| {
-        let side = (F(v[0]) * r.hand).0;
-        [(F(side) * dir[1] + F(v[2]) * dir[0]).0, v[1], (F(v[2]) * dir[1] - F(side) * dir[0]).0]
-    };
-    let (a, b) = (world(r.shoulder), world(r.tip));
-    let arm = len3(sub3(b, a));
-    if arm >= len3(sub3(d, a)) {
+/// How far a contact dive slides so the arm reaches the ball: the racket point and the shoulder of the dive arm
+/// `arm` turned by the player matrix `m` (rows side, up, `dir`, position; the arm takes only its turn), against the
+/// ball (y up, as the predicted path holds it; the arm's model is y down) from the matrix's position; 0 when the arm already reaches. `dir` is the dive's unit direction (x, z).
+pub fn arm_slide(arm: &[M4; 2], m: &M4, ball: [f32; 3], dir: [f32; 2]) -> f32 {
+    use crate::pose::{TIP, vmul};
+    use crate::vu0::transform;
+    let d = [(F(ball[0]) - m[3][0]).0, (F(ball[1]) * -1.0 - m[3][1]).0, (F(ball[2]) - m[3][2]).0];
+    let turn = [m[0], m[1], m[2], [0.0, 0.0, 0.0, 1.0]];
+    let tip = transform(&vmul(&arm[0], &turn), TIP);
+    let sh = vmul(&arm[1], &turn)[3];
+    let (tx, ty, tz) = (F(tip[0]) - sh[0], F(tip[1]) - sh[1], F(tip[2]) - sh[2]);
+    let reach = (ty * ty).madd(tx, tx).madd(tz, tz);
+    let (ax, ay, az) = (F(d[0]) - sh[0], F(d[1]) - sh[1], F(d[2]) - sh[2]);
+    let dist = (ay * ay).madd(ax, ax).madd(az, az);
+    if dist.sqrt() <= reach.sqrt() {
         return 0.0;
     }
-    let t = (-(dir[0] * (F(a[0]) - d[0]) + dir[1] * (F(a[2]) - d[2]))).0;
-    let px = (d[0] - (F(dir[0]) * t + a[0])).0;
-    let pz = (d[2] - (F(dir[1]) * t + a[2])).0;
-    let (ax, ay, az) = ((F(d[0]) - a[0]).0, (F(d[1]) - a[1]).0, (F(d[2]) - a[2]).0);
-    let side = (F(ay) * ay + F(px) * px + F(pz) * pz).0;
-    ((F(ax) * ax + F(az) * az).sqrt() - (F(arm) * arm - side).sqrt()).0
+    // the ball's distance off the line through the shoulder along `dir`, and the arm's reach left across it
+    let t = -(F::ZERO + F(dir[1]) * (F(sh[2]) - d[2])).madd(dir[0], F(sh[0]) - d[0]);
+    let px = F(d[0]) - (F::ZERO + sh[0]).madd(dir[0], t);
+    let pz = F(d[2]) - (F::ZERO + sh[2]).madd(dir[1], t);
+    let side = (F::ZERO + (F::ZERO + pz * pz).madd(px, px)).madd(ay, ay);
+    ((F::ZERO + az * az).madd(ax, ax).sqrt() - (reach - side).sqrt()).0
+}
+
+/// The player matrix the dive's slide is measured in: side (up × `dir`, by the hand), up, `dir` (x, z), `pos`.
+fn dive_matrix(pos: [f32; 3], dir: [f32; 2], hand: f32) -> M4 {
+    // up × direction by the hand, its zeros signed as the game's
+    let side = [(F(dir[1]) * hand).0, (F::ZERO * hand).0, ((F::ZERO - dir[0]) * hand).0, (F(hand) * 0.0).0];
+    [side, [0.0, 1.0, 0.0, 0.0], [dir[0], 0.0, dir[1], 0.0], [pos[0], pos[1], pos[2], 1.0]]
 }
 
 impl Dive {

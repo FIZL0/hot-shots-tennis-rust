@@ -627,12 +627,16 @@ mod tests {
             app.add_systems(Startup, setup);
             app.add_systems(FixedUpdate, (remember, control, simulate, motions, character::tick, played_out, held_ball).chain());
             app.update();
-            let mut v = Vec::new();
+            let (mut v, mut shots) = (Vec::new(), 0);
             for _ in 0..60 * 60 {
+                let before = app.world().resource::<Game>().shots;
                 app.world_mut().run_schedule(FixedUpdate);
                 v.push(snapshot::state_hash(app.world_mut()));
+                // shots this rally: count each one struck (it goes back to 0 at the next point)
+                shots += (app.world().resource::<Game>().shots > before) as i32;
             }
-            (v, app.world().resource::<Game>().shots)
+            eprintln!("{shots} shots struck");
+            (v, shots)
         };
         let (with, _) = hashes(true);
         let (without, shots) = hashes(false);

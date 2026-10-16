@@ -660,7 +660,7 @@ fn ai_dives_match_the_game() {
                 let reach = Reach {
                     base: f(a, p, 0x13ac), reach: f(a, p, 0x13b0), stroke_height: f(a, p, 0x13b8), volley_height: f(a, p, 0x13bc),
                     smash_top: 0.0, smash_bottom: 0.0, ahead: 0.0, smash_ahead: 0.0, body_low: 0.0, body_high: 0.0,
-                    grades: vec![], hand: 1.0, shoulder: [0.0; 3], tip: [0.0; 3],
+                    grades: vec![], hand: 1.0, dive_arm: [[[0.0; 4]; 4]; 2],
                 };
                 // the AI's path starts at step 5 (the search skips 0..5) with y up; bounces only pick hit or miss
                 let len = (ai32(a, p, 0x3c).max(0) as usize).min(DIVE_HORIZON);

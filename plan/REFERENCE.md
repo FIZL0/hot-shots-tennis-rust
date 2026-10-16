@@ -148,6 +148,7 @@ Private windows (B457): a browser that refuses OPFS (Firefox/Zen private browsin
 - N5a: △ smash (kind 1) — contact search, launch (smsh1, 5° spin) and flight to the first bounce exact on lob_smash_s05; one locked swing per team (swing.rs, shot_tables.rs).
 - B57: CPUs let out balls go — the predicted path's line call (mode) and its distance past the nearest line (gap, kept stale as the original's) feed the NET/BASE routines' let-go hold (out by ≥ the row's line margin → stand); hold replayed bit-exact on ai_let_go_s05 (lines and margins poked) (play/doubles_ai.rs).
 - B479: a doubles player may take a ball its partner is diving for (falling short) or locked onto — the contact search never looks at the partner; a hit cancels every other lock, a reaching dive's contact too (play.rs theirs/cancel_locks; play/partner_ball.rs; journal 2026-10-16-b479-partner-ball).
+- P4: contact dives measure how far to slide from the character's own dive arm (receive motion at time 5) — exact against the game's function (oracle) and the recorded contact dives; reach, body widths and smash reach come from each player's own skeleton, mods included (swing.rs arm_slide, pose.rs dive_arm, play/skeleton_reach.rs; journal 2026-10-16-p4-contact-branches).
 - N3a: sound banks (`hst_data::snd`), note → tone and SPU pitch bit-exact vs save states (sound.rs).
 - Disc/XB/TIM2/MDL/MTL readers; court layout placement; Bevy renderer, 60 Hz fixed sim + interpolation.
 - Ball flight (drag, Magnus, gravity, curve/bend), ground bounces, rolling — 4524 recorded frames.

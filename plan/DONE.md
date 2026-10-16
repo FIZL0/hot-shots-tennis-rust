@@ -926,6 +926,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P17b** Court fog (FGE): far court and props haze toward the court's fog colour as in the original (compare court 10, slot 5, against PCSX2) → `gs.rs` gs.wgsl · `main.rs` load | t: gs.rs court_fog_row | j: 2026-10-07-p17-court-rendering/4-FOG-FINAL.md
 - [x] **P3f1a** Menu flame drawing (P3f1 gap): `rng::MenuFlame` steps only the draws; the effect's motion (speed along the heading, decays), spin, alpha ramp and f_s.tm2/Blue.tm2 sprites, and where on the select it sits, aren't ported. When B40's character select exists, run `MenuFlame` per frame from P1's pick (as the original) instead of main.rs's clock count, and draw it → `main.rs` · `play/main_menu.rs` | t: rng.rs | j: 2026-10-08-p3f1-menu-flame
 - [x] **P3f5** Lens flare drawing (P3f gap): the flare's 24 rays (brightness/angle jitter from `rand()`) are drawn by the game; the app only steps their draws → `play.rs` | t: rng.rs
+- [x] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs — user 2026-10-16: do all three open parts: the dive/reach branch (+0x3e58), the skeleton-derived values for every character (not just character 0), and the arm-IK sideways step (replace the 0.1 m stand-in; P8 was dropped, so it lives here now)
 
 
 ### Lowest priority (user 2026-10-07: creatures, NPCs, ball-hit obstacles after everything else)
