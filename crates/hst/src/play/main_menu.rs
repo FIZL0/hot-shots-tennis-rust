@@ -1884,6 +1884,12 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     menu.umpire_in_range();
     // M8f6: a court mod pick likewise (never saved)
     menu.court_mods = crate::mods_court::list(&mods_dir);
+    // B425: `HST_NO_MODS=1` (for `--shot`s): the menu as with no mods installed (1P's Get more chip), whatever
+    // `mods/` holds
+    if std::env::var_os("HST_NO_MODS").is_some() {
+        (menu.mods, menu.court_mods, menu.umpire_mods) = (Vec::new(), Vec::new(), Vec::new());
+        menu.umpire_in_range();
+    }
     menu.court_in_range();
     if fresh {
         menu.favs = tabs::load(&args.iso);
