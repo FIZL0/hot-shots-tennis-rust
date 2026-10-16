@@ -1812,6 +1812,16 @@ struct Sheets {
     font: Vec<u8>,
 }
 
+/// M113: the disc's TParam.csv, so the Mods screen can grade a mod the startup roster doesn't have ([`mod_card`]).
+#[derive(Resource)]
+struct TParam(Vec<u8>);
+
+/// M113: mod `m`'s play style and △ grades as the select shows them (None: its TParam.csv row can't be read).
+fn mod_card(m: &crate::mods::Mod, csv: &[u8], t: &Text) -> Option<(usize, [u8; 5])> {
+    let row = crate::mods::tparam_row(csv, m).ok()?;
+    Some((mod_style(m, &t.style), mod_grades(&row, m.base, csv, &t.grades)))
+}
+
 /// [`read_text`]'s mod roster and its folder, for [`setup`].
 #[derive(Resource)]
 struct Roster(Vec<crate::mods::Mod>, std::path::PathBuf);
@@ -1916,6 +1926,7 @@ fn read_text(mut commands: Commands, args: Res<Args>, mut sheets: ResMut<Sheets>
     art.push(super::menu_art::pill_layers(&mut images));
     commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), ranks, mods: mod_text }));
     commands.insert_resource(Roster(mods, mods_dir));
+    commands.insert_resource(TParam(csv));
 }
 
 /// The menu: its settings, the screen it opens on, its quads.

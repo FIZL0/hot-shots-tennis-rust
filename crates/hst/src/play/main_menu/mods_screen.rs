@@ -1579,6 +1579,7 @@ fn page(
     mut on: Local<bool>,
     (mut card, mut baked): (ResMut<super::previews::ModCard>, Local<u32>),
     time: Res<Time>,
+    (tparam, mut graded): (Option<Res<super::TParam>>, Local<std::collections::HashSet<PathBuf>>),
 ) {
     if (menu.screen == Screen::Mods) != *on {
         *on = !*on;
@@ -1593,11 +1594,22 @@ fn page(
         if *on && let Some(art) = &art {
             let stats = menu.mods.iter().zip(&art.2.mods).map(|(m, s)| (m.dir.clone(), *s)).collect();
             menu.add.stats = stats;
+            graded.clear();
             // (B383: the Installed grid's cards)
             menu.add.relist();
         }
         if let Some(a) = &args {
             menu.add.iso = a.iso.clone();
+        }
+    }
+    // M113: a mod the startup roster doesn't have (added or installed since) graded from the disc's TParam.csv, so
+    // its upload carries its card and its Installed / Upload panel shows it
+    if *on && let (Some(art), Some(tp)) = (&art, &tparam) {
+        let v = &mut menu.add;
+        let new: Vec<_> = v.list.iter().filter(|m| !v.stats.contains_key(&m.dir) && graded.insert(m.dir.clone())).filter_map(|m| Some((m.dir.clone(), super::mod_card(m, &tp.0, &art.2)?))).collect();
+        if !new.is_empty() {
+            v.stats.extend(new);
+            v.relist();
         }
     }
     if std::mem::take(&mut menu.add.paste) {
