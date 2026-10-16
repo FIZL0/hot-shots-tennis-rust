@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use hst_data::{exe, iso::Iso, layout, xb::Archive};
-use hst_sim::{npc, rally::msg, sound};
+use hst_sim::{npc::{self, match_phase}, rally::msg, sound};
 
 use super::{Game, Phase};
 use crate::character::{self, CharacterData, Motion};
@@ -453,21 +453,21 @@ fn step(
         }
         home_walkers(&mut npcs.walkers, &g.players);
     }
-    // the serve set-up's message (every new point and the match's first serve): in the match's state 0 (its
-    // start) or 1 (after a change of ends) only the passing ball resets, and only in state 1 its reset rolls; else every
+    // the serve set-up's message (every new point and the match's first serve): in the match's state `START` or
+    // `AFTER_ENDS` only the passing ball resets, and only in `AFTER_ENDS` its reset rolls; else every
     // creature but type 37
     if serve && !npcs.serving {
-        let phase = if first { 0 } else if npcs.ends { 1 } else { 4 };
-        (npcs.near.ends, npcs.near.players) = (phase == 1, players);
+        let phase = if first { match_phase::START } else if npcs.ends { match_phase::AFTER_ENDS } else { match_phase::PLAY };
+        (npcs.near.ends, npcs.near.players) = (phase == match_phase::AFTER_ENDS, players);
         let games = g.match_stats.games;
         for (_, t, row) in &mut npcs.triggers {
             heard.extend(t.hear(row, msg::SERVE as u32, false, phase, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
             // B261: court 3's type 10 sounds at its reset here once every second game (the games so far even)
-            if t.ty == 10 && phase == 4 && games != 0 && games.is_multiple_of(2) && games != npcs.games {
+            if t.ty == 10 && phase == match_phase::PLAY && games != 0 && games.is_multiple_of(2) && games != npcs.games {
                 heard.push((row.sound, t.ty, t.pos3()));
             }
         }
-        if phase == 4 {
+        if phase == match_phase::PLAY {
             npcs.games = games;
         }
         npcs.near.ends = false;
@@ -478,7 +478,7 @@ fn step(
         npcs.crowd.iter_mut().for_each(|(c, _)| c.reset());
         npcs.cheers.clear();
         for (_, t, row) in &mut npcs.triggers {
-            heard.extend(t.hear(row, msg::CHANGE_ENDS as u32, false, 4, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
+            heard.extend(t.hear(row, msg::CHANGE_ENDS as u32, false, match_phase::PLAY, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
         }
     }
     npcs.ends = ends;

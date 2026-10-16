@@ -8,13 +8,14 @@
 
 use bevy::prelude::*;
 use hst_sim::score::Event;
+use hst_sim::motion::id;
 use hst_sim::sound;
 
 use super::{Game, Phase, controls::Action, set_motion};
 
 /// The emotes by flick (up, down, left, right): the character's post-point reactions `gu_set` (the big win),
 /// `di_set` (the big loss), `gu` (a won point), `di` (a lost one) — a mod character's from its pack.
-pub const MOTIONS: [usize; 4] = [0x2e, 0x2f, 0x2c, 0x2d];
+pub const MOTIONS: [usize; 4] = [id::WON_GAME as usize, id::LOST_GAME as usize, id::WON as usize, id::LOST as usize];
 
 /// Keys 1–4 by default, in flick order.
 pub const KEYS: [Action; 4] = [Action::EmoteUp, Action::EmoteDown, Action::EmoteLeft, Action::EmoteRight];
@@ -234,9 +235,9 @@ mod tests {
     /// reactions' key memory alone.
     #[test]
     fn emote_lines_vary() {
-        for (m, program, keys) in [(0x2e, 9, &[0, 1, 0][..]), (0x2f, 10, &[0, 1, 0]), (0x2c, 7, &[0, 1, 2, 0]), (0x2d, 8, &[0, 1, 2, 3, 4, 0])] {
+        for (m, program, keys) in [(id::WON_GAME, 9, &[0, 1, 0][..]), (id::LOST_GAME, 10, &[0, 1, 0]), (id::WON, 7, &[0, 1, 2, 0]), (id::LOST, 8, &[0, 1, 2, 3, 4, 0])] {
             let mut v = sound::Voice::default();
-            let got: Vec<_> = keys.iter().map(|_| line(&mut v, 1, m).map(|p| (p.program, p.key)).unwrap()).collect();
+            let got: Vec<_> = keys.iter().map(|_| line(&mut v, 1, m as usize).map(|p| (p.program, p.key)).unwrap()).collect();
             assert_eq!(got, keys.iter().map(|&k| (program, k)).collect::<Vec<_>>(), "motion {m:#x}");
             let rv = sound::reaction_voice(2, m as i32, false, false, || 0).unwrap();
             let mut fresh = sound::Voice::default();
@@ -272,7 +273,7 @@ mod tests {
 #[cfg(test)]
 mod match_tests {
     use super::super::tick_input::{IDLE, Replay, TickPads};
-    use super::MOTIONS;
+    use super::{MOTIONS, id};
     use super::super::*;
     use crate::{Args, GameSpace};
     use hst_sim::replay::Pad;
@@ -411,7 +412,7 @@ mod match_tests {
                 assert_eq!(drawn, MOTIONS[2], "the body kept the stance, tick {t}");
             }
             if t == at + len + 2 {
-                assert!((0x20..=0x22).contains(&drawn), "no stance after the emote, tick {t}: {drawn:#x}");
+                assert!((id::SERVE_STANCE as usize..=id::SERVE_RIGHT as usize).contains(&drawn), "no stance after the emote, tick {t}: {drawn:#x}");
             }
             // the press tosses (a second would swing)
             if g.serving.toss.is_some() {

@@ -16,7 +16,6 @@ index out of bounds: the len is 0 but the index is 0"
 ### Netplay and mobile (user 2026-10-09: right after the bugs/priority list, in this order)
 
 ### Match basics
-- [ ] **C3** Readable sim, no RAM mirroring (user 2026-10-16, split into C3a–C3f; was 'after C1', dropped): rename and restructure what still mirrors the original's memory (packed words, raw offsets, byte flags, original struct shapes and index arithmetic, unnamed magic constants) into plain Rust types, enums and named constants, so the code reads without the decompile. Behaviour-preserving only, proven the way C2 was (plan/C2.md): the replay, oracle and recording tests stay bit-exact and `hash_trace` (before/after baselines in context/c3/) is unchanged; no gameplay change. Done when C3a–C3f are ticked → `hst-sim/src/`
 
 ### Shots
 
