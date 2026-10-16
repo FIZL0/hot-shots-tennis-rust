@@ -15,7 +15,7 @@
 //!   codes') each hold one listing with its short code, read and written on the DHT natively and through the pkarr
 //!   relay in the browser. A host takes the first slot that's free, stale or its own; Find reads them all.
 //! - **Relay** for when hole punching fails: n0's public relays, your own `iroh-relay`, or none (LAN only).
-//! - **Code / QR**: the host's [`EndpointTicket`] (ID + relay + direct addresses, its LAN ones included), needs no
+//! - **Code / link**: the host's [`EndpointTicket`] (ID + relay + direct addresses, its LAN ones included), needs no
 //!   discovery at all.
 //!
 //! The lobby protocol (ALPN [`ALPN`]): the joiner opens a stream and sends [`Msg::Hello`] (build, its 1–3 local
@@ -66,6 +66,8 @@ const LAN_TAG: &str = "hst1";
 const LAN_WAIT: Duration = Duration::from_secs(3);
 const REPUBLISH: Duration = Duration::from_secs(30);
 const STALE: u64 = 90;
+/// B518: the shortest gap between two of a host's lobby listings outside a republish.
+const LIST_GAP: Duration = Duration::from_secs(10);
 /// The build peers must share (M2e will add the disc pack, rules and mods).
 pub const BUILD: &str = concat!("hst ", env!("CARGO_PKG_VERSION"));
 
@@ -271,7 +273,7 @@ pub struct Room {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vanilla: bool,
     /// B322: the host's short code once it's online (empty until then, or with none), so a guest's lobby shows the
-    /// same code and QR as the host's and can pass the lobby on. Never the long ticket (B224).
+    /// same code and link as the host's and can pass the lobby on. Never the long ticket (B224).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub short: String,
     /// B370: each guest's last round trip to the host (ms, by peer), for the lobby's cards.
@@ -1605,13 +1607,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut joined: Vec<(String, Link, Conn)> = Vec::new();
     let mut tick = n0_future::time::interval(REPUBLISH);
     let mut dirty = true;
+    let mut listed_at = None;
     // B275: the code's record goes out every REPUBLISH, not on every lobby change (the pkarr relay allows 10 puts)
     let mut republish = true;
     let mut listed = false;
     // the board slot this lobby is listed in (B116; SLOTS: none yet)
     let slot = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(SLOTS));
     // B467: the last code or board put failed (the lobby says why until one goes out again)
-    let unlisted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // B518: republishes in a row that didn't go out
+    let unlisted = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
     // the round trips: each guest's last, and (full) the guests not yet answered since the start's probe, until when
     let t0 = n0_future::time::Instant::now();
     let mut rtt: std::collections::HashMap<String, Duration> = Default::default();
@@ -1671,8 +1675,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             broadcast(&joined, &Msg::Room(room.clone()));
             cx.say(Event::Room(room.clone()));
         }
-        if dirty {
+        // B518: a join changes the room a few times in a row (join, pick, ready) and each listing is a read and a put
+        // on the pkarr relay, which with the guest's own lookups on the same Wi-Fi went past its rate limit: "Others
+        // may not find this lobby" as someone joined. Between republishes a listing goes out at most every
+        // `LIST_GAP`; the changes in between go with the next one (the next event, or the tick at the latest)
+        if dirty && (republish || listed_at.is_none_or(|t: n0_future::time::Instant| t.elapsed() >= LIST_GAP)) {
             dirty = false;
+            listed_at = Some(n0_future::time::Instant::now());
             // listing in the background: a slow DHT put never holds up a join
             if let Some(ep) = &cx.ep {
                 let l = room.clone();
@@ -1701,10 +1710,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         match r {
                             Err(why) => {
                                 bevy::log::warn!("lobby: {why}");
-                                unlisted.store(true, std::sync::atomic::Ordering::Relaxed);
-                                cx2.say(Event::Status(format!("Others may not find this lobby: {why}. Trying again in {} s.", REPUBLISH.as_secs())));
+                                // B518: one miss leaves the last republish's record standing (a code is stale only
+                                // after `STALE`): the host hears of it from the second miss in a row on
+                                if unlisted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1 {
+                                    cx2.say(Event::Status(format!("Others may not find this lobby: {why}. Trying again in {} s.", REPUBLISH.as_secs())));
+                                }
                             }
-                            Ok(()) if unlisted.swap(false, std::sync::atomic::Ordering::Relaxed) => cx2.say(Event::Status("The lobby is listed again: Waiting for players...".into())),
+                            Ok(()) if unlisted.swap(0, std::sync::atomic::Ordering::Relaxed) >= 2 => cx2.say(Event::Status("The lobby is listed again: Waiting for players...".into())),
                             Ok(()) => {}
                         }
                     }
@@ -1986,7 +1998,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     room.private = p;
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
-                    dirty = true;
+                    // B518: the host's own Public/Private goes on (or off) the list at once
+                    (dirty, listed_at) = (true, None);
                 }
                 Some(Cmd::Venue(court, sets, games, umpire)) if starting.is_none() => {
                     (room.court, room.sets, room.games, room.umpire) = (court, sets, games, umpire);
@@ -2749,17 +2762,22 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
 /// Put `ticket` under `code`: Ok once it went out (on the DHT, or the relay when the DHT put fails), else why not.
 #[cfg(not(target_arch = "wasm32"))]
 async fn publish(dht: &Dht, code: &str, ticket: &str) -> Result<(), String> {
+    // ponytail: the relay's own DHT lookup misses our put now and then, so browsers read it from the relay directly;
+    // its put takes 5-20 s (B151), so it goes out alongside the DHT put, in the background (native joiners read the
+    // DHT). B513: it used to start only once the DHT put was done, which with the roll's lookup left a browser guest's
+    // 20 s of lookups (`resolve`) finding nothing for a code already on the host's screen (not from the tests: their
+    // DHT is a local testnet)
+    let relay = (!cfg!(test)).then(|| {
+        let (code, ticket) = (code.to_string(), ticket.to_string());
+        n0_future::task::spawn(async move { relay_put(&code, &ticket).await })
+    });
     let item = MutableItem::new(&SigningKey::from_bytes(&code_key(code).to_bytes()), &dns_txt(ticket), unix_micros(), None);
     let put = dht.put_mutable(item, None).await.map_err(|e| bevy::log::warn!("lobby code {code}: {e}")).is_ok();
-    // ponytail: the relay's own DHT lookup misses our put now and then, so browsers read it from the relay directly;
-    // its put takes 5-20 s (B151), so after a DHT put it goes on in the background (native joiners read the DHT)
-    // (not from the tests: their DHT is a local testnet)
-    if put && !cfg!(test) {
-        let (code, ticket) = (code.to_string(), ticket.to_string());
-        n0_future::task::spawn(async move { drop(relay_put(&code, &ticket).await) });
-        return Ok(());
+    match relay {
+        _ if put => Ok(()),
+        Some(r) => r.await.map_err(|e| e.to_string())?,
+        None => relay_put(code, ticket).await,
     }
-    relay_put(code, ticket).await
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2891,9 +2909,9 @@ async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &List
 
 /// The ticket the short code `code` stands for, if its lobby is open; else (B467) what the lookup found instead.
 async fn resolve(dht: &Dht, code: &str) -> Result<String, String> {
-    // B114: asked again until 20 s are up, as a code just rolled can take a few seconds to reach the relay or DHT
-    // nodes this machine asks
-    let until = n0_future::time::Instant::now() + Duration::from_secs(20);
+    // B114: asked again until 40 s are up, as a code just rolled can take a while to reach the relay or DHT nodes
+    // this machine asks (B513: the relay's put alone takes up to 20 s)
+    let until = n0_future::time::Instant::now() + Duration::from_secs(40);
     loop {
         let left = until.saturating_duration_since(n0_future::time::Instant::now()).as_secs().max(1);
         let r = lookup_for(dht, code, left).await;

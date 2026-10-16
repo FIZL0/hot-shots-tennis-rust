@@ -523,7 +523,9 @@ function fail(e) {
   // the crate and file are enough
   const why = (/panicked/.test(lastError) ? lastError : msg).split(/\n\s*Stack:/)[0].replace(/\S*\/\.cargo\/registry\/src\/[^/\s]+\//g, '');
   const text = why.split('\n').filter(l => !/wasm-function|@https?:/.test(l)).slice(0, 6).join('\n');
-  step.textContent = why === noGraphics ? noGraphics : /webgl2 not available|Unable to find a GPU|Failed to create wgpu surface/.test(why) ? `${noGraphics}\n\n(${text})` : `The game stopped: ${text}`;
+  const none = lostRecently() ? lostGraphics : noGraphics;
+  step.textContent = why === noGraphics ? none : /webgl2 not available|Unable to find a GPU|Failed to create wgpu surface/.test(why) ? `${none}\n\n(${text})`
+    : `The game stopped: ${text}${/DeviceLost/.test(why) ? `\n\n${lostGraphics}` : ''}`;
   // the whole error with the browser and its graphics for a report (Copy the error)
   document.getElementById('copy').hidden = false;
   document.getElementById('copy').onclick = e => {
@@ -562,6 +564,12 @@ const noGraphics = 'This browser isn\'t giving the page any 3D graphics (no WebG
   + 'Chrome / Chromium / Edge: Settings → System → turn on "Use graphics acceleration when available" and relaunch. '
   + 'Then open chrome://gpu: WebGL2 should say "Hardware accelerated". If it says disabled or blocklisted (common with '
   + 'Linux drivers), turn on chrome://flags/#ignore-gpu-blocklist and relaunch. Firefox: about:support → Graphics.';
+// B511: after the GPU crashed under the page (Android Edge: "DeviceLost … A valid external Instance reference no longer
+// exists") Chromium blocks WebGPU and WebGL for the site for a while, so the reload has no 3D at all: that's not the
+// settings above, it says what happened instead. `hstLost` (sessionStorage, survives a refresh) is when the device went
+const lostGraphics = 'The phone\'s graphics crashed under the game, and the browser blocks 3D graphics for this site for a '
+  + 'while after that. Close this tab (or the whole browser) and open the game again in a new one.';
+const lostRecently = () => { try { return Date.now() - (+sessionStorage.getItem('hstLost') || 0) < 600000; } catch { return false; } };
 // Bevy logs its errors with console.log (`%cERROR%c file:line%c message`, css args after) and quits on a render
 // error (a lost GPU device…) without a panic: the page would sit on "Starting…" for good. The first error is the cause.
 let renderError = '', shown = false;
@@ -579,7 +587,8 @@ console.log = (...a) => {
   if (/DeviceLost/.test(renderError)) {
     let last = 0;
     try { last = +sessionStorage.getItem('hstLost') || 0; sessionStorage.setItem('hstLost', Date.now()); } catch {}
-    if (Date.now() - last > 60000) { console.warn('hst: GPU device lost, reloading'); location.reload(); return; }
+    // B511: on the WebGPU build the reload is the WebGL2 one (Android Chromium's GPU process going away, B452)
+    if (Date.now() - last > 60000) { console.warn('hst: GPU device lost, reloading'); if (!window.hstWebGL2?.(renderError)) location.reload(); return; }
   }
   fail(renderError);
 };
