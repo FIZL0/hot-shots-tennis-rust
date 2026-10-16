@@ -32,8 +32,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    # a release only builds the site when it is the one opentennis.dev shows
-    if: ${{ github.event_name != 'release' || vars.SITE_FROM == 'release' }}
+    # a release only builds the site when it is the one opentennis.dev shows; ship-local.sh's web-prebuilt
+    # prerelease is only a carrier for its upload, not a release
+    if: ${{ github.event_name != 'release' || vars.SITE_FROM == 'release' && github.event.release.tag_name != 'web-prebuilt' }}
     runs-on: ubuntu-latest
     steps:
       - if: ${{ inputs.prebuilt }}
