@@ -720,6 +720,14 @@ impl Sound {
         self.0.lock().unwrap().voices.iter().filter(|v| v.0.pcm.is_some()).count()
     }
 
+    /// One frame of the mix (`FRAME` stereo samples, interleaved), for tests.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn render_frame(&self) -> Vec<f32> {
+        let mut out = Vec::with_capacity(FRAME * 2);
+        self.0.lock().unwrap().render(&mut out);
+        out
+    }
+
     /// M8f6: how many loops (a court mod's BGM and ambience) are playing, for tests.
     #[cfg(any(test, feature = "testing"))]
     pub fn looping(&self) -> usize {

@@ -35,7 +35,12 @@ impl Seat {
 /// `SDL_GAMECONTROLLER_IGNORE_DEVICES` (`0xVID/0xPID,…`); those are skipped so only Steam's virtual pad, with the
 /// player's Steam/Big Picture layout, drives the game. Outside Steam Input, Steam's background virtual pads (Valve
 /// 0x28de/0x11ff) mirror real ones and are skipped instead.
+/// `--shot` and `HST_MENU` runs (P62) read no pad at all: the agents' virtual pads (`tools/vpad.py`) would otherwise
+/// join seats and move menus in the screenshots.
 pub fn readable(g: &Gamepad) -> bool {
+    if IGNORE.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
     static IGNORED: std::sync::OnceLock<Option<Vec<(u16, u16)>>> = std::sync::OnceLock::new();
     let ignored = IGNORED.get_or_init(|| std::env::var("SDL_GAMECONTROLLER_IGNORE_DEVICES").ok().map(|v| ignore_list(&v)));
     let id = (g.vendor_id().unwrap_or(0), g.product_id().unwrap_or(0));
@@ -43,6 +48,21 @@ pub fn readable(g: &Gamepad) -> bool {
         Some(list) => !list.contains(&id),
         None => id != (0x28de, 0x11ff),
     }
+}
+
+/// Set by `ignore_input`: no pad is `readable`.
+static IGNORE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// P62: an unattended `--shot`/`HST_MENU` run reads no gamepad and no real key; `HST_KEYS` (which presses keys in
+/// `ButtonInput` itself, after this) still drives it.
+pub fn ignore_input(app: &mut App) {
+    IGNORE.store(true, std::sync::atomic::Ordering::Relaxed);
+    app.add_systems(PreUpdate, drop_keys.before(bevy::input::InputSystems));
+}
+
+/// The window's key presses, dropped before the input systems turn them into `ButtonInput`/text.
+fn drop_keys(mut keys: ResMut<Messages<bevy::input::keyboard::KeyboardInput>>) {
+    keys.clear();
 }
 
 /// `SDL_GAMECONTROLLER_IGNORE_DEVICES`' `0xVID/0xPID` pairs; malformed entries are dropped.

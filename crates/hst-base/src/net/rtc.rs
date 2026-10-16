@@ -3,8 +3,9 @@
 //!
 //! The offer and answer go by copied link: the host's lobby shares its offer as a link (`…?code=rtco…`); a guest
 //! opens it (the game starts with the code, as Join by Code), and its lobby shares the answer as a link
-//! (`…?code=rtca…`) for the host to open. That opens a second tab on the host's device, which hands the answer to
-//! the game's tab (a `BroadcastChannel`, `web/index.html`) and stops; pasting either code on the page works too. The
+//! (`…?code=rtca…`) for the host to Paste in its lobby (B526: the clipboard read, `web.rs`), or to open: that opens a
+//! second tab on the host's device, which hands the answer to the game's tab (a `BroadcastChannel`, `web/index.html`)
+//! and stops; pasting either code on the page (Ctrl+V) works too. The
 //! host then shows a fresh offer for the next guest. Once connected it's the same lobby protocol as iroh's
 //! (`net.rs`): JSON messages on a reliable, ordered data channel, rollback's datagrams on an unordered one with no
 //! retransmits, both negotiated up front (ids 0 and 1) so the codes carry nothing but ICE and DTLS.
@@ -144,6 +145,11 @@ fn uuid(name: &str) -> Option<[u8; 16]> {
 
 pub fn is_offer(text: &str) -> bool {
     Sig::parse(text, OFFER).is_some()
+}
+
+/// B526: a guest's answer (its lobby's Copy Link shares it back to the host).
+pub fn is_answer(text: &str) -> bool {
+    Sig::parse(text, ANSWER).is_some()
 }
 
 thread_local! {

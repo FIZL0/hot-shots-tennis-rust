@@ -32,20 +32,28 @@ pub struct Handshake {
     pub seed: Seed,
 }
 
-/// The build: two builds can't be trusted to simulate alike. `HST_BUILD` (e.g. a commit id) set at compile time
-/// tells apart builds of one version.
-// ponytail: the crate version alone without HST_BUILD; a build.rs with the git commit if dev builds play online
-pub const BUILD: &str = match option_env!("HST_BUILD") {
-    Some(b) => b,
-    None => env!("CARGO_PKG_VERSION"),
-};
+/// The build: two builds can't be trusted to simulate alike. M22: one id for the lobby's Hello (`net.rs`) and this
+/// handshake, the crate version and the git commit ("1.0.0 2e28939", a "+" after it when built with uncommitted
+/// changes); the game (`hst`, whose build script knows the commit) sets it first thing (`set_build`). Unset (this
+/// crate's tests, `hst`'s dev builds) it is the version and "dev": dev builds of one version meet each other.
+static BUILD: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// This build's id (see `BUILD`).
+pub fn build() -> &'static str {
+    BUILD.get().copied().unwrap_or(concat!(env!("CARGO_PKG_VERSION"), " dev"))
+}
+
+/// Stamps this build's id, before any lobby or match; a second call changes nothing.
+pub fn set_build(id: &'static str) {
+    let _ = BUILD.set(id);
+}
 
 impl Handshake {
     pub fn of(args: &crate::Args, pack: Option<u64>, mods: Option<&MatchMod>, seed: Seed) -> Handshake {
         let seats = args.pads.map_or([None; 4], |p| p.map(|s| s.map(|_| 0)));
         let mods = (0..args.chars.len()).map(|n| mods.and_then(|m| m.get(n)).map(gameplay_hash)).collect();
         Handshake {
-            build: BUILD,
+            build: build(),
             pack,
             court: args.court,
             singles: args.singles,
@@ -111,7 +119,7 @@ mod tests {
 
     fn host() -> Handshake {
         Handshake {
-            build: BUILD,
+            build: build(),
             pack: Some(7),
             court: 3,
             singles: true,

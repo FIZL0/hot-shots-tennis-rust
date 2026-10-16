@@ -4,7 +4,8 @@
 //! (each animation looping on its own clock) are drawn in the layout court's game space, its manifest light is baked
 //! into their vertex colours, its sun casts the shadows, and its BGM and ambience loops play in place of the layout
 //! court's music and creature sounds. A `__clear` node isn't drawn while it stands between the eye and the court
-//! (M8f5a3, `clear_view`). Nothing here reads or writes the match: replays stay bit-exact.
+//! (M8f5a3, `clear_view`); a gimmick creature standing in the players' room isn't drawn at all (B506,
+//! `creatures_in_play`). Nothing here reads or writes the match: replays stay bit-exact.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -146,7 +147,7 @@ fn setup(
         } else {
             root
         };
-        match crate::mods::open(&path).and_then(|(doc, blob)| scene(&mut commands, &mut store, &doc, &blob, parent, args.singles, if sky { None } else { c.light.as_ref() }, sky, None)) {
+        match crate::mods::open(&path).and_then(|(doc, blob)| scene_off(&mut commands, &mut store, &doc, &blob, parent, args.singles, if sky { None } else { c.light.as_ref() }, sky, None, file == "gimmick.glb")) {
             Ok(n) => info!("court mod {}: {file}, {n} draws", c.id),
             Err(e) => warn!("court mod {}: {}: {e}", c.id, path.display()),
         }
@@ -180,7 +181,13 @@ pub struct Store<'a> {
 /// undone), leaving out the other match kind's `__singles`/`__doubles` nodes; its animations loop, or with `spawned`
 /// go there by name with the named nodes. Returns the draws.
 #[allow(clippy::too_many_arguments)]
-pub fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u8], parent: Entity, singles: bool, light: Option<&Light>, sky: bool, mut spawned: Option<&mut Spawned>) -> Result<usize, String> {
+pub fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u8], parent: Entity, singles: bool, light: Option<&Light>, sky: bool, spawned: Option<&mut Spawned>) -> Result<usize, String> {
+    scene_off(commands, s, doc, blob, parent, singles, light, sky, spawned, false)
+}
+
+/// [`scene`]; with `off_court`, the creatures standing in the players' room ([`creatures_in_play`]) aren't spawned (B506).
+#[allow(clippy::too_many_arguments)]
+fn scene_off(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u8], parent: Entity, singles: bool, light: Option<&Light>, sky: bool, mut spawned: Option<&mut Spawned>, off_court: bool) -> Result<usize, String> {
     let worlds = worlds(doc);
     let space = doc.nodes().find(|n| n.name() == Some("game_space")).map_or(Mat4::IDENTITY, |n| worlds[n.index()]);
     let to_game = space.inverse();
@@ -190,6 +197,7 @@ pub fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob:
     let skip = |n: &gltf::Node| n.name().is_some_and(|m| m.ends_with(if singles { "__doubles" } else { "__singles" }));
     // the node tree as entities (an animation or a skin moves them)
     let mut nodes = HashMap::new();
+    let off = if off_court { creatures_in_play(doc, blob, to_game, singles) } else { Default::default() };
     // each `__clear` node's subtree: the node it's under (M8f5a3)
     let clear_node = |n: &gltf::Node| n.name().is_some_and(|m| m.trim_end_matches("__singles").trim_end_matches("__doubles").ends_with("__clear"));
     let mut clear_of = HashMap::new();
@@ -213,12 +221,12 @@ pub fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob:
     let mut clears: HashMap<usize, ClearView> = HashMap::new();
     let mut draws = 0;
     for n in doc.nodes().filter(|n| nodes.contains_key(&n.index())) {
-        let Some(mesh) = n.mesh() else { continue };
+        let Some(mesh) = n.mesh().filter(|_| !off.contains(&n.index())) else { continue };
         let skin = n.skin().filter(|sk| sk.joints().all(|j| nodes.contains_key(&j.index())));
         // the skin's joints in game space at bind (to bake the light), and Bevy's skin
         let (rest, skinned) = match &skin {
             Some(sk) => {
-                let ibm: Vec<Mat4> = sk.reader(|_| Some(blob)).read_inverse_bind_matrices().map_or_else(|| vec![Mat4::IDENTITY; sk.joints().count()], |i| i.map(|m| Mat4::from_cols_array_2d(&m)).collect());
+                let ibm = bind_inverses(sk, blob);
                 let rest: Vec<Mat4> = sk.joints().zip(&ibm).map(|(j, b)| to_game * worlds[j.index()] * *b).collect();
                 let joints = sk.joints().map(|j| nodes[&j.index()]).collect();
                 (rest, Some(SkinnedMesh { inverse_bindposes: s.binds.add(SkinnedMeshInverseBindposes::from(ibm)), joints }))
@@ -490,6 +498,70 @@ fn bounds(m: &Mesh, rest: &[Mat4]) -> Option<(Vec3, Vec3)> {
     (b.0.x <= b.1.x).then_some(b)
 }
 
+fn bind_inverses(sk: &gltf::Skin, blob: &[u8]) -> Vec<Mat4> {
+    sk.reader(|_| Some(blob)).read_inverse_bind_matrices().map_or_else(|| vec![Mat4::IDENTITY; sk.joints().count()], |i| i.map(|m| Mat4::from_cols_array_2d(&m)).collect())
+}
+
+/// B506: the mesh nodes of a court mod's creatures that stand in the players' room ([`in_play`]) at rest: a skinned
+/// mesh (Get a Grip's pigeons, crows, sparrows, crab, dog, tiger; its props are rigid) and the rigid meshes that go
+/// with it (its shadow: under the highest node over its skeleton that holds no other skin and nothing out of the room). Get a Grip's pigeons sit on and around the court and fly
+/// off when play comes near, a reaction that isn't reproduced: here they'd stay in the rally, so they aren't drawn.
+fn creatures_in_play(doc: &gltf::Document, blob: &[u8], to_game: Mat4, singles: bool) -> std::collections::HashSet<usize> {
+    let worlds = worlds(doc);
+    let mut parent = HashMap::new();
+    doc.nodes().for_each(|n| n.children().for_each(|c| _ = parent.insert(c.index(), n.index())));
+    let skip = |n: &gltf::Node| n.name().is_some_and(|m| m.ends_with(if singles { "__doubles" } else { "__singles" }));
+    let in_room = |n: &gltf::Node, rest: &[Mat4], skinned: bool| {
+        n.mesh().is_some_and(|m| m.primitives().any(|p| primitive(&p, blob, None, rest, skinned).and_then(|m| bounds(&m, rest)).is_some_and(|(lo, hi)| in_play(lo, hi))))
+    };
+    let is_under = |mut i: usize, top: usize| loop {
+        if i == top {
+            return true;
+        }
+        match parent.get(&i) {
+            Some(&p) => i = p,
+            None => return false,
+        }
+    };
+    // the rigid meshes standing in the room, and each skin's joints and whether it stands there
+    let rigid: Vec<(usize, bool)> = doc.nodes().filter(|n| n.mesh().is_some() && n.skin().is_none() && !skip(n)).map(|n| (n.index(), in_room(&n, &[to_game * worlds[n.index()]], false))).collect();
+    let skins: Vec<(usize, Vec<usize>, bool)> = doc
+        .nodes()
+        .filter(|n| !skip(n))
+        .filter_map(|n| {
+            let sk = n.skin()?;
+            let rest: Vec<Mat4> = sk.joints().zip(bind_inverses(&sk, blob)).map(|(j, b)| to_game * worlds[j.index()] * b).collect();
+            Some((n.index(), sk.joints().map(|j| j.index()).collect(), in_room(&n, &rest, true)))
+        })
+        .collect();
+    let mut off = std::collections::HashSet::new();
+    for (k, (node, joints, inside)) in skins.iter().enumerate() {
+        if !inside {
+            continue;
+        }
+        off.insert(*node);
+        // the creature: up from its skeleton while nothing else comes in (another skin, a mesh out of the room)
+        let Some(mut root) = joints.first().copied() else { continue };
+        while let Some(&p) = parent.get(&root) {
+            let other = skins.iter().enumerate().any(|(o, s)| o != k && s.1.iter().any(|&j| is_under(j, p)));
+            if other || rigid.iter().any(|&(r, inside)| !inside && is_under(r, p)) {
+                break;
+            }
+            root = p;
+        }
+        off.extend(rigid.iter().filter(|&&(r, _)| is_under(r, root)).map(|&(r, _)| r));
+    }
+    off
+}
+
+/// B506: whether the box `lo..hi` (game space, y down) stands in the players' room: over the doubles court and 2 m
+/// beside / 4 m behind it (as the walkers' room, `play::npcs::court_clear`), from 3 m up to 1.5 m down (a mod's
+/// ground can sit off the layout's).
+pub fn in_play(lo: Vec3, hi: Vec3) -> bool {
+    let (w, l) = (5.485 + 2.0, 11.885 + 4.0);
+    lo.x < w && hi.x > -w && lo.z < l && hi.z > -l && lo.y < 1.5 && hi.y > -3.0
+}
+
 /// Whether the box `lo..hi` (game space, y down) stands between `eye` and the court: a line from the eye to a point
 /// of the playing area (the doubles court and 2 m behind each baseline, where the players stand, on the ground and
 /// 2 m up) passes through it, or the eye is inside it.
@@ -663,5 +735,40 @@ mod tests {
             }
         }
         eprintln!("{} court mods seat the umpire", courts.len());
+    }
+
+    /// B506: every court mod under `$HST_MODS`: the creatures left out for standing in the players' room are whole (a
+    /// skin with its shadow, a collar) and small pieces on the ground; Get a Grip's University court loses its pigeons there.
+    #[test]
+    fn no_court_mod_creature_stands_in_the_rally() {
+        let Ok(root) = std::env::var("HST_MODS") else { return eprintln!("no HST_MODS, skipped") };
+        let courts = crate::mods_court::list(std::path::Path::new(&root));
+        assert!(!courts.is_empty());
+        for c in &courts {
+            let Ok((doc, blob)) = crate::mods::open(&c.dir.join("gimmick.glb")) else { continue };
+            let worlds = worlds(&doc);
+            let to_game = doc.nodes().find(|n| n.name() == Some("game_space")).map_or(Mat4::IDENTITY, |n| worlds[n.index()]).inverse();
+            for singles in [true, false] {
+                let off = creatures_in_play(&doc, &blob, to_game, singles);
+                let mut names: Vec<String> = Vec::new();
+                for n in doc.nodes().filter(|n| off.contains(&n.index())) {
+                    let skinned = n.skin().is_some();
+                    let rest: Vec<Mat4> = match n.skin() {
+                        Some(sk) => sk.joints().zip(bind_inverses(&sk, &blob)).map(|(j, b)| to_game * worlds[j.index()] * b).collect(),
+                        None => vec![to_game * worlds[n.index()]],
+                    };
+                    let (lo, hi) = n.mesh().unwrap().primitives().filter_map(|p| primitive(&p, &blob, None, &rest, skinned).and_then(|m| bounds(&m, &rest))).fold((Vec3::INFINITY, Vec3::NEG_INFINITY), |a, b| (a.0.min(b.0), a.1.max(b.1)));
+                    assert!((hi - lo).max_element() < 3.0 && lo.y > -2.0 && hi.y > -0.5, "{}: {:?} {lo} {hi}", c.id, n.name());
+                    names.push(format!("{}{} {:.1},{:.1}", n.name().unwrap_or("?"), if skinned { "" } else { " (rigid)" }, (lo.x + hi.x) / 2.0, (lo.z + hi.z) / 2.0));
+                }
+                assert!(names.iter().filter(|n| !n.contains("(rigid)")).count() * 2 <= names.len(), "{}: each skin with its shadow: {names:?}", c.id);
+                if singles {
+                    eprintln!("{}: {}", c.id, names.join(", "));
+                }
+                if c.id == "gag_c14_academy" {
+                    assert_eq!(names.len(), 8, "University: its four pigeons by the court");
+                }
+            }
+        }
     }
 }

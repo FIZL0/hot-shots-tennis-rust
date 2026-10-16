@@ -16,9 +16,12 @@ pub(crate) use super::super::legend::Last;
 /// probes `step` for them).
 pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let mut v: Vec<(Act, &str)> = Vec::new();
-    let host = m.lead() == Some(dev);
+    let host = m.hosts(dev);
     let s = m.sel;
     match m.screen {
+        // B516: the splash's one press (none once 1P is taken)
+        Screen::Press if m.p1.is_none() => v.push((Act::Ok, "Start")),
+        Screen::Press => {}
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose")]),
         _ if m.mod_asking() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Stand-in")]),
         _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
@@ -95,6 +98,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             if m.team_switch(dev).is_some() {
                 v.push((Act::Page, "Switch team"));
+            }
+            // B522: online, a guest's □ moves its player to the other team
+            if m.online_team(dev).is_some() {
+                v.push((Act::Page, "Swap team"));
             }
             let me = m.players[p];
             if !me.ready {
@@ -207,10 +214,19 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Lobby if m.net.ask.is_none() && !m.net.keep.is_empty() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Not this time")]),
         Screen::Lobby if m.net.ask.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Leave")]),
+        // B523: the host's kick prompt; a card carried to another
+        Screen::Lobby if m.net.kick.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
+        Screen::Lobby if let Some(from) = m.carrying() => {
+            moves(&mut v, (true, true));
+            v.extend([(Act::Ok, if m.target_seat() == Some(from) { "Put Back" } else { "Drop" }), (Act::Back, "Cancel")]);
+        }
         Screen::Lobby => {
             moves(&mut v, m.pill_axes());
             if m.lobby_bot() {
                 v.extend([(Act::Costume, "Costume"), (Act::Card, "Remove")]);
+            }
+            if m.kickable().is_some() {
+                v.push((Act::Card, "Kick"));
             }
             // B396: this machine's own card: its costume and hand right there
             if m.lobby_own() {
@@ -222,6 +238,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             // B449: the host's □ and Start, from anywhere
             if m.lobby_mode() {
                 v.push((Act::Page, "Singles / Doubles"));
+            }
+            if m.lobby_team().is_some() {
+                v.push((Act::Page, "Swap team"));
             }
             if m.net.hosting && m.net.room.is_some() && m.counting() == 0 {
                 v.push((Act::Name, "Start"));

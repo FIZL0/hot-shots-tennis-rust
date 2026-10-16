@@ -5,10 +5,12 @@
 # ~/.config/hypr/hyprland.lua sends that title and class pcsx2-qt to workspace 1, unfocused, under every other window.
 # HST_ISO overrides the ISO (a symlink in a folder without mods/texture-replacements shows the disc textures: the
 # symlink is kept, not resolved); HST_BIN the binary. Other HST_* variables are passed on (hyprctl's exec drops the
-# environment). HST_WAIT: seconds to wait for OUT (60; raise it with a late --shot-at). Promo shots (M98): `--no-hud`,
+# environment). HST_WAIT: seconds to wait for OUT (60; raise it with a late --shot-at). Promo shots (M98): `--no-hud --hud-key` (F10 toggles it),
 # more frames from one run with HST_KEYS='20:shot=a.png 21:shot=b.png' (real-time seconds), any aspect with HST_SIZE.
 # A/B shots: pin the match seed (HST_WEATHER_SEED=1234, or HST_WEATHER=0): a clock-picked one rolls the
 # weather, and a cloudy roll draws the open court ~7.5 % darker than a clear one (B404).
+# Any --shot (or HST_MENU) run reads no gamepad and no real key (P62): other agents' tools/vpad.py pads can't join
+# seats or move menus; only HST_KEYS drives it.
 set -e
 cd "$(dirname "$0")/.."
 out=$(realpath -m "$1"); shift

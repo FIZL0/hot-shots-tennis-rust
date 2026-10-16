@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- B515: open on a device whose browser can't host ("Waiting for a relay..."): tests what the web build needs, the
+     iroh relays (HTTPS ping + the relay WebSocket) and the code servers (pkarr GET), and shows each result. -->
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Relay probe</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif }
+  body { margin: 0; padding: 16px }
+  li { font-variant-numeric: tabular-nums; overflow-wrap: anywhere }
+  .ok { color: #1a7f37 } .bad { color: #cf222e }
+</style>
+<h1>Relay probe</h1>
+<p id="ua"></p>
+<ul id="out"></ul>
+<script>
+const out = document.getElementById('out');
+document.getElementById('ua').textContent = navigator.userAgent;
+const t0 = performance.now();
+const line = (text, ok) => {
+  const li = document.createElement('li');
+  li.textContent = `${((performance.now() - t0) / 1000).toFixed(1)} s  ${text}`;
+  li.className = ok ? 'ok' : 'bad';
+  out.append(li);
+};
+const timed = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`no answer in ${ms / 1000} s`)), ms))]);
+const key = 'o4dksfbqk85ogzdb5osziw6befigbuxmuxkuxq8434q89uj56uyy';
+for (const h of ['use1-1', 'usw1-1', 'euc1-1', 'aps1-1']) {
+  const host = `${h}.relay.n0.iroh.link`;
+  timed(fetch(`https://${host}/ping`), 10000).then(r => line(`${h} ping ${r.status}`, r.ok), e => line(`${h} ping failed: ${e}`));
+  try {
+    const ws = new WebSocket(`wss://${host}/relay`, 'iroh-relay-v1');
+    ws.binaryType = 'arraybuffer';
+    let opened = false;
+    const stuck = setTimeout(() => opened || line(`${h} relay socket: no answer in 10 s`), 10000);
+    ws.onopen = () => { opened = true; clearTimeout(stuck); line(`${h} relay socket open`, true); };
+    // kept open 15 s (the game's own socket stays open): an error or close before then is the browser or relay
+    // dropping it, with the close code saying which
+    const ms = () => `${Math.round(performance.now() - t0)} ms`;
+    ws.onmessage = e => line(`${h} relay sent ${e.data.byteLength ?? e.data.size ?? e.data.length} bytes`, true);
+    ws.onerror = () => line(`${h} relay socket error at ${ms()}`);
+    ws.onclose = e => line(`${h} relay socket closed at ${ms()}: code ${e.code}${e.wasClean ? ' clean' : ''} ${e.reason}`);
+    setTimeout(() => { if (ws.readyState === 1) { line(`${h} relay socket still open after 15 s`, true); ws.close(); } }, 15000);
+  } catch (e) { line(`${h} relay socket threw: ${e}`); }
+}
+for (const s of ['https://pkarr.opentennis.dev', 'https://relay.pkarr.org'])
+  timed(fetch(`${s}/${key}`), 10000).then(r => line(`${s.slice(8)} lookup ${r.status} (404 = fine)`, r.status === 404 || r.ok), e => line(`${s.slice(8)} lookup failed: ${e}`));
+</script>

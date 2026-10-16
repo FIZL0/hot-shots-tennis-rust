@@ -3,7 +3,8 @@
 //! pack into (`Iso::write_pack_to`). Every later visit reads that pack and calls `run`, which mounts it in memory
 //! (`hst_data::iso::mount`) where every `Iso::open` finds it. Flags come from the URL: `?play&stage=1` = `--play --stage 1`;
 //! `?code=<lobby code>` (a lobby link, B104) starts on that lobby's character pick (`online::linked`); Join by Code's
-//! Paste takes the last text pasted on the page (`paste`), and a phone types the code on its own keyboard (`typed_code`).
+//! Paste takes the last text pasted on the page (`paste`), else reads the clipboard (`read_clipboard`, B526), and a phone
+//! types the code on its own keyboard (`typed_code`).
 
 use hst_data::iso::Iso;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -353,21 +354,52 @@ pub fn webgl2_reach() -> Option<(f64, bool, Option<f64>)> {
     (fps > 0).then(|| (fps as f64 / 10.0, play > 0, refresh()))
 }
 
-/// The last text pasted on the page (the browser's clipboard can't be read synchronously: Join by Code takes this).
+/// The last text pasted on the page (Ctrl+V), or the URL's `?code=`: Join by Code's Paste takes it before it reads the
+/// clipboard (`read_clipboard`).
 static PASTED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// Page: text pasted (Ctrl+V / the paste menu), or a LAN answer handed over by another tab (`index.html`): an answer
-/// goes to the hosting lobby (`net/rtc.rs`), anything else to Join by Code.
+/// Page: text pasted (Ctrl+V / the paste menu), or a LAN answer handed over by another tab (`index.html`); the game:
+/// what Paste read off the clipboard (B526). An answer goes to the hosting lobby (`net/rtc.rs`, true), anything else
+/// to Join by Code.
 #[wasm_bindgen]
-pub fn paste(text: String) {
+pub fn paste(text: String) -> bool {
     if crate::net::rtc::deliver(&text) {
-        return;
+        return true;
     }
     *PASTED.lock().unwrap() = Some(text);
+    false
 }
 
 pub fn pasted() -> Option<String> {
     PASTED.lock().unwrap().clone()
+}
+
+pub fn take_pasted() -> Option<String> {
+    PASTED.lock().unwrap().take()
+}
+
+/// B526: Paste's clipboard read, once the page answers (`clipboard`).
+static CLIP: std::sync::Mutex<Option<(Option<String>, bool)>> = std::sync::Mutex::new(None);
+
+/// B526: Paste: the page reads the clipboard (`navigator.clipboard.readText`, `hstReadClipboard`); what it got comes
+/// back through `clipboard`, and the menu takes it a frame or more later (`clipboard_read`).
+pub fn read_clipboard() {
+    match page_fn("hstReadClipboard") {
+        Some(f) => drop(f.call0(&JsValue::NULL)),
+        None => clipboard(None, false),
+    }
+}
+
+/// Page: the clipboard's text (None: the browser refused, or it isn't text); `again`: refused outside a tap (iOS
+/// Safari reads it only inside a tap's own event, which is over when the game sees it), so the page reads it on the
+/// next tap.
+#[wasm_bindgen]
+pub fn clipboard(text: Option<String>, again: bool) {
+    *CLIP.lock().unwrap() = Some((text, again));
+}
+
+pub fn clipboard_read() -> Option<(Option<String>, bool)> {
+    CLIP.lock().unwrap().take()
 }
 
 /// localStorage under the file's path (`crate::store`): settings.txt and controls.txt last between visits.

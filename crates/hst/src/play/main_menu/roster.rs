@@ -524,8 +524,9 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     };
     // the side pill: "Swap teams" with the seat's own □ / X / Tab while its device can switch (doubles), else its side
     let swap = match m.seats[p] {
-        Some(dev @ Dev::Pad(e)) if m.team_switch(dev).is_some() => Some(legend::dev_style(Some(e))),
-        Some(Dev::Keys) if m.team_switch(Dev::Keys).is_some() => Some(legend::dev_style(None)),
+        // B522: online, a guest's too
+        Some(dev @ Dev::Pad(e)) if m.team_switch(dev).is_some() || m.online_team(dev).is_some() => Some(legend::dev_style(Some(e))),
+        Some(Dev::Keys) if m.team_switch(Dev::Keys).is_some() || m.online_team(Dev::Keys).is_some() => Some(legend::dev_style(None)),
         _ => None,
     };
     let side = if swap.is_some() { "Swap teams" } else if p < (n / 2).max(1) { "Near" } else { "Far" };

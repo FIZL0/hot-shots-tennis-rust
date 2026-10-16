@@ -25,7 +25,7 @@
   workspace = 'special:hstshot silent' })`), so every shot is the same size (2048×1152 at the desktop's scale) however
   many windows other agents have tiled; launch any window you compare across runs this way. `HST_ISO=` a symlink in a
   folder without `mods/texture-replacements` shows the disc's own textures.
-- Promo shots (M98): `--no-hud` (F10 toggles it in a match when launched with `--hud-key`; a scripted `HST_KEYS` F10 always works) hides every UI root, balloons, markers and the umpire's
+- Promo shots (M98): launch with `--no-hud --hud-key` (F10 toggles it in a match when launched with `--hud-key`; a scripted `HST_KEYS` F10 always works) hides every UI root, balloons, markers and the umpire's
   calls; `HST_SIZE="W H"` sets the shot window (any aspect), `HST_KEYS="20:shot=a.png 21:F10 …"` takes many frames per
   run, `HST_WAIT` how long shot.sh waits. The set in `docs/screenshots/` (README and site share it) and how it was
   picked: journal 2026-10-16-m98-promo-shots.
@@ -41,6 +41,8 @@
   the third hits. P1 serves every point there and points are short (about 2 s).
   Not automated yet: choosing the COM characters (each COM cursor starts on a different character), the costume
   (L1), the switch-hand toggle, singles, P1 receiving.
+- **Singles with a human P1** (P11l4): `context/recordings/singles_1p_serve.p2s` (P1 Ashley serving vs a COM) and
+  `singles_1p_select.p2s` (the singles character select); the menu route is in journal 2026-10-07-p11-ai 24.
 - Verify input effects numerically over PINE (e.g. ball/player state), not by eye.
 - `tools/single.sh` (in tmux) runs `claude continue` (TUI: attach to watch or type; it never asks) back to back and owns the virtual pad for the night.
 
@@ -49,6 +51,9 @@
 ```
 cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
+
+The menus (B516) open on a press-start splash: the device that presses ✕ / Start or Enter / Space (or taps) is 1P and
+alone drives 1P's player; the keyboard still pauses and works the menus. `HST_MENU=main` (scripts, `HST_KEYS`) skips it.
 
 Without the ISO (M13): `hst --import "Hot Shots Tennis (USA).iso"` once (or plain `hst`, which asks for the ISO in a
 file dialog on first start) copies the 171 MB the remaster reads into `~/.local/share/hst/disc.pack`

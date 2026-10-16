@@ -72,6 +72,7 @@ mod plate_emote;
 mod previews;
 mod roster;
 mod slide;
+mod splash;
 
 /// Characters on the select screen.
 const CHARS: usize = 14;
@@ -405,7 +406,9 @@ struct Press {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Screen {
-    /// `bgmm_04` plays on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
+    /// B516: the press-start splash a fresh start opens on (`splash.rs`): its first press takes 1P.
+    Press,
+    /// `bgmm_03` plays on `Press` (the original's title screen), `bgmm_04` on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
     /// switch, measured per screen).
     Main,
     /// B290/B294: the Settings tabs (`options.rs`).
@@ -559,6 +562,9 @@ struct Menu {
     /// B437: the device that drives the controller assignment once it has moved or taken off a seat there: it keeps
     /// driving it (its own seat change pending, shown on the screen) until it leaves, where the new 1P takes over.
     assign_lead: Option<Dev>,
+    /// B516: the device that took 1P on the splash (`splash.rs`), the one that drives 1P's player.
+    p1: Option<Dev>,
+    splash: splash::Splash,
 }
 
 impl Default for Menu {
@@ -607,6 +613,8 @@ impl Default for Menu {
             names: default(),
             court_pick: default(),
             assign_lead: None,
+            p1: None,
+            splash: default(),
         }
     }
 }
@@ -705,10 +713,13 @@ impl Menu {
 
     /// B217: a character open to player `p` (any disc character or custom one, a costume pack's costumes going with
     /// its disc character) and one of its open costumes, each at random by `seed`; `None` if nothing's open.
+    /// B520: in an online lobby with mods off, only the disc characters and their own costumes.
     fn draw(&self, p: usize, seed: u64) -> Option<(Who, usize)> {
-        let whos = (0..CHARS).map(Who::Disc).chain((0..self.own_mods()).filter(|&i| self.mods[i].costume_of.is_none()).map(Who::Mod));
-        let open: Vec<(Who, Vec<usize>)> =
-            whos.map(|w| (w, (0..self.costumes(w)).filter(|&c| self.free(p, w, c)).collect::<Vec<_>>())).filter(|(_, c)| !c.is_empty()).collect();
+        let vanilla = self.vanilla_lobby();
+        let mods = if vanilla { 0 } else { self.own_mods() };
+        let whos = (0..CHARS).map(Who::Disc).chain((0..mods).filter(|&i| self.mods[i].costume_of.is_none()).map(Who::Mod));
+        let n = |w: Who| if vanilla { COSTUMES } else { self.costumes(w) };
+        let open: Vec<(Who, Vec<usize>)> = whos.map(|w| (w, (0..n(w)).filter(|&c| self.free(p, w, c)).collect::<Vec<_>>())).filter(|(_, c)| !c.is_empty()).collect();
         let n = open.len() as u64;
         let (w, cs) = open.get((seed % n.max(1)) as usize)?;
         Some((*w, cs[(seed / n % cs.len() as u64) as usize]))
@@ -901,6 +912,17 @@ impl Menu {
         if matches!(dev, Dev::Pad(_)) && !self.seats.contains(&Some(dev)) && touch(self.seats[0]) {
             self.seats[0] = Some(dev);
         }
+        // B516: and the splash's 1P with it
+        if matches!(dev, Dev::Pad(_)) && touch(self.p1) {
+            self.p1 = Some(dev);
+        }
+    }
+
+    /// B516: the splash's 1P a pad that's gone (unplugged or flat): the next device to press anything has it.
+    fn takes_lost_p1(&mut self, dev: Dev, pads: &[Entity]) {
+        if matches!(self.p1, Some(Dev::Pad(e)) if !pads.contains(&e)) && dev != Dev::Open {
+            self.p1 = Some(dev);
+        }
     }
 
     /// B388: 1P's pad gone (unplugged or flat) leaves the screens only 1P drives stuck: the keyboard's first press
@@ -929,6 +951,12 @@ impl Menu {
     /// seat there (B437: still the one that came in, until it leaves).
     fn lead(&self) -> Option<Dev> {
         self.assign_lead.filter(|_| self.screen == Screen::Assign).or(self.seats[0])
+    }
+
+    /// Whether `dev` works the screens only 1P drives: 1P's device ([`lead`](Self::lead)); B516: on the mode and
+    /// court screens (no seat of its own to move) the keyboard too, whoever has 1P.
+    fn hosts(&self, dev: Dev) -> bool {
+        self.lead() == Some(dev) || dev == Dev::Keys && self.lead().is_some() && matches!(self.screen, Screen::Mode | Screen::Confirm)
     }
 
     /// B437: the assignment's driver has moved off 1P (or off every seat): where it sits now (`None`: taken off), once
@@ -1075,8 +1103,15 @@ impl Menu {
             }
         };
         // a lobby link's start (`online::linked`): the first device to press anything is this machine's player
+        if self.screen == Screen::Press {
+            if self.splash_step(dev, k.ok) {
+                out.push(Effect::Sound(2));
+            }
+            return out;
+        }
         if self.screen == Screen::Assign && self.online() && self.seats[0].is_none() {
             self.seats[0] = Some(dev);
+            self.p1 = Some(dev);
             // B392: and straight into the lobby, no controllers screen
             self.online_enter(&mut out);
             return out;
@@ -1113,10 +1148,11 @@ impl Menu {
                             out.extend([Sound(2), Launch]);
                             self.screen = Screen::Playing;
                         }
-                        Row::Local => self.local_start(dev, &mut out),
+                        // B516: whoever chose it, 1P is the splash's
+                        Row::Local => self.local_start(self.p1.unwrap_or(dev), &mut out),
                         Row::Online => {
                             self.rematch = false;
-                            self.seats = [Some(dev), None, None, None];
+                            self.seats = [Some(self.p1.unwrap_or(dev)), None, None, None];
                             self.net.status.clear();
                             out.push(Effect::Online(online::Fx::Load));
                             self.go(Screen::Online, &mut out);
@@ -1157,7 +1193,7 @@ impl Menu {
                     self.step_tabs(k, &mut out);
                 }
             }
-            Screen::Mode if host == Some(dev) => {
+            Screen::Mode if self.hosts(dev) => {
                 if k.up || k.down || k.left || k.right {
                     self.doubles = !self.doubles;
                     out.push(Sound(0));
@@ -1266,6 +1302,10 @@ impl Menu {
                 if k.page && self.online_swap(dev, &mut out) {
                     return out;
                 }
+                // B522: a guest's moves its player to the other team
+                if k.page && self.online_team_step(dev, &mut out) {
+                    return out;
+                }
                 // B375: 1P's device (only) swaps Singles ↔ Doubles with □ / Tab (or a tap on the mode pill)
                 if k.page && self.can_swap(dev) {
                     self.swap_mode(true);
@@ -1357,8 +1397,8 @@ impl Menu {
                 }
             }
             // B451: the umpire picker's rows
-            Screen::Confirm if host == Some(dev) && self.picking.is_some() && self.sel == 4 => umpire_picker::step(self, k, &mut out),
-            Screen::Confirm if host == Some(dev) && self.picking.is_some() => {
+            Screen::Confirm if self.hosts(dev) && self.picking.is_some() && self.sel == 4 => umpire_picker::step(self, k, &mut out),
+            Screen::Confirm if self.hosts(dev) && self.picking.is_some() => {
                 // the pickers: the court and umpire strips' ←→ (Random first, stop at the ends); ✕ keeps, ○ puts back
                 let d = k.right as i32 - k.left as i32;
                 if self.sel == 1 {
@@ -1414,7 +1454,7 @@ impl Menu {
                     self.venue_picked(&mut out);
                 }
             }
-            Screen::Confirm if host == Some(dev) => {
+            Screen::Confirm if self.hosts(dev) => {
                 // B449: the arrows go about the screen as its parts lie; Start (a pad's also sends ✕) starts
                 let start = k.name || (k.ok && self.sel == 0);
                 let k = Press { ok: k.ok && !k.name, ..k };
@@ -1461,10 +1501,7 @@ impl Menu {
                     out.push(Sound(1));
                 }
             }
-            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => {
-                self.net.pad = matches!(dev, Dev::Pad(_));
-                self.online_step(k, &mut out)
-            }
+            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => self.online_step(k, &mut out),
             Screen::Mods => {
                 // B383: the search box's ✕ types in place from the keyboard, a pad gets the keyboard on screen
                 self.add.pad = matches!(dev, Dev::Pad(_));
@@ -1627,6 +1664,8 @@ enum Tex {
     Umpire(usize),
     /// B401: court mod `k`'s picture (`court_mods::Pics`), in its pixels.
     CourtMod(usize),
+    /// B516: the splash's logo (`splash::Logo`), in its pixels.
+    Logo,
 }
 
 /// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
@@ -2006,13 +2045,20 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" | "online-unread" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
-        "lobby" | "lobby-ios" | "lobby-bot" | "lobby-singles" | "lobby-courts" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
+        "lobby" | "lobby-ios" | "lobby-bot" | "lobby-move" | "lobby-kick" | "lobby-singles" | "lobby-courts" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" | "relay-url" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" | "signinmods" | "phonemods" | "phonemods-ask" => Screen::Mods,
         "extras" => Screen::Extras,
+        "press" | "press-claimed" => Screen::Press,
+        // B516: a fresh start opens on the splash
+        "" if fresh => Screen::Press,
         _ => Screen::Main,
     };
-    if fresh && menu.screen == Screen::Main {
+    if screen == "press-claimed" {
+        menu.p1 = Some(Dev::Keys);
+        menu.splash.hold();
+    }
+    if fresh && matches!(menu.screen, Screen::Press | Screen::Main) {
         online::linked(&mut menu);
     }
     // B297: the main screen with a Rematch card (a singles match against the computer played)
@@ -2470,15 +2516,20 @@ struct Ticker(String, f32, Option<(Screen, mods_screen::Page)>);
 
 /// The description bar's text, at the window's resolution in Fira Mono (Bevy's built-in font), in its tint (223), on
 /// the bar (y 404..436). Its bar spans the window (`Anchor::Span`). B237: at most 10 units a glyph (the original's
-/// was 11, and scrolled when it didn't fit); a longer text word-wraps and shrinks until it fits the bar.
+/// was 11, and scrolled when it didn't fit); a longer text word-wraps and shrinks until it fits the bar. B521: the
+/// glyphs' width and line height are taken as Fira Mono's (0.6 and 1.2 em) times `grow`, which goes up whenever the
+/// text as laid out comes back bigger than that (another platform's font rendering), so it's never cut off.
 fn ticker_text(
     ticker: Res<Ticker>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut clip: Query<(&mut Node, &mut Visibility, &Children), With<TickerClip>>,
-    mut text: Query<(&mut bevy::ui::widget::Text, &mut TextFont, &mut Node), Without<TickerClip>>,
+    mut text: Query<(&mut bevy::ui::widget::Text, &mut TextFont, &mut Node, &ComputedNode), Without<TickerClip>>,
+    mut grow: Local<Option<Grow>>,
 ) {
     let (Ok(win), Ok((mut cnode, mut vis, kids))) = (window.single(), clip.single_mut()) else { return };
-    let Some(Ok((mut t, mut font, mut node))) = kids.first().map(|&k| text.get_mut(k)) else { return };
+    let Some(Ok((mut t, mut font, mut node, laid))) = kids.first().map(|&k| text.get_mut(k)) else { return };
+    let g = grow.get_or_insert_with(Grow::default);
+    g.measure(&t.0, laid.size() * laid.inverse_scale_factor());
     *vis = if ticker.0.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
     let (share, vshare) = super::widescreen::window_menu_shares(&window);
     let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
@@ -2492,14 +2543,49 @@ fn ticker_text(
     // a tall narrow window (a phone held upright) has the height for a bigger glyph than its width's units give
     let cap = (10.0 * unit).max((7.0f32).min(bar_h / 4.0));
     // B325: 3 units clear above and below, so even two lines' descenders stay off the legend strip under the bar
-    let (p, lines) = fit_lines(&ticker.0, bar_w - 32.0 * unit, bar_h - 6.0 * unit, cap);
+    let (p, lines) = fit_lines(&ticker.0, (bar_w - 32.0 * unit) / g.w, (bar_h - 6.0 * unit) / g.h, cap / g.w.max(g.h));
     let em = p / 0.6;
     font.font_size = bevy::text::FontSize::Px(em);
     node.left = Val::Px(ticker_x_in(ticker.1, bar_w / unit + 16.0) * unit);
-    node.top = Val::Px((bar_h - 1.2 * em * lines.len() as f32) / 2.0);
+    node.top = Val::Px((bar_h - 1.2 * g.h * em * lines.len() as f32) / 2.0);
     let s = lines.join("\n");
+    // what the layout should come back as, at Fira Mono's metrics
+    let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
+    g.sent = (s.clone(), Vec2::new(longest * p, 1.2 * em * lines.len() as f32));
     if t.0 != s {
         t.0 = s;
+    }
+}
+
+/// B521: how much bigger than Fira Mono's metrics the description bar's text lays out (width, height; never below 1),
+/// and the text last set with its size at those metrics (logical px).
+struct Grow {
+    w: f32,
+    h: f32,
+    sent: (String, Vec2),
+}
+
+impl Default for Grow {
+    fn default() -> Self {
+        Grow { w: 1.0, h: 1.0, sent: (String::new(), Vec2::ZERO) }
+    }
+}
+
+impl Grow {
+    /// The text node's laid-out `size` (logical px) for `shown`: once it's the text last set, the factors grow to
+    /// cover it (a hair over, so rounding can't cut the last glyph).
+    fn measure(&mut self, shown: &str, size: Vec2) {
+        let (ref s, want) = self.sent;
+        if shown != s || s.is_empty() || want.x <= 0.0 || want.y <= 0.0 || size.x <= 0.0 {
+            return;
+        }
+        let (w, h) = (size.x / want.x, size.y / want.y);
+        if w > 1.001 {
+            self.w = self.w.max(w * 1.01).min(3.0);
+        }
+        if h > 1.001 {
+            self.h = self.h.max(h * 1.01).min(3.0);
+        }
     }
 }
 
@@ -2512,6 +2598,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
 fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], controllers: usize, hand_x: f32) -> Draw<'a> {
     let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
     match m.screen {
+        Screen::Press => splash::layout(&mut d, m, pads, controllers),
         Screen::Main => home::layout(&mut d, m, text, controllers, hand_x),
         Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::ModSettings | Screen::Mobile => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => options::controls_layout(&mut d, m, bind, hand_x),
@@ -3122,6 +3209,7 @@ fn step(
         // a click or tap is the keyboard's while 1P's pad is out (`pointer::device`)
         if k != Press::default() || dev == pointed && !acts.is_empty() {
             menu.takes_lost_1p(dev, &pads);
+            menu.takes_lost_p1(dev, &pads);
         }
         let mut fx = Vec::new();
         if dev == pointed {
@@ -3137,6 +3225,11 @@ fn step(
         }
         if dev == Dev::Keys && let Some((u, program, key)) = voice.2.take().filter(|h| h.0 == menu.umpire) {
             fx.push(Effect::Hear(u, program, key));
+        }
+        // B526: Paste's clipboard read answered (the browser's is async)
+        #[cfg(target_arch = "wasm32")]
+        if dev == Dev::Keys && let Some((text, again)) = crate::web::clipboard_read() {
+            fx.push(Effect::Online(online::Fx::Clip(text, again)));
         }
         if k == Press::default() && fx.is_empty() {
             continue;
@@ -3232,7 +3325,7 @@ fn draw(
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
     images: Res<Assets<Image>>,
-    (buttons, umpire_pics, court_pics): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>),
+    (buttons, umpire_pics, court_pics, logo): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>, Option<Res<splash::Logo>>),
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| controls::readable(g)).map(|(e, _, _)| e).collect();
@@ -3273,6 +3366,13 @@ fn draw(
             },
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Pill => art.0.last().expect("pill").clone(),
+            Tex::Logo => match &logo {
+                Some(l) => l.0.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Preview(_) => continue,
             Tex::Icon(w) => match (icons.0.get(&w), w) {
                 (Some(h), _) => h.clone(),
@@ -3401,7 +3501,7 @@ fn snap(start: f32, len: f32, p: f32) -> (f32, f32) {
     (a, edge(start + len) - a)
 }
 
-/// The menu's BGM tracks, `bgmm_04`..`bgmm_06`.
+/// The menu's BGM tracks, `bgmm_03`..`bgmm_06` (`bgmm_03`: the original's title screen, on our press-start splash).
 #[derive(Resource)]
 struct MenuBgm(Vec<Option<(Arc<SoundBank>, Vec<u8>)>>);
 
@@ -3409,11 +3509,12 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile => Some(0),
-            Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
-            Screen::Confirm => Some(2),
-            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
-            Screen::Mods | Screen::Extras => Some(0),
+            Screen::Press => Some(0),
+            Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile => Some(1),
+            Screen::Mode | Screen::Assign | Screen::Chars => Some(2),
+            Screen::Confirm => Some(3),
+            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(1),
+            Screen::Mods | Screen::Extras => Some(1),
             Screen::Playing => None,
         }
     }
@@ -3421,7 +3522,7 @@ impl Screen {
 
 fn load_bgm(mut commands: Commands, args: Res<Args>) {
     let Ok(mut iso) = Iso::open(&args.iso) else { return };
-    let tracks = (4..=6).map(|n| SoundBank::music(&mut iso, "Menu", &format!("bgmm_{n:02}")).map(|(b, m)| (Arc::new(b), m))).collect();
+    let tracks = (3..=6).map(|n| SoundBank::music(&mut iso, "Menu", &format!("bgmm_{n:02}")).map(|(b, m)| (Arc::new(b), m))).collect();
     commands.insert_resource(MenuBgm(tracks));
 }
 
@@ -3448,7 +3549,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
-        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick))
+        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, splash::tick, draw, ticker_text).chain(), bgm, cursor::tick))
+        .add_systems(Startup, splash::load)
         .add_systems(Last, cursor::show);
     // M14: the button legend
     legend::plugin(app);
@@ -3576,10 +3678,30 @@ mod tests {
         assert_eq!([ticker_x_in(0.0, 656.0), ticker_x_in(1.0, 656.0), ticker_x_in(20.0, 656.0), ticker_x_in(1000.0, 656.0)], [656.0, 624.0, 16.0, 16.0]);
     }
 
+    /// B521: a platform whose glyphs lay out wider than Fira Mono's 0.6 em: the next fit takes them as that wide, so
+    /// the line wraps or shrinks inside the bar instead of running off its right edge.
+    #[test]
+    fn description_grows_to_the_laid_out_size() {
+        let long = "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.";
+        let mut g = Grow::default();
+        g.sent = ("a".into(), Vec2::new(100.0, 20.0));
+        g.measure("b", Vec2::new(300.0, 60.0));
+        g.measure("a", Vec2::new(100.0, 20.0));
+        assert_eq!((g.w, g.h), (1.0, 1.0), "another text, or as expected: no change");
+        g.measure("a", Vec2::new(115.0, 20.0));
+        assert!(g.w > 1.15 && g.h == 1.0);
+        let (w, h) = (600.0, 30.0);
+        let (p, l) = fit_lines(long, w / g.w, h / g.h, 10.0 / g.w);
+        let longest = l.iter().map(|l| l.chars().count()).max().unwrap() as f32;
+        assert!(longest * p * 1.15 <= w, "at the platform's width it still fits");
+        g.measure("a", Vec2::new(105.0, 20.0));
+        assert!(g.w > 1.15, "never shrinks back");
+    }
+
     #[test]
     fn bgm_per_screen() {
-        let t = [Screen::Main, Screen::Display, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Playing].map(Screen::bgm);
-        assert_eq!(t, [Some(0), Some(0), Some(0), Some(1), Some(1), Some(1), Some(2), None]);
+        let t = [Screen::Press, Screen::Main, Screen::Display, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Playing].map(Screen::bgm);
+        assert_eq!(t, [Some(0), Some(1), Some(1), Some(1), Some(2), Some(2), Some(2), Some(3), None]);
     }
 
     fn press(f: impl FnOnce(&mut Press) -> &mut bool) -> Press {

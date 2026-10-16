@@ -7,7 +7,8 @@
 //!   with a random lobby number as the port, and puts its listing (endpoint ID, name, singles/doubles, court, seats,
 //!   time) as a BEP 44 mutable item under the well-known [`BOARD`] key, salted with that number and signed again
 //!   with its own endpoint key. Find = `get_peers(TOPIC)`, then each lobby number's listing; listings older than
-//!   [`STALE`] are dropped. Republished every [`REPUBLISH`] and on change (the Halo CE port's 30 s / 90 s).
+//!   [`STALE`] are dropped. Republished every [`REPUBLISH`] and on change (B527: 60 s / 150 s, the Halo CE port's
+//!   30 s / 90 s halved the requests on the pkarr relay; older builds' 90 s still counts a 60 s republish fresh).
 //! - **LAN** (M2j): every endpoint also advertises itself by mDNS (service [`MDNS`]), so bare IDs resolve on a shared
 //!   network with no internet (a router, or one phone's hotspot with no mobile data); a host puts its listing in the
 //!   mDNS record's user data too, and Find lists those first, before the DHT has answered (or with no internet at all).
@@ -64,12 +65,19 @@ const MDNS: &str = "hst";
 const LAN_TAG: &str = "hst1";
 /// How long Find listens on the LAN before it shows what it has (mDNS answers come within a second or two).
 const LAN_WAIT: Duration = Duration::from_secs(3);
-const REPUBLISH: Duration = Duration::from_secs(30);
-const STALE: u64 = 90;
+const REPUBLISH: Duration = Duration::from_secs(60);
+const STALE: u64 = 150;
 /// B518: the shortest gap between two of a host's lobby listings outside a republish.
 const LIST_GAP: Duration = Duration::from_secs(10);
-/// The build peers must share (M2e will add the disc pack, rules and mods).
-pub const BUILD: &str = concat!("hst ", env!("CARGO_PKG_VERSION"));
+/// The build peers must share (M22: the handshake's, version and commit; M2e checks the disc pack, rules and mods).
+fn our_build() -> &'static str {
+    crate::handshake::build()
+}
+
+/// M22: why a guest of another build is turned away (at its Hello, before any seat or pick), for the guest to read.
+pub fn version_differs(host: &str, you: &str) -> String {
+    format!("a different version of the game (host {host}, you {you}). Update so you both have the same one.")
+}
 
 // ---------------------------------------------------------------- settings
 
@@ -86,7 +94,8 @@ pub enum Relay {
 
 /// `online.txt` beside the disc image: `name = …` (this player's name, shown on their lobby seats; a host's lobby is
 /// listed under it), `relay = n0 | own | off`, `relay_url = https://…`, `private = yes | no` (B213: Host's last choice),
-/// `won = n`, `lost = n` (M120: this player's online record).
+/// `won = n`, `lost = n` (M120: this player's online record),
+/// `code_server = https://…` (B529: own pkarr relay for short codes, empty = [`OWN`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Online {
     pub name: String,
@@ -95,6 +104,7 @@ pub struct Online {
     /// B213: the host's last Public/Private choice (Host opens the lobby with it).
     pub private: bool,
     pub record: Record,
+    pub code_server: String,
 }
 
 /// M120: a player's online record: the finished online matches they won and lost (`online.txt`'s, sent in the Hello
@@ -110,7 +120,7 @@ pub static RECORD: std::sync::Mutex<Record> = std::sync::Mutex::new(Record { won
 
 impl Default for Online {
     fn default() -> Self {
-        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new(), private: false, record: Record::default() }
+        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new(), private: false, record: Record::default(), code_server: String::new() }
     }
 }
 
@@ -120,7 +130,9 @@ impl Online {
     }
 
     pub fn load(iso: &str) -> Online {
-        Online::parse(&crate::store::read_to_string(Online::path(iso)).unwrap_or_default())
+        let o = Online::parse(&crate::store::read_to_string(Online::path(iso)).unwrap_or_default());
+        *CODE_SERVER.write().unwrap() = o.code_server.trim_end_matches('/').to_string();
+        o
     }
 
     pub fn parse(text: &str) -> Online {
@@ -135,6 +147,7 @@ impl Online {
                 "private" => o.private = v == "yes",
                 "won" => o.record.won = v.parse().unwrap_or(0),
                 "lost" => o.record.lost = v.parse().unwrap_or(0),
+                "code_server" => o.code_server = v,
                 _ => {}
             }
         }
@@ -153,7 +166,8 @@ impl Online {
             Relay::Off => "off",
         };
         let r = self.record;
-        format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\nwon = {}\nlost = {}\n", self.name, self.relay_url, if self.private { "yes" } else { "no" }, r.won, r.lost)
+        let code = if self.code_server.is_empty() { String::new() } else { format!("code_server = {}\n", self.code_server) };
+        format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\nwon = {}\nlost = {}\n{code}", self.name, self.relay_url, if self.private { "yes" } else { "no" }, r.won, r.lost)
     }
 
     /// The next relay choice: n0, Off, then own only once a `relay_url` is set (the menu's Custom... comes after the
@@ -355,6 +369,34 @@ impl Room {
         true
     }
 
+    /// B523: seats `a` and `b` can trade players: two seats, not both open, not one peer's two (its players are its
+    /// seats in order, so only their picks would trade), and every peer's seats keep their order (its k-th player
+    /// stays in its k-th seat, as `live_of` and each peer's own players go by that).
+    pub fn can_swap(&self, a: usize, b: usize) -> bool {
+        let n = self.seats.len();
+        if a == b || a >= n || b >= n {
+            return false;
+        }
+        let (pa, pb) = (self.seats[a].as_ref().map(|s| s.peer.as_str()), self.seats[b].as_ref().map(|s| s.peer.as_str()));
+        if pa.is_none() && pb.is_none() || pa == pb && pa.is_some_and(|p| p != CPU) {
+            return false;
+        }
+        let mut after = self.seats.clone();
+        after.swap(a, b);
+        let order = |seats: &[Option<Seat>], peer: &str| seats.iter().flatten().filter(|s| s.peer == peer).map(|s| s.pick.clone()).collect::<Vec<_>>();
+        [pa, pb].into_iter().flatten().filter(|p| *p != CPU).all(|p| order(&self.seats, p) == order(&after, p))
+    }
+
+    /// B523: seats `a` and `b`'s players traded (`can_swap`); false (no change) if they can't.
+    fn swap(&mut self, a: usize, b: usize) -> bool {
+        if !self.can_swap(a, b) {
+            return false;
+        }
+        self.seats.swap(a, b);
+        self.ver += 1;
+        true
+    }
+
     /// B201: singles or doubles, the taken seats (people and computer) first in order; false (no change) if they
     /// don't fit.
     fn set_doubles(&mut self, doubles: bool) -> bool {
@@ -365,6 +407,30 @@ impl Room {
         }
         self.doubles = doubles;
         self.seats = taken.into_iter().map(Some).chain(std::iter::repeat(None)).take(n).collect();
+        self.ver += 1;
+        true
+    }
+
+    /// B522: the seat a person's player in seat `i` moves to on the other team (seats 0..half are one team, the rest
+    /// the other): its first open seat, else its first computer player's (who comes over in trade); `None` if a
+    /// person holds every seat there.
+    pub fn team_target(&self, i: usize) -> Option<usize> {
+        let n = self.seats.len();
+        let half = (n / 2).max(1);
+        self.seats.get(i)?.as_ref().filter(|s| s.human())?;
+        let other: Vec<usize> = if i < half { (half..n).collect() } else { (0..half).collect() };
+        let open = other.iter().copied().find(|&j| self.seats[j].is_none());
+        open.or_else(|| other.iter().copied().find(|&j| self.seats[j].as_ref().is_some_and(|s| !s.human())))
+    }
+
+    /// B522: `peer`'s player in seat `i` to the other team (`team_target`); false (no change) if it isn't `peer`'s or
+    /// there's no room.
+    fn switch_team(&mut self, peer: &str, i: usize) -> bool {
+        if self.seats.get(i).is_none_or(|s| s.as_ref().is_none_or(|s| s.peer != peer)) {
+            return false;
+        }
+        let Some(j) = self.team_target(i) else { return false };
+        self.seats.swap(i, j);
         self.ver += 1;
         true
     }
@@ -414,7 +480,8 @@ impl Room {
         self.vanilla = vanilla;
         for s in self.seats.iter_mut().flatten() {
             if let Some(w) = s.pick.r#mod.take() {
-                s.pick = Pick::disc(w.donor, 0);
+                // B520: a Random draw stays Random, the hand toggle stays
+                s.pick = Pick { random: s.pick.random, swap: s.pick.swap, ..Pick::disc(w.donor, 0) };
             }
         }
         self.ver += 1;
@@ -555,12 +622,20 @@ pub struct Listing {
     /// it's joined by the code); empty where the ID is dialled.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub code: String,
+    /// M22: the host's build id (`handshake::build`); empty from a build before it. Find greys out the others.
+    #[serde(default)]
+    pub build: String,
 }
 
 impl Listing {
     fn of(id: EndpointId, room: &Room) -> Listing {
         let seats = room.seats.len();
-        Listing { id: id.to_string(), name: room.name.clone(), doubles: room.doubles, court: room.court, taken: seats - room.open(), seats, time: now(), code: String::new() }
+        Listing { id: id.to_string(), name: room.name.clone(), doubles: room.doubles, court: room.court, taken: seats - room.open(), seats, time: now(), code: String::new(), build: our_build().into() }
+    }
+
+    /// M22: hosted by this same build, so joining it can work (else the host refuses at the Hello).
+    pub fn same_build(&self) -> bool {
+        self.build == our_build()
     }
 
     pub fn open(&self) -> usize {
@@ -575,7 +650,7 @@ impl Listing {
 
 /// The Quickplay rule (the Halo CE port's Quick Match): the busiest open lobby that fits, newest first on a tie.
 pub fn quick_pick(list: &[Listing], doubles: bool, need: usize) -> Vec<Listing> {
-    let mut fit: Vec<_> = list.iter().filter(|l| l.doubles == doubles && l.open() >= need).cloned().collect();
+    let mut fit: Vec<_> = list.iter().filter(|l| l.doubles == doubles && l.open() >= need && l.same_build()).cloned().collect();
     fit.sort_by_key(|l| (std::cmp::Reverse(l.taken), std::cmp::Reverse(l.time)));
     fit
 }
@@ -698,6 +773,8 @@ pub enum Msg {
     Emote { seat: u8, dir: u8 },
     /// M95: a guest's input changed in the lobby (`Room::devices`).
     Device(crate::device::Device),
+    /// B522: a guest's player in seat `.0` to the other team (`Room::team_target`).
+    Team(u8),
 }
 
 impl Msg {
@@ -869,6 +946,8 @@ pub enum Cmd {
     Live(Vec<Live>),
     Bot(usize, Option<Pick>),
     Doubles(bool),
+    /// B523: the host swaps two seats' players (an open seat: moves one there), rearranging the teams.
+    Swap(usize, usize),
     /// B213: the host's lobby private (unlisted) or public.
     Private(bool),
     /// The host's lobby vanilla (no mods) or not.
@@ -879,6 +958,8 @@ pub enum Cmd {
     Emote(u8, u8),
     /// M95: this machine's platform and input (any time: the next Hello carries it; in a lobby everyone hears it).
     Device(crate::device::Device),
+    /// B522: a guest's player in seat `.0` to the other team (the host's □ is singles / doubles instead).
+    Team(usize),
 }
 
 /// What the network tells the app.
@@ -1594,7 +1675,16 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         if ctx_.is_closed() {
                             return;
                         }
-                        let _ = ev.send(Event::Status("Waiting for a relay to put the code online (no internet?)...".into()));
+                        // B515: why (iOS Safari reaches the relays, yet its host waited here for good): none picked
+                        // yet (the latency probes didn't finish) or the picked one's last error
+                        let st = iroh::Watcher::get(&mut ep.home_relay_status());
+                        bevy::log::warn!("no home relay yet: {st:?}");
+                        let why = match st.iter().find_map(|r| r.last_error()) {
+                            Some(e) => format!("relay error: {e}"),
+                            None if st.is_empty() => "no relay picked yet".into(),
+                            None => "relay not connected yet".into(),
+                        };
+                        let _ = ev.send(Event::Status(format!("Waiting for a relay to put the code online (no internet?): {why}...")));
                     }
                 }
                 // B114: relays off, right after bind the address can still be empty; a bare ID in the code fails
@@ -1653,7 +1743,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
         }
         None => {
             offer = new_offer(cx).await;
-            cx.say(Event::Status("Players scan this code, then you scan the one their screen shows (or paste it here).".into()));
+            cx.say(Event::Status("Players join with this lobby's link (Copy Link, send it: they open it or Paste it in Join by Code); then Paste the link they send back.".into()));
         }
     }
     let (gtx, mut guests) = amp::unbounded_channel::<Guest>();
@@ -1826,13 +1916,13 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
                 o => {
                     offer = o;
-                    cx.say(Event::Status("That code answers an older lobby code: they need to scan the one shown now.".into()));
+                    cx.say(Event::Status("That link answers an older one: send them this lobby's link again (Copy Link).".into()));
                 }
             },
             Some(g) = guests.recv() => match g {
                 Guest::In { peer, name, picks, build, link, conn, courts, device, record } => {
-                    let why = if build != BUILD {
-                        Some(format!("different version (host {BUILD}, you {build})"))
+                    let why = if build != our_build() {
+                        Some(version_differs(our_build(), &build))
                     } else if let Err(e) = picks_ok(&picks) {
                         Some(e)
                     } else if starting.is_some() || !room.take(&peer, &picks) {
@@ -1869,6 +1959,15 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     if changed {
                         broadcast(&joined, &Msg::Room(room.clone()));
                         cx.say(Event::Room(room.clone()));
+                    }
+                }
+                // B522: a guest's player to the other team (a line-up change, as the host's Doubles)
+                Guest::Said(peer, Msg::Team(i)) => {
+                    if starting.is_none() && room.switch_team(&peer, i as usize) {
+                        ready.clear();
+                        broadcast(&joined, &Msg::Room(room.clone()));
+                        cx.say(Event::Room(room.clone()));
+                        dirty = true;
                     }
                 }
                 Guest::Said(peer, Msg::Picks(p)) => {
@@ -2029,10 +2128,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                 }
-                Some(c @ (Cmd::Bot(..) | Cmd::Doubles(_))) if starting.is_none() => {
+                Some(c @ (Cmd::Bot(..) | Cmd::Doubles(_) | Cmd::Swap(..))) if starting.is_none() => {
                     let changed = match c {
                         Cmd::Bot(i, p) => room.bot(i, p),
                         Cmd::Doubles(d) => room.set_doubles(d),
+                        Cmd::Swap(a, b) => room.swap(a, b),
                         _ => false,
                     };
                     if changed {
@@ -2170,7 +2270,8 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
                     // ponytail: the rejoiner plays the seat's old picks (a mod pick it lacks shows its stand-in)
                     let back = away.iter().find(|p| room.names.get(*p).is_some_and(|n| *n == name)).or(away.first()).cloned();
                     match back {
-                        Some(old) if build == BUILD => {
+                        Some(_) if build != our_build() => refuse(&link, conn, version_differs(our_build(), &build)),
+                        Some(old) => {
                             bevy::log::info!("{name} ({}) rejoins for {}", short(&peer), short(&old));
                             away.retain(|p| *p != old);
                             if let Some(i) = joined.iter().position(|(p, ..)| *p == old) {
@@ -2341,7 +2442,7 @@ fn short(id: &str) -> &str {
 async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -> Option<(Conn, Link, Inbox, String)> {
     let code = code.trim();
     if rtc::is_offer(code) {
-        // the browser's LAN: our answer shown for the host to scan, then wait for them (or a Leave)
+        // the browser's LAN: our answer shared back to the host (Copy Link), then wait for them (or a Leave)
         let (pending, answer) = match rtc::answer(code).await {
             Ok(p) => p,
             Err(e) => {
@@ -2352,7 +2453,7 @@ async fn connect(cx: &Ctx, code: &str, cmds: &mut amp::UnboundedReceiver<Cmd>) -
         let me = pending.me();
         bevy::log::info!("LAN answer: {answer}");
         cx.say(Event::Code(answer));
-        cx.say(Event::Status("Now the host scans this code (or you send it to them to paste).".into()));
+        cx.say(Event::Status("Send this lobby's link back to the host (Copy Link): they Paste it in their lobby.".into()));
         let open = pending.open();
         n0_future::pin!(open);
         loop {
@@ -2450,13 +2551,18 @@ fn picks_ok(p: &[Pick]) -> Result<(), String> {
 }
 
 /// Join by code; true once seated (the lobby then runs until it starts or someone leaves).
-async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> bool {
+async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> bool {
+    join_as(cx, code, picks, cmds, our_build()).await
+}
+
+/// `join`, saying it is build `build` (M22's test plays another build).
+async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>, build: &str) -> bool {
     // a home relay first, as when bind waited for it (B224 moved that here; bounded: a dead relay still leaves LAN)
     if let Some(ep) = cx.ep.as_ref().filter(|_| cx.relays) {
         let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
     let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
-    link.send(&Msg::Hello { build: BUILD.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap(), record: *RECORD.lock().unwrap() });
+    link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap(), record: *RECORD.lock().unwrap() });
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
     let ev = cx.ev.clone();
@@ -2546,6 +2652,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Chat(text)) => link.send(&Msg::Chat { from: String::new(), name: String::new(), text }),
                 Some(Cmd::Emote(seat, dir)) if !playing => link.send(&Msg::Emote { seat, dir }),
                 Some(Cmd::Device(d)) if !playing => link.send(&Msg::Device(d)),
+                Some(Cmd::Team(i)) if !playing => link.send(&Msg::Team(i as u8)),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
                     picks = p;
@@ -2678,6 +2785,40 @@ pub const SITE: &str = match option_env!("HST_SITE") {
 /// The pkarr relay the browser reads and writes short codes through (it allows the site's origin); native hosts put
 /// theirs there too.
 const PKARR: &str = "https://relay.pkarr.org";
+/// B528: our own pkarr relay (the user's server, `tools/pkarr-relay/`), asked first: [`PKARR`]'s rate limit (10 at
+/// once per network, then ~2 a second) is shared by everyone behind the same address. Down or slow, the public one is
+/// used for [`OWN_PAUSE`]; both put to the same DHT, so a record written through either is read through the other.
+const OWN: &str = "https://pkarr.opentennis.dev";
+/// B529: `code_server` from `online.txt`, asked instead of [`OWN`] when set.
+static CODE_SERVER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+fn own_url() -> String {
+    Some(CODE_SERVER.read().unwrap().clone()).filter(|u| !u.is_empty()).unwrap_or_else(|| OWN.into())
+}
+const OWN_PAUSE: i64 = 60_000_000;
+static OWN_DOWN_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// `ask` on [`OWN`] with `secs` to answer (a PUT waits for the relay's own DHT put, 5-20 s: B151): None (and OWN
+/// skipped for [`OWN_PAUSE`]) if it didn't.
+async fn own<T>(secs: u64, ask: impl std::future::Future<Output = Result<T, String>>) -> Option<T> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if unix_micros() < OWN_DOWN_UNTIL.load(Relaxed) {
+        return None;
+    }
+    let why = match n0_future::time::timeout(Duration::from_secs(secs), ask).await {
+        Ok(Ok(t)) => return Some(t),
+        Ok(Err(e)) => e,
+        Err(_) => format!("no answer in {secs} s"),
+    };
+    bevy::log::warn!("{}: {why}; {PKARR} for a minute", own_url());
+    OWN_DOWN_UNTIL.store(unix_micros() + OWN_PAUSE, Relaxed);
+    None
+}
+
+/// A relay's answer to a GET: signature, seq (big-endian), the packet.
+fn relay_record(b: &[u8]) -> Option<(String, i64)> {
+    let seq = b.get(64..72).and_then(|s| s.try_into().ok()).map(i64::from_be_bytes)?;
+    Some((b.get(72..).and_then(txt_of)?, seq))
+}
 
 pub fn is_short(code: &str) -> bool {
     code.len() == SHORT && code.bytes().all(|b| SYMBOLS.contains(&b))
@@ -2768,10 +2909,11 @@ fn relay_trouble(status: Option<u16>, err: &str) -> String {
     }
 }
 
-/// B467: a refused request's wait before asking the pkarr relay again: 1-3 s, spread out so the requests turned away
-/// together don't all come back in the same second.
-fn relay_pause() -> Duration {
-    Duration::from_millis(1000 + SecretKey::generate().to_bytes()[0] as u64 * 8)
+/// B467: a refused request's wait before asking the pkarr relay again, spread out by up to 2 s so the requests turned
+/// away together don't all come back in the same second. B524: 2, 4, then 8 s after the `k`th refusal: a guest asking
+/// every second or two while refused spent the network's whole allowance itself, and the host's code never went out
+fn relay_pause(k: u32) -> Duration {
+    Duration::from_millis((2000 << k.min(2)) + SecretKey::generate().to_bytes()[0] as u64 * 8)
 }
 
 /// The record under `code` on the pkarr relay (the browser's [`lookup`]): Ok(None) if it has none.
@@ -2782,8 +2924,21 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
     // B467: the relay lets one address make 10 requests at once, then about one a second (429, Retry-After: 1); two
     // phones on one Wi-Fi (a host's slot reads and puts, a guest's Find) share that, so a refusal waits and asks again
     // (the callers' timeouts end it sooner). In the browser a refusal is a failed fetch (`relay_trouble`): those too.
+    let path = format!("{}?t={}", code_key(code).public().to_z32(), unix_micros());
+    let ours = own(8, async {
+        let r = crate::modstore::client().get(format!("{}/{path}", own_url())).send().await.map_err(|e| e.to_string())?;
+        match r.status().as_u16() {
+            404 => Ok(None),
+            s if (200..300).contains(&s) => Ok(relay_record(&r.bytes().await.map_err(|e| e.to_string())?)),
+            s => Err(format!("HTTP {s}")),
+        }
+    });
+    if let Some(r) = ours.await {
+        return Ok(r);
+    }
     let mut why = relay_trouble(Some(429), "");
-    for _ in 0..8 {
+    // B524: four tries (2 + 4 + 8 s of pauses) end inside `resolve`'s lookups, so it hears why
+    for k in 0..4 {
         // B275: the relay answers with max-age=300, so a browser's second lookup (a rejoin) got its cached copy, by
         // then older than STALE: "No open lobby has the code"; the query makes each lookup a fresh request
         let url = format!("{PKARR}/{}?t={}", code_key(code).public().to_z32(), unix_micros());
@@ -2791,7 +2946,7 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
             Ok(r) => r,
             Err(e) => {
                 why = relay_trouble(None, &e.to_string());
-                n0_future::time::sleep(relay_pause()).await;
+                n0_future::time::sleep(relay_pause(k)).await;
                 continue;
             }
         };
@@ -2799,14 +2954,12 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
             404 => return Ok(None),
             429 => {
                 why = relay_trouble(Some(429), "");
-                n0_future::time::sleep(relay_pause()).await;
+                n0_future::time::sleep(relay_pause(k)).await;
             }
             s if !(200..300).contains(&s) => return Err(relay_trouble(Some(s), "")),
             _ => {
                 let b = r.bytes().await.map_err(|e| relay_trouble(None, &e.to_string()))?;
-                // the relay's payload: signature, seq (big-endian), the packet
-                let seq = b.get(64..72).and_then(|s| s.try_into().ok()).map(i64::from_be_bytes);
-                return Ok(seq.zip(b.get(72..).and_then(txt_of)).map(|(s, t)| (t, s)));
+                return Ok(relay_record(&b));
             }
         }
     }
@@ -2848,9 +3001,17 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
     // BEP 44's signed form: bencoded seq and v
     let sig = key.sign(&[format!("3:seqi{seq}e1:v{}:", v.len()).into_bytes(), v.clone()].concat());
     let body = [sig.to_bytes().to_vec(), seq.to_be_bytes().to_vec(), v].concat();
+    let ours = own(25, async {
+        let r = crate::modstore::client().put(format!("{}/{}", own_url(), key.public().to_z32())).body(body.clone()).send().await.map_err(|e| e.to_string())?;
+        let s = r.status().as_u16();
+        if (200..300).contains(&s) { Ok(()) } else { Err(format!("HTTP {s}")) }
+    });
+    if ours.await.is_some() {
+        return Ok(());
+    }
     // B467: a refusal for too many requests (`relay_get`) waits and tries again
     let mut why = String::new();
-    for _ in 0..5 {
+    for k in 0..5 {
         let r = crate::modstore::client().put(format!("{PKARR}/{}", key.public().to_z32())).body(body.clone()).send().await;
         match r.map(|r| r.status().as_u16()) {
             Ok(s) if (200..300).contains(&s) => return Ok(()),
@@ -2863,7 +3024,7 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
         if !why.contains("too many") && !cfg!(target_arch = "wasm32") {
             break;
         }
-        n0_future::time::sleep(relay_pause()).await;
+        n0_future::time::sleep(relay_pause(k)).await;
     }
     Err(why)
 }
@@ -2871,6 +3032,11 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
 /// A short code for the lobby with `ticket`, `code` first: a free one, published (Err: why the DHT or relay
 /// didn't take it). Each code tried after a taken one goes to `show`.
 async fn roll(dht: &Dht, mut code: String, ticket: &str, show: impl Fn(&str)) -> Result<String, String> {
+    // ponytail: B527: the browser doesn't check (a relay request each, on its rate limit): a fresh code is one of
+    // 32^4 ≈ 1M, so with a few hundred open lobbies a clash is ~1 in 3000 hosts; check here again if that grows
+    if cfg!(target_arch = "wasm32") {
+        return publish(dht, &code, ticket).await.map(|_| code);
+    }
     for _ in 0..5 {
         match n0_future::time::timeout(Duration::from_secs(15), lookup(dht, &code)).await {
             Ok(Ok(Some((_, seq)))) if fresh(seq) => {
@@ -2914,7 +3080,28 @@ async fn read_slots(dht: &Dht) -> Vec<Result<Option<(Listing, i64)>, String>> {
 
 /// The open lobbies in the board slots, each with its short code, and (B467) why some slots couldn't be read.
 async fn find_slots(dht: &Dht) -> (Vec<Listing>, Option<String>) {
-    let all = read_slots(dht).await;
+    // B527: the browser reads every slot through the pkarr relay (SLOTS requests of its ~10 per network): a Find, the
+    // Online screen's list and Quick play within FIND_CACHE share one read
+    #[cfg(target_arch = "wasm32")]
+    {
+        thread_local!(static LAST: std::cell::RefCell<Option<(n0_future::time::Instant, Vec<Result<Option<(Listing, i64)>, String>>)>> = const { std::cell::RefCell::new(None) });
+        const FIND_CACHE: Duration = Duration::from_secs(15);
+        let all = match LAST.with_borrow(|l| l.clone().filter(|(t, all)| t.elapsed() < FIND_CACHE && all.iter().all(Result::is_ok))) {
+            Some((_, all)) => all,
+            None => {
+                let all = read_slots(dht).await;
+                LAST.set(Some((n0_future::time::Instant::now(), all.clone())));
+                all
+            }
+        };
+        return slots_list(all);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    slots_list(read_slots(dht).await)
+}
+
+/// The open lobbies in `all` (the board slots' answers) and why some couldn't be read.
+fn slots_list(all: Vec<Result<Option<(Listing, i64)>, String>>) -> (Vec<Listing>, Option<String>) {
     let bad: Vec<&String> = all.iter().filter_map(|r| r.as_ref().err()).collect();
     let why = bad.first().map(|e| if bad.len() == SLOTS { e.to_string() } else { format!("{} of its {SLOTS} slots unread, {e}", bad.len()) });
     if let Some(w) = &why {
@@ -2938,9 +3125,16 @@ async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &List
     let ours = |r: &Result<Option<(Listing, i64)>, String>| r.as_ref().ok().and_then(|r| r.as_ref()).is_none_or(|(o, seq)| o.id == l.id || !fresh(*seq));
     let mut i = slot.load(Relaxed);
     if i >= SLOTS || !ours(&read_slot(dht, i).await) {
-        let all = read_slots(dht).await;
+        // B527: one slot at a time from the one its ID picks, not all of them at once: usually a single request on
+        // the pkarr relay instead of SLOTS
         let start = l.id.parse().map_or(0, |id| lobby_number(id) as usize);
-        i = (0..SLOTS).map(|k| (start + k) % SLOTS).find(|&k| ours(&all[k])).unwrap_or(SLOTS);
+        i = SLOTS;
+        for k in (0..SLOTS).map(|k| (start + k) % SLOTS) {
+            if ours(&read_slot(dht, k).await) {
+                i = k;
+                break;
+            }
+        }
         slot.store(i, Relaxed);
     }
     if i < SLOTS {
@@ -2964,7 +3158,7 @@ async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &List
 /// The ticket the short code `code` stands for, if its lobby is open; else (B467) what the lookup found instead.
 async fn resolve(dht: &Dht, code: &str) -> Result<String, String> {
     // B114: asked again until 40 s are up, as a code just rolled can take a while to reach the relay or DHT nodes
-    // this machine asks (B513: the relay's put alone takes up to 20 s)
+    // this machine asks (B514: the relay's put alone takes up to 20 s)
     let until = n0_future::time::Instant::now() + Duration::from_secs(40);
     loop {
         let left = until.saturating_duration_since(n0_future::time::Instant::now()).as_secs().max(1);
@@ -2974,10 +3168,13 @@ async fn resolve(dht: &Dht, code: &str) -> Result<String, String> {
         {
             return Ok(t.clone());
         }
-        if n0_future::time::Instant::now() + Duration::from_secs(3) >= until {
+        // B524: no lookup starts with under 20 s left, so the last one ends by itself and its reason (the relay
+        // refusing this network…) is what the player reads, not "didn't answer in 2 s"
+        if n0_future::time::Instant::now() + Duration::from_secs(20) >= until {
             return Err(missed(code, r.map(|r| r.map(|(_, seq)| seq))));
         }
-        n0_future::time::sleep(Duration::from_secs(3)).await;
+        // B527: every 5 s, not 3 (each a request on the pkarr relay in the browser)
+        n0_future::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -3038,6 +3235,30 @@ mod tests {
         assert!(r.all_set(), "full and ready");
     }
 
+    /// B523: the host's swaps trade two seats' players (or move one to an open seat), never one peer's two and never
+    /// out of a peer's order.
+    #[test]
+    fn seats_swap_keeping_each_peers_order() {
+        let mut r = room(true);
+        r.take("host", &[Pick::disc(0, 0)]);
+        r.take("g", &[Pick::disc(1, 0), Pick::disc(2, 0)]);
+        r.seats[3] = Some(Seat { peer: CPU.into(), pick: Pick::disc(3, 0) });
+        let peers = |r: &Room| r.seats.iter().map(|s| s.as_ref().map_or("", |s| s.peer.as_str()).to_string()).collect::<Vec<_>>();
+        let ver = r.ver;
+        assert!(r.swap(1, 0) && peers(&r) == ["g", "host", "g", CPU] && r.ver == ver + 1, "{:?}", peers(&r));
+        assert!(!r.can_swap(0, 2), "one peer's two");
+        assert!(!r.can_swap(0, 3), "g's first player would go after its second");
+        assert!(r.swap(2, 3) && peers(&r) == ["g", "host", CPU, "g"]);
+        assert!(r.swap(2, 1) && peers(&r) == ["g", CPU, "host", "g"], "host and computer");
+        assert!(!r.can_swap(1, 1) && !r.can_swap(1, 4));
+        r.seats[1] = None;
+        assert!(r.swap(2, 1) && peers(&r) == ["g", "host", "", "g"], "onto an open seat");
+        assert!(r.can_swap(2, 1) && !r.can_swap(2, 2));
+        r.seats[2] = None;
+        r.seats[0] = None;
+        assert!(!r.can_swap(0, 2), "two open seats");
+    }
+
     #[test]
     fn relay_off_fails_fast_on_relay_only_tickets() {
         let id = SecretKey::from_bytes(&[7; 32]).public();
@@ -3084,13 +3305,13 @@ mod tests {
             id: "x".into(), name: "X".into(), donor: 5, hand: 1.0, base: 5, overrides: vec![], ai_row: 5,
             names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: 1, dir: None,
         };
-        let modded = Pick { r#mod: Some(Box::new(w)), ..Pick::disc(5, 2) };
+        let modded = Pick { r#mod: Some(Box::new(w)), swap: true, random: true, ..Pick::disc(5, 2) };
         let mut r = room(false);
         assert!(r.take("host", &[modded.clone()]));
         assert!(r.allowed(std::slice::from_ref(&modded)).is_ok());
         let v = r.ver;
         assert!(r.set_vanilla(true) && !r.set_vanilla(true));
-        assert_eq!((r.seats[0].as_ref().unwrap().pick.clone(), r.ver), (Pick::disc(5, 0), v + 1));
+        assert_eq!((r.seats[0].as_ref().unwrap().pick.clone(), r.ver), (Pick { swap: true, random: true, ..Pick::disc(5, 0) }, v + 1), "B520: Random and the hand kept");
         assert!(r.allowed(&[modded]).is_err() && r.allowed(&[Pick::disc(1, 0)]).is_ok());
     }
 
@@ -3125,6 +3346,26 @@ mod tests {
             assert_eq!((u.len(), d.iter().filter(|&&c| c == 3).count()), (4, 1), "{d:?}");
         }
         assert!(all.iter().any(|d| !d.contains(&0)) && all.iter().any(|d| d != &all[0]), "{all:?}");
+    }
+
+    /// B522: a guest's player to the other team: its first open seat, else a computer's (who trades places); never a
+    /// person's, never someone else's player.
+    #[test]
+    fn a_guest_swaps_team() {
+        let mut r = room(true);
+        assert!(r.take("host", &[Pick::disc(0, 0)]) && r.take("g", &[Pick::disc(1, 0)]));
+        assert!(r.bot(3, Some(Pick::disc(4, 0))));
+        assert_eq!(r.team_target(1), Some(2), "the open seat first");
+        assert!(!r.switch_team("h", 1) && !r.switch_team("g", 0), "only its own player");
+        let v = r.ver;
+        assert!(r.switch_team("g", 1) && r.ver == v + 1);
+        assert_eq!(r.seats.iter().map(|s| s.as_ref().map(|s| s.peer.as_str())).collect::<Vec<_>>(), [Some("host"), None, Some("g"), Some(CPU)]);
+        assert!(r.bot(1, Some(Pick::disc(5, 0))) && r.switch_team("g", 2), "onto the computer's, which comes over");
+        assert_eq!(r.seats.iter().map(|s| s.as_ref().map(|s| s.pick.char)).collect::<Vec<_>>(), [Some(0), Some(1), Some(5), Some(4)]);
+        let mut s = room(false);
+        assert!(s.take("host", &[Pick::disc(0, 0)]) && s.take("g", &[Pick::disc(1, 0)]));
+        assert_eq!(s.team_target(1), None, "singles against the host: nowhere to go");
+        assert!(!s.switch_team("g", 1));
     }
 
     /// B201: the host's computer players (open and people's seats only), singles/doubles (the taken seats first, if
@@ -3303,7 +3544,7 @@ mod tests {
 
     #[test]
     fn quickplay_takes_the_busiest_that_fits() {
-        let l = |id: &str, taken, seats, time| Listing { id: id.into(), name: String::new(), doubles: seats == 4, court: 0, taken, seats, time, code: String::new() };
+        let l = |id: &str, taken, seats, time| Listing { id: id.into(), name: String::new(), doubles: seats == 4, court: 0, taken, seats, time, code: String::new(), build: our_build().into() };
         let list = [l("a", 1, 4, 5), l("b", 2, 4, 1), l("c", 3, 4, 9), l("d", 1, 2, 9)];
         assert_eq!(quick_pick(&list, true, 2).iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         assert_eq!(quick_pick(&list, true, 1)[0].id, "c");
@@ -3312,7 +3553,7 @@ mod tests {
 
     #[test]
     fn find_never_lists_our_own_lobby() {
-        let l = |id: &str| Listing { id: id.into(), name: String::new(), doubles: false, court: 0, taken: 1, seats: 2, time: 0, code: String::new() };
+        let l = |id: &str| Listing { id: id.into(), name: String::new(), doubles: false, court: 0, taken: 1, seats: 2, time: 0, code: String::new(), build: our_build().into() };
         let ids = |v: Vec<Listing>| v.into_iter().map(|l| l.id).collect::<Vec<_>>();
         assert_eq!(ids(not_mine(vec![l("me"), l("a"), l("b")], Some("me".into()))), ["a", "b"]);
         // B332: Quickplay would otherwise dial itself
@@ -3338,6 +3579,8 @@ mod tests {
         assert_eq!(o.relay, Relay::Own("https://relay.example.org".into()));
         assert_eq!(Online::parse(&o.text()), o);
         assert_eq!(Online::parse("").relay, Relay::N0);
+        let o = Online::parse("code_server = https://codes.example.org\n");
+        assert!(o.code_server == "https://codes.example.org" && Online::parse(&o.text()) == o);
         let o = Online::parse("private = yes\n");
         assert!(o.private && Online::parse(&o.text()) == o);
     }
@@ -3555,7 +3798,8 @@ mod tests {
         r.name = "🎾".repeat(24);
         r.take("host", &[Pick::disc(0, 0)]);
         let id = SecretKey::generate().public();
-        let data = lan_data(&Listing::of(id, &r)).expect("fits in 245 bytes");
+        // M22: with a long build id (a pre-release's version, a dirty build's commit)
+        let data = lan_data(&Listing { build: "10.10.10-rc.10 2e28939+".into(), ..Listing::of(id, &r) }).expect("fits in 245 bytes");
         let l = lan_listing(id, Some(&data)).unwrap();
         assert_eq!((l.id, l.name, l.taken, l.seats), (id.to_string(), r.name, 1, 4));
         assert_eq!(lan_listing(id, Some(&"other app".parse().unwrap())), None);
@@ -3658,6 +3902,51 @@ mod tests {
             next(&hev, |e| matches!(e, Event::Status(s) if s.contains("pick was refused"))).await;
             next(&gev, |e| matches!(e, Event::Chat { text, .. } if text.starts_with("Your pick was refused"))).await;
         });
+    }
+
+    /// M22: a guest of another build is refused at its Hello, saying both builds, before any seat; Find greys out
+    /// such a host's lobby and Quickplay passes it by.
+    #[test]
+    fn another_build_is_refused_at_the_door() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+            };
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (_hcmd, mut hrx) = amp::unbounded_channel();
+            let (_gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(3, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let code = loop {
+                if let Ok(Event::Code(c)) = hev.try_recv() {
+                    break c;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            };
+            let seated = tokio::spawn(async move { join_as(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx, "0.0.0 1a2b3c4").await });
+            let why = loop {
+                match gev.try_recv() {
+                    Ok(Event::Failed(w)) => break w,
+                    Ok(Event::Room(_)) => panic!("seated in another build's lobby"),
+                    _ => tokio::time::sleep(Duration::from_millis(20)).await,
+                }
+            };
+            assert!(why.starts_with("Refused: a different version"), "{why}");
+            assert!(why.contains(&format!("host {}, you 0.0.0 1a2b3c4", our_build())) && why.contains("Update"), "{why}");
+            assert!(!seated.await.unwrap(), "never seated");
+        });
+        let l = |build: &str| Listing { id: build.into(), name: String::new(), doubles: false, court: 0, taken: 1, seats: 2, time: 0, code: String::new(), build: build.into() };
+        let (ours, other, old) = (l(our_build()), l("0.0.0 1a2b3c4"), l(""));
+        assert!(ours.same_build() && !other.same_build() && !old.same_build());
+        assert_eq!(quick_pick(&[other, old, ours], false, 1).iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), [our_build()]);
+        // a listing from before M22 has no build: read as another build's
+        let before: Listing = serde_json::from_str(r#"{"id":"x","name":"","doubles":false,"court":0,"taken":1,"seats":2,"time":0}"#).unwrap();
+        assert!(!before.same_build());
     }
 
     /// M2i on loopback: the host brings a mod (and a court mod); the guest sees its wire, asks for its looks and gets
@@ -4113,7 +4402,7 @@ mod tests {
         let c = new_short();
         assert!(is_short(&c), "{c}");
         assert_ne!(code_key("AAAA").public(), code_key("AAAB").public());
-        assert!(fresh(unix_micros() - 80_000_000) && !fresh(unix_micros() - 100_000_000));
+        assert!(fresh(unix_micros() - 140_000_000) && !fresh(unix_micros() - 160_000_000));
     }
 
     /// A local DHT testnet, two lobbies through a short code (~20 s): `tools/check.sh -p hst short_code_on_a_testnet

@@ -1736,7 +1736,9 @@ pub fn read_input(
         .map(|(e, ..)| e)
         .collect();
     list.sort();
-    held.update(&list);
+    // B516: the keyboard's seat takes only an on-screen pad, never an idle real one
+    let touch: Vec<_> = gamepads.iter().filter(|(_, _, n)| n.is_some_and(|n| emote::is_touch(n))).map(|(e, ..)| e).collect();
+    held.update_with(&list, &touch);
     for (slot, e) in held.0.iter().enumerate() {
         let Some(Ok((_, g, name))) = e.map(|e| gamepads.get(e)) else {
             continue;
@@ -1934,11 +1936,8 @@ fn strike(
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
     g.marks.red = (g.rules.players == 1 || g.shots > 1).then_some([target[0], target[2]]);
     // each receiving human with its own character's heights; not on the serve (the game sets the search up from
-    // the serve return on, or in practice)
-    let heights: Vec<[f32; 2]> = (0..g.players.len())
-        .filter(|&i| i & 1 != who & 1 && g.humans.get(i) == Some(&true))
-        .map(|i| g.smash_heights[i])
-        .collect();
+    // the serve return on, or in practice); a lob onto bots too (B507, ours)
+    let heights = smash_marker::receivers(g, who, class == 1 && kind == 3);
     g.marks.smash = (!heights.is_empty() && (g.rules.players == 1 || g.shots > 1)).then(|| {
         let mut f = g.flight;
         let mut path = vec![path_entry(&f)];

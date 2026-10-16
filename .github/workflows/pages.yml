@@ -58,7 +58,8 @@ jobs:
           curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz | tar xz
           echo "$PWD/binaryen-version_123/bin" >> "$GITHUB_PATH"
       - if: ${{ !inputs.prebuilt }}
-        run: tools/web.sh
+        # M22: the online build id's commit, the same as the Linux and Windows jobs' (crates/hst/build.rs)
+        run: HST_COMMIT=${GITHUB_SHA::7} tools/web.sh
         env:
           HST_SITE: ${{ github.event_name != 'release' && vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
       - uses: actions/upload-pages-artifact@v3
@@ -102,7 +103,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - env:
           HST_SITE: ${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
+        # M22: the container's checkout may have no usable git: the commit for the online build id from Actions
         run: |
+          export HST_COMMIT=$(echo "$GITHUB_SHA" | cut -c1-7)
           cargo build --release -p hst --features ship
           mkdir -p dist/linux
           strip -o dist/linux/opentennis target/release/hst
@@ -125,6 +128,7 @@ jobs:
       - run: |
           sudo apt-get update -q && sudo apt-get install -yq gcc-mingw-w64-x86-64
           export HST_SITE=${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
+          export HST_COMMIT=${GITHUB_SHA::7}
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc RUSTFLAGS="-C target-feature=+crt-static" \
             cargo build --release -p hst --features ship --target x86_64-pc-windows-gnu
           x86_64-w64-mingw32-strip -o opentennis.exe target/x86_64-pc-windows-gnu/release/hst.exe

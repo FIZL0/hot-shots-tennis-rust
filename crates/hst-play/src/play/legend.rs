@@ -59,7 +59,7 @@ pub enum Act {
     Cancel,
     /// B301: a match key hint, keycaps only (`key_hints.rs`).
     Key,
-    /// B320: text chat in an online lobby (`chat.rs`): T, a pad's R2 (phrases) and L2 (say it).
+    /// B320: text chat in an online lobby (`chat.rs`): T (B512: no pad entry; a pad's R2/L2 phrases are the match's).
     Chat,
     /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab; B382: the character select's sections.
     Kind,
@@ -198,8 +198,14 @@ fn style_of(dev: Option<Entity>, pads: &Query<&Gamepad>) -> Style {
     if let Some(s) = forced() {
         return s;
     }
-    let Some(e) = dev else { return Style::Keys };
+    let Some(e) = dev else { return keys_style() };
     pad_style(pads.get(e).ok().and_then(|g| g.vendor_id()).unwrap_or(0), LAYOUT.load(Ordering::Relaxed), std::env::var("SteamDeck").as_deref() == Ok("1"))
+}
+
+/// The art for no pad (the keyboard, or a touch): with touch controls on, the touch pad's (✕ ○ □ △ on Auto, else
+/// the Button Icons setting's), not keycaps.
+fn keys_style() -> Style {
+    if super::touch_pad::on() { pad_style(super::touch_pad::SONY, LAYOUT.load(Ordering::Relaxed), false) } else { Style::Keys }
 }
 
 /// A pad's style: the Button Icons setting's (`layout`, a [`LAYOUTS`] index) when it picks one, else by the pad's
@@ -227,7 +233,7 @@ pub fn dev_style(dev: Option<Entity>) -> Style {
     if let Some(s) = forced() {
         return s;
     }
-    let Some(e) = dev else { return Style::Keys };
+    let Some(e) = dev else { return keys_style() };
     let known = PAD_STYLES.lock().ok().and_then(|v| v.iter().find(|(p, _)| *p == e).map(|(_, s)| *s));
     known.unwrap_or_else(|| pad_style(0, LAYOUT.load(Ordering::Relaxed), std::env::var("SteamDeck").as_deref() == Ok("1")))
 }
@@ -500,16 +506,14 @@ pub fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Costume if ps || generic => vec![Glyph::Shoulder("L1"), Glyph::Shoulder("R1")],
         Act::Costume if style == Style::Deck => vec![Glyph::Shoulder("L1"), Glyph::Shoulder("R1")],
         Act::Costume => vec![Glyph::Shoulder("LB"), Glyph::Shoulder("RB")],
-        Act::Chat if sw => vec![Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")],
-        Act::Chat if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("R2"), Glyph::Shoulder("L2")],
-        Act::Chat => vec![Glyph::Shoulder("RT"), Glyph::Shoulder("LT")],
         Act::Kind if sw => vec![Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")],
         Act::Kind if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("L2"), Glyph::Shoulder("R2")],
         Act::Kind => vec![Glyph::Shoulder("LT"), Glyph::Shoulder("RT")],
         Act::Emote => vec![Glyph::Stick],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start | Act::Name => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
-        Act::Type | Act::Cancel | Act::Key => vec![],
+        // B512: the menus' chat is the typed box (T, or the lobby's Chat button): a pad's quick-chat phrases are the match's
+        Act::Type | Act::Chat | Act::Cancel | Act::Key => vec![],
     }
 }
 
@@ -729,7 +733,7 @@ fn chip(styles: &[Style], it: &Item) -> Option<Pixmap> {
         }));
     }
     // a pad can't type: no entry for it
-    if parts.is_empty() && it.act == Act::Type && !styles.contains(&Style::Keys) {
+    if parts.is_empty() && matches!(it.act, Act::Type | Act::Chat) && !styles.contains(&Style::Keys) {
         return None;
     }
     Some(row(parts, &it.label, WHITE))
@@ -930,7 +934,8 @@ mod tests {
         }
         let it = |act| Item { act, label: String::new(), keys: vec![], dim: [false; 2] };
         assert_eq!(glyphs(Style::Switch, &it(Act::Costume)), [Glyph::Shoulder("L"), Glyph::Shoulder("R")]);
-        assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")]);
+        assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [], "B512: no quick-chat shoulders in the menus");
+        assert!(chip(&[Style::Ps], &it(Act::Chat)).is_none(), "nor a Chat entry for a pad alone");
         assert_eq!(glyphs(Style::Switch, &it(Act::Kind)), [Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")]);
         assert_eq!(glyphs(Style::Ps, &it(Act::Kind)), [Glyph::Shoulder("L2"), Glyph::Shoulder("R2")]);
         assert_eq!(glyphs(Style::Switch, &it(Act::Hand)), [Glyph::Small("-")]);

@@ -38,7 +38,7 @@ use bevy::window::PrimaryWindow;
 /// The pad's name: `emote::touch` knows it by its start ("Touch controls", as the browser's).
 const NAME: &str = if cfg!(target_os = "android") { "Touch controls (Android)" } else { "Touch controls (iPhone)" };
 /// Sony's USB vendor id: the menus' legend draws ✕ ○ □ △ for the pad, as its buttons are.
-const SONY: u16 = 0x054c;
+pub(super) const SONY: u16 = 0x054c;
 
 /// The Vibration setting (Settings → Mobile), as the menus last had it.
 pub static BUZZ: AtomicBool = AtomicBool::new(true);

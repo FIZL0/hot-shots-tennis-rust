@@ -97,6 +97,7 @@ Settings live in `online.txt` beside the ISO. The Online screen writes this file
 name = Player            # your name (on your lobby seats; a host's lobby is listed under it)
 relay = n0               # n0 (iroh's public relays), own (relay_url), off (direct only)
 relay_url = https://relay.example.org
+code_server = https://codes.example.org   # optional: your own pkarr relay for short codes (tools/pkarr-relay/)
 ```
 
 Online → Relay cycles n0 (public relays), Off, your own relay once one is set, and last, for advanced players,

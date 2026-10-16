@@ -19,6 +19,14 @@ what=${1:-linux}
 
 sdk=registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
 
+# M22: the commit every platform's build is stamped with (crates/hst/build.rs: the version corner and the online build
+# id, which must be the same on all of them); the Linux container can't read a worktree's git
+if [ -z "$HST_COMMIT" ]; then
+    HST_COMMIT=$(git rev-parse HEAD | cut -c1-7)
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || HST_COMMIT=$HST_COMMIT+
+fi
+export HST_COMMIT
+
 linux() {
     if ! docker info >/dev/null 2>&1; then
         echo "linux build needs docker (once): sudo pacman -S docker; sudo systemctl enable --now docker; sudo usermod -aG docker \$USER; log in again" >&2
@@ -26,7 +34,7 @@ linux() {
     fi
     mkdir -p ~/.cache/hst-steamrt
     docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" -v ~/.cache/hst-steamrt:/cache -w /src \
-        -e HST_VERSION -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
+        -e HST_VERSION -e HST_COMMIT -e HOME=/cache -e CARGO_HOME=/cache/cargo -e RUSTUP_HOME=/cache/rustup -e CARGO_TARGET_DIR=/src/target/steamrt \
         $sdk sh -ec '
             [ -x /cache/cargo/bin/cargo ] || curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --no-modify-path
             /cache/cargo/bin/cargo build --release -p hst --features ship'
