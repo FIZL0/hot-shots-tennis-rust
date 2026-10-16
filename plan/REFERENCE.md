@@ -52,6 +52,9 @@
 cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 ```
 
+The menus (B516) open on a press-start splash: the device that presses ✕ / Start or Enter / Space (or taps) is 1P and
+alone drives 1P's player; the keyboard still pauses and works the menus. `HST_MENU=main` (scripts, `HST_KEYS`) skips it.
+
 Without the ISO (M13): `hst --import "Hot Shots Tennis (USA).iso"` once (or plain `hst`, which asks for the ISO in a
 file dialog on first start) copies the 171 MB the remaster reads into `~/.local/share/hst/disc.pack`
 (`%APPDATA%\hst` on Windows); after that `hst [flags]` runs from the pack (settings.txt, controls.txt, mods/ beside it)
