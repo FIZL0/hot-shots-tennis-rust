@@ -1155,6 +1155,16 @@ async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>,
     }))
 }
 
+/// Backfill for uploads from before the card went up with them: sets `id`'s play style and grades in its `meta.json`
+/// on open PR `pr` and commits that file alone (the zip, preview and thumb stay). Run by `main_menu`'s `store_cards`.
+#[cfg(any(test, feature = "testing"))]
+pub async fn put_card(token: &str, id: &str, pr: u32, style: u8, grades: [u8; 5]) -> Result<String, String> {
+    let path = format!("mods/{id}/meta.json");
+    let mut meta: Meta = serde_json::from_slice(&get(&file_url(&format!("refs/pr/{pr}"), &path), 1 << 20).await?).map_err(|e| e.to_string())?;
+    (meta.style, meta.grades) = (Some(style), Some(grades));
+    commit(token, &format!("Card for mod {} ({id})", meta.name), vec![(path, serde_json::to_vec_pretty(&meta).unwrap())], &[], Some(pr)).await
+}
+
 /// An HTTP client; natively the TLS provider goes in first (building one without it panics), and on Android its own
 /// certificate check (B454, `android::tls`).
 pub fn client() -> reqwest::Client {

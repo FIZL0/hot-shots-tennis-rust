@@ -3477,6 +3477,36 @@ mod tests {
         assert_eq!(controllers(names[..2].iter().copied()), 0);
     }
 
+    /// Writes into the store the play style and grades of characters uploaded before Browse's card went up with
+    /// them, as the select works them out (`read_text`). Network, writes to the store: `HST_CARDS="<mod dir>@<PR> …"`
+    /// `HST_TOKEN=<hf-token.txt>` `HST_ISO=<iso>` `tools/check.sh -p hst store_cards -- --ignored`.
+    #[test]
+    #[ignore]
+    fn store_cards() {
+        let (Ok(list), Ok(t), Ok(iso)) = (std::env::var("HST_CARDS"), std::env::var("HST_TOKEN"), std::env::var("HST_ISO")) else { return };
+        let t = std::fs::read_to_string(t).unwrap();
+        let token = t.trim().split_once('\n').unwrap().1.trim();
+        let mut iso = Iso::open(&iso).unwrap();
+        let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/MENU.BIN").unwrap());
+        let grades = hst_data::exe::Menu::new(&cnf, &bin).unwrap().grades();
+        let pc = iso.read("PCDATA/PCDATA.XB").unwrap();
+        let pc = Archive::parse(&pc).unwrap();
+        let csv = pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).and_then(|e| pc.read(e).ok()).unwrap();
+        let style = styles(&csv);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let mut failed = 0;
+        for item in list.split_whitespace() {
+            let (dir, pr) = item.rsplit_once('@').unwrap();
+            let m = crate::mods::read_any(std::path::Path::new(dir)).unwrap();
+            let row = crate::mods::tparam(&mut iso, &m).unwrap();
+            let (st, g) = (mod_style(&m, &style), mod_grades(&row, m.base, &csv, &grades));
+            let got = rt.block_on(crate::modstore::put_card(token, &m.id, pr.parse().unwrap(), st as u8, g));
+            failed += got.is_err() as usize;
+            eprintln!("{} style {st} grades {g:?}: {got:?}", m.id);
+        }
+        assert_eq!(failed, 0);
+    }
+
     /// A mod's △ grades: its base's where its row matches the base, the nearest disc characters' where it doesn't.
     #[test]
     fn mod_grades_follow_nearest() {
