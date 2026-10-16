@@ -17,6 +17,8 @@ pub struct Mass {
     stiffness: f32,
     gravity: f32,
     damping: f32,
+    /// The chain's first link (hung on the pinned anchor).
+    first: bool,
 }
 
 /// The skin's spring joints (`nodes` in skin order, as `joints`), parents before children.
@@ -37,21 +39,25 @@ pub fn masses(nodes: &[gltf::Node], joints: &[Joint]) -> Vec<Mass> {
             let s = &e["spring"];
             let f = |key: &str, default: f64| s[key].as_f64().unwrap_or(default) as f32;
             s.is_object().then_some(())?;
-            Some((depth(k), Mass { joint: k, parent: joints[k].parent?, limit: f("limit", 30.0).to_radians(), stiffness: f("stiffness", 0.5), gravity: f("gravity", 4.9), damping: f("damping", 0.83) }))
+            Some((depth(k), Mass { joint: k, parent: joints[k].parent?, limit: f("limit", 30.0).to_radians(), stiffness: f("stiffness", 0.5), gravity: f("gravity", 4.9), damping: f("damping", 0.83), first: false }))
         })
         .collect();
     // a chain's first record is its anchor (stiffness 1, limit 0..5°): pinned, it never turns the head it hangs on
     let springy: Vec<usize> = out.iter().map(|(_, m)| m.joint).collect();
     out.retain(|(_, m)| springy.contains(&m.parent));
     out.sort_by_key(|(d, _)| *d);
-    out.into_iter().map(|(_, m)| m).collect()
+    let inner: Vec<usize> = out.iter().map(|(_, m)| m.joint).collect();
+    out.into_iter().map(|(_, m)| Mass { first: !inner.contains(&m.parent), ..m }).collect()
 }
 
-/// A rig's masses in world space: position, last step's motion and the anchor it hung from then; `None` until the
-/// first pose.
+/// A mass in world space: position, last step's motion, and its parent joint's world matrix at that step (the frame
+/// it is carried in).
+type State = (Vec3, Vec3, Mat4);
+
+/// A rig's masses; `None` until the first pose.
 #[derive(Component, Default)]
 pub struct Spring {
-    state: Vec<Option<(Vec3, Vec3, Vec3)>>,
+    state: Vec<Option<State>>,
     clock: f32,
 }
 
@@ -75,10 +81,15 @@ fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig), Added<Rig>>) {
     }
 }
 
+// ponytail: Out of Bounds' stiffness read per 60 Hz step rang at ~7 Hz (B410b); a tenth of it and the lag cap were picked
+// by eye on Sophie idling. The game's own solver would replace both
+const SOFT: f32 = 0.1;
+const LAG: f32 = 3f32.to_radians();
+
 /// One 60 Hz step of a mass toward `target`, hung at `origin`; returns the new position and motion.
 fn step(m: &Mass, origin: Vec3, target: Vec3, (x, v): (Vec3, Vec3)) -> (Vec3, Vec3) {
     let len = (target - origin).length();
-    let v = v * m.damping + (target - x) * m.stiffness + Vec3::NEG_Y * m.gravity / 3600.0;
+    let v = v * m.damping + (target - x) * m.stiffness * SOFT + Vec3::NEG_Y * m.gravity / 3600.0;
     let posed = (target - origin).normalize_or_zero();
     // only the motion across the segment turns it: a pull along it (gravity on a tip posed upright) would shorten
     // the step and the renormalised turn would overshoot, swinging for ever
@@ -101,60 +112,84 @@ fn turned(above: Mat4, turn: Quat, local: Quat) -> Quat {
     Quat::from_mat3(&(a.inverse() * Mat3::from_quat(turn) * a * Mat3::from_quat(local))).normalize()
 }
 
-pub(crate) fn swing(time: Res<Time>, mut rigs: Query<(&Rig, &GlobalTransform, &mut Spring, Has<crate::shadow::Minor>, Option<&Visibility>)>, mut joints: Query<&mut Transform>) {
+pub(crate) fn swing(time: Res<Time>, mut rigs: Query<(&Rig, &GlobalTransform, &mut Spring, Has<crate::shadow::Minor>, Option<&Visibility>)>, mut joints: Query<&mut Transform>, mut locals: Local<Vec<Transform>>) {
     for (rig, global, mut s, minor, shown) in &mut rigs {
         // not posed while put away (`character::animate`), so not swung on top of the last pose either
         if crate::character::put_away(minor, shown) {
             continue;
         }
         let masses = springs(rig);
-        s.state.resize(masses.len(), None);
         // ponytail: whole 60 Hz steps against this frame's pose (none while paused); sub-frame targets if it judders
         s.clock += time.delta_secs() * 60.0;
         let steps = (s.clock.floor() as usize).min(4);
         s.clock = (s.clock - s.clock.floor()).min(1.0);
-        let mut world: Vec<Option<Mat4>> = vec![None; rig.joints.len()];
-        fn posed(j: usize, rig: &Rig, root: Mat4, joints: &Query<&mut Transform>, w: &mut [Option<Mat4>]) -> Mat4 {
-            if let Some(m) = w[j] {
-                return m;
+        locals.clear();
+        locals.extend(rig.joints.iter().map(|&e| joints.get(e).copied().unwrap_or_default()));
+        let parents: Vec<Option<usize>> = rig.data.joints.iter().map(|j| j.parent).collect();
+        solve(masses, &parents, global.to_matrix(), &mut locals, &mut s.state, steps);
+        for m in masses {
+            if let Ok(mut tf) = joints.get_mut(rig.joints[m.parent]) {
+                tf.set_if_neq(locals[m.parent]);
             }
-            let local = joints.get(rig.joints[j]).map_or(Mat4::IDENTITY, |t| t.to_matrix());
-            let m = rig.data.joints[j].parent.map_or(root, |p| posed(p, rig, root, joints, w)) * local;
-            w[j] = Some(m);
-            m
         }
-        let root = global.to_matrix();
-        for (m, state) in masses.iter().zip(s.state.iter_mut()) {
-            let parent = posed(m.parent, rig, root, &joints, &mut world);
-            let target = posed(m.joint, rig, root, &joints, &mut world).w_axis.truncate();
-            let origin = parent.w_axis.truncate();
-            // a fresh rig, or one placed somewhere new (a point's set-up), starts at the pose
-            let (mut x, mut v, mut at) = state.filter(|(x, ..)| x.distance(target) < 1.0).unwrap_or((target, Vec3::ZERO, origin));
+    }
+}
+
+/// One drawn frame of `masses` on a skeleton (`parents`, posed `locals`) under `root`: `steps` 60 Hz steps, then each
+/// spring's parent joint in `locals` turned to point at its mass.
+fn solve(masses: &[Mass], parents: &[Option<usize>], root: Mat4, locals: &mut [Transform], state: &mut Vec<Option<State>>, steps: usize) {
+    state.resize(masses.len(), None);
+    let mut world: Vec<Option<Mat4>> = vec![None; locals.len()];
+    fn posed(j: usize, parents: &[Option<usize>], root: Mat4, locals: &[Transform], w: &mut [Option<Mat4>]) -> Mat4 {
+        if let Some(m) = w[j] {
+            return m;
+        }
+        let m = parents[j].map_or(root, |p| posed(p, parents, root, locals, w)) * locals[j].to_matrix();
+        w[j] = Some(m);
+        m
+    }
+    for (m, st) in masses.iter().zip(state.iter_mut()) {
+        let frame = posed(m.parent, parents, root, locals, &mut world);
+        let target = posed(m.joint, parents, root, locals, &mut world).w_axis.truncate();
+        let origin = frame.w_axis.truncate();
+        // a fresh rig, or one placed somewhere new (a point's set-up), starts at the pose
+        let (x, v, last) = st.filter(|(x, ..)| x.distance(target) < 1.0).unwrap_or((target, Vec3::ZERO, frame));
+        // B410b: carried with its parent joint since the last step. The chain's first link keeps its world motion (the
+        // head moves on under it: the swing); a link below rides along with the one above, or every link would lag
+        // its own origin again and a short chain whip off a gentle bob
+        let moved = frame * last.inverse();
+        let (cx, cv) = (moved.transform_point3(x), moved.transform_vector3(v));
+        let mut dir = (cx - origin).normalize_or_zero();
+        if steps > 0 {
+            // the first link's lag grows by at most `LAG` a step: a jolt of the head would flick a short ribbon
+            let lag = (x - origin).angle_between(cx - origin);
+            let c = if !m.first { 1.0 } else if lag > LAG { 1.0 - LAG / lag } else { 0.0 };
+            let (mut x, mut v) = (x.lerp(cx, c), v.lerp(cv, c));
             for _ in 0..steps {
                 (x, v) = step(m, origin, target, (x, v));
-                at = origin;
             }
-            *state = Some((x, v, at));
-            // between steps the head has moved on: the hair keeps the last step's direction (aiming at that step's
-            // world point would swing it round as fast as the body runs), still within the limit of this pose
-            let posed_dir = (target - origin).normalize_or_zero();
-            let mut dir = (x - at).normalize_or(posed_dir);
-            let off = posed_dir.angle_between(dir);
-            if off > m.limit {
-                dir = Quat::from_rotation_arc(posed_dir, dir).slerp(Quat::IDENTITY, 1.0 - m.limit / off) * posed_dir;
-            }
-            let turn = Quat::from_rotation_arc(posed_dir, dir);
-            if turn.is_nan() || turn.angle_between(Quat::IDENTITY) < 1e-6 {
-                continue;
-            }
-            // the parent's world rotation turned by `turn`, back in its parent's frame: through the whole matrix, as a
-            // left-hander's root mirrors (scale x −1) and a decomposed rotation would turn the hair the wrong way
-            let above = rig.data.joints[m.parent].parent.map_or(root, |p| posed(p, rig, root, &joints, &mut world));
-            let Ok(mut tf) = joints.get_mut(rig.joints[m.parent]) else { continue };
-            tf.rotation = turned(above, turn, tf.rotation);
-            world[m.parent] = Some(above * tf.to_matrix());
-            world[m.joint] = None;
+            *st = Some((x, v, frame));
+            dir = (x - origin).normalize_or_zero();
         }
+        // between steps the hair keeps the last step's direction in its parent's frame, within this pose's limit
+        let posed_dir = (target - origin).normalize_or_zero();
+        if dir == Vec3::ZERO {
+            continue;
+        }
+        let off = posed_dir.angle_between(dir);
+        if off > m.limit {
+            dir = Quat::from_rotation_arc(posed_dir, dir).slerp(Quat::IDENTITY, 1.0 - m.limit / off) * posed_dir;
+        }
+        let turn = Quat::from_rotation_arc(posed_dir, dir);
+        if turn.is_nan() || turn.angle_between(Quat::IDENTITY) < 1e-6 {
+            continue;
+        }
+        // the parent's world rotation turned by `turn`, back in its parent's frame: through the whole matrix, as a
+        // left-hander's root mirrors (scale x −1) and a decomposed rotation would turn the hair the wrong way
+        let above = parents[m.parent].map_or(root, |p| posed(p, parents, root, locals, &mut world));
+        locals[m.parent].rotation = turned(above, turn, locals[m.parent].rotation);
+        world[m.parent] = Some(above * locals[m.parent].to_matrix());
+        world[m.joint] = None;
     }
 }
 
@@ -163,7 +198,7 @@ mod tests {
     use super::*;
 
     fn mass(limit: f32) -> Mass {
-        Mass { joint: 1, parent: 0, limit: limit.to_radians(), stiffness: 0.5, gravity: 4.9, damping: 0.83 }
+        Mass { joint: 1, parent: 0, limit: limit.to_radians(), stiffness: 0.5, gravity: 4.9, damping: 0.83, first: true }
     }
 
     #[test]
@@ -180,7 +215,9 @@ mod tests {
         for _ in 0..600 {
             st = step(&m, origin, target, st);
         }
-        assert!(st.0.distance(target) < 0.01, "{:?}", st.0);
+        // at rest, sagging off the target by gravity over the (softened) stiffness
+        let rest = step(&m, origin, target, st);
+        assert!(rest.0.distance(st.0) < 1e-5 && target.angle_between(st.0) < 30f32.to_radians(), "{:?}", st.0);
     }
 
     #[test]
@@ -198,41 +235,35 @@ mod tests {
         }
     }
 
-    /// A chain hung off a head moved by `head(frame)` (translation): per frame the masses step in order, each turning its
-    /// parent's subtree as `swing` does; returns each frame's largest angle off the pose.
+    /// A chain hung off a head at `head(frame)` (translation), one step a frame through `solve`; returns each frame's
+    /// largest angle of a link off its pose.
     fn chain(params: &[(f32, f32, f32)], seg: f32, frames: usize, head: impl Fn(usize) -> Vec3) -> Vec<f32> {
-        let masses: Vec<Mass> = params.iter().enumerate().map(|(k, &(limit, stiffness, damping))| Mass { joint: k + 1, parent: k, limit: limit.to_radians(), stiffness, gravity: 4.9, damping }).collect();
-        // rest: hanging out sideways and down, a slight curve
-        let rest: Vec<Vec3> = (0..=params.len()).map(|k| Vec3::new(k as f32 * seg * 0.7, -(k as f32) * seg * 0.7, 0.0)).collect();
-        let mut state: Vec<Option<(Vec3, Vec3)>> = vec![None; masses.len()];
-        let mut out = Vec::new();
-        for f in 0..frames {
-            let mut p: Vec<Vec3> = rest.iter().map(|r| *r + head(f)).collect();
-            let posed = p.clone();
-            let mut worst = 0f32;
-            for (i, m) in masses.iter().enumerate() {
-                let (origin, target) = (p[m.parent], p[m.joint]);
-                let st = step(m, origin, target, state[i].unwrap_or((target, Vec3::ZERO)));
-                state[i] = Some(st);
-                let turn = Quat::from_rotation_arc((target - origin).normalize(), (st.0 - origin).normalize());
-                for q in p.iter_mut().skip(m.joint) {
-                    *q = origin + turn * (*q - origin);
-                }
-                worst = worst.max((p[m.joint] - p[m.parent]).angle_between(posed[m.joint] - posed[m.parent]));
-            }
-            out.push(worst);
-        }
-        out
+        let masses: Vec<Mass> = params.iter().enumerate().map(|(k, &(limit, stiffness, damping))| Mass { joint: k + 1, parent: k, limit: limit.to_radians(), stiffness, gravity: 4.9, damping, first: k == 0 }).collect();
+        let parents: Vec<Option<usize>> = (0..=params.len()).map(|k| k.checked_sub(1)).collect();
+        // rest: hanging out sideways and down
+        let rest: Vec<Transform> = (0..=params.len()).map(|k| Transform::from_xyz(seg * 0.7 * (k > 0) as u8 as f32, -seg * 0.7 * (k > 0) as u8 as f32, 0.0)).collect();
+        let mut state = Vec::new();
+        (0..frames)
+            .map(|f| {
+                let root = Mat4::from_translation(head(f));
+                let mut locals = rest.clone();
+                solve(&masses, &parents, root, &mut locals, &mut state, 1);
+                let world = |l: &[Transform]| l.iter().scan(root, |w, t| { *w *= t.to_matrix(); Some(w.w_axis.truncate()) }).collect::<Vec<_>>();
+                let (posed, now) = (world(&rest), world(&locals));
+                (1..now.len()).map(|j| (now[j] - now[j - 1]).angle_between(posed[j] - posed[j - 1])).fold(0f32, f32::max)
+            })
+            .collect()
     }
+
+    /// Sophie's pigtail (L_kami01..10): limit, stiffness, damping.
+    const KAMI: [(f32, f32, f32); 10] = [(5.0, 0.7, 0.83), (30.0, 0.5, 0.83), (20.0, 0.4, 0.73), (20.0, 0.3, 0.8), (20.0, 0.3, 0.83), (20.0, 0.5, 0.83), (20.0, 0.2, 0.83), (5.0, 0.7, 0.83), (0.0, 0.7, 0.83), (0.0, 0.7, 0.83)];
 
     #[test]
     fn a_still_chain_settles() {
-        // Sophie's pigtail (L_kami01..10): limit, stiffness, damping
-        let kami = [(5.0, 0.7, 0.83), (30.0, 0.5, 0.83), (20.0, 0.4, 0.73), (20.0, 0.3, 0.8), (20.0, 0.3, 0.83), (20.0, 0.5, 0.83), (20.0, 0.2, 0.83), (5.0, 0.7, 0.83), (0.0, 0.7, 0.83), (0.0, 0.7, 0.83)];
         // the head jumps 30 cm across, then holds still: the tail swings out, then comes to rest (sagging, each link from the one above)
-        let off = chain(&kami, 0.04, 600, |f| if f < 10 { Vec3::ZERO } else { Vec3::X * 0.3 });
-        assert!(off[11] > 20f32.to_radians(), "{}", off[11].to_degrees());
-        assert!((off[599] - off[400]).abs() < 1e-3 && off[599] < 30f32.to_radians(), "{} {}", off[400].to_degrees(), off[599].to_degrees());
+        let off = chain(&KAMI, 0.04, 600, |f| if f < 10 { Vec3::ZERO } else { Vec3::X * 0.3 });
+        assert!(off[11..30].iter().any(|&o| o > 20f32.to_radians()), "{:?}", &off[11..30]);
+        assert!((off[599] - off[400]).abs() < 1e-3 && off[599] < 60f32.to_radians(), "{} {}", off[400].to_degrees(), off[599].to_degrees());
     }
 
     #[test]
@@ -240,5 +271,14 @@ mod tests {
         let m = mass(0.0);
         let st = step(&m, Vec3::ZERO, Vec3::X, (Vec3::NEG_Y, Vec3::ZERO));
         assert!(st.0.distance(Vec3::X) < 1e-5);
+    }
+
+    #[test]
+    fn a_bobbing_head_does_not_whip() {
+        // B410b: an idle bob (3 cm at ~3 Hz) lagged every 4 cm link off its own origin: the pigtail whipped up to 86°
+        // off its pose, 38° in one step. Carried by the link above, it sways
+        let off = chain(&KAMI, 0.04, 600, |f| Vec3::Y * 0.03 * (f as f32 * 0.3).sin());
+        let jump = off[300..].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+        assert!(jump < 5f32.to_radians() && off[300..].iter().all(|&o| o < 60f32.to_radians()), "{} {:?}", jump.to_degrees(), off[300..].iter().cloned().fold(0f32, f32::max).to_degrees());
     }
 }
