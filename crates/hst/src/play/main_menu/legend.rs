@@ -95,10 +95,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                     v.push((Act::Kind, "Section"));
                 }
             }
-            // B422: the device's own preview plays its win / loss (`previews::buttons`; Random has no figure)
+            // B422 / B463 / B475: the device's own preview plays its win / loss (a pad's right stick up / down,
+            // `previews::buttons`) and the match's emotes (`plate_emote.rs`), one hint (Random has no figure)
             if m.seats[p] == Some(dev) && !me.random {
-                v.push((Act::Preview, "Win / Loss"));
-                // B463: and the match's emotes (`plate_emote.rs`)
                 v.push((Act::Emote, "Emote"));
             }
             // B369 / B375: △ in or out of the favorites (not Random)
@@ -527,7 +526,7 @@ mod tests {
     }
 
     /// B463: the select's keyboard caps: Q / E the sections (as Settings' tabs), Z / X the costume, 1-4 the emotes (a
-    /// pad's right stick left / right); the Mods page's kind tabs stay 1 / 3.
+    /// pad's right stick, B475: one hint for its four ways); the Mods page's kind tabs stay 1 / 3.
     #[test]
     fn select_keys() {
         let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], ..default() };
@@ -538,8 +537,10 @@ mod tests {
         assert_eq!(menu_keys(Act::Kind, &bind, true), ["Q", "E"]);
         assert_eq!(keys(Act::Costume), Some(vec!["Z".into(), "X".into()]));
         assert_eq!(keys(Act::Emote), Some(vec!["1-4".into()]));
+        // B475: one Emote hint for the right stick's four ways and the emote keys, no R / F
+        assert_eq!(g[0].items.iter().filter(|it| it.label.contains("Emote") || it.label.contains("Win")).count(), 1);
         assert_eq!(button_names(None, Act::Costume, &bind), ["Z", "X"]);
-        assert_eq!(glyphs(Style::Xbox, &item(Act::Emote, "", &[])), [Glyph::Stick(false)]);
+        assert_eq!(glyphs(Style::Xbox, &item(Act::Emote, "", &[])), [Glyph::Stick]);
         assert_eq!(menu_keys(Act::Kind, &bind, false), ["1", "3"]);
     }
 

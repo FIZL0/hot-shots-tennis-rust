@@ -1080,13 +1080,13 @@ struct Shot;
 #[derive(Component)]
 pub(super) struct Card(pub(super) usize);
 
-/// Each seated player's right stick up / down (keyboard R / F) on their own preview (B422: off R2 / L2, the
-/// roster's section jumps): a flick past half way, again once the stick has come back.
+/// Each seated pad's right stick up / down on its own preview (B422: off R2 / L2, the roster's section jumps): a flick
+/// past half way, again once the stick has come back. B475: the keyboard has none (its R / F unbound; the emote keys
+/// are its hint's only caps).
 #[allow(clippy::too_many_arguments)]
 fn buttons(
     menu: Res<Menu>,
     mut held: Local<HashMap<Entity, i8>>,
-    keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     mut cams: Query<(&mut Preview, &Card)>,
     data: Query<&character::Rig>,
@@ -1099,12 +1099,8 @@ fn buttons(
     }
     for player in 0..4 {
         let Some(dev) = menu.seats[player] else { continue };
-        // the keyboard's R / F are letters while a name picker is open (B371)
-        if dev == Dev::Keys && (0..4).any(|q| menu.naming(q)) {
-            continue;
-        }
         let flick = match dev {
-            Dev::Keys => keys.just_pressed(KeyCode::KeyR) as i8 - keys.just_pressed(KeyCode::KeyF) as i8,
+            Dev::Keys => 0,
             Dev::Pad(e) => {
                 let y = pads.get(e).map_or(0.0, |g| g.right_stick().y);
                 let now = if y > 0.5 { 1 } else if y < -0.5 { -1 } else { 0 };
