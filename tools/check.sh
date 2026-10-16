@@ -16,9 +16,13 @@ export RUST_TEST_THREADS=${RUST_TEST_THREADS:-$jobs}
 # checkout (target/, target-wasm/, ...) past HST_TARGET_CAP_GB is started over; sccache makes the rebuild cheap.
 # cargo clean waits on cargo's own build lock, so it never pulls files from under a running build.
 # ponytail: whole-dir wipe, cargo-sweep by age if the rebuilds get annoying
+# Incremental caches (about half of it, only our own crates) go first: a full wipe rebuilds all of Bevy, which
+# misses sccache in every worktree (the patched path crates in third_party/ give Bevy a per-checkout hash).
+over() { [ -d "$1" ] && [ "$(du -s --block-size=1G "$1" | cut -f1)" -gt "${HST_TARGET_CAP_GB:-80}" ]; }
 for t in target target-*; do
-  [ -d "$t" ] && [ "$(du -s --block-size=1G "$t" | cut -f1)" -gt "${HST_TARGET_CAP_GB:-80}" ] &&
-    { echo "$t over ${HST_TARGET_CAP_GB:-80} GB, cleaning it"; cargo clean -q --target-dir "$t" 9>&-; }
+  over "$t" && { echo "$t over ${HST_TARGET_CAP_GB:-80} GB, dropping incremental caches"
+    find "$t" -maxdepth 3 -type d -name incremental -prune -exec rm -rf {} +; }
+  over "$t" && { echo "$t still over, cleaning it"; cargo clean -q --target-dir "$t" 9>&-; }
 done
 # 9>&-: cargo mustn't inherit the lock, or the sccache server it starts holds it forever
 # The netplay match tests (two-to-four Apps playing thousands of ticks, minutes each) are skipped unless asked for:
