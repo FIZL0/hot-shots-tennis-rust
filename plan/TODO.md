@@ -46,6 +46,7 @@ index out of bounds: the len is 0 but the index is 0"
 - [ ] **B472** Emotes can still be triggered between points (post-point timeline); block them outside live play — crates/hst/src/play/tick_input.rs
 - [ ] **B473** Repeated emotes overlap their voice lines: a new emote from the same player should cut that player's previous emote line instead of stacking on it, and a post-point celebration/reaction voice should cut any emote line still playing — crates/hst/src/play/emote.rs (`voice`)
 - [ ] **B474** Sound settings: a toggle to mute emote voice lines (local only; the emote motion still plays) — crates/hst/src/play/main_menu.rs (sound settings), crates/hst/src/audio.rs, crates/hst/src/play/emote.rs (`voice`)
+- [ ] **B475** Character-select legend: merge the right stick's two hints (up/down "Win / Loss", left/right "Emote") into one "Emote" with a four-way stick glyph (keyboard: R F + emote keys under the same label) — crates/hst/src/play/main_menu/legend.rs (`Act::Preview`/`Act::Emote`, `Glyph::Stick`)
 
 ### Netplay and mobile (user 2026-10-09: right after the bugs/priority list, in this order)
 
