@@ -718,6 +718,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P61** Split the menus off the match (after P60's hst-base): untangle the match core's references into the front-end (pause menu embeds main_menu's options pages; netplay/background → menu, snapshot → match_stats::Serving/panel::Clock, intro → pause::label, recover/netplay → pause::OnlineNotice/CHOICES, menu_art → main_menu::FONT, touch_pad → menu::paused) so play/ minus main_menu/ can be its own crate under the menus; measure the edit cycle like P60 (journal 2026-10-16-p60-crate-split). Files: crates/hst/src/play.rs, crates/hst/src/play/menu.rs, crates/hst/src/play/main_menu/pause.rs, crates/hst/src/main.rs
 - [x] **B490** Online lobby: drop the NEAR SIDE / FAR SIDE labels in singles (user 2026-10-16): each client keeps its own player on the near side, so the labels mean nothing; show the two seats without side names (doubles' TEAM 1 / TEAM 2 stay) — crates/hst/src/play/main_menu/online/lobby.rs
 - [x] **B491** Website GitHub button (user 2026-10-16): the 'Open source on GitHub' pill reads just 'GitHub' with the GitHub mark icon before it (inline SVG, no external request) → web/index.html
+- [x] **P56** Renderer auto-pick: Chrome 152 on Linux (RX 9070 XT) got WebGL2 under 'auto'. Check whether WebGPU was offered and fell back or never offered; if usable, prefer it; otherwise say on the settings page how to enable it → web/index.html
 
 
 ### Shots
