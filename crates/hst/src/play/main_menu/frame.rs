@@ -234,7 +234,7 @@ pub(super) fn rounded(d: &mut Draw, rect: [f32; 4], r: f32, rgb: [f32; 3], alpha
     d.out.last_mut().unwrap().round = [r.min(rect[2] / 2.0).min(rect[3] / 2.0).max(0.0); 4];
 }
 
-/// A box with a rim `t` units thick in `rim` round `fill` (none: the rim only, as four bars), corners `r`.
+/// A box with a rim `t` units thick in `rim` round `fill` (none: the rim only), corners `r`.
 pub(super) fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: [f32; 3], fill: Option<[f32; 3]>) {
     match fill {
         Some(f) => {
@@ -242,24 +242,8 @@ pub(super) fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: 
             rounded(d, [x + t, y + t * PY / PX, w - 2.0 * t, h - 2.0 * t * PY / PX], r - t, f, 128.0);
         }
         None => {
-            let ty = t * PY / PX;
-            for rect in [[x + r, y, w - 2.0 * r, ty], [x + r, y + h - ty, w - 2.0 * r, ty]] {
-                d.q(Tex::Solid, [0.0; 4], rect, rim, 128.0);
-            }
-            for rect in [[x, y + r, t, h - 2.0 * r], [x + w - t, y + r, t, h - 2.0 * r]] {
-                d.q(Tex::Solid, [0.0; 4], rect, rim, 128.0);
-            }
-            // the corners: short bars round each arc
-            for (cx, cy, a0) in [(x + r, y + r, 180.0f32), (x + w - r, y + r, 270.0), (x + w - r, y + h - r, 0.0), (x + r, y + h - r, 90.0)] {
-                for s in 0..4 {
-                    let a = (a0 + 11.25 + 22.5 * s as f32).to_radians();
-                    let rr = r - t / 2.0;
-                    let len = (r * 0.42).max(t);
-                    let (px, py) = (cx + rr * a.cos(), cy + rr * a.sin() * PY / PX);
-                    d.q(Tex::Solid, [0.0; 4], [px - len / 2.0, py - ty / 2.0, len, ty], rim, 128.0);
-                    d.out.last_mut().unwrap().angle = -(a + std::f32::consts::FRAC_PI_2);
-                }
-            }
+            rounded(d, [x, y, w, h], r, rim, 128.0);
+            d.out.last_mut().unwrap().rim = t;
         }
     }
 }

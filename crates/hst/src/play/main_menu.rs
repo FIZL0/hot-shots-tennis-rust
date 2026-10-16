@@ -1638,6 +1638,8 @@ struct Quad {
     /// Its corners rounded off (in 640×448 units: top-left, top-right, bottom-right, bottom-left), a picture cut to
     /// the round box it sits in.
     round: [f32; 4],
+    /// Drawn as an outline this thick (640×448 units) in its colour round an empty middle, not filled.
+    rim: f32,
 }
 
 /// The disc's text and tables the screens show.
@@ -2055,7 +2057,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     commands.spawn((full, GlobalZIndex(10))).with_children(|p| {
         for i in 0..POOL {
-            p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
+            p.spawn((Slot(i), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, BorderColor::default(), Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
         }
         // the description bar's text over its bar (`ticker_text`)
         let clip = Node { position_type: PositionType::Absolute, overflow: Overflow::clip(), ..default() };
@@ -2133,7 +2135,7 @@ const RANK_NAMES: [&str; 17] = [
 
 impl Draw<'_> {
     fn q(&mut self, tex: Tex, src: [f32; 4], dst: [f32; 4], rgb: [f32; 3], alpha: f32) {
-        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor, angle: 0.0, round: [0.0; 4] });
+        self.out.push(Quad { tex, src, dst, rgb, alpha, tile: false, anchor: self.anchor, angle: 0.0, round: [0.0; 4], rim: 0.0 });
     }
 
     /// B221: `rect` (placed as `q` would place it) does `act` under the pointer.
@@ -2149,7 +2151,7 @@ impl Draw<'_> {
 
     /// The screen's wall, tiled over the whole window.
     fn wall(&mut self, wall: usize) {
-        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0, round: [0.0; 4] });
+        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0, round: [0.0; 4], rim: 0.0 });
     }
 
     /// The screen's wall (tiled) and title bar.
@@ -3095,7 +3097,7 @@ fn draw(
     time: Res<Time>,
     mut ticker: ResMut<Ticker>,
     mut slide: ResMut<slide::Slide>,
-    mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility, &mut UiTransform)>,
+    mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility, &mut UiTransform, &mut BorderColor)>,
     qr: Option<Res<online::QrImage>>,
     cursor: Option<Res<cursor::Cursor>>,
     icons: Res<Icons>,
@@ -3128,7 +3130,7 @@ fn draw(
     let (share, vshare) = super::widescreen::window_menu_shares(&window);
     // the quads' parent (the view) in physical pixels
     let px = window.single().map_or(Vec2::ZERO, |w| super::widescreen::view_size(w) * w.scale_factor());
-    for (Slot(i), mut img, mut node, mut vis, mut turn) in &mut q {
+    for (Slot(i), mut img, mut node, mut vis, mut turn, mut rim) in &mut q {
         let Some(quad) = quads.get(*i).filter(|q| !matches!(q.tex, Tex::Preview(_))) else {
             *vis = Visibility::Hidden;
             continue;
@@ -3260,6 +3262,12 @@ fn draw(
         let k = window.single().map_or(0.0, |win| width / 100.0 * super::widescreen::view_size(win).x / quad.dst[2].max(1e-3));
         let [tl, tr, br, bl] = quad.round.map(|r| Val::Px(r * k));
         node.border_radius = BorderRadius { top_left: tl, top_right: tr, bottom_right: br, bottom_left: bl };
+        // an outline: the node's own border (a true rounded stroke) in the quad's colour, the image clear
+        node.border = UiRect::all(Val::Px(quad.rim * k));
+        if quad.rim > 0.0 {
+            *rim = BorderColor::all(img.color);
+            img.color = Color::NONE;
+        }
         *vis = Visibility::Inherited;
     }
 }
