@@ -13,6 +13,10 @@
 //! the player there: shown on the machine whose player had moved to the other end, it put that player at the far end
 //! and the picture snapped round to the own camera when it ended. Each machine glides to its own camera's view of the
 //! new set-up, round the player at its end, the same move as a solo game's.
+//!
+//! B534: a local game whose humans are all on one team (2P doubles against two computers) is the same case: the
+//! shared camera keeps its end, as with more than one human, so after a change of ends the humans played from the far
+//! end. This machine's camera follows its first human there too, and every human's stick turns with it.
 
 use bevy::prelude::*;
 use hst_sim::camera::{Camera, Scene, View};
@@ -66,8 +70,18 @@ fn cam_of(peers: &[Option<&str>]) -> Vec<usize> {
     (0..n).map(|i| peer(i).and_then(|p| (0..n).find(|&j| peer(j) == Some(p))).unwrap_or(i)).collect()
 }
 
-fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCam>>, mut commands: Commands) {
-    let (Some(np), Some(mut g)) = (np, g) else { return };
+fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCam>>, pads: Option<Res<super::Pads>>, mut commands: Commands) {
+    let Some(mut g) = g else { return };
+    let Some(np) = np else {
+        if own.is_none()
+            && let Some(pads) = pads
+            && let Some((owner, of)) = local(&g, &pads)
+        {
+            g.cam_of = of;
+            commands.insert_resource(own_cam(&g, owner));
+        }
+        return;
+    };
     let n = g.players.len();
     let peers: Vec<_> =
         (0..n).map(|s| np.room.seats.get(s).cloned().flatten().filter(|x| x.human()).map(|x| x.peer)).collect();
@@ -81,6 +95,20 @@ fn link(np: Option<Res<Netplay>>, g: Option<ResMut<Game>>, own: Option<Res<OwnCa
     {
         commands.insert_resource(own_cam(&g, owner));
     }
+}
+
+/// B534: offline, with two or more humans all at one end, the first of them (whose end this machine's camera
+/// follows) and each player's camera (`Game::cam_of`: the humans that one's); else `None` (one human: the shared
+/// camera turns with it; humans on both teams: it keeps its end).
+fn local(g: &Game, pads: &super::Pads) -> Option<(usize, Vec<usize>)> {
+    let n = g.players.len();
+    let humans: Vec<usize> = (0..n).filter(|&i| pads.slot_of(i, n).is_some()).collect();
+    let &owner = humans.first()?;
+    let side = |i: usize| g.players[i].end < 0.0;
+    if humans.len() < 2 || humans.iter().any(|&i| side(i) != side(owner)) {
+        return None;
+    }
+    Some((owner, (0..n).map(|i| if humans.contains(&i) { owner } else { i }).collect()))
 }
 
 fn own_cam(g: &Game, owner: usize) -> OwnCam {
@@ -289,6 +317,78 @@ mod tests {
         let (prev, now) = after.expect("the serve's first tick");
         let d = |a: &hst_sim::camera::View, b: &hst_sim::camera::View| Vec3::from(a.eye).distance(Vec3::from(b.eye));
         assert!(d(&prev, &last) < 0.05 && d(&now, &last) < 0.05, "the serve's set-up cut from {last:?} to {prev:?} → {now:?}");
+    }
+
+    /// B534: a local 2P doubles game against two computers (players 0 and 2, room seats 0 and 1: one team) follows
+    /// player 0 with this machine's camera and turns both humans' sticks with it; through two changes of ends, glides
+    /// included, the picture stays behind the humans while the shared camera keeps its end. 2P against each other or
+    /// one human: no own camera (skipped without the ISO).
+    #[test]
+    fn local_humans_on_one_team_stay_near_through_changes_of_ends() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        // the players are bots (no one presses anything); who'd be human is asked of the pads below
+        crate::play::AUTOPLAY.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars: vec![6, 1, 2, 3], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_plugins((cutaway::plugin, change_ends::plugin, super::plugin));
+        app.add_systems(Startup, setup);
+        let time = |mut g: ResMut<Game>| g.match_stats.tick();
+        app.add_systems(FixedUpdate, (remember, control, simulate, time, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        assert!(!app.world().contains_resource::<super::OwnCam>(), "all bots: no own camera");
+        let pads = |connected, seats| Pads { slots: default(), connected, seats, autoplay: false };
+        let g = app.world().resource::<Game>();
+        assert_eq!(super::local(g, &pads(2, None)), Some((0, vec![0, 1, 0, 3])), "2P: players 0 and 2, one team");
+        assert_eq!(super::local(g, &pads(1, None)), None, "one human: the shared camera turns");
+        assert_eq!(super::local(g, &pads(4, None)), None, "humans on both teams");
+        assert_eq!(super::local(g, &pads(0, Some([true, false, true, false]))), None, "1P and 3P: players 0 and 1, both teams");
+        // the match's link makes the camera (the pads then go back to bots)
+        app.world_mut().insert_resource(pads(2, None));
+        bevy::ecs::system::RunSystemOnce::run_system_once(app.world_mut(), super::link).unwrap();
+        app.world_mut().insert_resource(Pads::default());
+        assert_eq!(app.world().resource::<super::OwnCam>().owner, 0, "following player 0");
+        assert_eq!(app.world().resource::<Game>().cam_of, [0, 1, 0, 3]);
+        let (mut changes, mut gliding, mut far, mut ticks) = (0, false, false, 0);
+        for _ in 0..60 * 1200 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let w = app.world();
+            let (g, own) = (w.resource::<Game>(), w.resource::<super::OwnCam>());
+            let showing = w.resource::<cutaway::Director>().showing();
+            let (_, now) = super::shown(g, Some(own));
+            let z = g.players[0].pos[2];
+            assert_eq!(super::flipped(g, 0), super::flipped(g, 2), "the partners' sticks turn together");
+            match g.phase {
+                Phase::ChangeEnds(n) => {
+                    gliding = true;
+                    if n < hst_sim::flow::CHANGE_ENDS {
+                        assert!(now.eye[2] * z > 0.0 && now.eye[2].abs() > 11.885, "change {changes} tick {n}: eye {:?} not behind player 0 at {z}", now.eye);
+                    }
+                }
+                _ if gliding => {
+                    gliding = false;
+                    changes += 1;
+                    if changes == 2 {
+                        break;
+                    }
+                }
+                _ if own.plain && !showing && g.instant.ticks > 0 => {
+                    ticks += 1;
+                    assert!(now.eye[2] * z > 0.0, "after {changes} changes: eye {:?}, player 0 at {z}", now.eye);
+                    // the humans' sticks turn with the picture (the eye at +z: turned)
+                    assert_eq!(super::flipped(g, 0), now.eye[2] > 0.0, "player 0's stick, eye {:?}", now.eye);
+                    far |= g.cam.view.eye[2] * z < 0.0;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(changes, 2, "two changes of ends");
+        assert!(ticks > 0 && far, "the shared camera never had the humans at the far end ({ticks} plain ticks)");
     }
 
     /// B376: deciding whether the picture shows this machine's camera waits for every system that moves the shared
