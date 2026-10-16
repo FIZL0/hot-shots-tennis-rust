@@ -177,13 +177,43 @@ pub fn import_disc_to_memory(iso: File, progress: js_sys::Function, chunk: js_sy
     Ok(js_sys::Array::of2(&format!("{hash:016x}").into(), &js_sys::Uint8Array::from(&c.head[..])))
 }
 
-/// Page: start the game from the pack's bytes, with the URL's flags.
+/// The pack as the page reads it in ([`pack_begin`], [`pack_part`]): the buffer and how much of it is filled.
+type Filling = (Arc<[std::mem::MaybeUninit<u8>]>, usize);
+
+thread_local! {
+    static FILLING: std::cell::RefCell<Option<Filling>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Page: a pack of `len` bytes follows in parts ([`pack_part`]), then [`run`]. B468: the page reads the pack from
+/// OPFS a part at a time straight into this one buffer, so it is never held whole in JS as well (≈ 171 MB more until
+/// the browser's garbage collector got to it, on a phone that's what a tab kill needs).
 #[wasm_bindgen]
-pub fn run(pack: js_sys::Uint8Array) {
-    // straight into one shared buffer: the pack (≈ 171 MB) is never held twice in wasm memory
-    let mut bytes = Arc::<[u8]>::new_uninit_slice(pack.length() as usize);
-    pack.copy_to_uninit(Arc::get_mut(&mut bytes).unwrap());
-    // SAFETY: copy_to_uninit filled every byte
+pub fn pack_begin(len: usize) {
+    FILLING.with(|f| *f.borrow_mut() = Some((Arc::new_uninit_slice(len), 0)));
+}
+
+/// Page: the pack's next bytes.
+#[wasm_bindgen]
+pub fn pack_part(part: js_sys::Uint8Array) -> Result<(), JsValue> {
+    FILLING.with(|f| {
+        let mut f = f.borrow_mut();
+        let (buf, at) = f.as_mut().ok_or("pack_part before pack_begin")?;
+        let end = *at + part.length() as usize;
+        let dst = Arc::get_mut(buf).unwrap().get_mut(*at..end).ok_or("pack_part past the pack's length")?;
+        part.copy_to_uninit(dst);
+        *at = end;
+        Ok(())
+    })
+}
+
+/// Page: start the game from the pack read in ([`pack_begin`]), with the URL's flags.
+#[wasm_bindgen]
+pub fn run() -> Result<(), JsValue> {
+    let (bytes, at) = FILLING.with(|f| f.borrow_mut().take()).ok_or("run before pack_begin")?;
+    if at != bytes.len() {
+        return Err(format!("pack read {at} of {} bytes", bytes.len()).into());
+    }
+    // SAFETY: the parts filled every byte (checked just above)
     hst_data::iso::mount(PACK, unsafe { bytes.assume_init() });
     let mut argv = vec![PACK.to_string()];
     if let Ok(q) = web_sys::window().unwrap().location().search() {
@@ -202,6 +232,7 @@ pub fn run(pack: js_sys::Uint8Array) {
         }
     }
     crate::start(argv);
+    Ok(())
 }
 
 /// The page's boot status (`index.html`) goes once the game has drawn its first frames.
@@ -210,6 +241,65 @@ pub fn shown(frames: Res<bevy::diagnostic::FrameCount>) {
         if let Ok(f) = js_sys::Reflect::get(&js_sys::global(), &"hstShown".into()).and_then(|f| f.dyn_into::<js_sys::Function>()) {
             let _ = f.call0(&JsValue::NULL);
         }
+    }
+}
+
+/// B468: the system allocator, counting the bytes live and the most live at once since [`memory_log`] last read it.
+struct Counted;
+
+static LIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PEAK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[global_allocator]
+static ALLOC: Counted = Counted;
+
+unsafe impl std::alloc::GlobalAlloc for Counted {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        let p = unsafe { std::alloc::System.alloc(l) };
+        if !p.is_null() {
+            grew(l.size());
+        }
+        p
+    }
+    unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
+        let p = unsafe { std::alloc::System.alloc_zeroed(l) };
+        if !p.is_null() {
+            grew(l.size());
+        }
+        p
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(p, l) };
+        LIVE.fetch_sub(l.size(), std::sync::atomic::Ordering::Relaxed);
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, size: usize) -> *mut u8 {
+        let q = unsafe { std::alloc::System.realloc(p, l, size) };
+        if !q.is_null() {
+            LIVE.fetch_sub(l.size(), std::sync::atomic::Ordering::Relaxed);
+            grew(size);
+        }
+        q
+    }
+}
+
+fn grew(n: usize) {
+    let live = LIVE.fetch_add(n, std::sync::atomic::Ordering::Relaxed) + n;
+    PEAK.fetch_max(live, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// B468: the wasm heap's size in the console each time it has grown another 32 MB, and once a second while the bytes
+/// live (or their peak since the last line) moved 8 MB: `hst: wasm memory N MB (live L MB, peak P MB)`. The heap never
+/// shrinks, so its size is the peak so far: what a phone's tab kill (WebKit drops a tab over its memory limit and
+/// reloads the page) leaves to read in a remote Web Inspector.
+pub fn memory_log(time: Res<bevy::time::Time<bevy::time::Real>>, mut logged: bevy::prelude::Local<(usize, usize, f32)>) {
+    let heap = core::arch::wasm32::memory_size(0) * 65536;
+    let now = time.elapsed_secs();
+    let (live, peak) = (LIVE.load(std::sync::atomic::Ordering::Relaxed), PEAK.load(std::sync::atomic::Ordering::Relaxed));
+    let moved = live.abs_diff(logged.1).max(peak.saturating_sub(logged.1)) >= 8 << 20 && now >= logged.2 + 1.0;
+    if heap >= logged.0 + (32 << 20) || moved {
+        *logged = (heap.max(logged.0), live, now);
+        PEAK.store(live, std::sync::atomic::Ordering::Relaxed);
+        bevy::log::info!("hst: wasm memory {} MB (live {} MB, peak {} MB)", heap >> 20, live >> 20, peak >> 20);
     }
 }
 

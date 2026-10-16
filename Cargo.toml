@@ -35,7 +35,8 @@ wgpu = { path = "third_party/wgpu" }
 # (render_resource/pipeline_cache.rs `compile_budget`, set by hst's mode.rs)
 bevy_render = { path = "third_party/bevy_render" }
 # P37: the mesh-preprocess bind groups kept while their buffers stay the same, instead of rebuilt for every view and
-# phase each frame (src/render/gpu_preprocess.rs)
+# phase each frame (src/render/gpu_preprocess.rs); B468: CPU clustering reuses each view's cluster buffers instead of
+# making new ones every frame, which WebGPU never frees until GC (src/cluster/mod.rs)
 bevy_pbr = { path = "third_party/bevy_pbr" }
 # M91: iOS 27 requires the UIScene lifecycle; winit 0.30 puts its windows in the app's scene (src/platform_impl/ios/window.rs)
 # M101: Android pad key/motion events go to a queue (platform::android::gamepad) for `hst/src/android_pad.rs`, not into Touch/KeyboardInput

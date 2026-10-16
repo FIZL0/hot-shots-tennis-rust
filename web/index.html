@@ -603,7 +603,7 @@ window.hstWebGL2 = why => {
 };
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
 say('Loading the game…');
-const { default: init, run, paste, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js');
+const { default: init, pack_begin, pack_part, run, paste, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js');
 
 // the game's wasm, with how much of it has arrived
 async function wasm() {
@@ -658,14 +658,16 @@ const writeFile = async (path, data) => {
 };
 
 async function start() {
-  const pack = await dir.getFileHandle('disc.pack');
+  const pack = await (await dir.getFileHandle('disc.pack')).getFile();
   boot.hidden = false;
   say('Reading the disc pack…');
-  const bytes = new Uint8Array(await (await pack.getFile()).arrayBuffer());
-  // B457: in memory, the Blob let go once read (any reload goes back to the site to pick the ISO anyway)
-  if (dir.memory) await dir.removeEntry('disc.pack');
   // (a phone's first run picks its graphics preset in the game: main_menu.rs `first`, graphics.rs PHONE)
   await init({ module_or_path: wasm() });
+  // B468: 8 MB at a time straight into the game's memory (web.rs pack_begin), never the whole pack in JS as well
+  pack_begin(pack.size);
+  for (let at = 0; at < pack.size; at += 8 << 20) pack_part(new Uint8Array(await pack.slice(at, at + (8 << 20)).arrayBuffer()));
+  // B457: in memory, the Blob let go once read (any reload goes back to the site to pick the ISO anyway)
+  if (dir.memory) await dir.removeEntry('disc.pack');
   say('Starting…');
   // the select's baked cards (web.rs add_card): read now, written back as the game bakes them
   const cards = await dir.getDirectoryHandle('previews', { create: true });
@@ -788,7 +790,7 @@ async function start() {
   // a LAN answer from a tab opened by scanning a guest's code
   new BroadcastChannel('hst-rtc').onmessage = e => paste(String(e.data));
   try {
-    run(bytes);
+    run();
   } catch (e) {
     // winit hands the event loop to the browser by throwing
     if (!String(e).includes('Using exceptions for control flow')) throw e;
