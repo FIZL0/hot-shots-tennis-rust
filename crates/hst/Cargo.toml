@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 # Android (`tools/apk.sh`): the game as a NativeActivity .so; only built when asked for, never by `cargo test`
 [[example]]
 name = "hst"
-path = "src/android_so.rs"
+path = "src/main.rs"
 crate-type = ["cdylib"]
 required-features = ["android"]
 test = false

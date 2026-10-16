@@ -290,6 +290,7 @@ fn dev_env() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "android", allow(dead_code))] // the bin's entry; the Android .so (the `hst` example) starts at `android_main`
 fn main() {
     dev_env();
     handshake::set_build(BUILD_ID);
@@ -1316,6 +1317,7 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>, mut dts:
         stall::diag!("{}", frame_spread(&mut dts));
         dts.clear();
         // the process's CPU time (all threads) per frame: steadier than fps on a busy machine
+        #[cfg(not(target_os = "ios"))]
         let cpu = std::fs::read_to_string("/proc/self/stat").ok().and_then(|s| {
             let f: Vec<u64> = s.rsplit_once(')')?.1.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
             Some(f.iter().sum::<u64>() as f32 * 10.0)

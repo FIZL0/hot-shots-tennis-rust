@@ -3029,21 +3029,21 @@ async fn find_slots(dht: &Dht) -> (Vec<Listing>, Option<String>) {
     // B527: the browser reads every slot through the pkarr relay (SLOTS requests of its ~10 per network): a Find, the
     // Online screen's list and Quick play within FIND_CACHE share one read
     #[cfg(target_arch = "wasm32")]
-    {
+    let all = {
         thread_local!(static LAST: std::cell::RefCell<Option<(n0_future::time::Instant, Vec<Result<Option<(Listing, i64)>, String>>)>> = const { std::cell::RefCell::new(None) });
         const FIND_CACHE: Duration = Duration::from_secs(15);
-        let all = match LAST.with_borrow(|l| l.clone().filter(|(t, all)| t.elapsed() < FIND_CACHE && all.iter().all(Result::is_ok))) {
+        match LAST.with_borrow(|l| l.clone().filter(|(t, all)| t.elapsed() < FIND_CACHE && all.iter().all(Result::is_ok))) {
             Some((_, all)) => all,
             None => {
                 let all = read_slots(dht).await;
                 LAST.set(Some((n0_future::time::Instant::now(), all.clone())));
                 all
             }
-        };
-        return slots_list(all);
-    }
+        }
+    };
     #[cfg(not(target_arch = "wasm32"))]
-    slots_list(read_slots(dht).await)
+    let all = read_slots(dht).await;
+    slots_list(all)
 }
 
 /// The open lobbies in `all` (the board slots' answers) and why some couldn't be read.

@@ -204,6 +204,8 @@ fn aspect_about() -> &'static str {
 fn vibration_about() -> &'static str {
     #[cfg(target_arch = "wasm32")]
     let can = crate::web::vibration();
+    #[cfg(target_arch = "wasm32")]
+    let can = can.as_str();
     #[cfg(not(target_arch = "wasm32"))]
     let can = if cfg!(any(target_os = "ios", target_os = "android")) { "haptic" } else { "vibrate" };
     match can {

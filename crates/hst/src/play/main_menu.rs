@@ -629,6 +629,8 @@ enum Effect {
     Sound(u8),
     SaveSettings,
     Launch,
+    /// The game restarted itself after a self-update (no browser equivalent).
+    #[cfg(not(target_arch = "wasm32"))]
     Quit,
     ResetControls,
     Online(online::Fx),
@@ -3088,7 +3090,7 @@ fn step(
     art: Option<Res<Art>>,
     sound: Option<Res<Sound>>,
     mut repeat: Local<std::collections::HashMap<(Option<Entity>, usize), Repeat>>,
-    mut exit: MessageWriter<AppExit>,
+    #[cfg(not(target_arch = "wasm32"))] mut exit: MessageWriter<AppExit>,
     mut gfx: ResMut<Graphics>,
     (net, mut clipboard, mut pending): (Option<Res<crate::net::Net>>, ResMut<bevy::clipboard::Clipboard>, Option<ResMut<pointer::Pending>>),
     // Preview Voice: each umpire's voice bank once read, the call playing, and (B487) one waiting for the browser
@@ -3237,6 +3239,7 @@ fn step(
                     #[cfg(target_arch = "wasm32")]
                     crate::web::renderer(RENDERERS[menu.settings.5 as usize].0);
                 }
+                #[cfg(not(target_arch = "wasm32"))]
                 Effect::Quit => {
                     exit.write(AppExit::Success);
                 }

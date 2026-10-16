@@ -251,10 +251,12 @@ fn cache_name(iso: &str) -> String {
 }
 
 /// The cache folder (natively beside settings.txt; in the browser the OPFS names' prefix, B120).
+#[cfg(target_arch = "wasm32")]
+fn cache_dir(_iso: &str, name: &str) -> PathBuf {
+    PathBuf::from(name)
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn cache_dir(iso: &str, name: &str) -> PathBuf {
-    #[cfg(target_arch = "wasm32")]
-    return PathBuf::from(name);
-    #[cfg(not(target_arch = "wasm32"))]
     super::Settings::path(iso).with_file_name("cache").join("previews").join(name)
 }
 

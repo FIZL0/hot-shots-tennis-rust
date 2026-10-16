@@ -24,10 +24,11 @@ pub fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Optio
 
 /// [`spawn`] for a job done in steps: `step` is called until it gives the result. In the browser each step is a
 /// piece of a frame's budget, so it should be short (a few ms on desktop); on native they all run in one go.
-pub fn spawn_steps<T: Send + 'static>(mut step: impl FnMut() -> Option<T> + Send + 'static) -> Option<Job<T>> {
+pub fn spawn_steps<T: Send + 'static>(step: impl FnMut() -> Option<T> + Send + 'static) -> Option<Job<T>> {
     let pool = bevy::tasks::AsyncComputeTaskPool::try_get()?;
     #[cfg(not(target_arch = "wasm32"))]
     return Some(Job(pool.spawn(async move {
+        let mut step = step;
         loop {
             if let Some(v) = step() {
                 break v;

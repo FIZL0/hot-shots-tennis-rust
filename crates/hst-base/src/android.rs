@@ -96,7 +96,8 @@ extern "C" fn on_signal(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut 
         if let Some(f) = LOG.get() {
             libc::write(f.as_raw_fd(), msg.as_ptr().cast(), msg.len());
         }
-        let old = &*(&raw const OLD[sig as usize]);
+        // a copy (no reference to the `static mut`): `sigaction` filled this slot before our handler went in
+        let old = OLD[sig as usize];
         if old.sa_flags & libc::SA_SIGINFO != 0 && old.sa_sigaction > libc::SIG_IGN {
             let h: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) = std::mem::transmute(old.sa_sigaction);
             h(sig, info, ctx);
