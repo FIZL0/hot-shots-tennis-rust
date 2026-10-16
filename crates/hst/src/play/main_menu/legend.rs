@@ -240,6 +240,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             }
             v.extend(m.add.kind_switch().into_iter().chain([(Act::Back, "Back")]));
         }
+        Screen::Extras => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Open Ko-fi"), (Act::Back, "Back")]),
         _ => {}
     }
     // B320: chat works in an online room's lobby and character select (`chat.rs`, unless Settings turned it off)
@@ -412,7 +413,7 @@ mod tests {
             m
         };
         let mut starts: Vec<(Menu, Dev)> = vec![(Menu::default(), Dev::Keys)];
-        for s in [Screen::Display, Screen::Graphics, Screen::Advanced, Screen::Sound, Screen::ModSettings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods] {
+        for s in [Screen::Display, Screen::Graphics, Screen::Advanced, Screen::Sound, Screen::ModSettings, Screen::Controls, Screen::Mode, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Online, Screen::Mods, Screen::Extras] {
             starts.push((base(s), Dev::Keys));
         }
         let mut m = base(Screen::Main);

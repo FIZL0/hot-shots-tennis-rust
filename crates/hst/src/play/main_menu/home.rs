@@ -17,6 +17,8 @@ pub(super) enum Row {
     Online,
     Mods,
     Settings,
+    /// M97: Donate (`extras.rs`).
+    Extras,
     /// B317: a newer build is out (`update.rs`): Refresh (browser) or Download (desktop).
     Update,
     Quit,
@@ -31,7 +33,7 @@ impl Menu {
         if self.rematch {
             v.push(Row::Rematch);
         }
-        v.extend([Row::Local, Row::Online, Row::Mods, Row::Settings]);
+        v.extend([Row::Local, Row::Online, Row::Mods, Row::Settings, Row::Extras]);
         if crate::update::latest().is_some() {
             v.push(Row::Update);
         }
@@ -70,24 +72,24 @@ impl Menu {
 
 /// The panels' sizes (640 units): the list, the gaps, the preview panel's widest, the store column; the content's
 /// top and foot (under the title tab, over the legend strip).
-const LIST_W: f32 = 200.0;
+pub(super) const LIST_W: f32 = 200.0;
 const GAP: f32 = 16.0;
 const PANEL_MAX: f32 = 540.0;
 const STORE_W: f32 = 170.0;
-const TOP: f32 = 50.0;
-const FOOT: f32 = 426.0;
+pub(super) const TOP: f32 = 50.0;
+pub(super) const FOOT: f32 = 426.0;
 /// Room left of the list for the hand, and right of the last panel.
 const LEFT: f32 = 64.0;
 const RIGHT: f32 = 16.0;
 /// The list's pills.
-const PILL_H: f32 = 38.0;
-const PITCH: f32 = 46.0;
+pub(super) const PILL_H: f32 = 38.0;
+pub(super) const PITCH: f32 = 46.0;
 const CARD_H: f32 = 62.0;
 /// B317's new-version card.
 const UPDATE_H: f32 = 48.0;
 /// The preview's picture height and the facts' tiles.
-const PIC_H: f32 = 170.0;
-const FACT_H: f32 = 44.0;
+pub(super) const PIC_H: f32 = 170.0;
+pub(super) const FACT_H: f32 = 44.0;
 
 /// Where the panels go on a view `extra` wider than 640 each side: the list's x, the panel's x and width, and the
 /// store column's x if it fits.
@@ -103,10 +105,10 @@ pub(super) fn columns(extra: f32) -> (f32, f32, f32, Option<f32>) {
 }
 
 /// The tints: the chosen pill, the others, a picture's backdrop by row.
-const ON: [f32; 3] = [128.0, 108.0, 38.0];
-const OFF: [f32; 3] = [56.0, 56.0, 67.0];
-const PAPER: [f32; 3] = [128.0, 128.0, 128.0];
-const MUTED: [f32; 3] = [45.0, 40.0, 52.0];
+pub(super) const ON: [f32; 3] = [128.0, 108.0, 38.0];
+pub(super) const OFF: [f32; 3] = [56.0, 56.0, 67.0];
+pub(super) const PAPER: [f32; 3] = [128.0, 128.0, 128.0];
+pub(super) const MUTED: [f32; 3] = [45.0, 40.0, 52.0];
 
 fn backdrop(r: Row) -> [f32; 3] {
     match r {
@@ -115,6 +117,7 @@ fn backdrop(r: Row) -> [f32; 3] {
         Row::Online => [92.0, 108.0, 122.0],
         Row::Mods => [114.0, 104.0, 122.0],
         Row::Settings => [118.0, 104.0, 98.0],
+        Row::Extras => [118.0, 104.0, 70.0],
         Row::Update => [118.0, 104.0, 70.0],
         Row::Quit => [100.0; 3],
     }
@@ -184,7 +187,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
                 if r == Row::Mods && mods_screen::reload_due(m) {
                     d.outlined(|d| d.text("Reload", x + LIST_W - 84.0, y + 10.0, 18.0, GOLD));
                 }
-                y += PITCH;
+                // M97: with both cards (Rematch, Update) the five pills close up so the Update card clears Quit
+                y += if m.rematch && rows.contains(&Row::Update) { PITCH - 4.0 } else { PITCH };
                 rect
             }
         };
@@ -208,6 +212,7 @@ fn name(r: Row) -> &'static str {
         Row::Online => "Online",
         Row::Mods => "Mods",
         Row::Settings => "Settings",
+        Row::Extras => "Extras",
         Row::Update => crate::update::button(),
         Row::Quit if cfg!(target_arch = "wasm32") => "Back to launcher",
         Row::Quit => "Quit",
@@ -226,7 +231,7 @@ pub(super) fn fit_text(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f3
 }
 
 /// `s` word-wrapped to `w` at `size` from (x, y), at most `lines` lines; the y under it.
-fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, lines: usize, rgb: [f32; 3]) -> f32 {
+pub(super) fn para(d: &mut Draw, s: &str, x: f32, y: f32, w: f32, size: f32, lines: usize, rgb: [f32; 3]) -> f32 {
     let mut out: Vec<String> = Vec::new();
     for word in s.split_whitespace() {
         match out.last_mut() {
@@ -263,6 +268,7 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Online => "Play over the internet or on this network: host a lobby, find one, or join by code.".into(),
         Row::Mods => "Get characters, courts and umpires from the mod store, and manage the ones you have.".into(),
         Row::Settings => text.msg(190).to_string(),
+        Row::Extras => "Donate: what building OpenTennis has taken so far, and a link to support my work on Ko-fi.".into(),
         Row::Update if cfg!(target_arch = "wasm32") => "A new version is out. Refresh loads this page again with it; your settings and mods stay.".into(),
         Row::Update if crate::update::installs() => "A new version is out. Update downloads it, checks its signature and restarts the game into it; your settings and mods stay.".into(),
         Row::Update => "A new version is out. Download opens its release page: replace this game with the new build and keep your settings and mods folders next to it.".into(),
@@ -300,6 +306,10 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Update if crate::update::installs() => vec![("Update", "Download, check, restart".into()), ("Keeps", "Settings, mods, ISO".into())],
         Row::Update => vec![("Download", "GitHub release page".into()), ("Builds", "Linux, Windows".into())],
         Row::Settings => vec![("Pages", options::tabs_shown().len().to_string()), ("Texture replacements", on(m.settings.0[0])), ("Menu music", on(m.settings.0[1]))],
+        Row::Extras => match super::extras::stats() {
+            Some(s) => vec![("Prompts", super::extras::short(s.prompts)), ("Tokens", super::extras::short(s.tokens)), ("Commits", super::extras::short(s.commits))],
+            None => vec![("Donate", "ko-fi.com/fizlo".into())],
+        },
         Row::Quit => vec![],
     };
     let n = facts.len().max(1) as f32;
@@ -393,6 +403,10 @@ fn picture(d: &mut Draw, m: &Menu, r: Row, pads: usize, [x, y, w, h]: [f32; 4]) 
                 }
                 d.outlined(|d| d.label(&says, x0 + bw / 2.0, y + 126.0, 12.0, bw, WHITE));
             }
+        }
+        Row::Extras => {
+            d.outlined(|d| d.centred("Ko-fi", x + w / 2.0, y + 40.0, 48.0, WHITE));
+            d.centred("ko-fi.com/fizlo", x + w / 2.0, y + 96.0, 20.0, WHITE);
         }
         Row::Quit => {}
     }

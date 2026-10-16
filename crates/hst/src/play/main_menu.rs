@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327), graphics-list / graphics-fps = Graphics with Preset's / Frame Limit's dropdown open (B498)) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), rematch-update = both cards (M97), main-extras / extras = main on Extras / the Extras screen (M97), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327), graphics-list / graphics-fps = Graphics with Preset's / Frame Limit's dropdown open (B498)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -50,6 +50,7 @@ pub(crate) mod flame;
 pub(crate) mod legend;
 mod child;
 mod confirm;
+mod extras;
 mod frame;
 mod home;
 mod look;
@@ -429,6 +430,8 @@ enum Screen {
     Code,
     /// M16: add and remove mods (the browser build's; `mods_screen.rs`).
     Mods,
+    /// M97: Extras (`extras.rs`): Donate.
+    Extras,
     /// A match is running (the window is hidden).
     Playing,
 }
@@ -1115,6 +1118,7 @@ impl Menu {
                         }
                         Row::Settings => self.go(Screen::Display, &mut out),
                         Row::Mods => self.mods_open(&mut out),
+                        Row::Extras => self.go(Screen::Extras, &mut out),
                         Row::Update => crate::update::act(),
                         #[cfg(target_arch = "wasm32")]
                         Row::Quit => crate::web::launcher(),
@@ -1458,6 +1462,7 @@ impl Menu {
                 self.add.pad = matches!(dev, Dev::Pad(_));
                 self.mods_step(k, &mut out)
             }
+            Screen::Extras => self.extras_step(k, &mut out),
             _ => {}
         }
         out
@@ -1998,13 +2003,14 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "lobby" | "lobby-ios" | "lobby-bot" | "lobby-singles" | "lobby-courts" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" | "relay-url" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" | "signinmods" | "phonemods" | "phonemods-ask" => Screen::Mods,
+        "extras" => Screen::Extras,
         _ => Screen::Main,
     };
     if fresh && menu.screen == Screen::Main {
         online::linked(&mut menu);
     }
     // B297: the main screen with a Rematch card (a singles match against the computer played)
-    if fresh && screen == "rematch" {
+    if fresh && (screen == "rematch" || screen == "rematch-update") {
         menu.rematch = true;
         menu.seats[0] = Some(Dev::Keys);
         menu.players[1].cursor = 9;
@@ -2016,7 +2022,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     if fresh && screen == "main-mods" {
         menu.sel = menu.main_at(home::Row::Mods);
     }
-    if fresh && screen == "main-update" {
+    // M97: Extras highlighted
+    if fresh && screen == "main-extras" {
+        menu.sel = menu.main_at(home::Row::Extras);
+    }
+    if fresh && (screen == "main-update" || screen == "rematch-update") {
         menu.sel = menu.main_at(home::Row::Update);
     }
     if fresh && screen == "reloadmods" {
@@ -2174,7 +2184,7 @@ struct Draw<'a> {
 
 const WHITE: [f32; 3] = [128.0; 3];
 /// B141: our colours. Each screen's title and the colour of its bar (the wall's, as the disc's bars had it).
-const TITLES: [(&str, [f32; 3]); 10] = [
+const TITLES: [(&str, [f32; 3]); 11] = [
     ("Main Menu", [102.0, 85.0, 25.0]),
     ("Settings", [110.0, 65.0, 75.0]),
     ("Game Selection", [75.0, 52.0, 85.0]),
@@ -2185,6 +2195,7 @@ const TITLES: [(&str, [f32; 3]); 10] = [
     ("Select Court", [55.0, 80.0, 42.0]),
     ("Online", [32.0, 67.0, 98.0]),
     ("Select Umpire", [55.0, 80.0, 42.0]),
+    ("Extras", [102.0, 85.0, 25.0]),
 ];
 /// Rims and outlines.
 const INK: [f32; 3] = [15.0; 3];
@@ -2549,6 +2560,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, pads, hand_x),
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
         Screen::Mods => mods_screen::layout(&mut d, m, hand_x),
+        Screen::Extras => extras::layout(&mut d, m, hand_x),
     }
     online::draw_ask_over(&mut d, m);
     // B221: the screens with no Back row show the title tab's Back (B449: the confirm screen has its own)
@@ -3400,7 +3412,7 @@ impl Screen {
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
-            Screen::Mods => Some(0),
+            Screen::Mods | Screen::Extras => Some(0),
             Screen::Playing => None,
         }
     }
