@@ -89,13 +89,22 @@ fn input(
     for (e, mut g, name) in pads.iter_mut().filter(|_| !covered) {
         let touch = name.is_some_and(|n| emote::is_touch(n));
         // B463: on the select only the stick's left / right (up / down are the preview's win / loss), no touch L1 / R1
-        let d = if select { emote::flick(g.right_stick()).filter(|d| *d >= 2) } else { emote::flick(g.right_stick()).or(emote::touch(&g, name)) };
+        let d = if select { emote::flick(g.right_stick()).filter(|d| *d >= 2) } else { emote::bound(&g, &bind).or(emote::flick(g.right_stick())).or(emote::touch(&g, name)) };
         let was = plates.held.insert(e, d).flatten();
         if touch && !select {
             // the touch pad's L1 / R1 are the emotes here, not the costume step (`step` reads them after this)
             let b = g.digital_mut();
             b.clear_just_pressed(GamepadButton::LeftTrigger);
             b.clear_just_pressed(GamepadButton::RightTrigger);
+        }
+        if !select {
+            // buttons bound to emotes are emotes here, not what `step` would do with them
+            let b = g.digital_mut();
+            for i in 9..13 /* controls.txt rows emote_up..emote_right */ {
+                for x in bind.pads_of(i) {
+                    b.clear_just_pressed(x);
+                }
+            }
         }
         if let Some(d) = d.filter(|d| Some(*d) != was) {
             flicks.push((Dev::Pad(e), d));

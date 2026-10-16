@@ -1757,7 +1757,7 @@ pub fn read_input(
             .find(|(a, _)| bind.pad_just_pressed(g, *a))
             .map(|(_, k)| k));
         s.serve |= bind.pad_just_pressed(g, A::Replay);
-        s.emote = s.emote.or(emote::flick(g.right_stick())).or(emote::touch(g, name));
+        s.emote = s.emote.or(emote::bound(g, &bind)).or(emote::flick(g.right_stick())).or(emote::touch(g, name));
     }
     pads.connected = held.connected();
     for (slot, n) in pads.slots.iter_mut().zip(now) {

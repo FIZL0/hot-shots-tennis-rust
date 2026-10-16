@@ -39,6 +39,11 @@ pub fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
         .map(|(_, d)| d)
 }
 
+/// A pad button bound to an emote in `controls.txt` (none by default), held: its direction.
+pub fn bound(g: &Gamepad, bind: &super::controls::Bindings) -> Option<u8> {
+    KEYS.iter().position(|a| bind.pad_pressed(g, *a)).map(|d| d as u8)
+}
+
 /// The touch pad's id (web/touch.js `pad.id`), as gilrs names it.
 pub fn is_touch(name: &str) -> bool {
     name.starts_with("Touch controls")
@@ -207,6 +212,23 @@ const EMOTE_SLOT: usize = 2;
 mod tests {
     use super::super::tick_input::{IDLE, TickPads, decode};
     use super::*;
+
+    /// Pad buttons rebound to emotes (bumpers, triggers) play them; unbound, a shoulder never does.
+    #[test]
+    fn rebound_pad_buttons_emote() {
+        let (bind, errors) = super::super::controls::Bindings::parse("emote_left = PadLeftTrigger\nemote_up = PadRightTrigger2\n");
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut g = Gamepad::default();
+        assert_eq!(bound(&g, &bind), None);
+        g.digital_mut().press(GamepadButton::LeftTrigger);
+        assert_eq!(bound(&g, &bind), Some(2));
+        let mut g = Gamepad::default();
+        g.digital_mut().press(GamepadButton::RightTrigger2);
+        assert_eq!(bound(&g, &bind), Some(0));
+        let mut g = Gamepad::default();
+        g.digital_mut().press(GamepadButton::LeftTrigger);
+        assert_eq!(bound(&g, &Default::default()), None);
+    }
 
     /// B300 / B500: repeated emotes of one direction go through every take of their program in turn, and leave the
     /// reactions' key memory alone.
