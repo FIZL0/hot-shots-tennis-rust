@@ -47,6 +47,8 @@ if t.get('tool_name') == 'Bash' and SWEEP.search(cmd):
         sys.exit(print('Main checkout is shared with other sessions: stage and commit only your own paths '
                        '(git add <paths>; git commit -m ... -- <paths>), never add -A/./-u or commit -a. '
                        'Bigger work: git worktree add ../opentennis-<slug>.', file=sys.stderr) or 2)
+# ponytail: only a runner started before 2026-10-16 16:00 writes MARK (now it tests merges in ../opentennis-slots/smerge
+# and main never holds an untested one); delete this block once no such runner is up
 # the runner is testing a merge it made in main (tools/parallel.py MARK): committing or pushing on top of it sends
 # out an untested merge, and a failed or stopped test then rewinds main under the commit (2026-10-16)
 MARK = os.path.join(ROOT, '.git/runner-merge')
