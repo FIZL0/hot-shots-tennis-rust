@@ -8,9 +8,54 @@
 
 use crate::ball::V3;
 use crate::libm::cosf;
+use crate::lines::{BASELINE, BOX_MIDDLE, DEG, LENGTH, sideline};
 use crate::ps2::{F, f32s, fs};
+use crate::replay::Pad;
 use crate::vu0;
 use crate::world::{self, M4};
+
+/// Shot classes: the trajectory tables' and the shot records' first index (`Launch`, `Margins`, `params`).
+pub mod class {
+    pub const SERVE: u8 = 0;
+    pub const STROKE: u8 = 1;
+    pub const VOLLEY: u8 = 2;
+    pub const SMASH: u8 = 3;
+}
+
+/// Shot kinds. The buttons give topspin (✕), slice (○) and lob (△); at contact the stick turns a topspin flat and
+/// a slice into a drop shot (`stick_kind`). A serve's kinds are its own (`UNDERHAND`), and a smash's `LOB` is the
+/// △ smash.
+pub mod kind {
+    pub const TOPSPIN: i32 = 0;
+    pub const SLICE: i32 = 1;
+    pub const FLAT: i32 = 2;
+    pub const LOB: i32 = 3;
+    pub const DROP: i32 = 4;
+    /// The underhand serve (the serve's kind 3).
+    pub const UNDERHAND: i32 = 3;
+}
+
+/// The contact a swing locked onto (`Hitter::branch`): its own numbering, not the shot class.
+pub mod branch {
+    pub const SERVE: u8 = 0;
+    pub const GROUND: u8 = 1;
+    pub const VOLLEY: u8 = 2;
+    pub const DIVE: u8 = 3;
+    pub const SMASH: u8 = 4;
+
+    /// A rally contact: a ground stroke, volley or dive.
+    pub fn rally(b: u8) -> bool {
+        (GROUND..=DIVE).contains(&b)
+    }
+}
+
+/// cos 60°: a stick within 60° of straight ahead turns a topspin flat.
+const FLAT_CONE: f32 = 0.5;
+/// The hitter-to-net axis of every rally table, as negative depths: 0.5 m to 18.17 m from the net crossing.
+const NET_NEAR: f32 = -0.5;
+const NET_FAR: f32 = -18.17;
+/// The game constant the stroke tables' height axis tops out from (1.1638…).
+const STROKE_TOP: f32 = f32::from_bits(0x3f94_f893);
 
 const N: usize = 16;
 const ANGLE_UNIT: f32 = 0.0007669904; // π / 4096
@@ -73,11 +118,12 @@ impl Bounds {
     /// slice (1) starts the height axis at the ground; a drop shot (4) has a flat height axis at 0.3 m and a short
     /// target axis (2–8.22 m). `hit_z` sets `low` for a caller's use; `lookup` redoes it at its own hit point.
     pub fn stroke(kind: i32, hit_z: f32) -> Self {
-        let high = ((-F(f32::from_bits(0x3f94_f893)) + 0.0).msub(1.3, 1.3) - 0.5).0;
+        let high = ((-F(STROKE_TOP) + 0.0).msub(1.3, 1.3) - 0.5).0;
+        let (near, far) = (NET_NEAR, NET_FAR);
         match kind {
-            4 => Self { near: -0.5, far: -18.17, low: -0.3, sloped: false, high: -0.3, short: 2.0, long: 8.22 },
-            1 => Self { near: -0.5, far: -18.17, low: ABOVE_GROUND, sloped: false, high, short: 3.0, long: 16.17 },
-            _ => Self { near: -0.5, far: -18.17, low: low_bound(hit_z), sloped: true, high, short: if kind == 2 { 6.4 } else { 3.0 }, long: 16.17 },
+            kind::DROP => Self { near, far, low: -0.3, sloped: false, high: -0.3, short: 2.0, long: 8.22 },
+            kind::SLICE => Self { near, far, low: ABOVE_GROUND, sloped: false, high, short: 3.0, long: 16.17 },
+            _ => Self { near, far, low: low_bound(hit_z), sloped: true, high, short: if kind == kind::FLAT { 6.4 } else { 3.0 }, long: 16.17 },
         }
     }
 
@@ -85,20 +131,20 @@ impl Bounds {
     /// slice (kind 1) starts the height axis at the ground.
     pub fn volley(kind: i32, hit_z: f32) -> Self {
         Self {
-            low: if kind == 1 { ABOVE_GROUND } else { low_bound(hit_z) },
-            sloped: kind != 1,
+            low: if kind == kind::SLICE { ABOVE_GROUND } else { low_bound(hit_z) },
+            sloped: kind != kind::SLICE,
             high: (F(-1.6) * 1.3 - 0.5).0,
             short: match kind {
-                2 => 6.4,
-                4 => 2.0,
+                kind::FLAT => 6.4,
+                kind::DROP => 2.0,
                 _ => 3.0,
             },
-            long: if kind == 4 { 8.22 } else { 16.17 },
-            ..Self::stroke(0, hit_z)
+            long: if kind == kind::DROP { 8.22 } else { 16.17 },
+            ..Self::stroke(kind::TOPSPIN, hit_z)
         }
     }
 
-    /// Serves (class 0); `underhand` is serve kind 3. The low height bound never sits above the ball's radius.
+    /// Serves (class 0); `underhand` is `kind::UNDERHAND`. The low height bound never sits above the ball's radius.
     pub fn serve(underhand: bool, radius: f32) -> Self {
         let (low, high) = if underhand { (0.0, -1.25) } else { (-1.5, -3.45) };
         let top = -F(radius);
@@ -109,7 +155,7 @@ impl Bounds {
 impl Bounds {
     /// Smashes (class 3) by smash kind (0 ✕/○, 1 △): kind 0 starts the target axis deeper.
     pub fn smash(kind: i32) -> Self {
-        Self { near: -0.5, far: -18.17, low: -1.7, sloped: false, high: -3.05, short: if kind == 0 { 6.9425 } else { 3.0 }, long: 16.17 }
+        Self { near: NET_NEAR, far: NET_FAR, low: -1.7, sloped: false, high: -3.05, short: if kind == 0 { 6.9425 } else { 3.0 }, long: 16.17 }
     }
 }
 
@@ -178,7 +224,7 @@ pub fn lookup(t: &Table, b: &Bounds, hit: V3, target: V3) -> Lookup {
         let near = cosf(((1.0 - (1.0 - ((to_net - 0.5) / (F(6.0) - 0.5)).clamp(0.0, 1.0))) * 1.5707964).0);
         let high = cosf(((1.0 - ((height - 0.0) / (F(1.3) - 0.0)).clamp(0.0, 1.0)) * 1.5707964).0);
         let rise = elevation - lowest;
-        let w = if rise >= 0.0 { (rise / (F(7.0) * 0.017453292)).min(1.0) } else { F::ZERO };
+        let w = if rise >= 0.0 { (rise / (F(7.0) * DEG)).min(1.0) } else { F::ZERO };
         if w != 0.0 {
             let k = w * (1.0 - (rise.abs() / 1.05).min(1.0));
             speed = (F::ZERO + speed).madd(k * (F(high) * near), slowest - speed);
@@ -215,26 +261,26 @@ pub fn side_axis(hit: V3, target: V3) -> vu0::V4 {
 /// The special condition the shot effects need: a strong-tossed topspin or slice serve hit within a frame of the
 /// sweet spot (timing `offset`), any other shot hit with a clean timing `grade` (1 or 2).
 pub fn special(class: u8, kind: i32, strong: bool, grade: u8, offset: i32) -> bool {
-    if class == 0 && strong && kind < 2 { offset.abs() < 2 } else { grade == 1 || grade == 2 }
+    if class == class::SERVE && strong && kind <= kind::SLICE { offset.abs() < 2 } else { grade == 1 || grade == 2 }
 }
 
 /// A special shot's effect, as launched: (`Shot::bend`, `Shot::curve`, `Shot::bounce_turn`). The character's
-/// bend and curve grow with the flat distance up to a court's length (23.77 m); a left-hander's bend and turn
+/// bend and curve grow with the flat distance up to a court's length (`LENGTH`); a left-hander's bend and turn
 /// are mirrored, and so is the bend of a shot hit with `flip`.
 // ponytail: the game's debug switch that forces every effect, and its practice-only exception (one player on
 // court, player 1 hitting, gets row 0's lob curve and no bend or turn), are left out
 pub fn effect(e: &hst_data::exe::ShotEffects, class: u8, kind: i32, hit: V3, target: V3, lefty: bool, flip: bool) -> (f32, f32, f32) {
     let (mut bend, mut curve, mut turn) = match (class, kind) {
-        (0, 0) => (F(e.bend[0]), F::ZERO, F(e.turn) * 0.017453292),
-        (0, 1) => (F(e.bend[1]), F::ZERO, F::ZERO),
-        (1, 1) => (F(e.bend[2]), F::ZERO, F::ZERO),
-        (1, 3) => (F::ZERO, F(e.curve), F::ZERO),
+        (class::SERVE, kind::TOPSPIN) => (F(e.bend[0]), F::ZERO, F(e.turn) * DEG),
+        (class::SERVE, kind::SLICE) => (F(e.bend[1]), F::ZERO, F::ZERO),
+        (class::STROKE, kind::SLICE) => (F(e.bend[2]), F::ZERO, F::ZERO),
+        (class::STROKE, kind::LOB) => (F::ZERO, F(e.curve), F::ZERO),
         _ => (F::ZERO, F::ZERO, F::ZERO),
     };
     if bend != 0.0 || curve != 0.0 {
         let (hit, target) = (fs(hit), fs(target));
         let (dx, dz) = (target[0] - hit[0], target[2] - hit[2]);
-        let s = ((dz * dz).madd(dx, dx).sqrt() / 23.77).clamp(0.0, 1.0);
+        let s = ((dz * dz).madd(dx, dx).sqrt() / LENGTH).clamp(0.0, 1.0);
         if bend != 0.0 {
             bend = bend * s;
             if flip {
@@ -277,7 +323,7 @@ pub struct Launch {
 /// `frames`, and the shot's `bend` (0 until the special shots, P6). A lefty hitter's side-angled shot spins the
 /// other way. With a side angle the velocity heads off the target line by the spin (as a yaw) and the wind
 /// brings the ball back onto the target over the flight; the spin frame is turned a quarter about Z and by the
-/// side angle about Y, toward the spin's sign. Off a serve (`class` 0) clear of the 2.0575 m line the flight
+/// side angle about Y, toward the spin's sign. Off a serve clear of the service boxes' middle (`BOX_MIDDLE`) the flight
 /// gets one frame less or more, by which side of that line the ball crosses to.
 #[allow(clippy::too_many_arguments)]
 pub fn launch_turned(class: u8, hit: [f32; 4], target: [f32; 4], elevation: f32, speed: f32, spin: f32, side: f32, bend: f32, lefty: bool, frames: i32) -> Launch {
@@ -286,11 +332,11 @@ pub fn launch_turned(class: u8, hit: [f32; 4], target: [f32; 4], elevation: f32,
     let mut n = frames + 1;
     if side != 0.0 || bend != 0.0 {
         let mut step = 0;
-        if class == 0 {
+        if class == class::SERVE {
             let toward = if target[2] < 0.0 { -1.0 } else { 1.0 };
-            if (F(target[0].abs()) - 2.0575).abs() > 1.0 {
+            if (F(target[0].abs()) - BOX_MIDDLE).abs() > 1.0 {
                 let past = F(target[0]) * toward;
-                step = if F(hit[0]) * toward > 0.0 { if past < -2.0575 { 1 } else { -1 } } else if past < 2.0575 { 1 } else { -1 };
+                step = if F(hit[0]) * toward > 0.0 { if past < -F(BOX_MIDDLE) { 1 } else { -1 } } else if past < BOX_MIDDLE { 1 } else { -1 };
                 if spin < 0.0 || bend < 0.0 {
                     step = -step;
                 }
@@ -324,29 +370,28 @@ pub(crate) fn rot_z(t: f32) -> M4 {
     [[(z + c).0, (z + s).0, 0.0, 0.0], [(z - s).0, (z + c).0, 0.0, 0.0], [0.0, 0.0, (z + 1.0).0, 0.0], [0.0, 0.0, 0.0, (z + 1.0).0]]
 }
 
-/// The shot press a frame's pad gives (`before`, `now`: the pad words, ✕ 0x2000, ○ 0x4000, △ 0x1000): only a
-/// button going down this frame counts, ✕ before ○ before △ when several do; its kind (0 topspin, 1 slice, 3 lob).
-/// Holding a button gives nothing more: no charge, no repeat.
+/// The shot press a frame's pad gives (`before`, `now`: the pad words): only a button going down this frame
+/// counts, ✕ before ○ before △ when several do; its kind (✕ topspin, ○ slice, △ lob). Holding a button gives
+/// nothing more: no charge, no repeat.
 pub fn press_kind(before: u16, now: u16) -> Option<i32> {
     let down = now & !before;
-    [(0x2000, 0), (0x4000, 1), (0x1000, 3)].into_iter().find(|&(b, _)| down & b != 0).map(|(_, k)| k)
+    [(Pad::CROSS, kind::TOPSPIN), (Pad::CIRCLE, kind::SLICE), (Pad::TRIANGLE, kind::LOB)].into_iter().find(|&(b, _)| down & b != 0).map(|(_, k)| k)
 }
 
-/// The shot buttons give three kinds: ✕ topspin (0), ○ slice (1), △ lob (3). Flat (2) and drop (4) have no
-/// button: at contact the stick (court x, z) turns a topspin into a flat shot when it points within 60° of
-/// `facing` (the hitter's end, +1 toward +z) and a slice into a drop shot when it points within 45° of straight
-/// back. `branch` is the contact (0 serve, 1 ground, 2 volley, 3 dive, 4 smash): serves only go flat, smashes
-/// never change.
+/// The shot buttons give three kinds: ✕ topspin, ○ slice, △ lob. Flat and drop have no button: at contact the
+/// stick (court x, z) turns a topspin into a flat shot when it points within 60° of `facing` (the hitter's end,
+/// +1 toward +z) and a slice into a drop shot when it points within 45° of straight back. `branch` is the contact
+/// (`branch`): serves only go flat, smashes never change.
 pub fn stick_kind(branch: u8, kind: i32, stick: [f32; 2], facing: f32) -> i32 {
     let stick = fs(stick);
     let len = (stick[0] * stick[0] + stick[1] * stick[1]).sqrt();
-    if branch > 3 || len <= 0.0 {
+    if branch >= branch::SMASH || len <= 0.0 {
         return kind;
     }
     let along = F(facing) * stick[1] * (1.0 / len);
     match kind {
-        0 if along >= 0.5 => 2,
-        1 if branch > 0 && -along >= std::f32::consts::FRAC_1_SQRT_2 => 4,
+        kind::TOPSPIN if along >= FLAT_CONE => kind::FLAT,
+        kind::SLICE if branch != branch::SERVE && -along >= std::f32::consts::FRAC_1_SQRT_2 => kind::DROP,
         _ => kind,
     }
 }
@@ -362,14 +407,21 @@ pub struct AimStats {
     pub under: f32,
 }
 
+impl AimStats {
+    /// Indices into `con` (all three) and `body` (the first two).
+    pub const STROKE: usize = 0;
+    pub const VOLLEY: usize = 1;
+    pub const SERVE: usize = 2;
+}
+
 /// The hitter at the moment of the shot.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hitter {
     /// The player's end: +1 hits toward +z.
     pub end: f32,
-    /// 0 serve, 1 ground, 2 volley, 3 dive, 4 smash.
+    /// The contact (`branch`).
     pub branch: u8,
-    /// After `stick_kind` (0 topspin, 1 slice, 2 flat, 3 lob, 4 drop; a smash's 3 is the △ smash).
+    /// After `stick_kind` (`kind`; a smash's `LOB` is the △ smash).
     pub kind: i32,
     /// Timing offset in frames from the sweet frame.
     pub offset: i32,
@@ -390,24 +442,24 @@ pub struct Hitter {
 /// for the nudge.
 pub fn aim(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, incoming: Option<bool>, roll: &mut impl FnMut() -> u32) -> Aim {
     let (end, b) = (h.end, h.branch);
-    let kind = |k: i32| (1..=3).contains(&b) && h.kind == k;
-    let drop = kind(4);
-    let sweet = b != 3 && !h.body && h.offset.abs() < 2;
+    let rally_kind = |k: i32| branch::rally(b) && h.kind == k;
+    let drop = rally_kind(kind::DROP);
+    let sweet = b != branch::DIVE && !h.body && h.offset.abs() < 2;
     // depth of the target band and its near edge
     let (long, near) = if drop {
         (9.885, 2.0)
     } else {
         (8.885, 3.0)
     };
-    let long = if sweet { F(long) } else { F(long) - if kind(3) { 0.5 } else { 1.0 } };
+    let long = if sweet { F(long) } else { F(long) - if rally_kind(kind::LOB) { 0.5 } else { 1.0 } };
     let half = long / 2.0;
     let base_z = (F(near) + half) * end;
-    let width = F(if four { 5.485 } else { 4.115 });
+    let width = F(sideline(four));
     let width = if sweet { width } else { width - 0.5 };
     let target = aim_from(h, s, stick, four, button, incoming, [0.0, base_z.0], width.0, half.0);
     // a plain smash with the stick pulled back holds the pull as a shorter launch (the stick's own depth, not
     // the square's)
-    let held = if !button && b == 4 && h.kind != 3 && F(stick[1]) * end < 0.0 { (half / 1.5 * stick[1].abs() / 2.0).0 } else { 0.0 };
+    let held = if !button && b == branch::SMASH && h.kind != kind::LOB && F(stick[1]) * end < 0.0 { (half / 1.5 * stick[1].abs() / 2.0).0 } else { 0.0 };
     // aimed close to the centre line with the stick level: a random sideways nudge of 5 or 10 tenths
     let mut coin = || roll() >> 16 & 1 != 0;
     let nudge = if target[0].abs() <= 1.0 && stick[0] == 0.0 {
@@ -436,10 +488,10 @@ pub struct Aim {
 pub fn aim_from(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: bool, incoming: Option<bool>, base: [f32; 2], width: f32, half: f32) -> V3 {
     use crate::libm::{acosf, tanf};
     let (end, b) = (h.end, h.branch);
-    let rally = (1..=3).contains(&b);
-    let kind = |k: i32| rally && h.kind == k;
-    let drop = kind(4);
-    let plain_smash = b == 4 && h.kind != 3;
+    let rally = branch::rally(b);
+    let rally_kind = |k: i32| rally && h.kind == k;
+    let drop = rally_kind(kind::DROP);
+    let plain_smash = b == branch::SMASH && h.kind != kind::LOB;
     let near = F(if drop { 2.0 } else { 3.0 });
     // the stick's circle stretched onto the square
     let (mut ox, mut oz) = (F::ZERO, F::ZERO);
@@ -466,22 +518,22 @@ pub fn aim_from(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: b
     // the widest angle off straight
     let mut a = F(if four { 3.0 } else { 0.0 });
     a += s.con[match b {
-        0 => 2,
-        1 => 0,
-        _ => 1,
+        branch::SERVE => AimStats::SERVE,
+        branch::GROUND => AimStats::STROKE,
+        _ => AimStats::VOLLEY,
     }] as f32;
     if plain_smash && h.offset.abs() > 1 {
-        let z = h.from[1].abs().clamp(3.0, 11.885);
+        let z = h.from[1].abs().clamp(3.0, BASELINE);
         a = a * F(1.0).msub(0.4, (F(z) - 3.0) / 8.885);
     }
-    if (b == 1 && (h.kind == 1 || h.kind == 3)) || kind(3) {
+    if (b == branch::GROUND && (h.kind == kind::SLICE || h.kind == kind::LOB)) || rally_kind(kind::LOB) {
         a = F(90.0);
     } else {
         if incoming.is_none() {
             if h.body {
-                a = a * s.body[(b != 1) as usize] as f32 / 100.0;
+                a = a * s.body[if b == branch::GROUND { AimStats::STROKE } else { AimStats::VOLLEY }] as f32 / 100.0;
             }
-            if (b == 1 || b == 2) && h.height < s.under {
+            if (b == branch::GROUND || b == branch::VOLLEY) && h.height < s.under {
                 a = a * s.rising as f32 / 100.0;
             }
         }
@@ -492,7 +544,7 @@ pub fn aim_from(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: b
             None => a,
         };
     }
-    let a = a.max(0.0) * 0.017453292;
+    let a = a.max(0.0) * DEG;
     let (dx, dz) = (tx - h.from[0], tz - h.from[1]);
     let inv = 1.0 / (dz * dz + dx * dx).sqrt();
     if a < acosf((F(end) * (dz * inv)).clamp(-1.0, 1.0).0) {
@@ -500,7 +552,7 @@ pub fn aim_from(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: b
         tx = if h.from[0] < tx { F(h.from[0]) + w } else { F(h.from[0]) - w };
     }
     // an angled drive keeps the straight line's depth
-    if plain_smash || (rally && h.kind < 2) {
+    if plain_smash || (rally && h.kind <= kind::SLICE) {
         let (dx, dz) = (tx - h.from[0], tz - h.from[1]);
         let r = (dz * dz).sqrt() / (dz * dz + dx * dx).sqrt();
         tx = F(h.from[0]) + dx * r;
@@ -538,11 +590,11 @@ impl Margins {
     #[allow(clippy::too_many_arguments)]
     pub fn inside(&self, class: u8, kind: i32, low: bool, doubles: bool, character: usize, special: bool, hit: V3, aim: V3) -> V3 {
         let abs = |v: F| if v < 0.0 { -v } else { v };
-        let hi = F(if doubles { 5.485 } else { 4.115 });
+        let hi = F(sideline(doubles));
         let lo = -hi;
         let row = fs(self.lines[class as usize][kind as usize]);
         let (mut mx, mut mz) = if low { (row[2], row[3]) } else { (row[0], row[1]) };
-        let topspin = class == 1 && kind == 0;
+        let topspin = class == class::STROKE && kind == kind::TOPSPIN;
         let (hit, aim) = (fs(hit), fs(aim));
         let (dx, dz) = (aim[0] - hit[0], aim[2] - hit[2]);
         let inv = 1.0 / (dz * dz).madd(dx, dx).sqrt();
@@ -564,7 +616,7 @@ impl Margins {
         };
         let (x0, x1) = (lo + mx, hi - mx);
         let x = if p[0] < x0 { x0 } else if p[0] <= x1 { p[0] } else { x1 };
-        let z1 = 11.885 - mz;
+        let z1 = BASELINE - mz;
         let z = if p[1] < -z1 { -z1 } else if p[1] <= z1 { p[1] } else { z1 };
         f32s([aim[0] + (x - p[0]), aim[1], aim[2] + (z - p[1])])
     }

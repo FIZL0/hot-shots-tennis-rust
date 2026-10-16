@@ -3,9 +3,10 @@
 //! Players 0..3; team = player & 1 (0 and 2 against 1 and 3).
 #![deny(clippy::float_arithmetic)]
 
+use crate::lines::{BASELINE, DOUBLES_SIDELINE, SERVICE_LINE, SINGLES_SIDELINE};
 use crate::ps2::F;
 
-/// A ball's line call (+0xa5 of the ball object).
+/// A ball's line call (the ball keeps it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Call {
     /// Not landed yet.
@@ -28,7 +29,7 @@ pub struct Lines {
     pub shots: i32,
     /// Four players on court: rally balls may land in the doubles alleys.
     pub doubles: bool,
-    /// Court side being served from: 0 deuce, 1 ad.
+    /// Court side being served from (`score::DEUCE_COURT`, `score::AD_COURT`).
     pub side: i32,
     /// The hitter stands on the +z half, so the ball must land on the −z half.
     pub hitter_far: bool,
@@ -36,10 +37,6 @@ pub struct Lines {
     pub margin: f32,
 }
 
-const SINGLES_HALF_WIDTH: f32 = 4.115;
-const DOUBLES_HALF_WIDTH: f32 = 5.485;
-const SERVICE_LENGTH: f32 = 6.4;
-const HALF_LENGTH: f32 = 11.885;
 /// The serve may cross the centre service line by this much (plus the margin).
 const CENTRE_SLACK: f32 = 0.05;
 /// A ball that has not been called is outside the arena past these (|x|, |z|).
@@ -50,8 +47,8 @@ fn same_team(a: i32, b: i32) -> bool {
 }
 
 /// Call a contact at `at` (the ball's centre at contact). `call` is the ball's call so far, `net` whether it
-/// has touched the net. Returns the new call, and the signed distance to the nearest line (+0x230, negative
-/// inside) when the landing was measured.
+/// has touched the net. Returns the new call, and the signed distance to the nearest line (negative inside)
+/// when the landing was measured.
 pub fn call_landing(call: Call, net: bool, at: [f32; 4], l: &Lines) -> Option<(Call, Option<f32>)> {
     if call != Call::None && call != Call::Net {
         return None;
@@ -64,8 +61,8 @@ pub fn call_landing(call: Call, net: bool, at: [f32; 4], l: &Lines) -> Option<(C
         return Some((Call::Net, None));
     }
     // ponytail: the original also skips contacts with material 0; every surface the port collides with has one.
-    let w = (F(l.margin) + if !l.doubles || serve { SINGLES_HALF_WIDTH } else { DOUBLES_HALF_WIDTH }).0;
-    let len = (F(l.margin) + if serve { SERVICE_LENGTH } else { HALF_LENGTH }).0;
+    let w = (F(l.margin) + if !l.doubles || serve { SINGLES_SIDELINE } else { DOUBLES_SIDELINE }).0;
+    let len = (F(l.margin) + if serve { SERVICE_LINE } else { BASELINE }).0;
     let (x, z) = (at[0], at[2]);
     let mut inside = false;
     if x.abs() <= w {
@@ -93,11 +90,11 @@ fn line_distance(at: [f32; 4], l: &Lines) -> f32 {
     let nearer = |a: f32, b: f32| if b.abs() <= a.abs() { b } else { a };
     if l.shots < 2 {
         // centre service line, sideline, service line
-        let side = (F(x) - SINGLES_HALF_WIDTH).0;
-        nearer(if x <= side.abs() { x } else { side }, (F(z) - SERVICE_LENGTH).0)
+        let side = (F(x) - SINGLES_SIDELINE).0;
+        nearer(if x <= side.abs() { x } else { side }, (F(z) - SERVICE_LINE).0)
     } else {
-        let w = if l.doubles { DOUBLES_HALF_WIDTH } else { SINGLES_HALF_WIDTH };
-        nearer((F(x) - w).0, (F(z) - HALF_LENGTH).0)
+        let w = if l.doubles { DOUBLES_SIDELINE } else { SINGLES_SIDELINE };
+        nearer((F(x) - w).0, (F(z) - BASELINE).0)
     }
 }
 
@@ -105,9 +102,9 @@ fn line_distance(at: [f32; 4], l: &Lines) -> f32 {
 #[derive(Clone, Copy, Debug)]
 pub struct BallState {
     pub call: Call,
-    /// Court contacts (+0x228).
+    /// Court contacts.
     pub contacts: i32,
-    /// Came to rest (+0xa4 == 3).
+    /// Came to rest.
     pub stopped: bool,
     pub pos: [f32; 3],
 }
@@ -159,11 +156,23 @@ impl Default for Rally {
     }
 }
 
+/// The calls a verdict shows (`Verdict::call`).
+pub mod verdict {
+    /// A plain point.
+    pub const POINT: u8 = 0;
+    pub const OUT: u8 = 1;
+    pub const FAULT: u8 = 2;
+    pub const DOUBLE_FAULT: u8 = 3;
+    pub const LET: u8 = 4;
+    /// Out after touching the net.
+    pub const NET_OUT: u8 = 5;
+    pub const ILLEGAL_HIT: u8 = 6;
+}
+
 /// The umpire's verdict on a finished point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Verdict {
-    /// The call shown (+0x426): 0 point, 1 out, 2 fault, 3 double fault, 4 let, 5 out after the net,
-    /// 6 illegal hit.
+    /// The call shown (`verdict`).
     pub call: u8,
     /// Winning team, `None` when no point is played out (fault or let: the serve is taken again).
     pub winner: Option<usize>,
@@ -270,20 +279,21 @@ impl Rally {
     pub fn judge(&self, body: Option<i32>) -> Verdict {
         let (h, v) = (self.hitter, self.server);
         let other = |p: i32| (p & 1 ^ 1) as usize;
-        let fault = |faults: i32| if faults == 1 { Verdict { call: 2, winner: None } } else { Verdict { call: 3, winner: Some(other(v)) } };
+        use verdict::*;
+        let fault = |faults: i32| if faults == 1 { Verdict { call: FAULT, winner: None } } else { Verdict { call: DOUBLE_FAULT, winner: Some(other(v)) } };
         match body {
-            None if self.illegal_hit => Verdict { call: 6, winner: Some(other(h)) },
+            None if self.illegal_hit => Verdict { call: ILLEGAL_HIT, winner: Some(other(h)) },
             None => match (self.call, self.shots) {
-                (Call::NetIn, 1) => Verdict { call: 4, winner: None },
+                (Call::NetIn, 1) => Verdict { call: LET, winner: None },
                 (Call::NetOut, 1) => fault(self.faults),
-                (Call::NetOut, _) => Verdict { call: 5, winner: Some(other(h)) },
+                (Call::NetOut, _) => Verdict { call: NET_OUT, winner: Some(other(h)) },
                 (Call::Out, s) if s < 2 => fault(self.faults),
-                (Call::Out, _) => Verdict { call: 1, winner: Some(other(h)) },
-                _ => Verdict { call: 0, winner: Some((h & 1) as usize) },
+                (Call::Out, _) => Verdict { call: OUT, winner: Some(other(h)) },
+                _ => Verdict { call: POINT, winner: Some((h & 1) as usize) },
             },
-            Some(p) if !self.hit_on_serve => Verdict { call: 0, winner: Some(other(p)) },
+            Some(p) if !self.hit_on_serve => Verdict { call: POINT, winner: Some(other(p)) },
             Some(p) if same_team(v, p) => fault(self.faults),
-            Some(_) => Verdict { call: 4, winner: None },
+            Some(_) => Verdict { call: LET, winner: None },
         }
     }
 }

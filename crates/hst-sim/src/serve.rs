@@ -3,10 +3,13 @@
 //! over a hitter's head (strokes too).
 #![deny(clippy::float_arithmetic)]
 
+use crate::lines::{BOX_MIDDLE, SERVICE_LINE, SINGLES_SIDELINE};
 use crate::pose::{Clip, M4, Path, Skeleton, node_world};
 use crate::ps2::{F, f32s};
-use crate::swing::PathPoint;
-use crate::shot::{self, Bounds, Table};
+use crate::swing::{PathPoint, grade};
+use crate::shot::{self, Bounds, Table, class};
+use crate::world::{HALF_PI, IDENTITY};
+use std::f32::consts::SQRT_2;
 
 /// Toss gravity (the ball's gravity factor × g per frame²).
 const TOSS_GRAVITY: f32 = 0.9 * 0.0027222224;
@@ -100,7 +103,7 @@ pub fn toss_points(d: &ServeData, toss: Toss, player: &M4) -> ([f32; 3], [f32; 3
 /// origin: `HAND_BALL` on the left hand at the toss's frame 45 (`toss`: motion 0x23 overhand, 0x24 underhand)
 /// and the `Racket` node's matrix at the swing's contact frame (`swing`: 0x25, 0x26).
 pub fn toss_setup(sk: &Skeleton, toss: &Clip, swing: &Clip) -> ([f32; 4], M4) {
-    const ID: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    const ID: M4 = IDENTITY;
     let node = |n: &str| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no {n} node"));
     let hand = crate::vu0::transform(&node_world(sk, &toss.locals(sk, TOSS_RELEASE as f32), node("Bip01LFinger21"), &ID), HAND_BALL);
     (hand, node_world(sk, &swing.locals(sk, SWEET_FRAME as f32), node("Racket"), &ID))
@@ -111,7 +114,7 @@ pub fn toss_setup(sk: &Skeleton, toss: &Clip, swing: &Clip) -> ([f32; 4], M4) {
 /// less a margin of 0.15 m across and 0.1 m along, each scaled by the share of the contact→aim direction along it
 /// (unscaled when the serve is `bent`: the character bends it and the special condition holds).
 pub fn inside(server_x: f32, hit: [f32; 3], aim: [f32; 3], bent: bool) -> [f32; 3] {
-    let (mut lo, mut hi) = (-4.115, 4.115);
+    let (mut lo, mut hi) = ((-F(SINGLES_SIDELINE)).0, SINGLES_SIDELINE);
     if server_x < 0.0 { lo = 0.0 } else { hi = 0.0 }
     let (mut mx, mut mz) = (0.15, 0.1);
     if !bent && (aim[0] < 0.0 && lo < hit[0]) || (0.0 < aim[0] && hit[0] < hi) {
@@ -120,7 +123,7 @@ pub fn inside(server_x: f32, hit: [f32; 3], aim: [f32; 3], bent: bool) -> [f32; 
         mx = (F(mx) * ((F(dx) * inv).0.abs())).0;
         mz = (F(mz) * ((F(dz) * inv).0.abs())).0;
     }
-    let (x0, x1, z1) = ((F(lo) + mx).0, (F(hi) - mx).0, (F(6.4) - mz).0);
+    let (x0, x1, z1) = ((F(lo) + mx).0, (F(hi) - mx).0, (F(SERVICE_LINE) - mz).0);
     let x = if aim[0] < x0 { x0 } else if x1 < aim[0] { x1 } else { aim[0] };
     let z = if aim[2] < -F(z1) { (-F(z1)).0 } else if z1 < aim[2] { z1 } else { aim[2] };
     [(aim[0] + (F(x) - aim[0])).0, aim[1], (aim[2] + (F(z) - aim[2])).0]
@@ -224,9 +227,9 @@ pub fn target(
 ) -> ([f32; 3], Miss) {
     let strong = toss == Toss::Strong;
     let sweet = strong || offset.abs() < 2;
-    let (width, depth) = if sweet { (2.0575, 3.4) } else { ((F(2.0575) - 0.5).0, (F(3.4) - 1.0).0) };
+    let (width, depth) = if sweet { (BOX_MIDDLE, 3.4) } else { ((F(BOX_MIDDLE) - 0.5).0, (F(3.4) - 1.0).0) };
     let half = (F(depth) / 2.0).0;
-    let x = (F(2.0575) * facing).0;
+    let x = (F(BOX_MIDDLE) * facing).0;
     let base = [if side == 0 { (F(x) * -1.0).0 } else { x }, ((F(3.0) + half) * facing).0];
     let h = shot::Hitter { end: facing, from: [server[0], server[2]], ..Default::default() };
     let s = shot::AimStats { con: [0, 0, d.max_angle as i32], ..Default::default() };
@@ -239,7 +242,7 @@ pub fn target(
         0
     };
     let mut miss = Miss { side: 0.0, depth: 0.0, nudge };
-    if strong && (grade == 3 || grade == 4) {
+    if strong && (grade == grade::OFF || grade == grade::SLOW) {
         let sign = if offset < 1 { -1 } else { 1 };
         miss.depth = (F::ZERO + 0.0).madd(0.01, (sign * d.miss[0]) as f32).0;
         let full = (F(stick[1]) * stick[1]).madd(stick[0], stick[0]).sqrt().0;
@@ -278,9 +281,9 @@ pub struct Miss {
 
 /// The serve's depth error at the swing, in tenths of a metre (+ deep): the timing table's bias for the contact
 /// frame `k`, and 6 for every 10 cm the contact height `height` strays from the ideal past `reach[0]`, 12 per
-/// 10 cm past `reach[1]` more. A clean hit (grade 1 or 2) has none; ±1 m at most.
+/// 10 cm past `reach[1]` more. A clean hit (`grade::clean`) has none; ±1 m at most.
 pub fn depth_error(d: &ServeData, toss: Toss, k: usize, grade: u8, height: f32) -> i32 {
-    if grade == 1 || grade == 2 {
+    if grade::clean(grade) {
         return 0;
     }
     let off = (F(height) - d.window(toss)[1]).0;
@@ -337,7 +340,7 @@ pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [
     let l = shot::lookup(table, &Bounds::serve(underhand, radius), [(F(hit[0]) - scatter[0]).0, hit[1], (F(hit[2]) - scatter[2]).0], aim);
     let target = [(F(aim[0]) + scatter[0]).0, aim[1], (F(aim[2]) + scatter[2]).0, 1.0];
     let (spin, side, lefty) = turn;
-    shot::launch_turned(0, [hit[0], hit[1], hit[2], 1.0], target, l.elevation, l.speed, spin, side, bend, lefty, l.frames)
+    shot::launch_turned(class::SERVE, [hit[0], hit[1], hit[2], 1.0], target, l.elevation, l.speed, spin, side, bend, lefty, l.frames)
 }
 
 /// The balloon over a hitter's head.
@@ -424,6 +427,14 @@ pub struct ServeArm {
     pub lift: f32,
 }
 
+/// The overhead arm's last turn about z (135°).
+const THREE_QUARTER_PI: f32 = f32::from_bits(0x4016_cbe4);
+/// The arm solve's bend passes stop with the racket point within 0.1 m (squared distance), or when the joint
+/// already points at the contact (cos ≥ 0.99999); one pass bends a joint 30° at most (cos).
+const CCD_DONE: f32 = f32::from_bits(0x3c23_d70a);
+const CCD_ALIGNED: f32 = f32::from_bits(0x3f7f_ff58);
+const CCD_MAX_BEND: f32 = f32::from_bits(0x3f5d_b3d7);
+
 /// The entry for `clip`: the racket point turned about x into the y–z plane's −y (overhead) or +z (underhand)
 /// from the shoulder, then the arm turned 135° about z (overhead) or 90° about y (underhand).
 pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -> ServeArm {
@@ -432,7 +443,7 @@ pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -
     let idx = ARM_NODES.map(|n| sk.names.iter().position(|x| x == n).unwrap_or_else(|| panic!("no node {n}")));
     let local = clip.locals(sk, clip.wrap(8.0, false));
     let [racket, hand, forearm, mut upper, _] = idx.map(|n| local[n]);
-    let mut chain: M4 = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut chain: M4 = IDENTITY;
     let mut p = sk.parent[idx[3]];
     while let Some(i) = p {
         chain = vmul(&chain, &local[i]);
@@ -454,7 +465,7 @@ pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -
     if cross < 0.0 {
         angle = (F(angle) * -1.0).0;
     }
-    let twist = if under { axis_angle(f32::from_bits(0x3fc9_0fdb), [0.0, 1.0, 0.0]) } else { axis_angle(f32::from_bits(0x4016_cbe4), [0.0, 0.0, 1.0]) };
+    let twist = if under { axis_angle(HALF_PI, [0.0, 1.0, 0.0]) } else { axis_angle(THREE_QUARTER_PI, [0.0, 0.0, 1.0]) };
     let mut aimed = vmul(&vmul(&vmul(&m, &axis_angle(angle, [1.0, 0.0, 0.0])), &twist), &transpose3(&chain));
     let zero_t = [0.0, 0.0, 0.0, 1.0];
     (aimed[3], upper[3], chain[3]) = (zero_t, zero_t, zero_t);
@@ -474,7 +485,7 @@ pub fn overhead_solve(a: &ServeArm, contact: [f32; 4], pos: [f32; 4], scale: [f3
     let sh = a.shoulder;
     let mut v = [(F(d[0]) * s01 - sh[0]).0, (F(d[1]) - sh[1]).0, (F(d[2]) * scale[0] - sh[2]).0, (F(d[3]) - sh[3]).0];
     let mut step = [0.0f32; 4];
-    let lim = (F(a.radius) / f32::from_bits(0x3fb5_04f3)).0;
+    let lim = (F(a.radius) / SQRT_2).0;
     if v[2] < 0.0 {
         step[2] = v[2];
     } else if !(v[2] <= lim) {
@@ -546,16 +557,16 @@ fn arm_ccd(a: &ServeArm, mut v: [f32; 4], t0: M4, c: [usize; 2], under: bool) ->
     let mut p = tip(&forearm, &aimed);
     let mut elbow = true;
     for _ in 0..50 {
-        if dist(v, p) <= f32::from_bits(0x3c23_d70a) {
+        if dist(v, p) <= CCD_DONE {
             break;
         }
         let (m, frame) = if elbow { (vmul(&vmul(&forearm, &aimed), &chain), vmul(&aimed, &chain)) } else { (vmul(&aimed, &chain), chain) };
         let (u, w) = (unit_in(p, m[3], c), unit_in(v, m[3], c));
         let dot = dot_of(u, w);
-        if !(dot < f32::from_bits(0x3f7f_ff58)) {
+        if !(dot < CCD_ALIGNED) {
             break;
         }
-        let cos = if dot < f32::from_bits(0x3f5d_b3d7) { f32::from_bits(0x3f5d_b3d7) } else { dot };
+        let cos = if dot < CCD_MAX_BEND { CCD_MAX_BEND } else { dot };
         let s = if dot < 0.0 || cross_of(u, w) < 0.0 { -1.0 } else { 1.0 };
         let bent = vmul(&vmul(&m, &axis_cos(cos, s, axis)), &transpose3(&frame));
         let j = if elbow { &mut forearm } else { &mut aimed };
@@ -569,7 +580,7 @@ fn arm_ccd(a: &ServeArm, mut v: [f32; 4], t0: M4, c: [usize; 2], under: bool) ->
         let m = vmul(&hand, &frame);
         let (u, w) = (unit_in(p, m[3], c), unit_in(v, m[3], c));
         let dot = dot_of(u, w);
-        if !(dot < f32::from_bits(0x3f5d_b3d7)) {
+        if !(dot < CCD_MAX_BEND) {
             let cr = if under { (F(u[1]) * w[0]).msub(u[0], w[1]).0 } else { (F(u[0]) * w[1]).msub(u[1], w[0]).0 };
             let bent = vmul(&vmul(&m, &axis_cos(dot.clamp(-1.0, 1.0), if cr < 0.0 { -1.0 } else { 1.0 }, axis)), &transpose3(&frame));
             hand = keep_row3(bent, &hand);
