@@ -636,7 +636,7 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let z = zoom(&m.grid).1;
     look::backdrop(d);
     let n0 = d.out.len();
-    let (list, side) = chrome(d, m, opts.len(), page_name(m.screen), "");
+    let (list, side) = chrome(d, m, opts.len(), page_name(m.screen), "Changes apply right away");
     let mut edit = None;
     for (i, &o) in opts.iter().enumerate() {
         let r @ [x, y, w, h] = row(list, opts.len(), i);
