@@ -54,7 +54,7 @@ use crate::Args;
 use crate::play::controls::Bindings;
 
 /// The baked previews' drawing version: part of the cache folder's name.
-const RENDER: u32 = 8;
+const RENDER: u32 = 9;
 /// B219: Ashley's face square, grown about its centre to sit like the rest of the cast's.
 const ASHLEY_ZOOM: f32 = 1.25;
 /// A baked preview's size: the card's 128×160 at 3× (sharp on a window up to 1344 lines); a multiple of 64 bytes a
