@@ -282,6 +282,17 @@ for spec in filter(None, os.environ.get("HST_CHAR", "").split(",")):
     k, off, v = spec.split(":")
     rec = p.read32(p.read32(p.read32(gm0 + 0xa8 + 4 * int(k)) + 0x80) + 8)
     p.write32(rec + int(off, 0), struct.unpack("<I", struct.pack("<f", float(v)))[0])
+# HST_WINDOW=<n> (P11k5): in rallies (shot count >= 2; serves and returns keep the game's 180, or nobody returns
+# one) every CPU's path window (ai +0x34) takes n, so its copy ends before the second bounce (NET/BASE's not-found
+# short-landing walk) and, once the ball has bounced, the walk's later fallbacks run: the after-bounce descent, entry
+# 11 (n >= 12) or the last entry (n <= 11); tests read the window from the AI region
+WINDOW = int(os.environ.get("HST_WINDOW", "0"))
+def window():
+    n = WINDOW if p.read32(0x423060) >= 2 else 180
+    for k in range(4):
+        pl = p.read32(gm0 + 0xa8 + 4 * k)
+        ai = pl and p.read32(pl + 0x80)
+        if ai and p.read32(ai + 0x34) != n: p.write32(ai + 0x34, n)
 # HST_PATH_STOP=<z> (P11k4): once per serve, when the served ball is past |z| = z on the receiver's half, the path
 # object stops growing (+0x5c = 0, as at its 600-entry cap), so the AI's copy runs down below 12 entries
 PATH_STOP = float(os.environ.get("HST_PATH_STOP", "0"))
@@ -433,6 +444,7 @@ try:
         time.sleep(0.03 if DRIVE else 0.1)
         if DRIVE: drive()
         if PATH_STOP: path_stop()
+        if WINDOW: window()
         if p.read32(PTR) > BUF + (END - BUF) // 3:
             p.pause()
             chunks.append(drain())
