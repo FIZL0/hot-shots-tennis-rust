@@ -182,8 +182,27 @@ impl Graphics {
         if self.vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync }
     }
 
+    /// The MSAA samples the cameras draw at: 1 on WebGL2 ([`webgl2`]), else the setting.
+    pub fn msaa_drawn(&self) -> u32 {
+        if webgl2() { 1 } else { self.msaa }
+    }
+
     pub fn window_mode(&self) -> WindowMode {
         if self.windowed || KEEP_WINDOWED.load(Ordering::Relaxed) { WindowMode::Windowed } else { WindowMode::BorderlessFullscreen(MonitorSelection::Current) }
+    }
+}
+
+/// P54: the WebGL2 renderer (the browser's WebGL2 build, or `HST_WEBGL2=1` natively), where MSAA stays off whatever
+/// the setting says: each sample count is its own set of mesh pipelines, and WebGL2 compiles them on the main thread,
+/// so the first match built every one a second time at 4x (79 pipelines, ~12 s stalled; the menus draw at 1x). The
+/// setting is kept (Options greys it), so WebGPU and native draw it as chosen.
+pub fn webgl2() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return cfg!(not(feature = "webgpu"));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("HST_WEBGL2").is_some())
     }
 }
 
@@ -523,7 +542,7 @@ fn msaa(g: Res<Graphics>, mut q: Query<&mut Msaa, With<crate::hud_gamma::Scene>>
         use bevy::render::render_resource::TextureFormat;
         [TextureFormat::Rgba16Float, TextureFormat::Depth32Float].iter().any(|&f| !a.get_texture_format_features(f).flags.sample_count_supported(2))
     });
-    let m = Msaa::from_samples(if (cfg!(all(target_arch = "wasm32", feature = "webgpu")) || no_2x) && g.msaa == 2 { 4 } else { g.msaa });
+    let m = Msaa::from_samples(if (cfg!(all(target_arch = "wasm32", feature = "webgpu")) || no_2x) && g.msaa_drawn() == 2 { 4 } else { g.msaa_drawn() });
     for mut c in &mut q {
         c.set_if_neq(m);
     }
@@ -666,7 +685,7 @@ fn fps_counter(
             a(enc),
             a(sub),
             g.shadows.name(),
-            msaa_name(g.msaa),
+            msaa_name(g.msaa_drawn()),
         );
     }
     if frame >= 500.0 || g.show_fps == 1 {
@@ -858,7 +877,7 @@ pub fn pick(d: &Device) -> Graphics {
 }
 
 /// One step cheaper, every preset's 60 fps kept (30 is unplayable, user 2026-10-15): the speed-ups on, then the scale
-/// down to 67 %, Low shadows, MSAA halved to off, half scale, no shadows, quarter meshes (from Phone: Low, then down to
+/// down to 67 %, Low shadows, MSAA halved to off (skipped on WebGL2, where it's off anyway), half scale, no shadows, quarter meshes (from Phone: Low, then down to
 /// Lowest). `None` at the bottom.
 pub fn cheaper(g: Graphics) -> Option<Graphics> {
     let mut c = g;
@@ -868,7 +887,7 @@ pub fn cheaper(g: Graphics) -> Option<Graphics> {
         c.scale = SCALES.into_iter().rev().find(|&s| s < g.scale)?;
     } else if g.shadows == Shadows::High {
         c.shadows = Shadows::Low;
-    } else if g.msaa > 1 {
+    } else if g.msaa_drawn() > 1 {
         c.msaa = g.msaa / 2;
     } else if g.scale > 50 && !g.original {
         c.scale = 50;

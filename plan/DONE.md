@@ -719,6 +719,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B490** Online lobby: drop the NEAR SIDE / FAR SIDE labels in singles (user 2026-10-16): each client keeps its own player on the near side, so the labels mean nothing; show the two seats without side names (doubles' TEAM 1 / TEAM 2 stay) — crates/hst/src/play/main_menu/online/lobby.rs
 - [x] **B491** Website GitHub button (user 2026-10-16): the 'Open source on GitHub' pill reads just 'GitHub' with the GitHub mark icon before it (inline SVG, no external request) → web/index.html
 - [x] **B492** Release hardening (user 2026-10-16): audit for debug code, dev-only paths and diagnostics that should be off in release builds for stability — debug overlays/keys, HST_* debug env vars, census/trace logging, asserts/unwraps on user data, dev features in Cargo features/profiles (debug-assertions, bevy dev features, dynamic_linking), verbose log levels; gate or remove them, keep tests' hooks → Cargo.toml · crates/hst/src/main.rs · crates/hst/build.rs · tools/release.sh
+- [x] **P54** WebGL2: turn off the settings that blow up the pipeline count and stall it (user 2026-10-16): MSAA (hst-log 10: every mesh pipeline at samples 4), plus whatever else doubles variants there (prepass). Force them off on WebGL2 and hide/grey them in Options with a note; WebGPU and native keep them → crates/hst-base/src/graphics.rs, play/main_menu/options.rs
 
 
 ### Shots
