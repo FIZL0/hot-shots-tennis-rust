@@ -26,15 +26,24 @@ if t.get('tool_name') == 'Bash' and (re.search(r'/tasks/\w+\.output', cmd) or TE
     sys.exit(print('Don\'t poll a background task or test run: end your turn now (say what you are waiting for); its '
                    'completion notification wakes you and the runner keeps the session alive meanwhile. Run '
                    'tools/check.sh / tools/done.sh in the foreground: they get a 60 min timeout.', file=sys.stderr) or 2)
+def git_dirs(cmd):
+    """(git dir, common git dir) of the repo the command's git runs in: its `git -C DIR`, else its last `cd DIR`,
+    else the session's cwd (a `cd ../ps2-decomp-kit-linux && git commit -a` is not the main checkout)."""
+    import os.path, subprocess
+    m = re.search(r'\bgit\s+-C\s+(\S+)', cmd) or ([None] + list(re.finditer(r'(?:^|[;&|(]\s*)cd\s+(\S+)', cmd)))[-1]
+    base = t.get('cwd') or ROOT
+    d = os.path.join(base, os.path.expanduser(m.group(1).strip('"\''))) if m else base
+    return [subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=d if os.path.isdir(d) else base,
+                           capture_output=True, text=True).stdout.strip() for f in ('--git-dir', '--git-common-dir')]
+
+
+MAIN_GIT = os.path.realpath(os.path.join(ROOT, '.git'))  # only this repo's main checkout, not other repos or worktrees
 # main checkout: several sessions edit it at once, so sweeping commits (add -A/./-u, commit -a) take the others' edits
 # (worktrees -- runner slots -- are exempt: their .git dir differs from the common one)
 SWEEP = re.compile(r'\bgit\b[^;&|]*\badd\b[^;&|]*\s(-A|--all|-u|--update|\.|:/)(?=\s|$|[;&|)])'
                    r'|\bgit\b[^;&|]*\bcommit\b[^;&|]*\s(-[a-zA-Z]*a[a-zA-Z]*|--all)(?=\s|$|[;&|)])')
 if t.get('tool_name') == 'Bash' and SWEEP.search(cmd):
-    import subprocess
-    d = [subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=t.get('cwd') or ROOT, capture_output=True,
-                        text=True).stdout.strip() for f in ('--git-dir', '--git-common-dir')]
-    if d[0] and d[0] == d[1]:
+    if git_dirs(cmd)[0] == MAIN_GIT:
         sys.exit(print('Main checkout is shared with other sessions: stage and commit only your own paths '
                        '(git add <paths>; git commit -m ... -- <paths>), never add -A/./-u or commit -a. '
                        'Bigger work: git worktree add ../opentennis-<slug>.', file=sys.stderr) or 2)
@@ -43,10 +52,7 @@ if t.get('tool_name') == 'Bash' and SWEEP.search(cmd):
 MARK = os.path.join(ROOT, '.git/runner-merge')
 if t.get('tool_name') == 'Bash' and os.path.exists(MARK) and time.time() - os.path.getmtime(MARK) < 3 * 3600 \
         and re.search(r'\bgit\b[^;&|]*\b(commit|push|merge|reset|pull|rebase|cherry-pick|stash)(?![\w-])', cmd):
-    import subprocess
-    d = [subprocess.run(['git', 'rev-parse', '--path-format=absolute', f], cwd=t.get('cwd') or ROOT, capture_output=True,
-                        text=True).stdout.strip() for f in ('--git-dir', '--git-common-dir')]
-    if d[0] and d[0] == d[1]:
+    if git_dirs(cmd)[0] == MAIN_GIT:
         sys.exit(print(f'The runner is testing its merge of task/{open(MARK).read().strip()} in main (a few minutes): '
                        'don\'t commit, push or move main until .git/runner-merge is gone; do other work, then retry.',
                        file=sys.stderr) or 2)
