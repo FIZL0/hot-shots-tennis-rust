@@ -1760,7 +1760,7 @@ mod tests {
 
     /// M118: re-uploads the mods in `HST_REUPLOAD` (folders, space-separated) with the game's own packaging, as the
     /// account in `HST_TOKEN` (an `hf-token.txt`: name, then token), onto that account's open pull request of each
-    /// (a mod with no `previews/` keeps the PR's picture). For rebuilt upscales (`tools/upscale_mods.py --check`).
+    /// (a mod with no `previews/` keeps the PR's picture; a texture pack is checked against `HST_ISO`). For rebuilt upscales (`tools/upscale_mods.py --check`).
     /// Network, writes to the store: `HST_REUPLOAD="…" HST_TOKEN=hf-token.txt tools/check.sh -p hst-base reupload -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -1773,7 +1773,7 @@ mod tests {
         let mut failed = 0;
         for d in dirs.split_whitespace() {
             let m = crate::mods::read_any(std::path::Path::new(d)).unwrap();
-            let got = rt.block_on(super::upload(&m, None, None, name, token.trim(), &mut own));
+            let got = rt.block_on(super::upload(&m, None, None, name, token.trim(), &std::env::var("HST_ISO").unwrap_or_default(), &mut own));
             failed += got.is_err() as usize;
             eprintln!("{}: {got:?}", m.id);
         }
