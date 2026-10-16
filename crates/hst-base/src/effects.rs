@@ -609,10 +609,9 @@ pub struct BallFlight {
 pub fn load_flight(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshes: &mut Assets<Mesh>, materials: &mut Assets<Fx>, images: &mut Assets<Image>) -> Result<BallFlight, String> {
     let ribbon = meshes.add(Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::default()));
     let view = commands.spawn((Mesh3d(ribbon.clone()), MeshMaterial3d(look(iso, "ballrolling", materials, images)?), Transform::default(), crate::cull::Cullable)).id();
-    let mut looks = Vec::new();
-    for k in ["slice", "top", "flat", "lob", "drop"] {
-        looks.push(look(iso, &format!("impactef_{k}"), materials, images)?);
-    }
+    // Z21: `Glow::start` shows slice's for flat and top's for drop, so `impactef_flat` and `impactef_drop` are never read
+    let (slice, top) = (look(iso, "impactef_slice", materials, images)?, look(iso, "impactef_top", materials, images)?);
+    let looks = vec![slice.clone(), top.clone(), slice, look(iso, "impactef_lob", materials, images)?, top];
     let disc = commands.spawn((Mesh3d(meshes.add(Rectangle::new(2.0 * GLOW_SIZE, 2.0 * GLOW_SIZE))), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden)).id();
     commands.entity(parent).add_children(&[view, disc]);
     Ok(BallFlight { flight: Flight::default(), glow: Glow::default(), ribbon, disc, pos: Vec3::ZERO, vel: Vec3::ZERO, prev: Vec3::ZERO, looks: looks.try_into().unwrap() })

@@ -125,7 +125,7 @@ fn backdrop(r: Row) -> [f32; 3] {
 
 /// The main screen.
 pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f32) {
-    d.frame(0, 5);
+    d.frame(0, super::WALL);
     // the header's right: pads and disc (only SCUS-97610 gets this far, `exe`), B302's build version and commit
     // under it (`+` if built with local changes; the font has no `·`); `Sides` pins each side of 320 to its own
     // edge, so neither line may reach the middle

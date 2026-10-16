@@ -1500,7 +1500,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     match m.screen {
         Screen::Online => online_screen(d, m, hand_x),
         Screen::Lobbies => {
-            d.frame(8, 5);
+            d.frame(8, super::WALL);
             // B195: every open lobby, singles and doubles together, a row each: host, kind, court, open seats
             let n = m.net.list.len();
             // ponytail: one page of 6 rows (B496: the note under them); scroll when lobbies get that many
@@ -1564,7 +1564,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             osk::draw(d, &m.net.entry, m.sel, hand_x, osk::Look { title: Some("Your name (the other players see it)"), done: "Save", full });
         }
         Screen::Code => {
-            d.frame(8, 5);
+            d.frame(8, super::WALL);
             const ON: [f32; 3] = [128.0, 110.0, 40.0];
             const OFF: [f32; 3] = [70.0, 70.0, 80.0];
             let keys = m.keys();
@@ -1644,7 +1644,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 lobby::draw(d, m, status.as_deref());
                 return;
             }
-            d.frame(6, 5);
+            d.frame(6, super::WALL);
             // B236: no lobby yet: what's happening, the spinner turning; or why it stopped
             let sub = "Progress shows below. It gives up on its own if nothing answers.";
             match (m.net.pick_next, m.net.go) {
@@ -1686,7 +1686,7 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
     const MUTED: [f32; 3] = [45.0, 40.0, 52.0];
     const SMALL: [f32; 3] = [84.0, 96.0, 110.0];
     let fit = super::home::fit_text;
-    d.frame(8, 5);
+    d.frame(8, super::WALL);
     d.anchor = super::Anchor::Span;
     d.outlined(|d| d.text("<", 10.0, 5.0, 30.0, WHITE));
     d.anchor = super::Anchor::Centre;

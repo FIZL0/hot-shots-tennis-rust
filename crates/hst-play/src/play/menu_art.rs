@@ -35,58 +35,31 @@ type Label<'a> = (u16, u16, u16, u16, &'a str);
 struct Sheet {
     name: &'static str,
     labels: &'static [Label<'static>],
-    /// A screen's title bar: these words where the disc's title stands on its stripes (box found at run time), with a
-    /// drop shadow.
-    title: Option<&'static str>,
     /// B141a: stylised words and digits of ours, each cell cleared and stamped in its [`Look`].
     stamps: &'static [Stamp],
-    /// B141a: icons of ours drawn over the sheet (each clears its own cells).
-    icons: Option<fn(&mut Pixmap)>,
 }
 
 const fn sheet(name: &'static str, labels: &'static [Label<'static>]) -> Sheet {
-    Sheet { name, labels, title: None, stamps: &[], icons: None }
-}
-
-const fn title(name: &'static str, words: &'static str) -> Sheet {
-    Sheet { name, labels: &[], title: Some(words), stamps: &[], icons: None }
+    Sheet { name, labels, stamps: &[] }
 }
 
 const fn stamped(name: &'static str, labels: &'static [Label<'static>], stamps: &'static [Stamp]) -> Sheet {
-    Sheet { name, labels, title: None, stamps, icons: None }
+    Sheet { name, labels, stamps }
 }
 
-/// Rounded bars drawn again as shapes (x, y, w, h on the disc sheet): a 2-px dark rim, a 2-px white ring and a flat
-/// fill, each colour taken from the disc bar, so their round ends stay smooth (the mode pills).
-const PILLS: &[(&str, &[(u16, u16, u16, u16)])] = &[("characterselect2_00", &[(0, 0, 256, 32), (0, 32, 256, 32)])];
-
 const SHEETS: &[Sheet] = &[
-    sheet("option_00", OPTION_00),
     sheet("word", &[]),
-    sheet("characterselect2_00", CS0),
-    sheet("characterselect2_02", NAMES),
     sheet("characterselect2_04", ATTRS),
-    sheet("keyassign_characterselect2", KEYS),
-    sheet("confirmation_01", COURTS),
-    stamped("confirmation_03", CONFIRM, &[((448, 268, 64, 41), "VS", VS)]),
-    sheet("confirmation_04", RANKS),
-    sheet("i_dialog_01", DIALOG),
     sheet("loading", &[(2, 152, 195, 32, "Now Loading...")]),
     sheet("inpane_pause02", PAUSED),
     sheet("inpane_team", TEAMS),
     sheet("result_status01", STATS),
     sheet("keyassign_inpane", RESULT_KEYS),
-    title("title_mainmenu", "Main Menu"),
-    title("title_option", "Options"),
-    title("title_playerselect", "Game Selection"),
-    title("title_characterselect2", "Character Selection"),
-    title("title_confirmation_01", "Confirm Settings (Fun Time Tennis)"),
     stamped("result_gameset01", &[], &DIGITS_PAST),
     stamped("result_gameset02", &[], &DIGITS_NOW),
     stamped("result_gameset05", &[], BANNERS),
     stamped("inpane_pause00", &[], POINTS),
     stamped("inpane_pause01", &[], TIEBREAK),
-    Sheet { name: "info", labels: &[], title: None, stamps: &[], icons: Some(info_icons) },
 ];
 
 
@@ -135,9 +108,6 @@ const BANNERS: &[Stamp] = &[
     ((8, 412, 240, 54), "NARROW LOSS", look([195, 232, 255], [35, 125, 200], [10, 45, 90], 3.0, 0.0)),
 ];
 
-/// The confirm screen's "VS".
-const VS: Look = look([255, 225, 80], [230, 70, 20], [120, 30, 10], 2.5, 0.2);
-
 /// The pause board's points (64×48 cells as `menu::POINT_U`/`POINT_V` place them): gold, the tiebreak's red.
 const GOLD: Look = look([255, 240, 130], [230, 160, 20], [90, 50, 10], 2.5, 0.15);
 const RED: Look = look([255, 160, 160], [190, 35, 50], [80, 10, 20], 2.5, 0.15);
@@ -162,62 +132,6 @@ const TIEBREAK: &[Stamp] = &[
     ((68, 196, 56, 40), "A", RED),
 ];
 
-/// The mode bars, card labels, play styles and the stat names of the select (CS0).
-const CS0: &[Label<'static>] = &[
-    (88, 5, 80, 22, "Singles"),
-    (84, 37, 89, 21, "Doubles"),
-    (299, 5, 34, 13, "Serve"),
-    (297, 21, 38, 13, "Stroke"),
-    (298, 37, 36, 14, "Volley"),
-    (297, 53, 39, 14, "Impact"),
-    (290, 69, 53, 13, "Footwork"),
-    (293, 85, 47, 13, "Stamina"),
-    (190, 66, 28, 20, "1P"),
-    (230, 66, 29, 20, "2P"),
-    (189, 90, 30, 20, "3P"),
-    (229, 90, 30, 20, "4P"),
-    (145, 116, 43, 17, "COM"),
-    (89, 140, 21, 7, "Both"),
-    (89, 149, 26, 7, "hands"),
-    (89, 164, 24, 9, "Right"),
-    (89, 173, 31, 7, "hander"),
-    (89, 188, 17, 7, "Left"),
-    (89, 197, 31, 7, "hander"),
-    (320, 115, 144, 21, "All-round Player"),
-    (326, 139, 133, 21, "Baseline Player"),
-    (347, 163, 91, 21, "Net Player"),
-    (345, 187, 93, 23, "Big Server"),
-    (4, 211, 104, 21, "Ready to go!"),
-    (2, 236, 109, 18, "Not selectable"),
-    (402, 273, 25, 16, "Flat"),
-    (399, 297, 30, 16, "Slice"),
-    (391, 321, 45, 17, "Topspin"),
-    (394, 345, 40, 16, "Smash"),
-    (393, 369, 42, 18, "Volley"),
-    (275, 364, 74, 16, "All-round"),
-    (279, 388, 66, 16, "Baseline"),
-    (272, 412, 81, 18, "Net Player"),
-    (272, 435, 81, 19, "Big Server"),
-];
-
-/// The characters' names on the select's cards.
-const NAMES: &[Label<'static>] = &[
-    (32, 2, 64, 21, "Ashley"),
-    (41, 26, 48, 21, "Cody"),
-    (47, 50, 34, 18, "Jun"),
-    (41, 74, 48, 18, "Kaito"),
-    (27, 98, 76, 18, "Momoko"),
-    (54, 122, 20, 18, "JJ"),
-    (40, 146, 49, 18, "Carol"),
-    (23, 170, 84, 21, "Big Chief"),
-    (28, 194, 75, 18, "Miranda"),
-    (43, 218, 44, 18, "Kent"),
-    (45, 242, 41, 18, "Lola"),
-    (46, 266, 36, 18, "Will"),
-    (36, 290, 57, 18, "Gloria"),
-    (33, 314, 62, 18, "Suzuki"),
-];
-
 /// The attribute card: play styles, stat names and the A–F grades.
 const ATTRS: &[Label<'static>] = &[
     (33, 81, 74, 16, "All-round"),
@@ -237,109 +151,6 @@ const ATTRS: &[Label<'static>] = &[
     (236, 75, 16, 17, "D"),
     (237, 99, 14, 17, "E"),
     (237, 123, 14, 17, "F"),
-];
-
-/// The select's key hints.
-const KEYS: &[Label<'static>] = &[(0, 5, 103, 15, "Show Attributes"), (0, 28, 130, 17, "Select Costume"), (1, 50, 154, 20, "Select Costume")];
-
-/// Court names, surfaces and the umpires' names.
-const COURTS: &[Label<'static>] = &[
-    (0, 2, 214, 21, "North Academy Grounds"),
-    (0, 26, 227, 18, "Aloha Beach Tennis Court"),
-    (0, 50, 252, 18, "Western Prairie Tennis Court"),
-    (0, 74, 221, 21, "Sakuragaoka Park Courts"),
-    (0, 98, 204, 20, "Queen's Tennis Garden"),
-    (0, 122, 183, 21, "Alpine Heights Court"),
-    (0, 146, 229, 18, "Grand Palais Indoor Court"),
-    (0, 170, 214, 18, "Wild Green Tennis Court"),
-    (0, 194, 203, 21, "Nakagawa River Courts"),
-    (0, 218, 216, 21, "Temple of Olympia Court"),
-    (0, 242, 178, 21, "Miyabi Tennis Grove"),
-    (70, 288, 119, 20, "Grass Court"),
-    (77, 312, 105, 21, "Clay Court"),
-    (75, 334, 109, 22, "Hard Court"),
-    (8, 366, 54, 19, "Chika"),
-    (8, 398, 64, 19, "Suzuki"),
-    (9, 430, 35, 22, "Lily"),
-    (8, 459, 44, 14, "Robot"),
-    (7, 473, 49, 12, "Tennis"),
-    (143, 462, 51, 19, "Anna"),
-];
-
-/// The confirmation screen: modes, setting names, offbeat rules, handicaps and play styles.
-const CONFIRM: &[Label<'static>] = &[
-    (2, 5, 107, 20, "Free Game"),
-    (2, 37, 202, 23, "Hot Shots Challenge"),
-    (1, 70, 143, 22, "Training Mode"),
-    (2, 102, 162, 19, "Fun Time Tennis"),
-    (2, 133, 124, 20, "Select Court"),
-    (1, 165, 185, 23, "Advanced Settings"),
-    (2, 197, 132, 23, "Set Handicap"),
-    (2, 229, 132, 20, "Offbeat Rules"),
-    (2, 261, 139, 23, "Select Umpire"),
-    (27, 298, 145, 18, "Irregular Bounce"),
-    (45, 330, 108, 18, "Slow Motion"),
-    (0, 364, 198, 14, "Overhead Camera Always on Same Side"),
-    (64, 465, 175, 18, "All Offbeat Rules On"),
-    (361, 488, 31, 19, "ON"),
-    (405, 488, 39, 19, "OFF"),
-    (256, 6, 64, 19, "Games"),
-    (256, 38, 43, 19, "Sets"),
-    (256, 70, 117, 19, "Select Court"),
-    (256, 102, 125, 22, "Select Umpire"),
-    (255, 134, 125, 22, "Advanced Settings"),
-    (231, 166, 161, 20, "Start the match!"),
-    (290, 198, 69, 22, "Umpire"),
-    (249, 229, 125, 23, "Settings OK!"),
-    (256, 262, 125, 22, "Set Handicap"),
-    (249, 294, 125, 22, "Ready to go!"),
-    (290, 326, 157, 22, "Irregular Bounce"),
-    (289, 358, 116, 19, "Slow Motion"),
-    (385, 6, 125, 19, "Offbeat Rules"),
-    (409, 38, 50, 19, "None"),
-    (483, 38, 27, 19, "1P"),
-    (388, 70, 88, 22, "Weight x 1"),
-    (482, 70, 28, 19, "2P"),
-    (388, 102, 90, 22, "Weight x 2"),
-    (482, 102, 28, 19, "3P"),
-    (388, 134, 90, 22, "Weight x 3"),
-    (482, 134, 28, 19, "4P"),
-    (419, 172, 74, 16, "All-round"),
-    (423, 196, 66, 16, "Baseline"),
-    (416, 220, 81, 16, "Net Player"),
-    (416, 243, 81, 17, "Big Server"),
-];
-
-/// The rank titles.
-const RANKS: &[Label<'static>] = &[
-    (6, 2, 82, 18, "Tennis Lv 5"),
-    (6, 26, 82, 18, "Tennis Lv 4"),
-    (6, 50, 82, 18, "Tennis Lv 3"),
-    (6, 74, 82, 18, "Tennis Lv 2"),
-    (6, 98, 80, 18, "Tennis Lv 1"),
-    (4, 122, 86, 21, "Tennis Hopeful"),
-    (5, 146, 84, 18, "Tennis Tier II"),
-    (3, 170, 88, 18, "Tennis Tier III"),
-    (2, 194, 91, 18, "Tennis Tier IV"),
-    (98, 2, 93, 18, "Tennis Tier V"),
-    (101, 26, 87, 18, "Tennis Master"),
-    (103, 50, 82, 18, "Tennis Elite"),
-    (101, 74, 86, 18, "Tennis Guru"),
-    (99, 98, 90, 21, "Tennis Legend"),
-    (102, 122, 85, 18, "Tennis Hero"),
-    (103, 146, 82, 21, "Tennis King"),
-    (99, 170, 90, 21, "Tennis Superstar"),
-];
-
-/// The pause and result dialogs' rows.
-const DIALOG: &[Label<'static>] = &[
-    (78, 3, 101, 24, "Resume"),
-    (4, 35, 249, 24, "Return to the Menu"),
-    (2, 66, 253, 29, "Retry with Same Settings"),
-    (41, 98, 175, 25, "Save and Exit"),
-    (75, 131, 111, 24, "Rematch"),
-    (96, 163, 70, 28, "Retry"),
-    (12, 195, 236, 24, "Resume the Match"),
 ];
 
 /// The pause panel's heading, set count and words.
@@ -400,34 +211,6 @@ const RESULT_KEYS: &[Label<'static>] = &[
     (2, 50, 96, 20, "Continue"),
     (1, 74, 72, 20, "Cancel"),
     (2, 99, 55, 19, "Done"),
-];
-
-const OPTION_00: &[Label<'static>] = &[
-    (235, 5, 71, 21, "Sound"),
-    (429, 5, 39, 23, "ON"),
-    (239, 37, 65, 21, "Music"),
-    (423, 37, 51, 23, "OFF"),
-    (194, 69, 154, 25, "Short Replays"),
-    (408, 71, 83, 23, "Opening"),
-    (233, 101, 77, 21, "Movies"),
-    (416, 104, 69, 22, "Ending"),
-    (218, 133, 107, 24, "Load Tips"),
-    (422, 136, 57, 19, "Mono"),
-    (220, 165, 101, 21, "Vibration"),
-    (417, 167, 67, 20, "Stereo"),
-    (219, 197, 103, 21, "Autosave"),
-    (201, 229, 140, 21, "Shot Markers"),
-    (399, 231, 104, 23, "Infrequent"),
-    (27, 238, 75, 20, "Default"),
-    (174, 261, 194, 21, "Overhead Camera"),
-    (27, 271, 75, 22, "English"),
-    (405, 264, 91, 22, "Frequent"),
-    (231, 293, 80, 21, "Voices"),
-    (29, 303, 71, 19, "French"),
-    (32, 335, 64, 19, "Italian"),
-    (24, 366, 79, 20, "German"),
-    (23, 398, 82, 23, "Spanish"),
-    (16, 431, 96, 22, "Japanese"),
 ];
 
 /// `data` (a TIM2 sheet called `name`) as an image: rebuilt if it's one of ours, else the disc's.
@@ -551,17 +334,10 @@ impl Steps {
         let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
         let (w, h) = (pic.width as usize, pic.height as usize);
         let mut labels: Vec<(u16, u16, u16, u16, String)> = sheet.labels.iter().map(|&(x, y, lw, lh, t)| (x, y, lw, lh, t.to_string())).collect();
-        let mut shadow = false;
-        if let Some(words) = sheet.title {
-            let (x, y, lw, lh) = title_box(&pic.rgba, w, h);
-            labels.push((x, y, lw, lh, words.to_string()));
-            shadow = true;
-        }
         if name == "word" {
             labels.extend(glyph_boxes(&pic.rgba, w));
         }
-        let pills = PILLS.iter().find(|p| p.0 == name).map_or(&[][..], |p| p.1);
-        let redo = Rebuild::new(w, h, &pic.rgba, pills, labels, if name == "word" { BOLD } else { HEAVY }, shadow);
+        let redo = Rebuild::new(w, h, &pic.rgba, labels, if name == "word" { BOLD } else { HEAVY });
         Steps { name: name.to_string(), sheet, redo, stamps: None, pixels: None }
     }
 
@@ -588,9 +364,6 @@ impl Steps {
             return None;
         }
         let Some(px) = &mut self.pixels else {
-            if let Some(icons) = self.sheet.icons {
-                icons(out);
-            }
             if let Ok(dir) = std::env::var("HST_MENU_ART") {
                 let _ = image::save_buffer(format!("{dir}/{}.png", self.name), out.data(), out.width(), out.height(), image::ColorType::Rgba8);
             }
@@ -657,7 +430,7 @@ pub(crate) fn relabel(images: &mut Assets<Image>, w: usize, h: usize, rgba: &[u8
     let ink: Vec<(usize, usize)> = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| rgba[(y * w + x) * 4 + 3] > 0x20).collect();
     let (x0, y0) = (ink.iter().map(|p| p.0).min()?, ink.iter().map(|p| p.1).min()?);
     let (x1, y1) = (ink.iter().map(|p| p.0).max()? + 1, ink.iter().map(|p| p.1).max()? + 1);
-    let out = rebuild(w, h, rgba, &[], &[(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16, s)], HEAVY, false);
+    let out = rebuild(w, h, rgba, &[(x0 as u16, y0 as u16, (x1 - x0) as u16, (y1 - y0) as u16, s)], HEAVY);
     let (w, h) = (out.width(), out.height());
     let handle = images.add(Image::new(Extent3d { width: w, height: h, depth_or_array_layers: 1 }, TextureDimension::D2, unpremultiply(out), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD));
     crate::textures::ours(handle.id(), Vec2::splat(K as f32));
@@ -669,53 +442,43 @@ pub(crate) fn unpremultiply(p: Pixmap) -> Vec<u8> {
 }
 
 /// The sheet at `K`×: labels erased and set again, the rest snapped sharp.
-fn rebuild(w: usize, h: usize, rgba8: &[u8], pills: &[(u16, u16, u16, u16)], labels: &[Label], font: &'static [u8], shadow: bool) -> Pixmap {
+fn rebuild(w: usize, h: usize, rgba8: &[u8], labels: &[Label], font: &'static [u8]) -> Pixmap {
     let labels = labels.iter().map(|&(x, y, lw, lh, t)| (x, y, lw, lh, t.to_string())).collect();
-    let mut r = Rebuild::new(w, h, rgba8, pills, labels, font, shadow);
+    let mut r = Rebuild::new(w, h, rgba8, labels, font);
     while !r.step() {}
     r.out
 }
 
 /// [`rebuild`] a step at a time (B409): the disc picture with its labels erased, then scaled up a band of rows a step,
-/// the pills, then a label a step.
+/// then a label a step.
 struct Rebuild {
     w: usize,
     h: usize,
     /// The erased picture, premultiplied, so a colour doesn't bleed out of a transparent neighbour.
     pm: Vec<[f32; 4]>,
-    pills: Vec<(u16, u16, u16, u16, [Vec<u8>; 3])>,
     labels: Vec<(u16, u16, u16, u16, String)>,
     styles: Vec<Style>,
     font: &'static [u8],
-    shadow: bool,
     out: Pixmap,
     /// Output rows scaled up so far, then labels set (past the rows).
     at: usize,
 }
 
 impl Rebuild {
-    fn new(w: usize, h: usize, rgba8: &[u8], pills: &[(u16, u16, u16, u16)], labels: Vec<(u16, u16, u16, u16, String)>, font: &'static [u8], shadow: bool) -> Rebuild {
+    fn new(w: usize, h: usize, rgba8: &[u8], labels: Vec<(u16, u16, u16, u16, String)>, font: &'static [u8]) -> Rebuild {
         let mut rgba: Vec<[f32; 4]> = rgba8.chunks(4).map(|c| [c[0], c[1], c[2], c[3]].map(|v| v as f32 / 255.0)).collect();
         let styles: Vec<Style> = labels.iter().map(|&(x, y, lw, lh, ref t)| Style::sample(&rgba, w, h, &(x, y, lw, lh, t))).collect();
         for (&(x, y, lw, lh, ref t), s) in labels.iter().zip(&styles) {
             // an outline's faint outer pixel lies just past the ink box (left behind, it reads as a cut-off outline round
-            // the new one); a title's old shadow stands 2 px down and right of its words
+            // the new one)
             let m = (s.width > 0.0) as u16;
             let (x, y) = (x.saturating_sub(m), y.saturating_sub(m));
-            let pad = 2 * m + if shadow { 3 } else { 0 };
+            let pad = 2 * m;
             erase(&mut rgba, w, h, &(x, y, (lw + pad).min(w as u16 - x), (lh + pad).min(h as u16 - y), t));
         }
-        // colours from the disc bar: rim and ring at the top middle, the fill halfway down left of the words
-        let pills = pills
-            .iter()
-            .map(|&(x, y, pw, ph)| {
-                let at = |dx: u16, dy: u16| rgba8[((y + dy) as usize * w + (x + dx) as usize) * 4..][..3].to_vec();
-                (x, y, pw, ph, [at(pw / 2, 0), at(pw / 2, 2), at(20, ph / 2)])
-            })
-            .collect();
         let pm = rgba.iter().map(|c| [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]).collect();
         let out = Pixmap::new(w as u32 * K, h as u32 * K).expect("sheet size");
-        Rebuild { w, h, pm, pills, labels, styles, font, shadow, out, at: 0 }
+        Rebuild { w, h, pm, labels, styles, font, out, at: 0 }
     }
 
     /// Does the next piece; true once it's all done.
@@ -725,35 +488,13 @@ impl Rebuild {
             let to = (self.at + (BAND / self.out.width() as usize).max(1)).min(oh);
             upscale(&self.pm, self.w, self.h, &mut self.out, self.at..to);
             self.at = to;
-            if to == oh {
-                for (x, y, pw, ph, cols) in std::mem::take(&mut self.pills) {
-                    pill(&mut self.out, x, y, pw, ph, cols);
-                }
-            }
             return false;
         }
         let Some(&(x, y, w, h, ref t)) = self.labels.get(self.at - oh) else { return true };
         let font = ab_glyph::FontRef::try_from_slice(self.font).expect("menu font");
-        label(&mut self.out, &font, &(x, y, w, h, t), &self.styles[self.at - oh], self.shadow);
+        label(&mut self.out, &font, &(x, y, w, h, t), &self.styles[self.at - oh]);
         self.at += 1;
         self.at - oh == self.labels.len()
-    }
-}
-
-/// A stadium in `cols` (rim, ring, fill), outer edge on the disc box, 2 disc px each for the rim and ring.
-fn pill(out: &mut Pixmap, x: u16, y: u16, w: u16, h: u16, cols: [Vec<u8>; 3]) {
-    let k = K as f32;
-    let (x0, y0, x1, y1) = (x as f32 * k, y as f32 * k, (x + w) as f32 * k, (y + h) as f32 * k);
-    // the box's pixels are the bar's own: clear them so the anti-aliased round ends blend onto nothing
-    let ow = out.width();
-    for py in y0 as u32..y1 as u32 {
-        out.pixels_mut()[(py * ow + x0 as u32) as usize..(py * ow + x1 as u32) as usize].fill(tiny_skia::PremultipliedColorU8::TRANSPARENT);
-    }
-    for (i, col) in cols.iter().enumerate() {
-        let d = 2.0 * k * i as f32;
-        let mut paint = Paint { anti_alias: true, ..Paint::default() };
-        paint.set_color_rgba8(col[0], col[1], col[2], 255);
-        out.fill_path(&stadium(x0 + d, y0 + d, x1 - d, y1 - d), &paint, FillRule::Winding, Transform::identity(), None);
     }
 }
 
@@ -920,115 +661,6 @@ fn stamp(out: &mut Pixmap, font: &ab_glyph::FontRef, [x, y, w, h]: [f32; 4], wor
     out.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
 }
 
-/// `info.tm2`'s buttons drawn ours (its left half, the plain boxes and Yes/No, stays the disc's): L1/L2/R1/R2, the
-/// d-pad with each arm lit and plain, △ □ ○ ✕, the orange dot, START and SELECT plain and lit, the four arrows.
-fn info_icons(out: &mut Pixmap) {
-    clear(out, [144.0, 0.0, 112.0, 256.0]);
-    let t = Transform::from_scale(K as f32, K as f32);
-    let font = ab_glyph::FontRef::try_from_slice(HEAVY).expect("menu font");
-    const DARK: [u8; 3] = [24, 24, 28];
-    const BODY: [u8; 3] = [72, 74, 80];
-    const LIT: [u8; 3] = [250, 160, 30];
-    let white = look([255; 3], [215; 3], DARK, 0.0, 0.0);
-    let white = Look { rw: 0.0, ..white };
-    let label = Look { ew: 1.2, rw: 0.0, ..white };
-    for (k, s) in ["L1", "L2", "R1", "R2"].into_iter().enumerate() {
-        let y = 9.0 + 32.0 * k as f32;
-        fill_rgb(out, &rounded(160.0, y, 192.0, y + 19.0, 6.0), DARK, t);
-        fill_rgb(out, &rounded(161.5, y + 1.5, 190.5, y + 17.5, 4.5), BODY, t);
-        stamp(out, &font, [166.0, y + 4.0, 20.0, 11.0], s, &white);
-    }
-    // the d-pad: lit arm k (up, left, right, down) at (208, 16 + 32k); plain at (160, 144)
-    let pads = [(208.0, 16.0, Some(0)), (208.0, 48.0, Some(1)), (208.0, 80.0, Some(2)), (208.0, 112.0, Some(3)), (160.0, 144.0, None)];
-    for (cx, cy, lit) in pads {
-        let (a, l) = (4.0, 13.0);
-        let mut pb = PathBuilder::new();
-        for (px, py) in [(-a, -l), (a, -l), (a, -a), (l, -a), (l, a), (a, a), (a, l), (-a, l), (-a, a), (-l, a), (-l, -a), (-a, -a)] {
-            if pb.is_empty() {
-                pb.move_to(cx + px, cy + py);
-            } else {
-                pb.line_to(cx + px, cy + py);
-            }
-        }
-        pb.close();
-        let cross = pb.finish().expect("d-pad");
-        stroke_rgb(out, &cross, DARK, 2.4, t);
-        fill_rgb(out, &cross, BODY, t);
-        if let Some(arm) = lit {
-            let r = match arm {
-                0 => [cx - a, cy - l, cx + a, cy - a],
-                1 => [cx - l, cy - a, cx - a, cy + a],
-                2 => [cx + a, cy - a, cx + l, cy + a],
-                _ => [cx - a, cy + a, cx + a, cy + l],
-            };
-            let arm = rounded(r[0] + 0.6, r[1] + 0.6, r[2] - 0.6, r[3] - 0.6, 1.5);
-            fill_rgb(out, &arm, LIT, t);
-        }
-    }
-    // △ □ ○ ✕ in their PlayStation colours
-    let face = [[70, 205, 165], [235, 130, 185], [240, 95, 85], [110, 160, 240]];
-    for (k, col) in face.into_iter().enumerate() {
-        let (cx, cy) = (240.0, 16.0 + 32.0 * k as f32);
-        fill_rgb(out, &PathBuilder::from_circle(cx, cy, 12.0).expect("button"), DARK, t);
-        fill_rgb(out, &PathBuilder::from_circle(cx, cy, 10.6).expect("button"), [58, 60, 66], t);
-        let r = 5.5;
-        let mut pb = PathBuilder::new();
-        match k {
-            0 => {
-                pb.move_to(cx, cy - r);
-                pb.line_to(cx + r * 0.95, cy + r * 0.6);
-                pb.line_to(cx - r * 0.95, cy + r * 0.6);
-                pb.close();
-            }
-            1 => pb.push_rect(tiny_skia::Rect::from_xywh(cx - r * 0.8, cy - r * 0.8, r * 1.6, r * 1.6).expect("square")),
-            2 => pb.push_circle(cx, cy, r * 0.9),
-            _ => {
-                pb.move_to(cx - r * 0.8, cy - r * 0.8);
-                pb.line_to(cx + r * 0.8, cy + r * 0.8);
-                pb.move_to(cx + r * 0.8, cy - r * 0.8);
-                pb.line_to(cx - r * 0.8, cy + r * 0.8);
-            }
-        }
-        stroke_rgb(out, &pb.finish().expect("symbol"), col, 2.0, t);
-    }
-    fill_rgb(out, &PathBuilder::from_circle(160.0, 176.0, 13.5).expect("dot"), LIT, t);
-    // START (a play triangle) and SELECT (a flat key), the lit ones rimmed orange, their names under them
-    for (y, rim) in [(132.0, DARK), (162.0, LIT)] {
-        let mut pb = PathBuilder::new();
-        pb.move_to(188.0, y + 2.0);
-        pb.line_to(212.0, y + 10.0);
-        pb.line_to(188.0, y + 18.0);
-        pb.close();
-        let tri = pb.finish().expect("start");
-        stroke_rgb(out, &tri, rim, 3.0, t);
-        fill_rgb(out, &tri, BODY, t);
-        stamp(out, &font, [183.0, y + 18.0, 35.0, 10.0], "START", &label);
-    }
-    for (y, rim) in [(198.0, DARK), (228.0, LIT)] {
-        let key = rounded(186.0, y + 1.0, 214.0, y + 13.0, 3.0);
-        stroke_rgb(out, &key, rim, 2.4, t);
-        fill_rgb(out, &key, BODY, t);
-        stamp(out, &font, [180.0, y + 14.0, 41.0, 10.0], "SELECT", &label);
-    }
-    // the arrows: right, left, down, up
-    let arrows = [
-        [(229.0, 133.0), (229.0, 155.0), (249.0, 144.0)],
-        [(251.0, 165.0), (251.0, 187.0), (231.0, 176.0)],
-        [(229.0, 197.0), (251.0, 197.0), (240.0, 217.0)],
-        [(240.0, 231.0), (229.0, 251.0), (251.0, 251.0)],
-    ];
-    for tri in arrows {
-        let mut pb = PathBuilder::new();
-        pb.move_to(tri[0].0, tri[0].1);
-        pb.line_to(tri[1].0, tri[1].1);
-        pb.line_to(tri[2].0, tri[2].1);
-        pb.close();
-        let tri = pb.finish().expect("arrow");
-        stroke_rgb(out, &tri, [70, 72, 78], 2.4, t);
-        fill_rgb(out, &tri, [240, 240, 244], t);
-    }
-}
-
 /// A box with rounded corners of radius `r`.
 pub(crate) fn rounded(l: f32, t: f32, rr: f32, b: f32, r: f32) -> tiny_skia::Path {
     let c = r * 0.5523;
@@ -1121,8 +753,8 @@ impl Style {
     }
 }
 
-/// Clear a label's box row by row, blending what's either side of it: nothing where it stood alone, the pill or the
-/// title's stripes where it stood on them.
+/// Clear a label's box row by row, blending what's either side of it: nothing where it stood alone, what
+/// it stood on otherwise.
 fn erase(px: &mut [[f32; 4]], w: usize, _h: usize, &(x, y, lw, lh, _): &Label) {
     let (l, r) = (x as usize, (x + lw) as usize);
     for y in y as usize..(y + lh) as usize {
@@ -1133,25 +765,6 @@ fn erase(px: &mut [[f32; 4]], w: usize, _h: usize, &(x, y, lw, lh, _): &Label) {
             px[y * w + x] = if a[3] < 0.5 && b[3] < 0.5 { [0.0; 4] } else { std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t) };
         }
     }
-}
-
-/// Where a title bar's words stand: the pixels that differ from their row's stripe, clear of the band's rule (its
-/// white and black lines, the 7 rows above where each column turns transparent). Less the 2 px of the words' shadow,
-/// which `rebuild` erases with them.
-fn title_box(rgba: &[u8], w: usize, h: usize) -> (u16, u16, u16, u16) {
-    let px = |x: usize, y: usize| &rgba[(y * w + x) * 4..][..4];
-    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
-    for x in 0..w {
-        let end = (0..h).find(|&y| px(x, y)[3] == 0).unwrap_or(h).saturating_sub(7);
-        for y in 0..end {
-            // the stripes repeat every 4 rows; the right end has nothing on them
-            let bg = px(w - 8, y % 4);
-            if (0..4).any(|i| (px(x, y)[i] as i32 - bg[i] as i32).abs() > 40) {
-                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
-            }
-        }
-    }
-    (x0 as u16, y0 as u16, (x1 - x0).saturating_sub(2) as u16, (y1 - y0).saturating_sub(2) as u16)
 }
 
 /// `word.tm2`'s glyphs: each cell's ink box and its letter (`word_label::FONT`'s grid, 32 px cells from row 1).
@@ -1308,7 +921,7 @@ pub(crate) fn text_path(font: &ab_glyph::FontRef, s: &str) -> Option<tiny_skia::
 }
 
 /// Set a label in its box at `K`×: the words' fill fitted inside the outline's width, outline then fill.
-fn label(out: &mut Pixmap, font: &ab_glyph::FontRef, &(x, y, w, h, s): &Label, st: &Style, shadow: bool) {
+fn label(out: &mut Pixmap, font: &ab_glyph::FontRef, &(x, y, w, h, s): &Label, st: &Style) {
     if s == "." {
         return dot(out, [x, y, w, h].map(f32::from), st);
     }
@@ -1322,12 +935,6 @@ fn label(out: &mut Pixmap, font: &ab_glyph::FontRef, &(x, y, w, h, s): &Label, s
     let rgb = |c: [f32; 3]| SkColor::from_rgba(c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0), 1.0).expect("colour");
     let mut paint = Paint { anti_alias: true, ..Paint::default() };
     let stroke = Stroke { width: 2.0 * e.max(k * 0.5), line_join: LineJoin::Round, line_cap: LineCap::Round, ..Stroke::default() };
-    if shadow {
-        // the titles' soft grey shadow, down and right of the outline
-        paint.set_color(SkColor::from_rgba(0.0, 0.0, 0.0, 0.3).expect("colour"));
-        out.stroke_path(&path, &paint, &stroke, Transform::from_translate(1.5 * k, 1.5 * k), None);
-        out.fill_path(&path, &paint, FillRule::Winding, Transform::from_translate(1.5 * k, 1.5 * k), None);
-    }
     if e > 0.0 {
         paint.set_color(rgb(st.edge));
         out.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
@@ -1456,7 +1063,7 @@ mod tests {
                 rgba[((y * w + x) * 4) as usize..][..4].copy_from_slice(&if edge { [0, 0, 0, 255] } else { [255, 255, 255, 255] });
             }
         }
-        let out = rebuild(w as usize, h as usize, &rgba, &[], &[(8, 8, 48, 16, "Ok")], HEAVY, false);
+        let out = rebuild(w as usize, h as usize, &rgba, &[(8, 8, 48, 16, "Ok")], HEAVY);
         assert_eq!((out.width(), out.height()), (w * K, h * K));
         let px = |x: u32, y: u32| out.pixel(x, y).unwrap().demultiply();
         assert_eq!(px(2, 2).alpha(), 0, "outside the box: cleared");
@@ -1484,7 +1091,7 @@ mod tests {
                 rgba[((y * w + x) * 4) as usize..][..4].copy_from_slice(&if fill { [255, 255, 255, 255] } else { [0, 0, 0, 255] });
             }
         }
-        let out = rebuild(w as usize, h as usize, &rgba, &[], &[(4, 4, 7, 7, ".")], HEAVY, false);
+        let out = rebuild(w as usize, h as usize, &rgba, &[(4, 4, 7, 7, ".")], HEAVY);
         let px = |x: u32, y: u32| out.pixel(x, y).unwrap().demultiply();
         let k = K;
         assert!(px(7 * k + k / 2, 7 * k + k / 2).red() > 240, "white middle");
@@ -1499,7 +1106,7 @@ mod tests {
     fn stamps_and_icons_ink_their_cells() {
         let font = ab_glyph::FontRef::try_from_slice(HEAVY).unwrap();
         let mut out = Pixmap::new(128 * K, 64 * K).unwrap();
-        stamp(&mut out, &font, [20.0, 10.0, 64.0, 41.0], "VS", &VS);
+        stamp(&mut out, &font, [20.0, 10.0, 64.0, 41.0], "VS", &GOLD);
         let ink = |out: &Pixmap, [x, y, w, h]: [f32; 4]| {
             let k = K as f32;
             (0..out.height()).flat_map(|py| (0..out.width()).map(move |px| (px, py))).filter(|&(px, py)| out.pixel(px, py).unwrap().alpha() > 0).all(|(px, py)| {

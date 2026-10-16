@@ -32,7 +32,9 @@ use super::{Game, Pads};
 use crate::Args;
 use crate::audio::{Sound, SoundBank};
 
-const TEXTURES: [&str; 11] = [
+// Z21: not `i_dialog_00`/`01`, which our box, pills and rows (B141) stand in for, nor `hsm_yubi`, whose place the 3D
+// hand always takes (`cursor::setup` at Startup)
+const TEXTURES: [&str; 8] = [
     "/i_pause_result_15.tm2",
     "/inpane_pause00.tm2",
     "/inpane_pause01.tm2",
@@ -41,9 +43,6 @@ const TEXTURES: [&str; 11] = [
     "/result_gameset00.tm2",
     "/result_gameset01.tm2",
     "/result_gameset02.tm2",
-    "/i_dialog_00.tm2",
-    "/i_dialog_01.tm2",
-    "/hsm_yubi.tm2",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,6 +52,8 @@ enum Tex {
     /// The panel's slot labels.
     Slot,
     Face(usize),
+    /// The 3D pointing hand (`cursor.rs`), where the original swung `hsm_yubi`.
+    Hand,
 }
 const DIM: Tex = Tex::Own(0);
 const POINTS: Tex = Tex::Own(1);
@@ -62,24 +63,24 @@ const BAR: Tex = Tex::Own(4);
 const BOARD: Tex = Tex::Own(5);
 const GAMES_PAST: Tex = Tex::Own(6);
 const GAMES_NOW: Tex = Tex::Own(7);
-const HAND: Tex = Tex::Own(10);
+const HAND: Tex = Tex::Hand;
 /// "Settings" in `word.tm2` on a row of its own (`pause::label`).
-const LABEL: Tex = Tex::Own(11);
+const LABEL: Tex = Tex::Own(8);
 /// B141: "Resume the Match" and "Return to the Menu" set the same way, in place of `i_dialog_01`'s rows.
-const RESUME: Tex = Tex::Own(12);
-const RETURN: Tex = Tex::Own(13);
+const RESUME: Tex = Tex::Own(9);
+const RETURN: Tex = Tex::Own(10);
 /// B68: the confirm's rows, set as `RESUME`: "Leave the match?", "Yes", "No".
-const ASK: Tex = Tex::Own(14);
-const YES: Tex = Tex::Own(15);
-const NO: Tex = Tex::Own(16);
+const ASK: Tex = Tex::Own(11);
+const YES: Tex = Tex::Own(12);
+const NO: Tex = Tex::Own(13);
 /// B254: "Controllers", set as `RESUME`.
-const SEATS: Tex = Tex::Own(17);
+const SEATS: Tex = Tex::Own(14);
 /// B141: our pill and box layers (`menu_art::pill_layers`), in place of `i_dialog_00`'s frame and pills; after
 /// [`LABELS`] in `setup` (B177: it was left at 14 when B68 added three labels, drawing the pills from "Leave the match?").
-const PILL: Tex = Tex::Own(18);
+const PILL: Tex = Tex::Own(15);
 /// B293: the match's court name and umpire (`pause::venue`), set as [`LABEL`], at the right of the top bar.
-const COURT: Tex = Tex::Own(19);
-const UMPIRE: Tex = Tex::Own(20);
+const COURT: Tex = Tex::Own(16);
+const UMPIRE: Tex = Tex::Own(17);
 /// The rows set in `setup` after `TEXTURES`, as [`LABEL`] to [`SEATS`].
 const LABELS: [&str; 7] = ["Settings", "Resume the Match", "Return to the Menu", "Leave the match?", "Yes", "No", "Controllers"];
 /// The dialog's colours (ours, B141): rims, its fill, a pill's fill chosen and not.
@@ -776,6 +777,10 @@ fn draw(
             (_, Tex::Own(k)) => art.0[k].clone(),
             (_, Tex::Slot) => panel_art.0[1].clone(),
             (_, Tex::Face(p)) => panel_art.0[panel::FACES + p].clone(),
+            (None, Tex::Hand) => {
+                vis.set_if_neq(Visibility::Hidden);
+                continue;
+            }
         };
         let [u, v, w, h] = quad.src;
         // B160: a face is its whole image (INPANE's 64×64, or a baked one's larger square)
@@ -837,7 +842,6 @@ mod tests {
     fn art_order() {
         let n = TEXTURES.len();
         assert_eq!([LABEL, RESUME, RETURN, ASK, YES, NO, SEATS, PILL, COURT, UMPIRE], std::array::from_fn(|i| Tex::Own(n + i)));
-        assert_eq!(HAND, Tex::Own(n - 1));
     }
 
     /// B341: a press latched while paused, an emote included, is spent before the match resumes.
