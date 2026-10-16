@@ -794,6 +794,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B515** iOS web host stuck on 'Waiting for a relay to put the code online (no internet?)': no iroh home relay within 30 s from Safari; needs the page's console log (Copy the error) and whether iCloud Private Relay is on — crates/hst-base/src/net.rs host()
 - [x] **B532** Mods "More by user" (user 2026-10-16): picking More by <user> in the mods browser drops every other category's count to 0; the other categories must keep their counts (or show that user's counts per category, not zeros) → `crates/hst/src/play/main_menu/mods_screen/` · `modstore.rs`
 - [x] **B530** Online mod looks broken (user 2026-10-16): lobby with 2 web browsers + desktop + Android; lobby said "Anya mod: you'll be asked to download it" but nobody was ever asked, and even the player who picked the mod saw their own stand-in (the plain donor character). The owner must always see their own selected mod; others get the ask (M2i) → `mods_online.rs` · `net.rs` · `mods.rs` · `character.rs`
+- [x] **B531** Mobile chat button (user 2026-10-16): on phones the chat button needs two taps before the on-screen keyboard pops up (should be one); and the button disappears in online screens where chat is available — it must stay visible wherever you can chat → `crates/hst-play/src/play/` netplay chat · `web.rs` · `android.rs` · `ios.rs`
 
 
 ### Shots

@@ -318,7 +318,7 @@ fn drive(
     let landed: Vec<_> = touches.iter_just_pressed().map(|t| (t.id(), t.position())).collect();
     for (id, p) in landed {
         if crate::chat::BUTTON.load(Ordering::Relaxed) && l.chat.inflate(l.u * 0.2).contains(p) {
-            crate::chat::ASK.store(1, Ordering::Relaxed);
+            crate::chat::ASK.store(3, Ordering::Relaxed);
             touches.clear_just_pressed(id);
             buzz = true;
             continue;

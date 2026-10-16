@@ -203,16 +203,17 @@ fn up(m: &Menu) -> bool {
 }
 
 /// The native apps' system keyboard: up while a popup is in mobile keyboard mode (iOS and Android show it for an
-/// allowed IME); a tap on the field puts it down for a frame and up again. Also notes a real controller (`mobile`).
+/// allowed IME) or, B531, the chat's typed box is open (menus and matches alike); a tap on the field (the chat button,
+/// the box open) puts it down for a frame and up again. Also notes a real controller (`mobile`).
 fn system_keyboard(menu: Res<Menu>, pads: Query<(&Gamepad, Option<&Name>)>, mut window: Query<&mut Window, With<bevy::window::PrimaryWindow>>) {
     PAD.store(pads.iter().any(|(_, n)| !n.is_some_and(|n| super::super::emote::is_touch(n))), Relaxed);
+    let raise = RAISE.swap(false, Relaxed) | crate::chat::RAISE.swap(false, Relaxed);
     if !cfg!(any(target_os = "ios", target_os = "android")) {
-        RAISE.store(false, Relaxed);
         return;
     }
-    let want = mobile() && (up(&menu) || menu.screen == Screen::Code);
+    let want = mobile() && (up(&menu) || menu.screen == Screen::Code || crate::chat::OPEN.load(Relaxed));
     let Ok(mut w) = window.single_mut() else { return };
-    let want = want && !(RAISE.swap(false, Relaxed) && w.ime_enabled);
+    let want = want && !(raise && w.ime_enabled);
     if w.ime_enabled != want {
         w.ime_enabled = want;
     }

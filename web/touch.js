@@ -7,7 +7,8 @@
 // Also here: audio unlocks on the first tap or key (browsers start every AudioContext suspended), and a touch screen
 // goes fullscreen on the first tap, either way up (B112) (where the browser allows it; an installed app starts that way).
 // B312: in an online lobby or match a chat button (a speech bubble) sits beside Start, styled as Select/Start; it isn't
-// a pad button: a tap on it opens the game's chat box (`chat.rs`, which shows it through `hstTouchChat`).
+// a pad button: a tap on it opens the game's chat box (`chat.rs`, which shows it through `hstTouchChat`) and the phone's
+// keyboard at once (B531: one tap); while the box is open it stays up and a tap brings the keyboard back.
 
 // every AudioContext the game makes, resumed on the next gesture
 const contexts = [];
@@ -104,6 +105,8 @@ const css = `
 /* B313: upright, the shoulders and Select/Start sit over the face buttons, not along the top edge:
    there the status bar and the notch (viewport-fit=cover) covered them, and the thumbs are at the bottom anyway */
 @media (orientation: portrait) { .touch button.small { top: auto !important; bottom: calc(env(safe-area-inset-bottom) + var(--u) * 4.1) !important; } }
+/* B531: chat's spot upright, centred under Select/Start (the rule above had put it on top of them) */
+@media (orientation: portrait) { .touch button.small.chat { bottom: calc(env(safe-area-inset-bottom) + var(--u) * 3.2) !important; } }
 `;
 // face buttons in a diamond for the right thumb, shoulders and Select/Start along the top
 const right = (x, y) => `right: calc(env(safe-area-inset-right) + var(--u) * ${x}); bottom: calc(var(--safe-b) + var(--u) * ${y})`;
@@ -197,8 +200,14 @@ const side = index => {
     chatTaps++;
     if (buzz) buzzOnce();
   };
-  // the phone's keyboard comes up from the finger's lift (index.html)
-  chat?.addEventListener('touchend', () => chatShown && window.hstChatKeys?.());
+  // the phone's keyboard comes up from the finger's lift (index.html). B531: from any touch that landed on the button,
+  // whatever the game has done since: it often opens the box between the finger's landing and its lift, and the
+  // keyboard comes only for a focus inside the lift's own event
+  let chatTouch = false;
+  chat?.addEventListener('touchend', () => {
+    if (chatTouch) window.hstChatKeys?.();
+    chatTouch = false;
+  });
   chat?.addEventListener('pointerdown', e => {
     if (e.pointerType === 'touch') return;
     e.preventDefault();
@@ -263,8 +272,10 @@ const side = index => {
     for (const t of e.changedTouches) {
       const el = t.target instanceof Element ? t.target.closest('button, .zone') : null;
       if (!el || !root.contains(el) || control.has(t.identifier)) continue;
-      if (el === chat) chatTap();
-      else if (el === zone) {
+      if (el === chat) {
+        chatTap();
+        chatTouch = true;
+      } else if (el === zone) {
         if (stick) continue;
         control.set(t.identifier, 'stick');
         stickDown(t.identifier, t.clientX, t.clientY);

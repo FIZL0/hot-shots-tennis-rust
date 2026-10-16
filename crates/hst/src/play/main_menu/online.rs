@@ -2254,6 +2254,19 @@ pub(super) fn touch_typing() -> bool {
     osk::mobile()
 }
 
+/// B531: a finger lands on the lobby's Chat button with the box closed: the page brings the phone's keyboard up from
+/// its lift (`web::chat_arm`), so one tap opens both (the button acts on the lift, a frame too late for the keyboard).
+#[cfg(target_arch = "wasm32")]
+pub(super) fn chat_arm(menu: Res<Menu>, touches: Res<Touches>, hits: Res<super::pointer::Hits>, window: Query<&Window, With<bevy::window::PrimaryWindow>>) {
+    if menu.screen != Screen::Lobby || crate::chat::OPEN.load(std::sync::atomic::Ordering::Relaxed) || touches.iter_just_pressed().next().is_none() {
+        return;
+    }
+    let (Some(k), Ok(win)) = (menu.items().iter().position(|i| *i == Item::Button("Chat")), window.single()) else { return };
+    if touches.iter_just_pressed().any(|t| super::pointer::touch_act(win, &hits, t.position()) == Some(Act::Row(k, OK))) {
+        crate::web::chat_arm();
+    }
+}
+
 /// A made-up lobby and lobby list for `HST_MENU=lobby|lobbies` shots: two seats taken, a code (for the link).
 pub(super) fn sample(m: &mut Menu) {
     let pick = |char| Pick::disc(char, 0);
