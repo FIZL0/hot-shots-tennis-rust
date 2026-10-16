@@ -26,12 +26,19 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Main => v.extend([(Act::UpDown, "Move"), (Act::Ok, if m.main_rows().get(s) == Some(&super::home::Row::Quit) { if cfg!(target_arch = "wasm32") { "Launcher" } else { "Quit" } } else { "Choose" })]),
         Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::ModSettings | Screen::Mobile => {
             let open = options::page(m.screen).get(s).is_some_and(|o| !options::locked(*o));
-            if m.editing.is_some() && open && options::page(m.screen).get(s) != Some(&options::Opt::Advanced) {
+            let listed = open && options::page(m.screen).get(s).is_some_and(|o| options::listed(*o));
+            if m.listing.is_some() && listed {
+                // B498: a dropdown open: ↑ ↓ move, ✕ picks, ○ closes it unchanged
+                v.extend([(Act::UpDown, "Move"), (Act::Ok, "Select"), (Act::Back, "Close")]);
+            } else if m.editing.is_some() && open && m.listing.is_none() && options::page(m.screen).get(s) != Some(&options::Opt::Advanced) {
                 // B326: the row picked: ◀ ▶ change it, ✕ sets it, ○ puts it back
                 v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Select"), (Act::Back, "Cancel")]);
             } else {
                 v.push((Act::UpDown, "Option"));
-                if open {
+                if listed {
+                    // B498: ◀ ▶ change a dropdown's row unopened
+                    v.extend([(Act::LeftRight, "Change"), (Act::Ok, "Open list")]);
+                } else if open {
                     // B411: Graphics' Advanced row opens its page
                     v.push((Act::Ok, if options::page(m.screen).get(s) == Some(&options::Opt::Advanced) { "Open" } else { "Change" }));
                 }
@@ -420,7 +427,12 @@ mod tests {
             for sel in (0..options::page(s).len()).filter(|&i| options::page(s)[i] != options::Opt::Advanced) {
                 let mut m = base(s);
                 (m.sel, m.editing) = (sel, Some(m.settings));
-                starts.push((m, Dev::Keys));
+                starts.push((m.clone(), Dev::Keys));
+                // B498: its dropdown open
+                if options::listed(options::page(s)[sel]) {
+                    m.listing = Some(1);
+                    starts.push((m, Dev::Keys));
+                }
             }
         }
         let mut m = base(Screen::Controls);

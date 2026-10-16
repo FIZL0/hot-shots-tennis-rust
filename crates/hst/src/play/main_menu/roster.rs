@@ -765,7 +765,7 @@ fn peek(d: &mut Draw, v: &View, cols: usize, s: &Seat, [x, y, w, h]: [f32; 4], p
 }
 
 /// A solid triangle in `[x, y, w, h]` pointing down (else up), as thin rows.
-fn triangle(d: &mut Draw, [x, y, w, h]: [f32; 4], down: bool, rgb: [f32; 3]) {
+pub(super) fn triangle(d: &mut Draw, [x, y, w, h]: [f32; 4], down: bool, rgb: [f32; 3]) {
     let n = 8;
     let rh = h / n as f32;
     for i in 0..n {
