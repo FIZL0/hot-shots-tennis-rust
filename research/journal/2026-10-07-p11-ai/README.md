@@ -134,3 +134,10 @@ See 24-P11K5-NETBASE-VPAD-FINAL.md. Pad-driven slot-3 rallies (`HST_DRIVE`, fast
 beside a human, the substate-3 wait, the tail repick, and the short-landing walk (landing + 0.3) unpoked. The
 walk's later targets need `HST_WINDOW`; the substate-2 hold stays on the poked `ai_let_go_s05`. Test:
 `vpad_rallies_net_and_base_match_the_game`.
+
+## P11l4 (singles receive branches from P1's serves)
+
+See 24-P11L4-SINGLES-VPAD-FINAL.md: a singles save with a human P1 (`context/recordings/singles_1p_serve.p2s`).
+From it, the singles receive's out-of-court aims (plans 10/11) and the level-3 plan-10 upgrade are reached
+unpoked: the upgrade with P1 at ×2.5 speed (`HST_SPEED`) and COM row 29. The last-entry pick and smash find use
+P11k4's pokes. Test: `singles_vpad_serves_receive_matches_the_game`.

@@ -41,6 +41,8 @@
   the third hits. P1 serves every point there and points are short (about 2 s).
   Not automated yet: choosing the COM characters (each COM cursor starts on a different character), the costume
   (L1), the switch-hand toggle, singles, P1 receiving.
+- **Singles with a human P1** (P11l4): `context/recordings/singles_1p_serve.p2s` (P1 Ashley serving vs a COM) and
+  `singles_1p_select.p2s` (the singles character select); the menu route is in journal 2026-10-07-p11-ai 24.
 - Verify input effects numerically over PINE (e.g. ball/player state), not by eye.
 - `tools/single.sh` (in tmux) runs `claude continue` (TUI: attach to watch or type; it never asks) back to back and owns the virtual pad for the night.
 

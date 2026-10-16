@@ -260,6 +260,12 @@ for k in range(p.read32(0x422fa4)):
     if slow != 1.0:
         pl = p.read32(gm0 + 0xa8 + 4 * k)
         p.write32(pl + 0x1374, struct.unpack("<I", struct.pack("<f", struct.unpack("<f", struct.pack("<I", p.read32(pl + 0x1374)))[0] * slow))[0])
+# HST_SPEED=k:scale[,...] (P11l4): player k's speed stat (+0x1374) alone, e.g. 0:2 so a driven P1 is inside 7.4 m of
+# the net by the time the CPU aims its return (the level-3 plan-10 upgrade); only the opponent's position reaches the AI
+for spec in filter(None, os.environ.get("HST_SPEED", "").split(",")):
+    k, scale = spec.split(":")
+    pl = p.read32(gm0 + 0xa8 + 4 * int(k))
+    p.write32(pl + 0x1374, struct.unpack("<I", struct.pack("<f", struct.unpack("<f", struct.pack("<I", p.read32(pl + 0x1374)))[0] * float(scale)))[0])
 # HST_AI=k:row:level[,...] (P11k4/P11l4/P11l5): player k's AI (player +0x80) takes table row `row` (+0xc; singles
 # rows are character + 14 * level, doubles +0x54) and level byte +0x10, to reach other styles' and levels' branches
 for spec in filter(None, os.environ.get("HST_AI", "").split(",")):
