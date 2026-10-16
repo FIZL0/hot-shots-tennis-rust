@@ -3,7 +3,7 @@
 //! Random card, then the disc cast), then one per mod game (`Mod::game`, "Mods" for an untagged mod) in name order,
 //! "Mods" last. Each section starts on a row of its own. ←→ walk the tiles in order across the rows and sections,
 //! stopping at the ends; ↑↓ a row, the same place across (the row's last if it's shorter), headings passed over;
-//! L2 / R2 (keyboard 1 / 3; L1 / R1 stay the costume) jump to the previous / next section's first tile,
+//! L2 / R2 (keyboard Q / E, Settings' tab keys, B463; L1 / R1 stay the costume, keyboard Z / X) jump to the previous / next section's first tile,
 //! stopping at the ends (B462: L2 on the first section's first tile and R2 in the last do nothing, their hint dims);
 //! a tap on a heading jumps there too. A favorite shows in Favorites and in its own section: `Player::tab` is the
 //! section the cursor is in. □ marks the highlighted character a favorite (or not): saved in `favorites.txt` beside

@@ -2960,6 +2960,12 @@ fn step(
                 k.name = keys.just_pressed(KeyCode::KeyN);
                 k.kind_prev = keys.just_pressed(KeyCode::Digit1);
                 k.kind_next = keys.just_pressed(KeyCode::Digit3);
+                // B463: on the select Q / E are the sections (Settings' tab keys), Z / X the costume; 1–4 its emotes
+                if menu.screen == Screen::Chars {
+                    (k.kind_prev, k.kind_next) = (k.prev, k.next);
+                    k.prev = keys.just_pressed(KeyCode::KeyZ);
+                    k.next = keys.just_pressed(KeyCode::KeyX);
+                }
             }
             Some(e) => {
                 let Ok((_, g)) = gamepads.get(e) else { continue };

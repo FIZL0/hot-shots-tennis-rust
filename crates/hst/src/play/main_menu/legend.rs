@@ -63,6 +63,8 @@ pub(crate) enum Act {
     Kind,
     /// B422: the right stick up / down (keyboard R / F): the select's preview plays its win / loss.
     Preview,
+    /// B463: the match's emote keys (1–4) and the right stick left / right: the select's preview plays an emote.
+    Emote,
 }
 
 /// A device's button art.
@@ -142,9 +144,13 @@ pub(crate) fn item(act: Act, label: &str, keys: &[&str]) -> Item {
 }
 
 /// The main menus' keys for `act` (`main_menu::step`): the bound ones, and the fixed Enter, Esc, Q/E, Tab.
-fn menu_keys(act: Act, bind: &Bindings) -> Vec<String> {
+/// `select`: the character select's (B463: Q / E its sections, Z / X the costume).
+fn menu_keys(act: Act, bind: &Bindings, select: bool) -> Vec<String> {
     let k = |a: Action| bind.key(a).unwrap_or_default();
     match act {
+        Act::Costume if select => vec!["Z".into(), "X".into()],
+        Act::Kind if select => vec!["Q".into(), "E".into()],
+        Act::Emote => emote_keys(bind),
         Act::Move => vec![k(Action::Up), k(Action::Left), k(Action::Down), k(Action::Right)],
         Act::UpDown => vec![k(Action::Up), k(Action::Down)],
         Act::LeftRight => vec![k(Action::Left), k(Action::Right)],
@@ -165,6 +171,12 @@ fn menu_keys(act: Act, bind: &Bindings) -> Vec<String> {
     .into_iter()
     .filter(|s| !s.is_empty())
     .collect()
+}
+
+/// B463: the emote keys' caps: "1-4" for the stock 1, 2, 3, 4, else each bound one.
+fn emote_keys(bind: &Bindings) -> Vec<String> {
+    let keys: Vec<String> = super::super::emote::KEYS.iter().map(|&a| bind.key(a).unwrap_or_default()).collect();
+    if keys == ["1", "2", "3", "4"] { vec!["1-4".into()] } else { keys }
 }
 
 // ---------------------------------------------------------------- the main menus' entries
@@ -253,6 +265,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             // B422: the device's own preview plays its win / loss (`previews::buttons`; Random has no figure)
             if m.seats[p] == Some(dev) && !me.random {
                 v.push((Act::Preview, "Win / Loss"));
+                // B463: and the match's emotes (`plate_emote.rs`)
+                v.push((Act::Emote, "Emote"));
             }
             // B369 / B375: △ in or out of the favorites (not Random)
             if !me.ready && !me.random {
@@ -432,7 +446,7 @@ pub(super) fn groups(m: &Menu, last: Dev, bind: &Bindings) -> Vec<Group> {
         }
         seen.push(dev);
         let items: Vec<Item> =
-            acts(m, dev).into_iter().map(|(act, label)| Item { act, keys: menu_keys(act, bind), label, dim: kind_ends(m, act, p) }).collect();
+            acts(m, dev).into_iter().map(|(act, label)| Item { act, keys: menu_keys(act, bind, m.screen == Screen::Chars), label, dim: kind_ends(m, act, p) }).collect();
         let id = match dev {
             Dev::Keys => None,
             Dev::Pad(e) => Some(e),
@@ -568,7 +582,7 @@ pub(super) fn dev_style(dev: Option<Entity>) -> Style {
 /// or LB / RB, its Select as "Create" on a PlayStation pad): the select's costume and hand pills label theirs.
 pub(super) fn button_names(dev: Option<Entity>, act: Act, bind: &Bindings) -> Vec<String> {
     let it = item(act, "", &[]);
-    let it = Item { keys: menu_keys(act, bind), ..it };
+    let it = Item { keys: menu_keys(act, bind, true), ..it };
     glyphs(dev_style(dev), &it)
         .into_iter()
         .filter_map(|g| match g {
@@ -591,7 +605,7 @@ pub(super) fn last_style() -> Style {
 /// LT / RT; the keyboard's 1 / 3), 2 ✕ (Enter), 3 △ and 4 □ (their keys) for the detail panel's buttons; B448: 5 / 6
 /// L1 / R1 (Q / E) round the Settings tabs and a stepped pill, 7 Select (C) on the Mods filter pill.
 fn page_glyphs(style: Style) -> Vec<Glyph> {
-    let it = |a: Act| Item { keys: menu_keys(a, &Bindings::default()), ..item(a, "", &[]) };
+    let it = |a: Act| Item { keys: menu_keys(a, &Bindings::default(), false), ..item(a, "", &[]) };
     let mut v = glyphs(style, &it(Act::Kind));
     v.truncate(2);
     for a in [Act::Ok, Act::Card, Act::Page] {
@@ -713,8 +727,8 @@ enum Glyph {
     Shoulder(&'static str),
     /// Select / Start.
     Small(&'static str),
-    /// B422: the right stick, up / down.
-    Stick,
+    /// B422: the right stick, up / down (B463: `false` left / right).
+    Stick(bool),
     /// The d-pad, arms lit: up, down, left, right.
     Dpad([bool; 4]),
     Slash,
@@ -745,7 +759,8 @@ fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Kind if sw => vec![Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")],
         Act::Kind if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("L2"), Glyph::Shoulder("R2")],
         Act::Kind => vec![Glyph::Shoulder("LT"), Glyph::Shoulder("RT")],
-        Act::Preview => vec![Glyph::Stick],
+        Act::Preview => vec![Glyph::Stick(true)],
+        Act::Emote => vec![Glyph::Stick(false)],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start | Act::Name => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         Act::Type | Act::Cancel | Act::Key => vec![],
@@ -892,20 +907,27 @@ fn draw_glyph(g: &Glyph) -> Pixmap {
             }
             out
         }
-        Glyph::Stick => {
-            // a thumbstick's cap with an R on it, arrows above and below
-            let mut out = pixmap(52.0);
-            let x = 26.0;
+        Glyph::Stick(up) => {
+            // a thumbstick's cap with an R on it, arrows above and below (or either side)
+            let mut out = pixmap(if *up { 52.0 } else { 76.0 });
+            let x = if *up { 26.0 } else { 38.0 };
             let p = tiny_skia::PathBuilder::from_circle(x, cy, 17.0).expect("cap");
             fill_rgb(&mut out, &p, DARK, Transform::identity());
             stroke_rgb(&mut out, &tiny_skia::PathBuilder::from_circle(x, cy, 16.0).expect("cap"), RIM, 2.0, Transform::identity());
             words(&mut out, "R", 20.0, x - text_w("R", 20.0) / 2.0, cy, WHITE);
             for dir in [-1.0, 1.0] {
                 let mut pb = tiny_skia::PathBuilder::new();
-                let tip = cy + dir * 31.0;
-                pb.move_to(x, tip);
-                pb.line_to(x + 7.0, tip - dir * 9.0);
-                pb.line_to(x - 7.0, tip - dir * 9.0);
+                if *up {
+                    let tip = cy + dir * 31.0;
+                    pb.move_to(x, tip);
+                    pb.line_to(x + 7.0, tip - dir * 9.0);
+                    pb.line_to(x - 7.0, tip - dir * 9.0);
+                } else {
+                    let tip = x + dir * 36.0;
+                    pb.move_to(tip, cy);
+                    pb.line_to(tip - dir * 9.0, cy + 7.0);
+                    pb.line_to(tip - dir * 9.0, cy - 7.0);
+                }
                 pb.close();
                 fill_rgb(&mut out, &pb.finish().expect("arrow"), WHITE, Transform::identity());
             }
@@ -1280,6 +1302,23 @@ mod tests {
             }
         }
         assert!(checked > 200, "{checked}");
+    }
+
+    /// B463: the select's keyboard caps: Q / E the sections (as Settings' tabs), Z / X the costume, 1-4 the emotes (a
+    /// pad's right stick left / right); the Mods page's kind tabs stay 1 / 3.
+    #[test]
+    fn select_keys() {
+        let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), None, None, None], ..default() };
+        m.players[0].cursor = 1;
+        let bind = Bindings::default();
+        let g = groups(&m, Dev::Keys, &bind);
+        let keys = |a: Act| g[0].items.iter().find(|it| it.act == a).map(|it| it.keys.clone());
+        assert_eq!(menu_keys(Act::Kind, &bind, true), ["Q", "E"]);
+        assert_eq!(keys(Act::Costume), Some(vec!["Z".into(), "X".into()]));
+        assert_eq!(keys(Act::Emote), Some(vec!["1-4".into()]));
+        assert_eq!(button_names(None, Act::Costume, &bind), ["Z", "X"]);
+        assert_eq!(glyphs(Style::Xbox, &item(Act::Emote, "", &[])), [Glyph::Stick(false)]);
+        assert_eq!(menu_keys(Act::Kind, &bind, false), ["1", "3"]);
     }
 
     /// B348: the select's legend is one untagged bar for every player's device, each action once.
