@@ -1588,7 +1588,7 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
 fn add_rect(m: &Menu, aspect: f32, k: f32) -> Option<[f32; 4]> {
     let (share, v) = widescreen::menu_shares(aspect, k);
     // B383: the Installed grid's Add mod word, where it was last drawn
-    let [x, y, w, h] = (*grid::ADD_AT.lock().unwrap_or_else(|e| e.into_inner()))?;
+    let [x, y, w, h] = grid::add_at()?;
     (m.screen == Screen::Mods && m.add.page == Page::Installed && !m.add.empty_kind() && !m.add.phone && m.add.nophone.is_none())
         .then(|| [x * share / 6.4 + 50.0 * (1.0 - share), y * v / 4.48 + 50.0 * (1.0 - v), w * share / 6.4, h * v / 4.48])
 }

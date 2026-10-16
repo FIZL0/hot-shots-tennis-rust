@@ -72,7 +72,28 @@ pub(super) enum Show {
 pub(super) const SHOWS: [Show; 5] = [Show::All, Show::Installed, Show::Updates, Show::Mine, Show::Wish];
 
 /// B383: the footer's Add mod word as last drawn (the browser's file input follows it; `mods_screen::add_rect`).
-pub(super) static ADD_AT: std::sync::Mutex<Option<[f32; 4]>> = std::sync::Mutex::new(None);
+#[cfg(not(test))]
+static ADD_AT: std::sync::Mutex<Option<[f32; 4]>> = std::sync::Mutex::new(None);
+// tests draw the page on parallel threads: each its own (a shared one raced `scrolls_and_taps`)
+#[cfg(test)]
+thread_local!(static ADD_AT_T: std::cell::Cell<Option<[f32; 4]>> = const { std::cell::Cell::new(None) });
+
+/// The Add mod word's place as last drawn ([`set_add_at`]).
+pub(super) fn add_at() -> Option<[f32; 4]> {
+    #[cfg(not(test))]
+    return *ADD_AT.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(test)]
+    ADD_AT_T.get()
+}
+
+fn set_add_at(r: Option<[f32; 4]>) {
+    #[cfg(not(test))]
+    {
+        *ADD_AT.lock().unwrap_or_else(|e| e.into_inner()) = r;
+    }
+    #[cfg(test)]
+    ADD_AT_T.set(r);
+}
 
 /// A Game filter: one game by its `source`, or every game the filter doesn't name.
 #[derive(Clone, Debug, PartialEq)]
@@ -1321,16 +1342,14 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, _hand_x: f32) {
     let v = &m.add;
     let l = lay_of(m);
     let a = look::accent(mods_kind::seat_of(v.kind));
-    *ADD_AT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_add_at(None);
     look::backdrop(d);
     // B471: the band in Characters' red whatever the kind (the panels' strips carry the kind's colour)
     let tab_end = look::top(d, m.grid.view, "Mods", look::accent(0));
     let n0 = d.out.len();
     page(d, m, a, &l, tab_end);
     l.zoom.apply(d, n0);
-    let mut add = ADD_AT.lock().unwrap_or_else(|e| e.into_inner());
-    *add = add.map(|r| l.zoom.at(r));
-    drop(add);
+    set_add_at(add_at().map(|r| l.zoom.at(r)));
     if v.b.osk.is_some() && v.child.is_none() {
         keyboard(d, v);
     }
@@ -1550,7 +1569,7 @@ fn footer(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
         }
         d.hit(b, Act::Row(2 + i, OK));
         if *word == "Add mod" {
-            *ADD_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(b);
+            set_add_at(Some(b));
         }
         wx -= gap;
     }
