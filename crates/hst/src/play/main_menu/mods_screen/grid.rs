@@ -1148,6 +1148,9 @@ const ROLL_SPEED: f32 = 30.0;
 /// left until its end shows, rests, and starts over (clipped to `max`, its height kept); without, it ends in "...".
 fn marquee(d: &mut Draw, s: &str, [x, y]: [f32; 2], size: f32, max: f32, rgb: [f32; 3], roll: Option<f32>) {
     let w = d.width(s, size);
+    if max <= 0.0 {
+        return;
+    }
     if w <= max {
         d.text(s, x, y, size, rgb);
         return;
@@ -1159,6 +1162,18 @@ fn marquee(d: &mut Draw, s: &str, [x, y]: [f32; 2], size: f32, max: f32, rgb: [f
     };
     let kept = rolled(d, s, x, y, size, max, rgb, roll_offset(w - max, t));
     d.out.extend(kept);
+}
+
+/// B447: [`look::para`]'s words wrapped in `w`, at most `max` lines, but a line still wider (one long word: a URL, a
+/// path, a file name) stays one line clipped to `w` and slides as [`marquee`] does, `roll` seconds in, instead of
+/// ending in "...". The y under the last line.
+#[allow(clippy::too_many_arguments)]
+fn para_roll(d: &mut Draw, s: &str, [x, y]: [f32; 2], w: f32, size: f32, gap: f32, max: usize, rgb: [f32; 3], roll: f32) -> f32 {
+    let lines = look::wrap(d, s, w, size, max);
+    for (i, l) in lines.iter().enumerate() {
+        marquee(d, l, [x, y + gap * i as f32], size, w, rgb, Some(roll));
+    }
+    y + gap * lines.len() as f32
 }
 
 /// How far left a title `over` px too long has slid `t` seconds after it was chosen.
@@ -1356,7 +1371,7 @@ fn page(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay, tab_end: f32) {
     if let Some(say) = mods_kind::coming(v.kind) {
         strip(d, m, l);
         mods_kind::empty(d, v.kind, l.card);
-        detail_text(d, a, l.detail, mods_kind::name(v.kind), say, mods_kind::online(v.kind));
+        detail_text(d, a, l.detail, mods_kind::name(v.kind), say, mods_kind::online(v.kind), v.b.roll.0);
         return;
     }
     strip(d, m, l);
@@ -1544,10 +1559,15 @@ fn footer(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
     let (said, busy) = status(m);
     let room = (nr - nx).max(0.0);
     let spin = if busy { 16.0 * PX } else { 0.0 };
-    let said = ellipsis(d, &said, size, (room * 0.6 - spin).max(0.0));
-    // (M114: "·" drawn as a dot, the font has none)
-    let sw = dotted_width(d, &said, size);
-    super::super::frame::dotted(d, &said, nr - sw, ty, size, sw + 1.0, look::c(look::INK), false);
+    // B447: a long status (an upload's end, its pull request's link) slides in its room instead of ending in "...";
+    // one that fits keeps M114's "·" drawn as a dot (the font has none)
+    let max = (room * 0.6 - spin).max(0.0);
+    let sw = dotted_width(d, &said, size).min(max);
+    if dotted_width(d, &said, size) <= max {
+        super::super::frame::dotted(d, &said, nr - sw, ty, size, sw + 1.0, look::c(look::INK), false);
+    } else {
+        marquee(d, &said.replace('·', "-"), [nr - sw, ty], size, max, look::c(look::INK), Some(v.b.roll.0));
+    }
     if busy {
         spinner(d, v, [nr - sw - 10.0 * PX, ny + nh / 2.0], a);
     }
@@ -1556,15 +1576,15 @@ fn footer(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
 }
 
 /// A panel with only words: a name outlined white on its strip in `a`, what it is and a note under it.
-fn detail_text(d: &mut Draw, a: [f32; 3], b: [f32; 4], name: &str, about: &str, note: &str) {
+fn detail_text(d: &mut Draw, a: [f32; 3], b: [f32; 4], name: &str, about: &str, note: &str, roll: f32) {
     let [sx, sy, sw, sh] = look::panel(d, b, look::STRIP, a);
     let (tx, tw) = (sx + PAD * PX, sw - 2.0 * PAD * PX);
     let size = 22.0 * PY;
     let name = ellipsis(d, name, size, tw);
     look::bold(d, &name, [tx, sy + (sh - size) / 2.0], size, WHITE);
-    let ty = look::para(d, about, [tx, sy + sh + 14.0 * PY], tw, 14.0 * PY, 19.0 * PY, 8, look::c(look::INK));
+    let ty = para_roll(d, about, [tx, sy + sh + 14.0 * PY], tw, 14.0 * PY, 19.0 * PY, 8, look::c(look::INK), roll);
     if !note.is_empty() {
-        look::para(d, note, [tx, ty + 10.0 * PY], tw, 12.5 * PY, 17.0 * PY, 4, look::c(look::MUTED));
+        para_roll(d, note, [tx, ty + 10.0 * PY], tw, 12.5 * PY, 17.0 * PY, 4, look::c(look::MUTED), roll);
     }
 }
 
@@ -1596,11 +1616,11 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
         let (name, about) = slot_text(m);
         // an open question's words are in its box: the panel only names it
         if let Some(c) = &v.child {
-            detail_text(d, a, b, &name, "", "");
+            detail_text(d, a, b, &name, "", "", v.b.roll.0);
             buttons(d, m, b, Some(c));
             return;
         }
-        return detail_text(d, a, b, &name, &about, "");
+        return detail_text(d, a, b, &name, &about, "", v.b.roll.0);
     };
     // the foot first (drawn over the panel after it): the buttons (or the question), then the facts over them
     let n0 = d.out.len();
@@ -1645,7 +1665,8 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
     let line = [sh.by.as_str(), sh.left.as_str(), sh.right.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" - ");
     let stw = style.map_or(0.0, |s| d.width(s, is) + 10.0 * PX);
     if lined {
-        d.text(&ellipsis(d, &line, is, tw - stw), tx, ty, is, look::c(look::MUTED));
+        // B447: a long one (a folder, a source) slides in what the play style leaves
+        marquee(d, &line, [tx, ty], is, tw - stw, look::c(look::MUTED), Some(roll));
         if let Some(s) = style {
             let sx = tx + tw - d.width(s, is);
             d.text(s, sx, ty, is, look::c(look::INK));
@@ -1656,8 +1677,8 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
     let fs = 12.5 * PY;
     let mut ly = fy;
     for f in &sh.facts {
-        let f = ellipsis(d, f, fs, tw);
-        d.text(&f, tx, ly, fs, look::c(look::INK));
+        // B447: an upload's link, a folder: one line in the panel, sliding
+        marquee(d, f, [tx, ly], fs, tw, look::c(look::INK), Some(roll));
         ly += fgap;
     }
     if let Some(ok) = sh.verified {
@@ -1719,7 +1740,7 @@ fn buttons(d: &mut Draw, m: &Menu, b @ [x, y, w, h]: [f32; 4], child: Option<&su
         let bh = 16.0 * PY + 18.0 * PY * lines as f32;
         let bx = [tx, top - 10.0 * PY - bh, tw, bh];
         boxed(d, bx);
-        look::para(d, &words, [tx + 10.0 * PX, bx[1] + 8.0 * PY], tw - 20.0 * PX, ws, 18.0 * PY, lines, ink);
+        para_roll(d, &words, [tx + 10.0 * PX, bx[1] + 8.0 * PY], tw - 20.0 * PX, ws, 18.0 * PY, lines, ink, v.b.roll.0);
         for (k, (r, word)) in rects.into_iter().zip(&c.opts).enumerate() {
             if k == c.at {
                 look::halo(d, r);
@@ -2146,6 +2167,40 @@ mod tests {
         assert!((roll_offset(over, ROLL_REST + slide / 2.0) - over / 2.0).abs() < 1e-3);
         assert_eq!(roll_offset(over, ROLL_REST + slide + 0.5), over);
         assert_eq!(roll_offset(over, 2.0 * ROLL_REST + slide + 0.1), 0.0);
+    }
+
+    /// B447: a status with a link longer than its panel wraps its words, and the link stays one line inside the panel
+    /// (never past its edge), sliding left over time until its end shows.
+    #[test]
+    fn a_long_link_stays_in_its_panel_and_slides() {
+        use super::super::super::{Anchor, Text};
+        let mut t = Text { msg: Vec::new(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
+        for c in "abcdefghijklmnopqrstuvwxyzAU0123456789:/.-()' ".chars() {
+            t.glyphs.insert(c, (0.0, 0.0, 14.0));
+        }
+        let s = "Allan is up: https://huggingface.co/datasets/FIZL0/opentennis-mods/discussions/12";
+        let (x, w) = (10.0, 200.0);
+        let draw = || Draw { out: Vec::new(), text: &t, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
+        let at = |roll: f32| {
+            let mut d = draw();
+            let end = para_roll(&mut d, s, [x, 0.0], w, 16.0, 20.0, 4, WHITE, roll);
+            assert_eq!(end, 40.0, "two lines: the words, then the link");
+            for q in &d.out {
+                assert!(q.dst[0] >= x - 1e-3 && q.dst[0] + q.dst[2] <= x + w + 1e-3, "{:?} past the panel", q.dst);
+            }
+            // the link's line: where its glyphs start, how wide a span of it shows, where its last one ends
+            let link: Vec<_> = d.out.iter().filter(|q| q.dst[1] == 20.0).map(|q| q.dst).collect();
+            let l = link[link.len() - 1];
+            (link[0][0], l[0] + l[2] - link[0][0], l[0] + l[2])
+        };
+        let over = draw().width(s.rsplit(' ').next().unwrap(), 16.0) - w;
+        assert!(over > 0.0);
+        // at rest at its start, then partway (a full panel of it showing), then at its end
+        assert_eq!(at(0.0).0, x);
+        let (_, shown, _) = at(ROLL_REST + over / ROLL_SPEED / 2.0);
+        assert!(shown <= w + 1e-3 && shown > w - 1.0, "{shown}");
+        let (_, _, last) = at(ROLL_REST + over / ROLL_SPEED + 0.1);
+        assert!((last - (x + w)).abs() < 16.0 * 2.0 / 32.0 + 1e-3, "{last}");
     }
 
     /// B448: the grid's lines: a heading per section, its tiles `cols` a row; ↑↓ keep the column (a short row: its

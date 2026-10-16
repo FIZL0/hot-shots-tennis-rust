@@ -1535,6 +1535,15 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         if std::env::var("HST_CHILD").is_ok_and(|c| c == "0") {
             (v.child, v.status, m.sel) = (None, RULE.into(), UP_TOP);
         }
+        // B447: `HST_CHILD=done`: as 0, with the status an upload's end says (its pull request's link)
+        if std::env::var("HST_CHILD").is_ok_and(|c| c == "done") {
+            let pr = "https://huggingface.co/datasets/FIZL0/opentennis-mods/discussions/12";
+            (v.child, v.status, m.sel) = (None, format!("Allan is up (23 MB): it's in everyone's Browse mods now. {pr}"), UP_TOP);
+        }
+        // B447: `HST_LONG=<secs>`: the panel's long lines slid that far
+        if let Some(t) = std::env::var("HST_LONG").ok().and_then(|t| t.parse::<f32>().ok()) {
+            v.b.roll = (t, m.sel);
+        }
     } else if screen == "signinmods" {
         v.page = Page::Upload;
         v.child = Some(Child::new(0, &["Open token page", "Paste token"]));
