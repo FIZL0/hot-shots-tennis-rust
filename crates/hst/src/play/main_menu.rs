@@ -3341,6 +3341,14 @@ pub fn plugin(app: &mut App) {
     // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Startup, || crate::web::touch_menu(true));
+    // B419: every menu screen keeps below the on-screen pad's top row (its taps, previews and legend follow the view)
+    app.add_systems(Update, touch_gap.before(fit_grid).before(pointer::pointer));
+}
+
+/// B419: the view (`widescreen`) starts under the touch pad's top row while it shows, so L1, Select, Start and R1
+/// don't cover the menus; a real controller connecting takes the pad and the gap away.
+fn touch_gap() {
+    super::widescreen::set_top_gap(super::touch_pad::top_row());
 }
 
 #[cfg(test)]
