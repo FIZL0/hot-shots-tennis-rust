@@ -624,12 +624,12 @@ mod tests {
         app.world_mut().resource_mut::<PauseSettings>().open();
         app.update();
         let was = app.world().resource::<Menu>().settings.0[1];
-        // the Sound tab (2), then its Menu Music row (4)
+        // the Sound tab (2), then its Menu Music row (5)
         app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Tab(2), true));
         app.update();
         // B326: a tap picks the row, a tap on its value's right half changes it, a tap on the row keeps it
         for k in [super::super::pointer::OK, Press { right: true, ..default() }, super::super::pointer::OK] {
-            app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(4, k), true));
+            app.world_mut().resource_mut::<super::super::pointer::Pending>().0.push((super::super::pointer::Act::Row(5, k), true));
             app.update();
         }
         assert_eq!(app.world().resource::<Menu>().settings.0[1], !was, "Menu Music didn't change");
