@@ -1070,6 +1070,10 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, MdnsAddressLookup), St
         Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
         Relay::Off => RelayMode::Disabled,
     };
+    // (relays off: nothing to check, `host` waits for none)
+    if *relay != Relay::Off {
+        *RELAYS.lock().unwrap() = mode.relay_map().urls();
+    }
     // the DHT record carries the direct addresses too, so a peer with relays off can still be dialled by ID
     let lookup = DhtAddressLookup::builder().addr_filter(AddrFilter::unfiltered());
     let mut b = Endpoint::builder(presets::Minimal).secret_key(SecretKey::generate()).alpns(vec![ALPN.to_vec()]).relay_mode(mode).address_lookup(lookup);
@@ -1114,6 +1118,7 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, ()), String> {
         Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
         Relay::Off => unreachable!("the browser's LAN is WebRTC (`bind`)"),
     };
+    *RELAYS.lock().unwrap() = mode.relay_map().urls();
     // the short code's ticket waits for the home relay (nothing else reaches a browser), not the bind (B224)
     let ep = Endpoint::builder(presets::Minimal).secret_key(SecretKey::generate()).alpns(vec![ALPN.to_vec()]).relay_mode(mode).bind().await.map_err(|e| e.to_string())?;
     Ok((ep, ()))
@@ -1541,7 +1546,10 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         if ctx_.is_closed() {
                             return;
                         }
-                        let _ = ev.send(Event::Status("Waiting for a relay to put the code online (no internet?)...".into()));
+                        // B515: and why, from the relays' own ping pages (an iPhone's Safari sat here with no clue)
+                        let why = relay_check().await;
+                        bevy::log::warn!("no home relay after {:?}: {why}", t.elapsed());
+                        let _ = ev.send(Event::Status(format!("Waiting for a relay to put the code online: {why}")));
                     }
                 }
                 // B114: relays off, right after bind the address can still be empty; a bare ID in the code fails
@@ -2714,6 +2722,58 @@ fn relay_trouble(status: Option<u16>, err: &str) -> String {
     }
 }
 
+/// The relays the last endpoint was bound with ([`relay_check`] fetches them; iroh's endpoint doesn't say).
+static RELAYS: std::sync::Mutex<Vec<RelayUrl>> = std::sync::Mutex::new(Vec::new());
+
+/// B515: why no relay has taken this endpoint yet, in words for the lobby screen: each relay's ping page fetched the
+/// way iroh's net report does to pick the home relay (which gives up on a probe after 3 s).
+async fn relay_check() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let urls = RELAYS.lock().unwrap().clone();
+    let ping = |u: RelayUrl| async move {
+        let host = u.host_str().unwrap_or("?").to_string();
+        let t = n0_future::time::Instant::now();
+        let r = match u.join("/ping") {
+            Ok(url) => match n0_future::time::timeout(Duration::from_secs(10), crate::modstore::client().get(url).send()).await {
+                Ok(Ok(r)) if r.status().is_success() => Ok(t.elapsed()),
+                Ok(Ok(r)) => Err(format!("HTTP {}", r.status().as_u16())),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err("no answer in 10 s".into()),
+            },
+            Err(e) => Err(e.to_string()),
+        };
+        (host, r)
+    };
+    let pings = n0_future::join_all(urls.into_iter().map(ping)).await;
+    for (host, r) in &pings {
+        bevy::log::info!("relay check {host}: {r:?}");
+    }
+    relay_words(&pings)
+}
+
+/// [`relay_check`]'s verdict from each relay's ping: its time, or why it failed.
+fn relay_words(pings: &[(String, Result<Duration, String>)]) -> String {
+    let best = pings.iter().filter_map(|(h, r)| r.as_ref().ok().map(|d| (h, *d))).min_by_key(|(_, d)| *d);
+    let fast = best.filter(|(_, d)| *d < Duration::from_secs(3));
+    let blockers = if cfg!(target_arch = "wasm32") { "a content blocker, VPN or iCloud Private Relay" } else { "a firewall or VPN" };
+    match (fast, best) {
+        (Some((h, d)), _) => format!(
+            "the relays answer ({h} in {} ms) but none has taken the connection yet: {blockers} may block their WebSocket; still trying...",
+            d.as_millis()
+        ),
+        (None, Some((h, d))) => format!(
+            "the relays answer too slowly to be picked ({h} in {} ms, more than 3 s): a slow network, or {blockers} in the way; still trying...",
+            d.as_millis()
+        ),
+        (None, None) if pings.is_empty() => "no relays are set".into(),
+        (None, None) => {
+            let (h, e) = (&pings[0].0, pings[0].1.as_ref().err().map_or("", |e| e.as_str()));
+            format!("none of the relays can be reached ({h}: {e}): no internet, or {blockers} blocks them; still trying...")
+        }
+    }
+}
+
 /// B467: a refused request's wait before asking the pkarr relay again: 1-3 s, spread out so the requests turned away
 /// together don't all come back in the same second.
 fn relay_pause() -> Duration {
@@ -2967,6 +3027,32 @@ mod tests {
         // B215: a shorter start countdown for the tests (each starts one)
         COUNTDOWN_MS.store(1000, std::sync::atomic::Ordering::Relaxed);
         Room { name: "t".into(), doubles, court: 0, sets: 0, games: 4, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }], ..Default::default() }
+    }
+
+    /// B515: the lobby's "Waiting for a relay" line says which way the relays failed.
+    #[test]
+    fn relay_words_name_the_failure() {
+        let ms = Duration::from_millis;
+        let p = |r: &[(&str, Result<Duration, &str>)]| relay_words(&r.iter().map(|(h, r)| (h.to_string(), r.map_err(|e| e.to_string()))).collect::<Vec<_>>());
+        let w = p(&[("a", Err("Load failed")), ("b", Ok(ms(4500))), ("c", Ok(ms(120))), ("d", Ok(ms(80)))]);
+        assert!(w.contains("d in 80 ms") && w.contains("WebSocket"), "{w}");
+        let w = p(&[("a", Err("Load failed")), ("b", Ok(ms(4500)))]);
+        assert!(w.contains("b in 4500 ms") && w.contains("too slowly"), "{w}");
+        let w = p(&[("a", Err("Load failed")), ("b", Err("no answer in 10 s"))]);
+        assert!(w.contains("(a: Load failed)") && w.contains("none of the relays can be reached"), "{w}");
+        assert_eq!(p(&[]), "no relays are set");
+    }
+
+    /// B515: the check fetches every relay the endpoint was bound with and reports one it can't reach.
+    #[test]
+    fn relay_check_reports_an_unreachable_relay() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let w = rt.block_on(async {
+            // a closed local port: refused at once
+            *RELAYS.lock().unwrap() = vec!["http://127.0.0.1:9/".parse().unwrap()];
+            relay_check().await
+        });
+        assert!(w.starts_with("none of the relays can be reached (127.0.0.1: "), "{w}");
     }
 
     /// B292: every person in ready doesn't count down while a seat is open; a full lobby does.
