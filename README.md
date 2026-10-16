@@ -81,27 +81,14 @@ textures of their own (the "upscaled textures" setting). How to make either: [do
 
 ## Online play
 
-Main menu → Online: host a lobby, find lobbies, quick play, or join with a code (paste it, or scan the host's QR).
-Find lists every open lobby (singles and doubles, the host, court and open seats); you pick your characters after
-joining, in the lobby, which holds your seats meanwhile (Characters picks again, the host's Court changes the venue).
-Set your name under Online → Name; the lobby shows it on your seats. Guests press Ready, and the host presses Start
-when everyone is ready. Any seats still open are played by the computer. The host can also take a guest out of the
-lobby (OK on their seat).
+Main menu → Online.
 
-In the browser, join by code
-(paste the code on the page with Ctrl+V, or open the page with `?code=<code>`) or host; Find isn't there, and Quick play
-hosts. Browser and desktop players can play together.
+- **Host**, **Find**, **Quick play**, or **Join** with a code or the host's QR.
+- Open seats are played by the computer.
+- Browser and desktop players can play together (Find is desktop only).
+- No internet? Set Relay to Off on the same network (LAN, or browsers via QR).
 
-Browsers on one network can also play with no internet and no server (WebRTC): the host sets the relay to Off and
-hosts; each player scans the host's QR with their phone camera (it opens the game with the code), joins, and shows a
-QR of their own, which the host scans in turn (the tab it opens hands the code to the game tab), or the codes are
-pasted both ways. Browser-only: desktop builds can't join these lobbies.
-
-LAN play needs no internet: put everyone on one network (a router, or one player's hotspot with mobile data off) and
-set the relay to Off. Find lists the lobbies on that network first (mDNS), and a host's code holds its LAN address,
-so joining by code works there too. Your firewall must let mDNS (UDP 5353) and the game's UDP port through.
-
-Relay and name settings: Online → Relay / Name (details in [docs/DEVELOPING.md](docs/DEVELOPING.md)).
+More (own relay, settings file): [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
 ## Legal
 
