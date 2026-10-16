@@ -207,10 +207,23 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Lobby if m.net.ask.is_none() && !m.net.keep.is_empty() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Not this time")]),
         Screen::Lobby if m.net.ask.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Leave")]),
+        // B523: the host's kick prompt; a card carried to another
+        Screen::Lobby if m.net.kick.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
+        Screen::Lobby if let Some(from) = m.carrying() => {
+            moves(&mut v, (true, true));
+            v.extend([(Act::Ok, if m.target_seat() == Some(from) { "Put Back" } else { "Drop" }), (Act::Back, "Cancel")]);
+        }
         Screen::Lobby => {
             moves(&mut v, m.pill_axes());
             if m.lobby_bot() {
                 v.extend([(Act::Costume, "Costume"), (Act::Card, "Remove")]);
+            }
+            // B523: ✕ carries a computer's card, so Select picks its character
+            if m.lobby_bot() && m.lobby_ok() == Some("Move") {
+                v.push((Act::Hand, "Pick"));
+            }
+            if m.kickable().is_some() {
+                v.push((Act::Card, "Kick"));
             }
             // B396: this machine's own card: its costume and hand right there
             if m.lobby_own() {

@@ -336,6 +336,34 @@ impl Room {
         true
     }
 
+    /// B523: seats `a` and `b` can trade players: two seats, not both open, not one peer's two (its players are its
+    /// seats in order, so only their picks would trade), and every peer's seats keep their order (its k-th player
+    /// stays in its k-th seat, as `live_of` and each peer's own players go by that).
+    pub fn can_swap(&self, a: usize, b: usize) -> bool {
+        let n = self.seats.len();
+        if a == b || a >= n || b >= n {
+            return false;
+        }
+        let (pa, pb) = (self.seats[a].as_ref().map(|s| s.peer.as_str()), self.seats[b].as_ref().map(|s| s.peer.as_str()));
+        if pa.is_none() && pb.is_none() || pa == pb && pa.is_some_and(|p| p != CPU) {
+            return false;
+        }
+        let mut after = self.seats.clone();
+        after.swap(a, b);
+        let order = |seats: &[Option<Seat>], peer: &str| seats.iter().flatten().filter(|s| s.peer == peer).map(|s| s.pick.clone()).collect::<Vec<_>>();
+        [pa, pb].into_iter().flatten().filter(|p| *p != CPU).all(|p| order(&self.seats, p) == order(&after, p))
+    }
+
+    /// B523: seats `a` and `b`'s players traded (`can_swap`); false (no change) if they can't.
+    fn swap(&mut self, a: usize, b: usize) -> bool {
+        if !self.can_swap(a, b) {
+            return false;
+        }
+        self.seats.swap(a, b);
+        self.ver += 1;
+        true
+    }
+
     /// B201: singles or doubles, the taken seats (people and computer) first in order; false (no change) if they
     /// don't fit.
     fn set_doubles(&mut self, doubles: bool) -> bool {
@@ -817,6 +845,8 @@ pub enum Cmd {
     Live(Vec<Live>),
     Bot(usize, Option<Pick>),
     Doubles(bool),
+    /// B523: the host swaps two seats' players (an open seat: moves one there), rearranging the teams.
+    Swap(usize, usize),
     /// B213: the host's lobby private (unlisted) or public.
     Private(bool),
     /// The host's lobby vanilla (no mods) or not.
@@ -1975,10 +2005,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     broadcast(&joined, &Msg::Room(room.clone()));
                     cx.say(Event::Room(room.clone()));
                 }
-                Some(c @ (Cmd::Bot(..) | Cmd::Doubles(_))) if starting.is_none() => {
+                Some(c @ (Cmd::Bot(..) | Cmd::Doubles(_) | Cmd::Swap(..))) if starting.is_none() => {
                     let changed = match c {
                         Cmd::Bot(i, p) => room.bot(i, p),
                         Cmd::Doubles(d) => room.set_doubles(d),
+                        Cmd::Swap(a, b) => room.swap(a, b),
                         _ => false,
                     };
                     if changed {
@@ -2982,6 +3013,30 @@ mod tests {
         r.picking.clear();
         r.ready.insert("h".into());
         assert!(r.all_set(), "full and ready");
+    }
+
+    /// B523: the host's swaps trade two seats' players (or move one to an open seat), never one peer's two and never
+    /// out of a peer's order.
+    #[test]
+    fn seats_swap_keeping_each_peers_order() {
+        let mut r = room(true);
+        r.take("host", &[Pick::disc(0, 0)]);
+        r.take("g", &[Pick::disc(1, 0), Pick::disc(2, 0)]);
+        r.seats[3] = Some(Seat { peer: CPU.into(), pick: Pick::disc(3, 0) });
+        let peers = |r: &Room| r.seats.iter().map(|s| s.as_ref().map_or("", |s| s.peer.as_str()).to_string()).collect::<Vec<_>>();
+        let ver = r.ver;
+        assert!(r.swap(1, 0) && peers(&r) == ["g", "host", "g", CPU] && r.ver == ver + 1, "{:?}", peers(&r));
+        assert!(!r.can_swap(0, 2), "one peer's two");
+        assert!(!r.can_swap(0, 3), "g's first player would go after its second");
+        assert!(r.swap(2, 3) && peers(&r) == ["g", "host", CPU, "g"]);
+        assert!(r.swap(2, 1) && peers(&r) == ["g", CPU, "host", "g"], "host and computer");
+        assert!(!r.can_swap(1, 1) && !r.can_swap(1, 4));
+        r.seats[1] = None;
+        assert!(r.swap(2, 1) && peers(&r) == ["g", "host", "", "g"], "onto an open seat");
+        assert!(r.can_swap(2, 1) && !r.can_swap(2, 2));
+        r.seats[2] = None;
+        r.seats[0] = None;
+        assert!(!r.can_swap(0, 2), "two open seats");
     }
 
     #[test]
