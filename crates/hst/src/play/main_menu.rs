@@ -1116,6 +1116,11 @@ impl Menu {
             self.online_enter(&mut out);
             return out;
         }
+        // B516: the splash's 1P (and the keyboard) works the menus; another pad only joins the screens that seat players
+        let joins = matches!(self.screen, Screen::Assign | Screen::Chars | Screen::Confirm | Screen::Lobby);
+        if !self.paused && !joins && matches!(dev, Dev::Pad(_)) && self.p1.is_some_and(|p| p != dev) {
+            return out;
+        }
         let host = self.lead();
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
             return out;
@@ -4283,6 +4288,24 @@ mod tests {
         m.step(pa, press(|p| &mut p.ok));
         assert_eq!((m.screen, m.lead()), (Screen::Chars, Some(Dev::Keys)));
         assert!(!m.droppable(0)); // the select's driver stays
+    }
+
+    #[test]
+    fn keyboard_p1_ignores_other_pads_in_the_menus() {
+        let pad = Dev::Pad(Entity::from_raw_u32(3).unwrap());
+        let mut m = Menu { screen: Screen::Press, ..default() };
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        m.screen = Screen::Main;
+        // the pad neither moves the main menu nor picks its row
+        m.step(pad, press(|p| &mut p.down));
+        assert_eq!(m.sel, 0);
+        m.step(pad, press(|p| &mut p.ok));
+        assert_eq!(m.screen, Screen::Main);
+        // the keyboard starts Local as 1P; on the select the pad still joins as 2P
+        m.step(Dev::Keys, press(|p| &mut p.ok));
+        assert_eq!((m.screen, m.seats[0]), (Screen::Chars, Some(Dev::Keys)));
+        m.step(pad, press(|p| &mut p.ok));
+        assert_eq!(m.seats[..2], [Some(Dev::Keys), Some(pad)]);
     }
 
     #[test]
