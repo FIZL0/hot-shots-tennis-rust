@@ -554,8 +554,9 @@ mod tests {
     }
 
     /// B254: doubles, 1P on the keyboard, 3P on pad a, 2P and 4P the computer's. 1P's → passes the computer's seat
-    /// (its device to 3P, pad a now 1P), △ adds no computer player, the keyboard leaves, a new pad b's ✕ takes the free
-    /// human seat, 1P's ✕ hands it to the match's slots, which keep it through `update`.
+    /// (its device to 3P, pad a now 1P), △ adds no computer player, the keyboard takes itself off, a new pad b's ✕
+    /// takes the free human seat, the keyboard's ✕ hands it to the match's slots, which keep it through `update`.
+    /// B437: the keyboard drives the screen until it leaves (its own move pending), so it can keep switching.
     #[test]
     fn reassign_in_a_match() {
         let [a, b] = [5, 7].map(|n| Entity::from_raw_u32(n).unwrap());
@@ -566,18 +567,31 @@ mod tests {
         let mut m = Menu { screen: Screen::Assign, doubles: true, seats, bots: humans.map(|h| !h), paused: true, ..default() };
         m.step(Dev::Keys, Press { right: true, ..default() });
         assert_eq!((m.seats, m.bots, m.sel), ([Some(Dev::Pad(a)), None, Some(Dev::Keys), None], [false, true, false, true], 2));
+        assert_eq!((m.lead(), m.lead_pending()), (Some(Dev::Keys), Some(Some(2))));
+        // still the keyboard's: back to 1P and over again; pad a, moved onto 1P, neither drives nor moves nor leaves
+        m.step(Dev::Keys, Press { right: true, ..default() });
+        assert_eq!((m.seats, m.lead_pending()), ([Some(Dev::Keys), None, Some(Dev::Pad(a)), None], None));
+        m.step(Dev::Keys, Press { left: true, ..default() });
+        assert_eq!(m.seats, [Some(Dev::Pad(a)), None, Some(Dev::Keys), None]);
+        for k in [Press { right: true, ..default() }, Press { back: true, ..default() }, Press { ok: true, ..default() }] {
+            m.step(Dev::Pad(a), k);
+        }
+        assert_eq!((m.screen, m.seats), (Screen::Assign, [Some(Dev::Pad(a)), None, Some(Dev::Keys), None]));
         m.sel = 1;
-        assert_eq!((m.step(Dev::Pad(a), Press { card: true, ..default() }), m.bots[1]), (vec![], true));
-        // no free human seat yet: b's ✕ does nothing; the keyboard's ○ leaves, then b takes 3P
+        assert_eq!((m.step(Dev::Keys, Press { card: true, ..default() }), m.bots[1]), (vec![], true));
+        // no free human seat yet: b's ✕ does nothing; the keyboard takes itself off (□), then b takes 3P
         m.step(Dev::Pad(b), Press { ok: true, ..default() });
         assert!(!m.seats.contains(&Some(Dev::Pad(b))));
-        m.step(Dev::Keys, Press { back: true, ..default() });
+        m.sel = 2;
+        m.step(Dev::Keys, Press { page: true, ..default() });
+        assert_eq!(m.lead_pending(), Some(None));
         m.step(Dev::Pad(b), Press { ok: true, ..default() });
         assert_eq!(m.seats, [Some(Dev::Pad(a)), None, Some(Dev::Pad(b)), None]);
         // 1P alone may take itself off too (no moving up over the computer's seats)
         assert!(m.droppable(0) && m.droppable(2));
-        m.step(Dev::Pad(a), Press { ok: true, ..default() });
+        m.step(Dev::Keys, Press { ok: true, ..default() });
         assert_eq!(m.screen, Screen::Chars);
+        assert_eq!(m.lead(), Some(Dev::Pad(a)), "left: pad a is 1P");
         apply(m.seats, &[a, b], &mut slots);
         slots.update(&[a, b]);
         assert_eq!((slots.0, slots.keys()), ([Some(a), None, Some(b), None], None));
