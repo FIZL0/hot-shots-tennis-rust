@@ -6,6 +6,7 @@
 #
 #   tmux new -s hst tools/single.sh               # detach: Ctrl-b d · reattach: tmux attach -t hst
 #   HST_IDLE=90 HST_PAUSE=60 tools/single.sh
+#   HST_ONLY="P59 P60" tools/single.sh       # just these, then exit
 #   HST_LEAN=0 tools/single.sh                    # full Claude Code (plugins, subagents); default is lean
 #
 # Runs with permission prompts bypassed: review the work in the morning (git log), and keep your backup.
@@ -36,7 +37,12 @@ run=0
 lean='--tools Bash,Read,Edit,Write --setting-sources project,local --strict-mcp-config'
 [ "${HST_LEAN:-1}" = 0 ] && lean=''
 trap 'tools/pcsx2-hst.sh stop' EXIT  # copy 6 starts its own virtual pad and takes it down with it
-while grep -q '^- \[ \]' plan/TODO.md; do
+# HST_ONLY="P59 P60": stop once none of those is open any more (they must be the first open tasks in TODO.md)
+open() {
+  [ -z "$HST_ONLY" ] && { grep -q '^- \[ \]' plan/TODO.md; return; }
+  for t in $HST_ONLY; do grep -q "^- \[ \] \*\*$t\*\*" plan/TODO.md && return 0; done; return 1
+}
+while open; do
   # PCSX2, screenshots and --shot need this user's Wayland session; after a reboot SDDM's greeter has the only one
   if ! compgen -G "/run/user/$(id -u)/wayland-[0-9]*" >/dev/null; then
     echo "=== $(date -Is) no desktop session: waiting for a login (from a shell: tools/desktop-login.sh)" | tee -a "$log"
