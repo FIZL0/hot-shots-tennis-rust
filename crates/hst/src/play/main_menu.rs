@@ -2474,15 +2474,20 @@ struct Ticker(String, f32, Option<(Screen, mods_screen::Page)>);
 
 /// The description bar's text, at the window's resolution in Fira Mono (Bevy's built-in font), in its tint (223), on
 /// the bar (y 404..436). Its bar spans the window (`Anchor::Span`). B237: at most 10 units a glyph (the original's
-/// was 11, and scrolled when it didn't fit); a longer text word-wraps and shrinks until it fits the bar.
+/// was 11, and scrolled when it didn't fit); a longer text word-wraps and shrinks until it fits the bar. B521: the
+/// glyphs' width and line height are taken as Fira Mono's (0.6 and 1.2 em) times `grow`, which goes up whenever the
+/// text as laid out comes back bigger than that (another platform's font rendering), so it's never cut off.
 fn ticker_text(
     ticker: Res<Ticker>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut clip: Query<(&mut Node, &mut Visibility, &Children), With<TickerClip>>,
-    mut text: Query<(&mut bevy::ui::widget::Text, &mut TextFont, &mut Node), Without<TickerClip>>,
+    mut text: Query<(&mut bevy::ui::widget::Text, &mut TextFont, &mut Node, &ComputedNode), Without<TickerClip>>,
+    mut grow: Local<Option<Grow>>,
 ) {
     let (Ok(win), Ok((mut cnode, mut vis, kids))) = (window.single(), clip.single_mut()) else { return };
-    let Some(Ok((mut t, mut font, mut node))) = kids.first().map(|&k| text.get_mut(k)) else { return };
+    let Some(Ok((mut t, mut font, mut node, laid))) = kids.first().map(|&k| text.get_mut(k)) else { return };
+    let g = grow.get_or_insert_with(Grow::default);
+    g.measure(&t.0, laid.size() * laid.inverse_scale_factor());
     *vis = if ticker.0.is_empty() { Visibility::Hidden } else { Visibility::Inherited };
     let (share, vshare) = super::widescreen::window_menu_shares(&window);
     let (left, width) = super::widescreen::place(0.0, 640.0, share, Anchor::Span);
@@ -2496,14 +2501,49 @@ fn ticker_text(
     // a tall narrow window (a phone held upright) has the height for a bigger glyph than its width's units give
     let cap = (10.0 * unit).max((7.0f32).min(bar_h / 4.0));
     // B325: 3 units clear above and below, so even two lines' descenders stay off the legend strip under the bar
-    let (p, lines) = fit_lines(&ticker.0, bar_w - 32.0 * unit, bar_h - 6.0 * unit, cap);
+    let (p, lines) = fit_lines(&ticker.0, (bar_w - 32.0 * unit) / g.w, (bar_h - 6.0 * unit) / g.h, cap / g.w.max(g.h));
     let em = p / 0.6;
     font.font_size = bevy::text::FontSize::Px(em);
     node.left = Val::Px(ticker_x_in(ticker.1, bar_w / unit + 16.0) * unit);
-    node.top = Val::Px((bar_h - 1.2 * em * lines.len() as f32) / 2.0);
+    node.top = Val::Px((bar_h - 1.2 * g.h * em * lines.len() as f32) / 2.0);
     let s = lines.join("\n");
+    // what the layout should come back as, at Fira Mono's metrics
+    let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
+    g.sent = (s.clone(), Vec2::new(longest * p, 1.2 * em * lines.len() as f32));
     if t.0 != s {
         t.0 = s;
+    }
+}
+
+/// B521: how much bigger than Fira Mono's metrics the description bar's text lays out (width, height; never below 1),
+/// and the text last set with its size at those metrics (logical px).
+struct Grow {
+    w: f32,
+    h: f32,
+    sent: (String, Vec2),
+}
+
+impl Default for Grow {
+    fn default() -> Self {
+        Grow { w: 1.0, h: 1.0, sent: (String::new(), Vec2::ZERO) }
+    }
+}
+
+impl Grow {
+    /// The text node's laid-out `size` (logical px) for `shown`: once it's the text last set, the factors grow to
+    /// cover it (a hair over, so rounding can't cut the last glyph).
+    fn measure(&mut self, shown: &str, size: Vec2) {
+        let (ref s, want) = self.sent;
+        if shown != s || s.is_empty() || want.x <= 0.0 || want.y <= 0.0 || size.x <= 0.0 {
+            return;
+        }
+        let (w, h) = (size.x / want.x, size.y / want.y);
+        if w > 1.001 {
+            self.w = self.w.max(w * 1.01).min(3.0);
+        }
+        if h > 1.001 {
+            self.h = self.h.max(h * 1.01).min(3.0);
+        }
     }
 }
 
@@ -3578,6 +3618,26 @@ mod tests {
         assert_eq!(l.join(" "), long);
         // flies in from the right edge at 32 a frame, then holds at 16
         assert_eq!([ticker_x_in(0.0, 656.0), ticker_x_in(1.0, 656.0), ticker_x_in(20.0, 656.0), ticker_x_in(1000.0, 656.0)], [656.0, 624.0, 16.0, 16.0]);
+    }
+
+    /// B521: a platform whose glyphs lay out wider than Fira Mono's 0.6 em: the next fit takes them as that wide, so
+    /// the line wraps or shrinks inside the bar instead of running off its right edge.
+    #[test]
+    fn description_grows_to_the_laid_out_size() {
+        let long = "Open a lobby for players over the internet or on this network; start when you like: open seats are played by the computer.";
+        let mut g = Grow::default();
+        g.sent = ("a".into(), Vec2::new(100.0, 20.0));
+        g.measure("b", Vec2::new(300.0, 60.0));
+        g.measure("a", Vec2::new(100.0, 20.0));
+        assert_eq!((g.w, g.h), (1.0, 1.0), "another text, or as expected: no change");
+        g.measure("a", Vec2::new(115.0, 20.0));
+        assert!(g.w > 1.15 && g.h == 1.0);
+        let (w, h) = (600.0, 30.0);
+        let (p, l) = fit_lines(long, w / g.w, h / g.h, 10.0 / g.w);
+        let longest = l.iter().map(|l| l.chars().count()).max().unwrap() as f32;
+        assert!(longest * p * 1.15 <= w, "at the platform's width it still fits");
+        g.measure("a", Vec2::new(105.0, 20.0));
+        assert!(g.w > 1.15, "never shrinks back");
     }
 
     #[test]
