@@ -16,9 +16,12 @@ pub(crate) use super::super::legend::Last;
 /// probes `step` for them).
 pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let mut v: Vec<(Act, &str)> = Vec::new();
-    let host = m.lead() == Some(dev);
+    let host = m.hosts(dev);
     let s = m.sel;
     match m.screen {
+        // B516: the splash's one press (none once 1P is taken)
+        Screen::Press if m.p1.is_none() => v.push((Act::Ok, "Start")),
+        Screen::Press => {}
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose")]),
         _ if m.mod_asking() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Stand-in")]),
         _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),

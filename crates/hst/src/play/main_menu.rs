@@ -72,6 +72,7 @@ mod plate_emote;
 mod previews;
 mod roster;
 mod slide;
+mod splash;
 
 /// Characters on the select screen.
 const CHARS: usize = 14;
@@ -405,6 +406,8 @@ struct Press {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Screen {
+    /// B516: the press-start splash a fresh start opens on (`splash.rs`): its first press takes 1P.
+    Press,
     /// `bgmm_04` plays on the first three, `bgmm_05` on the next three, `bgmm_06` on Confirm (the MENU overlay's track
     /// switch, measured per screen).
     Main,
@@ -559,6 +562,9 @@ struct Menu {
     /// B437: the device that drives the controller assignment once it has moved or taken off a seat there: it keeps
     /// driving it (its own seat change pending, shown on the screen) until it leaves, where the new 1P takes over.
     assign_lead: Option<Dev>,
+    /// B516: the device that took 1P on the splash (`splash.rs`), the one that drives 1P's player.
+    p1: Option<Dev>,
+    splash: splash::Splash,
 }
 
 impl Default for Menu {
@@ -607,6 +613,8 @@ impl Default for Menu {
             names: default(),
             court_pick: default(),
             assign_lead: None,
+            p1: None,
+            splash: default(),
         }
     }
 }
@@ -901,6 +909,17 @@ impl Menu {
         if matches!(dev, Dev::Pad(_)) && !self.seats.contains(&Some(dev)) && touch(self.seats[0]) {
             self.seats[0] = Some(dev);
         }
+        // B516: and the splash's 1P with it
+        if matches!(dev, Dev::Pad(_)) && touch(self.p1) {
+            self.p1 = Some(dev);
+        }
+    }
+
+    /// B516: the splash's 1P a pad that's gone (unplugged or flat): the next device to press anything has it.
+    fn takes_lost_p1(&mut self, dev: Dev, pads: &[Entity]) {
+        if matches!(self.p1, Some(Dev::Pad(e)) if !pads.contains(&e)) && dev != Dev::Open {
+            self.p1 = Some(dev);
+        }
     }
 
     /// B388: 1P's pad gone (unplugged or flat) leaves the screens only 1P drives stuck: the keyboard's first press
@@ -929,6 +948,12 @@ impl Menu {
     /// seat there (B437: still the one that came in, until it leaves).
     fn lead(&self) -> Option<Dev> {
         self.assign_lead.filter(|_| self.screen == Screen::Assign).or(self.seats[0])
+    }
+
+    /// Whether `dev` works the screens only 1P drives: 1P's device ([`lead`](Self::lead)); B516: on the mode and
+    /// court screens (no seat of its own to move) the keyboard too, whoever has 1P.
+    fn hosts(&self, dev: Dev) -> bool {
+        self.lead() == Some(dev) || dev == Dev::Keys && self.lead().is_some() && matches!(self.screen, Screen::Mode | Screen::Confirm)
     }
 
     /// B437: the assignment's driver has moved off 1P (or off every seat): where it sits now (`None`: taken off), once
@@ -1075,8 +1100,15 @@ impl Menu {
             }
         };
         // a lobby link's start (`online::linked`): the first device to press anything is this machine's player
+        if self.screen == Screen::Press {
+            if self.splash_step(dev, k.ok) {
+                out.push(Effect::Sound(2));
+            }
+            return out;
+        }
         if self.screen == Screen::Assign && self.online() && self.seats[0].is_none() {
             self.seats[0] = Some(dev);
+            self.p1 = Some(dev);
             // B392: and straight into the lobby, no controllers screen
             self.online_enter(&mut out);
             return out;
@@ -1113,10 +1145,11 @@ impl Menu {
                             out.extend([Sound(2), Launch]);
                             self.screen = Screen::Playing;
                         }
-                        Row::Local => self.local_start(dev, &mut out),
+                        // B516: whoever chose it, 1P is the splash's
+                        Row::Local => self.local_start(self.p1.unwrap_or(dev), &mut out),
                         Row::Online => {
                             self.rematch = false;
-                            self.seats = [Some(dev), None, None, None];
+                            self.seats = [Some(self.p1.unwrap_or(dev)), None, None, None];
                             self.net.status.clear();
                             out.push(Effect::Online(online::Fx::Load));
                             self.go(Screen::Online, &mut out);
@@ -1157,7 +1190,7 @@ impl Menu {
                     self.step_tabs(k, &mut out);
                 }
             }
-            Screen::Mode if host == Some(dev) => {
+            Screen::Mode if self.hosts(dev) => {
                 if k.up || k.down || k.left || k.right {
                     self.doubles = !self.doubles;
                     out.push(Sound(0));
@@ -1357,8 +1390,8 @@ impl Menu {
                 }
             }
             // B451: the umpire picker's rows
-            Screen::Confirm if host == Some(dev) && self.picking.is_some() && self.sel == 4 => umpire_picker::step(self, k, &mut out),
-            Screen::Confirm if host == Some(dev) && self.picking.is_some() => {
+            Screen::Confirm if self.hosts(dev) && self.picking.is_some() && self.sel == 4 => umpire_picker::step(self, k, &mut out),
+            Screen::Confirm if self.hosts(dev) && self.picking.is_some() => {
                 // the pickers: the court and umpire strips' ←→ (Random first, stop at the ends); ✕ keeps, ○ puts back
                 let d = k.right as i32 - k.left as i32;
                 if self.sel == 1 {
@@ -1414,7 +1447,7 @@ impl Menu {
                     self.venue_picked(&mut out);
                 }
             }
-            Screen::Confirm if host == Some(dev) => {
+            Screen::Confirm if self.hosts(dev) => {
                 // B449: the arrows go about the screen as its parts lie; Start (a pad's also sends ✕) starts
                 let start = k.name || (k.ok && self.sel == 0);
                 let k = Press { ok: k.ok && !k.name, ..k };
@@ -1627,6 +1660,8 @@ enum Tex {
     Umpire(usize),
     /// B401: court mod `k`'s picture (`court_mods::Pics`), in its pixels.
     CourtMod(usize),
+    /// B516: the splash's logo (`splash::Logo`), in its pixels.
+    Logo,
 }
 
 /// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
@@ -2010,9 +2045,16 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "code" | "name" | "relay-url" => Screen::Code,
         "addmods" | "browsemods" | "uploadmods" | "mymods" | "signinmods" | "phonemods" | "phonemods-ask" => Screen::Mods,
         "extras" => Screen::Extras,
+        "press" | "press-claimed" => Screen::Press,
+        // B516: a fresh start opens on the splash
+        "" if fresh => Screen::Press,
         _ => Screen::Main,
     };
-    if fresh && menu.screen == Screen::Main {
+    if screen == "press-claimed" {
+        menu.p1 = Some(Dev::Keys);
+        menu.splash.hold();
+    }
+    if fresh && matches!(menu.screen, Screen::Press | Screen::Main) {
         online::linked(&mut menu);
     }
     // B297: the main screen with a Rematch card (a singles match against the computer played)
@@ -2512,6 +2554,7 @@ fn layout(m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity], hand_x: f32) 
 fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], controllers: usize, hand_x: f32) -> Draw<'a> {
     let mut d = Draw { out: Vec::new(), text, said: String::new(), anchor: Anchor::Centre, hits: Vec::new(), outside: None };
     match m.screen {
+        Screen::Press => splash::layout(&mut d, m, pads, controllers),
         Screen::Main => home::layout(&mut d, m, text, controllers, hand_x),
         Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::ModSettings | Screen::Mobile => options::page_layout(&mut d, m, hand_x),
         Screen::Controls => options::controls_layout(&mut d, m, bind, hand_x),
@@ -3122,6 +3165,7 @@ fn step(
         // a click or tap is the keyboard's while 1P's pad is out (`pointer::device`)
         if k != Press::default() || dev == pointed && !acts.is_empty() {
             menu.takes_lost_1p(dev, &pads);
+            menu.takes_lost_p1(dev, &pads);
         }
         let mut fx = Vec::new();
         if dev == pointed {
@@ -3232,7 +3276,7 @@ fn draw(
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
     images: Res<Assets<Image>>,
-    (buttons, umpire_pics, court_pics): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>),
+    (buttons, umpire_pics, court_pics, logo): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>, Option<Res<splash::Logo>>),
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| controls::readable(g)).map(|(e, _, _)| e).collect();
@@ -3273,6 +3317,13 @@ fn draw(
             },
             Tex::Sheet(k) => art.0[3 + k].clone(),
             Tex::Pill => art.0.last().expect("pill").clone(),
+            Tex::Logo => match &logo {
+                Some(l) => l.0.clone(),
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Preview(_) => continue,
             Tex::Icon(w) => match (icons.0.get(&w), w) {
                 (Some(h), _) => h.clone(),
@@ -3409,7 +3460,7 @@ impl Screen {
     /// Which of `MenuBgm`'s tracks plays on this screen.
     fn bgm(self) -> Option<usize> {
         match self {
-            Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile => Some(0),
+            Screen::Press | Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile => Some(0),
             Screen::Mode | Screen::Assign | Screen::Chars => Some(1),
             Screen::Confirm => Some(2),
             Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => Some(0),
@@ -3448,7 +3499,8 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
         .init_resource::<slide::Slide>()
-        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, draw, ticker_text).chain(), bgm, cursor::tick))
+        .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, splash::tick, draw, ticker_text).chain(), bgm, cursor::tick))
+        .add_systems(Startup, splash::load)
         .add_systems(Last, cursor::show);
     // M14: the button legend
     legend::plugin(app);

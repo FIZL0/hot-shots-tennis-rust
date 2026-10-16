@@ -323,13 +323,14 @@ impl PadSlots {
     /// Drop pads gone from `present`, then give each new one the first free slot (in connection order). With seats a
     /// pad seat prefers its own pad and the others stay empty.
     pub fn update(&mut self, present: &[Entity]) {
-        self.update_with(present, cfg!(target_arch = "wasm32") || super::touch_pad::on());
+        self.update_with(present, &[]);
     }
 
-    /// `update`; `keys_take_spare`: the keyboard seat also takes a pad no other seat wants. B244: in the browser a phone's
-    /// menus are tapped (the keyboard's seat), so the touch pad (web/touch.js; the iPhone app's `touch_pad.rs`) must
-    /// drive that seat in the match.
-    pub fn update_with(&mut self, present: &[Entity], keys_take_spare: bool) {
+    /// `update`; `touch`: the on-screen pads among `present` (`emote::is_touch`), which the keyboard seat also takes
+    /// when no other seat wants them. B244: in the browser a phone's menus are tapped (the keyboard's seat), so the
+    /// touch pad (web/touch.js; the iPhone app's `touch_pad.rs`) must drive that seat in the match. B516: only those:
+    /// a real pad no seat holds (idle, or never pressed in the menus) never drives the keyboard's player.
+    pub fn update_with(&mut self, present: &[Entity], touch: &[Entity]) {
         for s in &mut self.0 {
             if s.is_some_and(|e| !present.contains(&e)) {
                 *s = None;
@@ -337,7 +338,7 @@ impl PadSlots {
         }
         let wants = |i: usize| self.1.map_or(Some(None), |seats| match seats[i] {
             Some(Seat::Pad(n)) => Some(Some(n)),
-            Some(Seat::Keys) if keys_take_spare => Some(None),
+            Some(Seat::Keys) if !touch.is_empty() => Some(None),
             _ => None,
         });
         // seats' own pads first, so a seat whose pad is gone doesn't take one another empty seat is waiting for
@@ -351,7 +352,8 @@ impl PadSlots {
         for i in 0..4 {
             if self.0[i].is_none() && wants(i).is_some() {
                 let own: Vec<_> = (0..4).filter(|&j| j != i && self.0[j].is_none()).filter_map(|j| wants(j).flatten()).filter_map(|n| present.get(n)).collect();
-                let free = present.iter().find(|e| !self.0.contains(&Some(**e)) && (self.1.is_none() || !own.contains(e)));
+                let keys = self.1.is_some_and(|seats| seats[i] == Some(Seat::Keys));
+                let free = present.iter().find(|e| !self.0.contains(&Some(**e)) && (self.1.is_none() || !own.contains(e)) && (!keys || touch.contains(e)));
                 self.0[i] = free.copied();
             }
         }
@@ -427,11 +429,17 @@ mod tests {
         assert_eq!(s.0, [Some(a), Some(c), None, Some(b)]);
         // B244, the browser: the keyboard's seat takes a pad no seat wants (the touch pad), never another seat's
         let mut s = PadSlots([None; 4], Some([k, p(1), None, None]));
-        s.update_with(&[a, b], true);
+        s.update_with(&[a, b], &[a]);
         assert_eq!((s.0, s.keys()), ([Some(a), Some(b), None, None], Some(0)));
         let mut s = PadSlots([None; 4], Some([k, p(0), None, None]));
-        s.update_with(&[a], true);
+        s.update_with(&[a], &[a]);
         assert_eq!(s.0, [None, Some(a), None, None]);
+        // B516: a real pad no seat holds stays off the keyboard's seat (it took over a keyboard player online)
+        let mut s = PadSlots([None; 4], Some([k, None, None, None]));
+        s.update_with(&[a, b], &[b]);
+        assert_eq!((s.0, s.keys()), ([Some(b), None, None, None], Some(0)));
+        s.update_with(&[a], &[]);
+        assert_eq!((s.0, s.keys()), ([None; 4], Some(0)));
         // no seats: connection order, the keyboard with 1P
         let mut s = PadSlots::default();
         s.update(&[a, b, c]);
