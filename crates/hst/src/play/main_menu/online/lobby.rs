@@ -13,6 +13,7 @@
 //! is only in the legend strip.
 
 use super::super::frame::{self, Cell, Chip, Plate, Spec, Thumb};
+use super::super::roster;
 use super::super::{Draw, Menu, WHITE, Who};
 use super::{Act, HOST_LAN, Item, OK, SETTINGS, shared, spinner, ticket_only};
 use crate::net::Room;
@@ -121,6 +122,7 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
             d.hit(rect, Act::Row(k, OK));
         }
         plate(d, m, rm, i, rect, s, on(Item::Seat(i)), at(Item::Remove(i)).is_some(), on(Item::Remove(i)));
+        carried(d, m, rm, i, rect, s);
         if let Some(k) = at(Item::Remove(i)) {
             let [x, y, w, h] = frame::remove_rect(rect, s);
             d.hit([x - 2.0, y - 2.0, w + 4.0, h + 4.0], Act::Row(k, OK));
@@ -142,6 +144,28 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
         d.hit(g.chat, Act::Row(k, OK));
     }
     start_button(d, m, rm, &g, &items, &on);
+}
+
+/// B523: the host carrying a card: it stays dimmed where it was, "Moving"; the card it would go onto says what the
+/// drop does.
+fn carried(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32) {
+    let Some(from) = m.carrying() else { return };
+    let words = match m.target_seat() {
+        _ if i == from => "Moving",
+        Some(t) if t == i && !r.can_swap(from, i) => "Can't swap",
+        Some(t) if t == i && r.seats.get(i).is_some_and(Option::is_none) => "Move here",
+        Some(t) if t == i => "Swap",
+        _ => return,
+    };
+    let [x, y, w, h] = rect;
+    if i == from {
+        frame::rounded(d, rect, 14.0 * s * roster::PX, frame::NAVY, 56.0);
+    }
+    let size = 16.0 * s * roster::PY;
+    let (pw, ph) = ((d.width(words, size) + 28.0 * s * roster::PX).min(w - 8.0), size + 12.0 * s * roster::PY);
+    let (px, py) = (x + (w - pw) / 2.0, y + h * 0.42 - ph / 2.0);
+    frame::rounded(d, [px, py, pw, ph], ph / 2.0, if i == from { frame::NAVY } else { frame::GOLD }, 128.0);
+    d.label(words, x + w / 2.0, py + (ph - size) / 2.0, size, pw - 8.0, if i == from { frame::GOLD } else { frame::NAVY });
 }
 
 /// The code pill: CODE and the join code (a spinner until there is one), Copy link (dim until there's a link), the
