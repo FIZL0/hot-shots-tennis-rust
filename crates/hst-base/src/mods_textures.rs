@@ -89,7 +89,8 @@ pub struct Order {
 static ORDER: Mutex<Order> = Mutex::new(Order { order: Vec::new(), off: Vec::new() });
 
 /// M5d: what a pack's `mod.json` may say it covers (`"covers"`) and what kind of change it is (`"look"`), as the
-/// store's filters name them; the place in each is what `meta.json` carries. Either may be left out.
+/// store's filters name them; the place in each is what `meta.json` carries. Either may be left out. The standard's §2
+/// lists them and the mods repo's `tools/texpack.py` writes them (M51): keep the three lists equal.
 pub const COVERS: [&str; 5] = ["everything", "courts", "characters", "menus", "mixed"];
 pub const LOOKS: [&str; 3] = ["upscale", "recolour", "new"];
 
