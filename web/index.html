@@ -1037,10 +1037,22 @@ async function start() {
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
   // to the game one at a time (a space kept in it so Backspace always fires)
   const keys = document.getElementById('codekeys');
-  window.hstCodeEntry = (on, url) => { keys.autocapitalize = url ? 'none' : 'characters'; keys.inputMode = url ? 'url' : 'text'; keys.hidden = !(on && (window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)); keys.value = ' '; if (keys.hidden) keys.blur(); };
+  let entry = false;
+  window.hstCodeEntry = (on, url) => { entry = on; keys.autocapitalize = url ? 'none' : 'characters'; keys.inputMode = url ? 'url' : 'text'; keys.hidden = !(on && (window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)); keys.value = ' '; if (keys.hidden) keys.blur(); };
   // B312: the chat button's tap (touch.js) brings the keyboard up at once: a phone opens it only for a focus inside the
-  // tap's own event, and the game shows the entry (`hstCodeEntry`) a frame later
-  window.hstChatKeys = () => { keys.autocapitalize = 'characters'; keys.inputMode = 'text'; keys.hidden = false; keys.value = ' '; keys.focus(); };
+  // tap's own event, and the game shows the entry (`hstCodeEntry`) a frame later. B531: the entry that the game didn't
+  // open after all (the finger slid off the lobby's Chat button) goes again
+  window.hstChatKeys = () => {
+    keys.autocapitalize = 'characters'; keys.inputMode = 'text'; keys.hidden = false; keys.focus();
+    if (!entry) keys.value = ' ';
+    setTimeout(() => { if (!entry) { keys.hidden = true; keys.blur(); } }, 700);
+  };
+  // B531: a finger landed on the lobby's Chat button (web.rs chat_arm; the menus act on its lift, after the lift's
+  // event): its lift brings the keyboard up with the box, one tap
+  let chatArmed = false;
+  window.hstChatArm = () => { chatArmed = true; };
+  addEventListener('touchend', () => { if (chatArmed) { chatArmed = false; window.hstChatKeys(); } }, true);
+  addEventListener('touchcancel', () => { chatArmed = false; }, true);
   // B207: Return / Go finishes the entry (as Save / Join) and closes the keyboard
   keys.onkeydown = e => { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); typed_code('\n'); keys.blur(); } };
   keys.oninput = e => { typed_code(e.inputType?.startsWith('delete') ? '\b' : (e.data ?? keys.value.trim())); keys.value = ' '; };

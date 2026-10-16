@@ -514,6 +514,14 @@ pub fn chat_tapped() -> bool {
     page_fn("hstChatTaps").and_then(|f| f.call0(&JsValue::NULL).ok()).and_then(|v| v.as_f64()).is_some_and(|n| n > 0.0)
 }
 
+/// B531: a finger landed on the lobby's Chat button: the page brings the phone's keyboard up from its lift, inside the
+/// tap's own event (the menus act on the lift, a frame after it, too late for the keyboard).
+pub fn chat_arm() {
+    if let Some(f) = page_fn("hstChatArm") {
+        let _ = f.call0(&JsValue::NULL);
+    }
+}
+
 /// B273: the renderer setting saved (`auto`, `webgpu`, `webgl2`): the page reloads into that build once it's left
 /// alone for a moment (a no-op when it's the one running).
 pub fn renderer(word: &str) {

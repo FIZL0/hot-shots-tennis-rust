@@ -417,6 +417,21 @@ pub(super) fn device(m: &Menu, pads: &[Entity]) -> Dev {
     }
 }
 
+/// B531: what a finger at `p` (window px) lands on, as `pointer` hit-tests it.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(super) fn touch_act(win: &Window, hits: &Hits, p: Vec2) -> Option<Act> {
+    #[allow(unused_mut)]
+    let mut size = Vec2::new(win.width().max(1.0), win.height().max(1.0));
+    #[cfg(target_arch = "wasm32")]
+    if let Some(css) = crate::web::page_size() {
+        size = css;
+    }
+    let off = widescreen::view(size).min;
+    let size = widescreen::in_view(size, off).0;
+    hit_at(&hits.0, (p - off) / size, size.x / size.y, widescreen::menu_scale(), SLOP_TOUCH)
+}
+
+#[cfg(test)]
 #[cfg(test)]
 pub(super) mod tests {
     use super::super::{Bindings, Text, drawn};

@@ -3562,6 +3562,9 @@ pub fn plugin(app: &mut App) {
         Update,
         (online::poll.after(step).before(draw), online::typing.before(step), names::typing.before(step), names::persist.after(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
     );
+    // B531: a finger on the lobby's Chat button readies the phone's keyboard for its lift
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, online::chat_arm.before(step));
     previews::plugin(app);
     plate_emote::plugin(app);
     mods_screen::plugin(app);

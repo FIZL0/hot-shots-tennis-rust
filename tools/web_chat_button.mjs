@@ -1,7 +1,8 @@
 // B312's check of web/touch.js's chat button alone (no game, no disc, no server): headless chromium with touch, the
 // script on a blank page. The button is hidden until `hstTouchChat(true)`; then it sits on Select/Start's row right of
 // Start (landscape) or centred under them (upright), as big as they are, overlapping no other control; a tap or a
-// click on it is counted once by `hstChatTaps` and presses no pad button, a tap raises the keyboard (`hstChatKeys`); hidden again it counts nothing. Screenshots
+// click on it is counted once by `hstChatTaps` and presses no pad button, a tap raises the keyboard (`hstChatKeys`, B531: even when the game took
+// the tap before the finger lifted); hidden again it counts nothing. Screenshots
 // of both layouts go to DIR (default context/B312). Prints PASS/FAIL per check; exits 1 on any FAIL.
 // Usage: node tools/web_chat_button.mjs [DIR]
 import { spawn } from 'node:child_process';
@@ -81,6 +82,13 @@ check('a tap is counted once', (await evaluate('hstChatTaps()')) === 1);
 check('...and raises the phone keyboard in its own event', (await evaluate('keysUp')) === 1);
 check('...and presses no pad button', !down && !(await pressed()));
 check('...and is taken once', (await evaluate('hstChatTaps()')) === 0);
+// B531: the game takes the tap (and opens the box) between the finger's landing and its lift: still one tap
+await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+await evaluate('hstChatTaps(); hstTouchChat(false)');
+await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [at] });
+check('a tap the game took before the finger lifted still raises the keyboard', (await evaluate('keysUp')) === 2);
+await evaluate('hstTouchChat(true)');
+await frame();
 await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', clickCount: 1 });
 await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', clickCount: 1 });
 check('a click is counted too', (await evaluate('hstChatTaps()')) === 1);
