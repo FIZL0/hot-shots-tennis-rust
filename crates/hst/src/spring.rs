@@ -85,6 +85,9 @@ fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig), Added<Rig>>) {
 // by eye on Sophie idling. The game's own solver would replace both
 const SOFT: f32 = 0.1;
 const LAG: f32 = 3f32.to_radians();
+/// Steps a fresh rig's hair hangs for at its first pose: soft springs take ~2 s to fall from the bind pose, and a
+/// preview bake or a point's set-up would catch it sticking out
+const HANG: usize = 180;
 
 /// One 60 Hz step of a mass toward `target`, hung at `origin`; returns the new position and motion.
 fn step(m: &Mass, origin: Vec3, target: Vec3, (x, v): (Vec3, Vec3)) -> (Vec3, Vec3) {
@@ -153,7 +156,9 @@ fn solve(masses: &[Mass], parents: &[Option<usize>], root: Mat4, locals: &mut [T
         let target = posed(m.joint, parents, root, locals, &mut world).w_axis.truncate();
         let origin = frame.w_axis.truncate();
         // a fresh rig, or one placed somewhere new (a point's set-up), starts at the pose
-        let (x, v, last) = st.filter(|(x, ..)| x.distance(target) < 1.0).unwrap_or((target, Vec3::ZERO, frame));
+        let kept = st.filter(|(x, ..)| x.distance(target) < 1.0);
+        let steps = if kept.is_some() { steps } else { HANG };
+        let (x, v, last) = kept.unwrap_or((target, Vec3::ZERO, frame));
         // B410b: carried with its parent joint since the last step. The chain's first link keeps its world motion (the
         // head moves on under it: the swing); a link below rides along with the one above, or every link would lag
         // its own origin again and a short chain whip off a gentle bob
@@ -262,6 +267,8 @@ mod tests {
     fn a_still_chain_settles() {
         // the head jumps 30 cm across, then holds still: the tail swings out, then comes to rest (sagging, each link from the one above)
         let off = chain(&KAMI, 0.04, 600, |f| if f < 10 { Vec3::ZERO } else { Vec3::X * 0.3 });
+        // a fresh rig's first frame already hangs at rest (`HANG`), not in the bind pose
+        assert!(off[0] > 20f32.to_radians() && (off[0] - off[9]).abs() < 1e-3, "{} {}", off[0].to_degrees(), off[9].to_degrees());
         assert!(off[11..30].iter().any(|&o| o > 20f32.to_radians()), "{:?}", &off[11..30]);
         assert!((off[599] - off[400]).abs() < 1e-3 && off[599] < 60f32.to_radians(), "{} {}", off[400].to_degrees(), off[599].to_degrees());
     }
