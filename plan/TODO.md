@@ -55,7 +55,6 @@ index out of bounds: the len is 0 but the index is 0"
 
 ### Confirmations
 
-- [ ] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs — user 2026-10-16: do all three open parts: the dive/reach branch (+0x3e58), the skeleton-derived values for every character (not just character 0), and the arm-IK sideways step (replace the 0.1 m stand-in; P8 was dropped, so it lives here now)
 - [ ] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs — user 2026-10-16: get a let serve by driving the real game with the virtual pad (tools/vpad.py, as P11k4/k5 do), recording with PINE; vary the server's character, serve power/aim and position until a serve clips the net cord and lands in the box. Then port and verify the let path against that recording. Time limit: stop after 2 hours of trying for a let; if none, write what was tried in the journal and re-block with that — user 2026-10-16: don't play rallies out: save a state just before the serve (scratch slot 8/9) and reload it after each serve that isn't a let, then serve again with a new character/power/aim/position
 
 ### Stretch

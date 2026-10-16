@@ -73,3 +73,6 @@ quat_micro_slerp 175d80
 # T3: the VIF0 DMA chain (refe tag → MPG of 251 instructions at 0) the boot code starts at boot to fill VU0's micro
 # memory; hst_oracle::hst runs it so `vcallms` finds the programs (data address, not a function)
 vu0_boot_chain 1beb00
+# Contact dive slide (a0 player: matrix +0x3d40, dive arm +0x3060/+0x30a0; a1 ball, a2 direction, a3/t0 out):
+# hst_sim::swing::arm_slide
+dive_arm_slide 3509e0

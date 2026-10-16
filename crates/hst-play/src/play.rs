@@ -64,6 +64,7 @@ mod flare;
 mod markers;
 pub mod name_tags;
 mod mod_match;
+mod skeleton_reach;
 pub mod hand_swap;
 pub mod net_hide;
 mod own_camera;
@@ -1032,8 +1033,8 @@ fn reach(iso: &mut Iso) -> Reach {
         volley_height: pair(63, 1) / 100.0,
         smash_top: pair(64, 0) / 100.0,
         smash_bottom: pair(64, 2) / 100.0,
-        // ponytail: measured on character 0's swing animations at their contact frame (the game derives them
-        // from the skeleton at load); read them from the motion data with P8
+        // character 0's, as the game derives them from the skeleton at load; each player's own replaces them
+        // (`skeleton_reach`)
         ahead: 0.484,
         smash_ahead: 0.3578,
         body_low: 0.5535,
@@ -1043,10 +1044,8 @@ fn reach(iso: &mut Iso) -> Reach {
             0, 0, 4, 4, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
         ],
         hand: if right { 1.0 } else { -1.0 },
-        // ponytail: character 0's arm joints in the receive pose (shoulder, racket tip 0.7 m along the hand
-        // joint); per-character from the skeleton with P8
-        shoulder: [0.08548, -0.83622, 0.20118],
-        tip: [0.006694, -0.646701, 1.220628],
+        // each player's own from its skeleton and motions (`skeleton_reach`)
+        dive_arm: [[[0.0; 4]; 4]; 2],
     };
     reach
 }
@@ -1450,6 +1449,7 @@ pub fn setup(
         game.serve_data.push(serve_data(&mod_match::row(&mut iso, match_mod.as_deref(), i, c), &data));
         serve_character(&mut iso, c, game.aim_stats[i], game.serve_data.last_mut().unwrap());
         game.data.push(data.clone());
+        skeleton_reach::apply(&mut game.reaches[i], &data);
         let f = character::spawn(&mut commands, &data, root);
         commands
             .entity(f)
@@ -3341,7 +3341,7 @@ fn bot(g: &mut Game, i: usize) {
             [
                 stand.unwrap_or(b[0]),
                 0.0,
-                b[2] - p.end * g.reach.ahead,
+                b[2] - p.end * g.reaches[i].ahead,
             ]
         });
         let dir = bot_run(g, i, goal);

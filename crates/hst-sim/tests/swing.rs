@@ -93,8 +93,7 @@ fn reach_of(fr: Frame, p: usize, ram: &[u8], obj: usize) -> Reach {
         body_high: rf(0x3058),
         grades: (0..look).map(|j| p_u8(fr, p, 0x1510 + j)).collect(),
         hand: rf(0x12b4),
-        shoulder: [0.0; 3],
-        tip: [0.0; 3],
+        dive_arm: [[[0.0; 4]; 4]; 2],
     }
 }
 
@@ -210,8 +209,7 @@ fn contact_search(name: &str, ram_name: &str) -> usize {
                 body_high: rf(0x3058),
                 grades: (0..look).map(|j| p_u8(fr, p, 0x1510 + j)).collect(),
                 hand: rf(0x12b4),
-                shoulder: [0.0; 3],
-                tip: [0.0; 3],
+                dive_arm: [[[0.0; 4]; 4]; 2],
             };
             let pos = a.player_pos(p);
             let facing = if pos[2] < 0.0 { 1.0 } else { -1.0 };
@@ -287,13 +285,36 @@ fn recorded_dives() {
                 .collect()
         })
         .collect();
+    // each character's dive arms, one per distinct costume skeleton (the receive motion at time 5)
+    let arms: Vec<Vec<[hst_sim::pose::M4; 2]>> = (0..14)
+        .map(|c| {
+            let xb = iso.read(&format!("PCANI/PC{c:02}ANI.XB")).unwrap();
+            let arc = Archive::parse(&xb).unwrap();
+            let stem = ani::motion_name(0x1e, c).unwrap().to_ascii_lowercase();
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))).unwrap();
+            let receive = ani::parse(&arc.read(e).unwrap()).unwrap();
+            let mut v: Vec<[hst_sim::pose::M4; 2]> = vec![];
+            for costume in 0..10 {
+                let Ok(md) = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")) else { continue };
+                let marc = Archive::parse(&md).unwrap();
+                let Some(e) = marc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(".mdl")) else { continue };
+                let m = hst_data::mdl::parse(&marc.read(e).unwrap()).unwrap();
+                let sk = hst_sim::pose::Skeleton { names: m.node_names.clone(), parent: m.node_parent.clone(), rest: m.node_local.clone() };
+                let arm = hst_sim::pose::dive_arm(&sk, &hst_sim::pose::Clip::new(&sk, &receive));
+                if !v.iter().any(|a| a.as_flattened().as_flattened().iter().zip(arm.as_flattened().as_flattened()).all(|(x, y)| x.to_bits() == y.to_bits())) {
+                    v.push(arm);
+                }
+            }
+            v
+        })
+        .collect();
     let mut files: Vec<String> = ["new_recording.bin", "match_s05.bin", "lob_smash_s05.bin", "human_smash_s04.bin"].map(String::from).to_vec();
     files.extend((0..14).map(|c| format!("p7b_c{c:02}.bin")));
     // Kaito and Bull, whose root paths are their own, by research/p7e_dive_record.py (P1 dives on purpose)
     files.extend(["p7e_c03.bin", "p7e_c07.bin"].map(String::from));
     // the doubles match with one human (Carol, left-handed) and three CPUs on court 11
     files.push("1p3goodcpus.bin".into());
-    let (mut dives, mut steps, mut skipped, mut chars) = (0, 0, 0, std::collections::BTreeSet::new());
+    let (mut dives, mut steps, mut skipped, mut contacts, mut exact, mut dirs_exact, mut chars) = (0, 0, 0, 0, 0, 0, std::collections::BTreeSet::new());
     for file in &files {
         let Ok(data) = std::fs::read(format!("{dir}/{file}")) else {
             eprintln!("{file} absent, skipped");
@@ -329,8 +350,7 @@ fn recorded_dives() {
                     body_high: 0.0,
                     grades: vec![],
                     hand: 1.0,
-                    shoulder: [0.0; 3],
-                    tip: [0.0; 3],
+                    dive_arm: [[[0.0; 4]; 4]; 2],
                 };
                 let pos = [fr.player_f32(p, 0x3f60), fr.player_f32(p, 0x3f64), fr.player_f32(p, 0x3f68)];
                 let end = if pos[2] < 0.0 { 1.0 } else { -1.0 };
@@ -357,13 +377,34 @@ fn recorded_dives() {
                 let contact = p_i32(fr, p, 0x3ec4) >= 0;
                 let want = (p_i32(fr, p, 0x3f84) - 50, contact);
                 assert_eq!((d.frame as i32, d.contact), want, "{at}");
-                // ponytail: a contact dive's arm slide needs the character's receive-pose shoulder and racket tip
-                // (zero here); its recorded slide drives the body instead
                 if !contact {
                     assert_eq!(d.slide, fr.player_f32(p, 0x3f80), "{at}");
+                } else {
+                    // the slide that lets the dive arm reach: the character's (one of its costumes') arm, the hand
+                    // read off the recorded side row (up × direction by the hand)
+                    let rec: Vec<u32> = (0x13a8..0x13f0).step_by(4).map(|o| fr.player_f32(p, o).to_bits()).collect();
+                    let side = [fr.player_f32(p, 0x3d40), fr.player_f32(p, 0x3d48)];
+                    let hand = if side[0] * d.dir[1] - side[1] * d.dir[0] < 0.0 { -1.0 } else { 1.0 };
+                    let slides: Vec<f32> = (0..14)
+                        .filter(|&c| records[c] == rec)
+                        .flat_map(|c| arms[c].iter())
+                        .map(|a| dive(&Reach { dive_arm: *a, hand, ..reach.clone() }, &path, pos, end, face, vel).unwrap().slide)
+                        .collect();
+                    let want = fr.player_f32(p, 0x3f80);
+                    // bit-exact where the recorded path gives the game's direction; elsewhere the recorded ball is
+                    // ulps off the game's predicted one (as the direction below)
+                    let want_dir = [fr.player_f32(p, 0x3e60), fr.player_f32(p, 0x3e68)];
+                    if d.dir.map(f32::to_bits) == want_dir.map(f32::to_bits) {
+                        assert!(slides.iter().any(|s| s.to_bits() == want.to_bits()), "{at}: slide {slides:?} want {want}");
+                        exact += 1;
+                    } else {
+                        assert!(slides.iter().any(|s| (s - want).abs() < 1e-5), "{at}: slide {slides:?} want {want}");
+                    }
+                    contacts += 1;
                 }
                 let want_dir = [fr.player_f32(p, 0x3e60), fr.player_f32(p, 0x3e68)];
                 assert!((d.dir[0] - want_dir[0]).abs() < 1e-5 && (d.dir[1] - want_dir[1]).abs() < 1e-5, "{at}: dir {:?} want {want_dir:?}", d.dir);
+                dirs_exact += (d.dir.map(f32::to_bits) == want_dir.map(f32::to_bits)) as usize;
                 dives += 1;
                 let root = root(fr, p);
                 // from the game's direction and slide (the path's ulps aside)
@@ -389,8 +430,9 @@ fn recorded_dives() {
             }
         }
     }
-    eprintln!("{dives} dives, {steps} dive frames, {skipped} skipped, characters {chars:?}");
+    eprintln!("{dives} dives ({dirs_exact} directions bit-exact; {contacts} reach the ball, {exact} of them bit-exact), {steps} dive frames, {skipped} skipped, characters {chars:?}");
     assert!(skipped <= 1);
+    assert!(dives == 0 || (contacts >= 2 && exact >= 1));
 }
 
 /// Each △ smash of `lob_smash_s05.bin` flies as the game's ball from its launch to its first bounce (bounces

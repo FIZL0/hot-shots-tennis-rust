@@ -422,6 +422,8 @@ pub struct ServeArm {
     /// The swing's root path (`*_serve_t_dummy`, `*_s_n_dummy` for the smash) height at frame 8: the jump is scaled
     /// by it (0 without one: no jump scale).
     pub lift: f32,
+    /// The racket point in the model at frame 8; the smash's z is the contact search's `Reach::smash_ahead`.
+    pub point: [f32; 4],
 }
 
 /// The entry for `clip`: the racket point turned about x into the y–z plane's −y (overhead) or +z (underhand)
@@ -458,7 +460,7 @@ pub fn serve_arm(sk: &Skeleton, clip: &Clip, jump: Option<&Path>, under: bool) -
     let mut aimed = vmul(&vmul(&vmul(&m, &axis_angle(angle, [1.0, 0.0, 0.0])), &twist), &transpose3(&chain));
     let zero_t = [0.0, 0.0, 0.0, 1.0];
     (aimed[3], upper[3], chain[3]) = (zero_t, zero_t, zero_t);
-    ServeArm { racket, hand, forearm, upper, chain, aimed, shoulder: sh, radius, lift: jump.map_or(0.0, |p| p.at(8.0)[1]) }
+    ServeArm { racket, hand, forearm, upper, chain, aimed, shoulder: sh, radius, lift: jump.map_or(0.0, |p| p.at(8.0)[1]), point: tip }
 }
 
 /// The overhead serve's (or smash's) contact solve at the swing press: the arm turns about x to face the contact
