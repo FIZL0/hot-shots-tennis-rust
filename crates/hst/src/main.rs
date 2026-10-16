@@ -332,6 +332,7 @@ fn android_main(app: bevy::android::android_activity::AndroidApp) {
     let dir = app.external_data_path().expect("no external files dir");
     android::log_to_files(&dir);
     let _ = bevy::android::ANDROID_APP.set(app);
+    android::init_tls();
     // mods/ and the other paths the desktop build keeps beside the binary land in the same dir
     let _ = std::env::set_current_dir(&dir);
     let iso = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("iso")));

@@ -44,6 +44,29 @@ for n in ic_launcher ic_launcher_round; do
   <monochrome android:drawable="@mipmap/ic_launcher_monochrome"/>
 </adaptive-icon>' >"$res/mipmap-anydpi-v26/$n.xml"
 done
+# B418: rustls-platform-verifier's Java side (the app's HTTPS checks certificates through Android's own verifier,
+# `android.rs` init_tls): its AAR, the version Cargo.lock's rustls-platform-verifier-android names, and the Kotlin
+# stdlib its classes call. Downloaded once into ~/.cache/opentennis-apk, checked against pinned hashes.
+rpv=$(awk '/^name = "rustls-platform-verifier-android"$/{getline; gsub(/[^0-9.]/,""); print}' Cargo.lock)
+[ "$rpv" = 0.2.0 ] || { echo "Cargo.lock has rustls-platform-verifier-android $rpv: update its AAR's version and hash here"; exit 2; }
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/opentennis-apk; mkdir -p "$cache"
+fetch() { # url sha256 → its path in the cache
+    local f=$cache/${1##*/}
+    if ! echo "$2  $f" | sha256sum -c --status 2>/dev/null; then
+        curl -sfL -o "$f.part" "$1" || { echo "can't download $1" >&2; exit 2; }
+        echo "$2  $f.part" | sha256sum -c --status || { echo "$1: wrong sha256" >&2; exit 2; }
+        mv "$f.part" "$f"
+    fi
+    echo "$f"
+}
+aar=$(fetch https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/org/rustls/rustls-platform-verifier/$rpv/rustls-platform-verifier-$rpv.aar \
+    aa021794230fbc2f0be355999e2cf67398dd563de066a2e17001ffbd0b69101b)
+kotlin=$(fetch https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.10/kotlin-stdlib-2.2.10.jar \
+    9c67cc79efd6b9215b49d2a4308f5f3433537376c7c88e89bdd6729bd096e61a)
+rm -rf "$out/rpv"; mkdir -p "$out/rpv" "$res/xml"
+unzip -qo "$aar" classes.jar res/xml/network_security_config.xml -d "$out/rpv"
+# its network security config: cleartext only to the CAs' revocation-list hosts, which the verifier's checks fetch
+cp "$out/rpv/res/xml/network_security_config.xml" "$res/xml/"
 rm -f "$out/res.zip"; "$BT/aapt2" compile --dir "$res" -o "$out/res.zip"
 cat >"$out/AndroidManifest.xml" <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
@@ -55,7 +78,7 @@ cat >"$out/AndroidManifest.xml" <<'EOF'
   <!-- B455: mDNS (LAN lobbies) needs Wi-Fi multicast (HstActivity's MulticastLock) -->
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
   <application android:label="OpenTennis" android:icon="@mipmap/ic_launcher"
-      android:roundIcon="@mipmap/ic_launcher_round" android:hasCode="true" android:extractNativeLibs="false"
+      android:roundIcon="@mipmap/ic_launcher_round" android:networkSecurityConfig="@xml/network_security_config" android:hasCode="true" android:extractNativeLibs="false"
       android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
     <activity android:name="io.github.fizl0.hst.HstActivity" android:exported="true" android:screenOrientation="sensorLandscape"
         android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode"
@@ -68,9 +91,14 @@ cat >"$out/AndroidManifest.xml" <<'EOF'
   </application>
 </manifest>
 EOF
-rm -rf "$out/classes" && mkdir -p "$out/classes" "$out/dex"
+rm -rf "$out/classes" "$out/dex" && mkdir -p "$out/classes" "$out/dex"
 javac -nowarn --release 17 -classpath "$JAR" -d "$out/classes" $(find crates/hst/android -name '*.java')
-"$BT/d8" --release --min-api 26 --lib "$JAR" --output "$out/dex" $(find "$out/classes" -name '*.class')
+# R8 rather than d8: the activity's classes and the verifier's whole, of the Kotlin stdlib only what they use
+(cd "$out/classes" && jar cf ../app.jar .)
+printf '%s\n' '-dontobfuscate' '-dontwarn org.jetbrains.annotations.**' '-keep class io.github.fizl0.hst.** { *; }' \
+    '-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }' >"$out/r8.pro"
+java -cp "$BT/lib/d8.jar" com.android.tools.r8.R8 --release --min-api 26 --lib "$JAR" --pg-conf "$out/r8.pro" \
+    --output "$out/dex" "$out/app.jar" "$out/rpv/classes.jar" "$kotlin"
 # a release (tools/release.sh, HST_VERSION=v1.2.3) names its version; versionCode 10203 keeps each release an upgrade
 ver=${HST_VERSION:-}; ver=${ver#v}; ver=${ver%%-*}
 vargs=()
