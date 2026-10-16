@@ -48,6 +48,8 @@ const BADGE_FAILED: u32 = 0xf6aaae;
 const VERIFIED: u32 = 0x2f8a52;
 /// The headings of mods from no named game, and of an uploader the store doesn't name.
 const OTHER: &str = "Other games";
+/// The heading of texture packs: they dress this game.
+const THIS_GAME: &str = "Hot Shots Tennis";
 const UNKNOWN: &str = "Unknown uploader";
 
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
@@ -411,6 +413,8 @@ impl View {
             s.clone()
         } else if self.b.sort == Sort::Uploader {
             UNKNOWN.into()
+        } else if e.meta.kind == Kind::Textures {
+            THIS_GAME.into()
         } else {
             OTHER.into()
         }
@@ -1812,12 +1816,13 @@ fn buttons(d: &mut Draw, m: &Menu, b @ [x, y, w, h]: [f32; 4], child: Option<&su
     };
     let mut top = primary[1];
     if rule {
-        // the rights rule in a light box over the buttons
-        let lines = look::wrap(d, RULE, tw - 20.0 * PX, 12.5 * PY, 6).len().max(1);
+        // the rights rule in a light box over the buttons, M5c: and the kind's size cap
+        let said = format!("{RULE} {}", v.kind.cap_words());
+        let lines = look::wrap(d, &said, tw - 20.0 * PX, 12.5 * PY, 7).len().max(1);
         let rh = 14.0 * PY + 17.0 * PY * lines as f32;
         let r = [tx, primary[1] - 10.0 * PY - rh, tw, rh];
         boxed(d, r);
-        look::para(d, RULE, [tx + 10.0 * PX, r[1] + 7.0 * PY], tw - 20.0 * PX, 12.5 * PY, 17.0 * PY, lines, soft);
+        look::para(d, &said, [tx + 10.0 * PX, r[1] + 7.0 * PY], tw - 20.0 * PX, 12.5 * PY, 17.0 * PY, lines, soft);
         top = r[1];
     }
     for (k, (r, word)) in [primary, seconds[0], seconds[1]].into_iter().zip(&words).enumerate() {
@@ -1854,6 +1859,8 @@ fn shown(m: &Menu) -> Option<Shown> {
         if player && let Some(c) = CHAR_NAMES.get(md.donor) {
             facts.push(format!("Plays like {c}"));
         }
+        // M5c: a pack's count and size (as Installed lists it; the rule's box says its cap)
+        let pack = (v.kind == Kind::Textures).then(|| v.packs.iter().find(|r| super::bare(&r.dir) == super::bare(&md.dir))).flatten();
         // B250: its upload's outcome (the pull request's link, or why not)
         if let Some(u) = v.ups.get(&md.dir) {
             let t = super::up_tag(u);
@@ -1865,8 +1872,8 @@ fn shown(m: &Menu) -> Option<Shown> {
         return Some(Shown {
             name: md.name.clone(),
             by: String::new(),
-            left: if player { plural(md.costumes.len(), "costume") } else { String::new() },
-            right: if player { hand(md.hand) } else { String::new() },
+            left: if player { plural(md.costumes.len(), "costume") } else { pack.map_or(String::new(), |r| super::packs::count(r.count)) },
+            right: if player { hand(md.hand) } else { pack.map_or(String::new(), |r| super::packs::size(r.bytes)) },
             face: mod_face(m, md),
             loading: false,
             badge: v.ups.get(&md.dir).map(up_badge),
@@ -1902,14 +1909,21 @@ fn shown(m: &Menu) -> Option<Shown> {
         .flatten()
         .collect::<Vec<_>>()
         .join(" - ");
-    let mut facts = vec![if mt.source.is_empty() { "From another game".to_string() } else { format!("From {}", mt.source) }, line];
+    // (M5c: a texture pack has no source game)
+    let from = match mt.kind {
+        Kind::Textures => "A texture pack for this game".to_string(),
+        _ if mt.source.is_empty() => "From another game".to_string(),
+        _ => format!("From {}", mt.source),
+    };
+    let mut facts = vec![from, line];
     if let Some(j) = v.jobs.get(&e.key()) {
         facts.push(j.1.clone());
     }
     Some(Shown {
         name: mt.name.clone(),
         by: if mt.author.is_empty() { String::new() } else { format!("by {}", mt.author) },
-        left: mt.costumes.map_or(String::new(), |c| plural(c as usize, "costume")),
+        // M5c: a pack's count of textures
+        left: mt.costumes.map(|c| plural(c as usize, "costume")).or(mt.textures.map(|n| super::packs::count(n as usize))).unwrap_or_default(),
         right: mt.hand.map_or(String::new(), |h| hand(f32::from(h))),
         face,
         loading,

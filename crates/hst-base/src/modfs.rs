@@ -176,6 +176,14 @@ pub const EXTENSIONS: [&str; 7] = ["json", "glb", "png", "webp", "tm2", "wav", "
 pub const MAX_ENTRIES: usize = 8192;
 pub const MAX_FILE: usize = 768 << 20;
 pub const MAX_TOTAL: usize = 1 << 30;
+/// M5c: a texture pack's cap on all its files (a whole-disc 4x upscale is ≈ 1.5 GB of PNGs); every other kind's is
+/// [`MAX_TOTAL`].
+pub const MAX_PACK: usize = 2 << 30;
+
+/// M5c: the cap on all the files of a mod of kind `k`.
+pub fn max_total(k: &mods::Kind) -> usize {
+    if *k == mods::Kind::Textures { MAX_PACK } else { MAX_TOTAL }
+}
 
 /// A mod's files: paths relative to its folder, and their bytes.
 #[cfg(any(test, feature = "testing"))]
@@ -503,8 +511,17 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
             }
             std::fs::create_dir_all(p.parent().unwrap()).and_then(|_| std::fs::write(&p, b)).map_err(|e| format!("can't write {}: {e}", p.display()))
         };
-        let names = unpack_with(len, zip, |n| with_upscaled || !upscaled(n), put, MAX_FILE, MAX_TOTAL).await?;
+        // M5c: a pack's cap while unpacking (the kind is in mod.json, read after), then the kind's own
+        let mut total = 0;
+        let count = |n: &str, b: Vec<u8>| {
+            total += b.len();
+            put(n, b)
+        };
+        let names = unpack_with(len, zip, |n| with_upscaled || !upscaled(n), count, MAX_FILE, MAX_PACK).await?;
         let j: serde_json::Value = serde_json::from_slice(&read(&stage.join("mod.json")).map_err(|e| e.to_string())?).map_err(|e| format!("mod.json: not JSON: {e}"))?;
+        if total > max_total(&mods::Kind::of(&j)) {
+            return Err(format!("more than {} MB unpacked", MAX_TOTAL >> 20));
+        }
         let id = j["id"].as_str().filter(|id| good_id(id)).ok_or("mod.json: `id` must be 1 to 64 letters, digits, `_` or `-`")?.to_string();
         if let Some(w) = want.filter(|w| *w != id) {
             return Err(format!("the zip holds `{id}`, not `{w}`"));

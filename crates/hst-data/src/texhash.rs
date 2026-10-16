@@ -322,6 +322,68 @@ pub fn disc_textures(iso: &mut crate::iso::Iso, mut f: impl FnMut(DiscTexture)) 
     }
 }
 
+/// M5c: what an upload's pack check keeps of a disc texture: its size and [`pixels_hash`].
+pub type Print = (u32, u32, u64);
+
+/// M5c: the disc textures under `keys`, in one pass over the disc ([`disc_textures`]): each one's [`Print`], and
+/// the largest of them whole (its path breaks a tie), for the pack's before/after picture.
+pub fn disc_prints(
+    iso: &mut crate::iso::Iso,
+    keys: &std::collections::HashSet<String>,
+) -> (HashMap<String, Print>, Option<DiscTexture>) {
+    let (mut prints, mut big) = (HashMap::new(), None::<DiscTexture>);
+    disc_textures(iso, |t| {
+        if !keys.contains(&t.key) || t.rgba.len() != (t.width * t.height * 4) as usize {
+            return;
+        }
+        prints.insert(
+            t.key.clone(),
+            (t.width, t.height, pixels_hash(t.width, t.height, &t.rgba)),
+        );
+        let size = |t: &DiscTexture| (t.width * t.height, std::cmp::Reverse(t.path.clone()));
+        if big.as_ref().is_none_or(|b| size(&t) > size(b)) {
+            big = Some(t);
+        }
+    });
+    (prints, big)
+}
+
+/// M5c: XXH3-64 of a picture's size and straight RGBA8 pixels, every fully transparent pixel counted as 0 (an
+/// image editor may keep or clear their colour).
+pub fn pixels_hash(w: u32, h: u32, rgba: &[u8]) -> u64 {
+    let mut b = Vec::with_capacity(8 + rgba.len());
+    b.extend_from_slice(&w.to_le_bytes());
+    b.extend_from_slice(&h.to_le_bytes());
+    b.extend(rgba.chunks(4).flat_map(|p| if p[3] == 0 { [0; 4] } else { [p[0], p[1], p[2], p[3]] }));
+    XxHash3_64::oneshot(&b)
+}
+
+/// M5c: whether replacement `rgba` (`w`×`h`) is the disc texture printed `disc` unchanged: the same pixels, or
+/// them scaled up by whole factors with nearest-neighbour (each pixel a solid block).
+pub fn is_disc_copy(w: u32, h: u32, rgba: &[u8], disc: Print) -> bool {
+    let (dw, dh, hash) = disc;
+    if dw == 0 || dh == 0 || w % dw != 0 || h % dh != 0 || rgba.len() != (w * h * 4) as usize {
+        return false;
+    }
+    let (fx, fy) = ((w / dw) as usize, (h / dh) as usize);
+    let px = |x: usize, y: usize| {
+        let p = &rgba[(y * w as usize + x) * 4..][..4];
+        if p[3] == 0 { [0; 4] } else { [p[0], p[1], p[2], p[3]] }
+    };
+    let mut small = Vec::with_capacity((dw * dh * 4) as usize);
+    for y in 0..dh as usize {
+        for x in 0..dw as usize {
+            let p = px(x * fx, y * fy);
+            let solid = (0..fy).all(|j| (0..fx).all(|i| px(x * fx + i, y * fy + j) == p));
+            if !solid {
+                return false;
+            }
+            small.extend_from_slice(&p);
+        }
+    }
+    pixels_hash(dw, dh, &small) == hash
+}
+
 /// User textures that replace disc ones, all in `mods/texture-replacements/` beside the ISO: `**/<path>-<key>.png`
 /// (straight alpha, found by [`GsTex::key`], e.g. upscaled `--dump-textures` output) over a PCSX2 pack's
 /// hash-named `<name>.png` at its top level (PS2 alpha, 0x80 opaque).
@@ -519,5 +581,46 @@ mod tests {
         assert_eq!(o.load("k1", &names), Some((1, 1, vec![9, 9, 9, 200])));
         assert_eq!(o.load("k2", &[]), None);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn disc_copies() {
+        let disc = [[1, 2, 3, 255], [4, 5, 6, 0], [7, 8, 9, 128], [0, 0, 0, 255]].concat();
+        let print = (2, 2, pixels_hash(2, 2, &disc));
+        assert!(is_disc_copy(2, 2, &disc, print));
+        // a transparent pixel's colour doesn't count
+        let mut cleared = disc.clone();
+        cleared[4..7].copy_from_slice(&[0, 0, 0]);
+        assert!(is_disc_copy(2, 2, &cleared, print));
+        // 2x wide, 3x high, nearest-neighbour
+        let big: Vec<u8> = (0..6).flat_map(|y| (0..4).map(move |x| (x / 2, y / 3))).flat_map(|(x, y)| disc[(y * 2 + x) * 4..][..4].to_vec()).collect();
+        assert!(is_disc_copy(4, 6, &big, print));
+        // one pixel off, a smoothed block, a size that isn't a whole multiple
+        let mut off = disc.clone();
+        off[0] = 2;
+        assert!(!is_disc_copy(2, 2, &off, print));
+        let mut smooth = big.clone();
+        smooth[0] = 9;
+        assert!(!is_disc_copy(4, 6, &smooth, print));
+        assert!(!is_disc_copy(3, 2, &[0; 24], print));
+    }
+
+    /// M5c: the disc pass a pack upload makes (the whole disc, keys of a few). Skips without the ISO.
+    #[test]
+    fn prints_from_the_disc() {
+        let Ok(mut iso) = crate::iso::Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+            return eprintln!("no ISO, skipped");
+        };
+        let mut all = Vec::new();
+        let t = std::time::Instant::now();
+        disc_textures(&mut iso, |d| all.push((d.key, d.width, d.height, d.rgba)));
+        eprintln!("{} disc textures in {:?}, {} MB of pixels", all.len(), t.elapsed(), all.iter().map(|a| a.3.len()).sum::<usize>() >> 20);
+        let keys: std::collections::HashSet<String> = all.iter().step_by(97).map(|a| a.0.clone()).collect();
+        let (prints, big) = disc_prints(&mut iso, &keys);
+        assert_eq!(prints.len(), keys.len());
+        let big = big.unwrap();
+        assert!(all.iter().filter(|a| keys.contains(&a.0)).all(|a| a.1 * a.2 <= big.width * big.height));
+        let (_, w, h, rgba) = all.iter().find(|a| a.0 == big.key).unwrap();
+        assert!(is_disc_copy(*w, *h, rgba, prints[&big.key]));
     }
 }
