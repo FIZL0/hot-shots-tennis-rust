@@ -47,7 +47,9 @@ function stage() {
     urls.delete(local('version.txt'));
     for (const u of urls) {
       if (await c.match(u)) continue;
-      const r = await fetch(u, { cache: 'no-cache' });
+      // `?v=`: GitHub Pages' CDN keeps each plain URL up to 10 min, so right after a deploy a plain fetch can pair
+      // the old hst.js with the new wasm ("function import requires a callable"); the query is part of its cache key
+      const r = await fetch(`${u}?v=${v}`, { cache: 'no-cache' });
       if (!r.ok) { if (SHELL.map(local).includes(u)) throw new Error(`${u}: HTTP ${r.status}`); continue; }
       await c.put(u, r);
     }
