@@ -432,13 +432,15 @@ if (answer) await new Promise(() => {});
 navigator.serviceWorker?.register('sw.js').catch(() => {});
 // B317: a new build pushed while the page is open never reloads it: `version.txt` (the commit, tools/web.sh) as the
 // page loads, read again every 10 minutes and on coming back to the tab; once it differs, `hstLatest` holds the new
-// one and the game's main menu shows a New version card whose Refresh reloads into it (`update.rs`, sw.js fetches
-// the network first). Read before the game, so a deploy landing mid-load at worst offers a refresh into the same build.
+// one and the game's main menu shows a New version card whose Refresh reloads into it (`update.rs`). B470: with the
+// service worker, `version.txt` is the cached build this page opens (its pkg is pinned to it, `?v=`) and `?next` the
+// build a reload would open, which sw.js only answers once it has downloaded all of it in the background.
+// Read before the game, so a deploy landing mid-load at worst offers a refresh into the same build.
+const read = (q = '') => fetch('version.txt' + q, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').then(t => t.trim(), () => '');
+const loaded = await read();
 {
-  const read = () => fetch('version.txt', { cache: 'no-store' }).then(r => r.ok ? r.text() : '').then(t => t.trim(), () => '');
-  const loaded = await read();
   const check = async () => {
-    const now = await read();
+    const now = await read('?next');
     if (loaded && now && now !== loaded && /^[0-9a-f]{7,40}$/.test(now)) window.hstLatest = now;
   };
   setInterval(check, 600000);
@@ -540,12 +542,14 @@ window.hstWebGL2 = why => {
   return true;
 };
 const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
+// hst.js and its wasm from the build this page is (B470: sw.js serves `?v=` from that build's cache)
+const pin = /^[0-9a-z]{1,40}$/.test(loaded) ? `?v=${loaded}` : '';
 say('Loading the game…');
-const { default: init, run, paste, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js');
+const { default: init, run, paste, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js' + pin);
 
 // the game's wasm, with how much of it has arrived
 async function wasm() {
-  const r = await fetch(pkg + 'hst_bg.wasm');
+  const r = await fetch(pkg + 'hst_bg.wasm' + pin);
   if (!r.ok) throw new Error(`${pkg}hst_bg.wasm: HTTP ${r.status}`);
   let got = 0;
   const count = new TransformStream({ transform(c, out) {

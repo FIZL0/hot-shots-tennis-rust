@@ -269,7 +269,8 @@ fn swappable() -> bool {
 }
 
 /// The notice's button: the page reloads (once its mod saves are done, `web.rs`) into the new build, which the
-/// service worker fetches first (`web/sw.js`); a newer release installs (B374); else the release page opens.
+/// service worker has already downloaded in the background (`web/sw.js`, B470); a newer release installs (B374); else
+/// the release page opens.
 pub fn act() {
     #[cfg(target_arch = "wasm32")]
     crate::web::reload();
