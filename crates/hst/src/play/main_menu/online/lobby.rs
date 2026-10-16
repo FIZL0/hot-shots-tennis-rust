@@ -1,6 +1,6 @@
 //! B449: the lobby, v4 (ours, the approved board "Concept v4: Lobby"; the frame and the plates are shared with the
-//! confirm screen, `frame.rs`). Along the top the title, the code pill (CODE and the join code, the QR big on ✕; Copy
-//! link; the host's Public / Private) and the Singles / Doubles button (the host's □ or ✕ switches). The middle is
+//! confirm screen, `frame.rs`). Along the top the title, the code pill (CODE and the join code, ✕ copies the link as
+//! Copy link does; the host's Public / Private) and the Singles / Doubles button (the host's □ or ✕ switches). The middle is
 //! the court: a team each side of the net (doubles: TEAM 1, TEAM 2; singles has no side names, B490: each client
 //! keeps its own player on the near side), a plate a seat with its seat-coloured
 //! header (tag, who has it: "You · Keyboard", "Mika · 35 ms" (the ping gold over 150 ms), Computer, Open seat; the
@@ -13,7 +13,7 @@
 //! is only in the legend strip.
 
 use super::super::frame::{self, Cell, Chip, Plate, Spec, Thumb};
-use super::super::{Draw, INK, Menu, Tex, WHITE, Who};
+use super::super::{Draw, Menu, WHITE, Who};
 use super::{Act, Item, OK, SETTINGS, shared, spinner, ticket_only};
 use crate::net::Room;
 use bevy::prelude::default;
@@ -96,7 +96,7 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
     let items = m.items();
     let g = m.lobby_geo();
     let at = |it: Item| items.iter().position(|x| *x == it);
-    let on = |it: Item| !m.lobby_asking() && !m.net.qr_big && at(it).is_some_and(|k| k == m.sel);
+    let on = |it: Item| !m.lobby_asking() && at(it).is_some_and(|k| k == m.sel);
     let Some(rm) = m.net.room.as_ref() else { return };
     // the top bar: the title, the code pill, Singles / Doubles (the host's □ or a tap)
     frame::bar(d, &g, "Lobby", rm.doubles, false, on(Item::Mode));
@@ -142,18 +142,6 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
         d.hit(g.chat, Act::Row(k, OK));
     }
     start_button(d, m, rm, &g, &items, &on);
-    if m.net.qr_big && shared(&m.net).is_some() {
-        // the QR big over everything; any press closes it
-        d.popup(Some(super::super::pointer::press(|k| k.back = true)));
-        let [l, t, r, b] = m.grid.reach();
-        let s = (b - t - 80.0).min(r - l - 40.0).min(300.0);
-        let (x, y) = ((l + r - s) / 2.0, (t + b - s) / 2.0 - 10.0);
-        d.box3([x - 14.0, y - 14.0, s + 28.0, s + 52.0], 14.0, [Some(INK), Some(WHITE), Some(WHITE)], 128.0);
-        d.q(Tex::Qr, [0.0, 0.0, 1.0, 1.0], [x, y, s, s], WHITE, 128.0);
-        let code = if ticket_only(&m.net) { "Scan to join" } else { m.net.short.as_str() };
-        d.label(code, x + s / 2.0, y + s + 6.0, 24.0, s, INK);
-        d.hit([x - 14.0, y - 14.0, s + 28.0, s + 52.0], super::super::pointer::press(|k| k.back = true));
-    }
 }
 
 /// The code pill: CODE and the join code (a spinner until there is one), Copy link (dim until there's a link), the
@@ -171,7 +159,7 @@ fn code_pill(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, on: &dyn Fn(Item)
     let vx = cx + g.x(46.0 + 8.0);
     let vw = g.copy[0] - g.x(8.0) - vx;
     if shared(&m.net).is_some() || !m.net.short.is_empty() {
-        let code = if ticket_only(&m.net) { "QR" } else if m.net.short.is_empty() { "...." } else { m.net.short.as_str() };
+        let code = if ticket_only(&m.net) { "Ready" } else if m.net.short.is_empty() { "...." } else { m.net.short.as_str() };
         let size = g.y(24.0);
         super::super::left(d, code, vx, y + (h - size) / 2.0, size, vw, frame::GOLD);
     } else {
@@ -272,7 +260,7 @@ fn seat_pick(m: &Menu, r: &Room, i: usize, s: &crate::net::Seat) -> (String, Who
 #[allow(clippy::too_many_arguments)]
 fn plate(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32, focus: bool, remove: bool, remove_focus: bool) {
     let text = d.text;
-    let hide = m.lobby_asking() || m.net.qr_big;
+    let hide = m.lobby_asking();
     let seat = r.seats.get(i).and_then(Option::as_ref);
     let Some(st) = seat else {
         // an open seat: the computer plays it unless someone joins

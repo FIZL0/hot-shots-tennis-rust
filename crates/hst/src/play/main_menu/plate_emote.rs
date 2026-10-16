@@ -4,7 +4,7 @@
 //! that emote's motion (`play::emote::MOTIONS`) with its match voice line, then goes back to its pose. As in a match a
 //! new one waits for the last to play out. The menus never read the right stick, so nothing clashes with moving about;
 //! the touch pad's L1 / R1 there are the emote's, not the costume step's. Not while a picker (court, umpire), the
-//! lobby's question or its big QR covers the cards.
+//! lobby's question covers the cards.
 //!
 //! Online a seat's emote goes to the other peers over the lobby channel (`net::Msg::Emote`, the host checking the seat
 //! is the sender's) so every machine plays it on that seat's card. It is the menu's only: never the match's input,
@@ -83,8 +83,8 @@ fn input(
     }
     let now = time.elapsed_secs();
     let mut flicks = Vec::new();
-    // a picker over the cards (the court's or umpire's: its L1 / R1 page), the lobby's question or big QR: no flicks
-    let covered = menu.picking.is_some() || menu.lobby_asking() || menu.net.qr_big;
+    // a picker over the cards (the court's or umpire's: its L1 / R1 page), the lobby's question: no flicks
+    let covered = menu.picking.is_some() || menu.lobby_asking();
     let select = menu.screen == Screen::Chars;
     for (e, mut g, name) in pads.iter_mut().filter(|_| !covered) {
         let touch = name.is_some_and(|n| emote::is_touch(n));

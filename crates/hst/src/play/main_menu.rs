@@ -1606,8 +1606,6 @@ enum Tex {
     Sheet(usize),
     /// Player `p`'s 3D preview (`previews.rs`), in place of the portrait.
     Preview(usize),
-    /// The lobby code's QR (`online::QrImage`).
-    Qr,
     /// The hovered store mod's preview (`mods_screen::Shelf`).
     Shelf,
     /// B372: a Browse tile's picture (`mods_screen::Shelf::thumbs[slot]`).
@@ -3229,7 +3227,6 @@ fn draw(
     mut ticker: ResMut<Ticker>,
     mut slide: ResMut<slide::Slide>,
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility, &mut UiTransform, &mut BorderColor)>,
-    qr: Option<Res<online::QrImage>>,
     cursor: Option<Res<cursor::Cursor>>,
     icons: Res<Icons>,
     shelf: Res<mods_screen::Shelf>,
@@ -3311,13 +3308,6 @@ fn draw(
                     continue;
                 }
             },
-            Tex::Qr => match &qr {
-                Some(qr) => qr.0.clone(),
-                None => {
-                    *vis = Visibility::Hidden;
-                    continue;
-                }
-            },
             Tex::Button(s) => match buttons.as_ref().and_then(|b| b.0.get(&s)) {
                 Some((h, _)) => h.clone(),
                 None => {
@@ -3348,7 +3338,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Qr && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Glyph(..) | Tex::Thumb(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Glyph(..) | Tex::Thumb(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         // a face's source is out of 64 whatever the icon's size (a part of it: the Mods tiles' square crop)
         if matches!(quad.tex, Tex::Face(_)) && [u, v, w, h] != [0.0, 0.0, 64.0, 64.0] {
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);
@@ -3376,17 +3366,8 @@ fn draw(
             // the hand's image covers `PAD` times its quad, around the same centre (B146)
             (x, y, w, h) = (x - w * (cursor::PAD - 1.0) / 2.0, y - h * (cursor::PAD - 1.0) / 2.0, w * cursor::PAD, h * cursor::PAD);
         }
-        let (mut left, mut width) = super::widescreen::place(x, w, share, quad.anchor);
-        let (mut top, mut height) = super::widescreen::vplace_in(y, h, vshare, quad.anchor);
-        if quad.tex == Tex::Qr
-            && let Ok(win) = window.single()
-        {
-            // a QR stays square (scannable) at any aspect: the largest square in its rect, centred
-            let vs = super::widescreen::view_size(win);
-            let side = (width * vs.x).min(height * vs.y);
-            (left, top) = (left + (width - side / vs.x) / 2.0, top + (height - side / vs.y) / 2.0);
-            (width, height) = (side / vs.x, side / vs.y);
-        }
+        let (left, width) = super::widescreen::place(x, w, share, quad.anchor);
+        let (top, height) = super::widescreen::vplace_in(y, h, vshare, quad.anchor);
         // edges on whole physical pixels: abutting quads (a box's nine slices) computed apart could round to either
         // side of an edge on a half pixel and leave a one-pixel seam showing what's behind
         let [(left, width), (top, height)] = [(left, width, px.x), (top, height, px.y)].map(|(a, len, p)| snap(a, len, p));

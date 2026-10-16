@@ -85,10 +85,10 @@ mods can carry upscaled textures of their own (the "Texture Replacements" settin
 
 Main menu → Online.
 
-- **Host**, **Find**, **Quick play**, or **Join** with a code or the host's QR.
+- **Host**, **Find**, **Quick play**, or **Join** with a code or the host's copied link.
 - Open seats are played by the computer.
 - Browser and desktop players can play together (Find is desktop only).
-- No internet? Set Relay to Off on the same network (LAN, or browsers via QR).
+- No internet? Set Relay to Off on the same network (LAN, or browsers via the copied link).
 
 More (own relay, settings file): [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
