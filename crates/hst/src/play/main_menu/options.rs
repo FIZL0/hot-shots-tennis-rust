@@ -106,9 +106,9 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
 }
 
 /// The options the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
-/// Downloads, `modstore::install`).
+/// Downloads, `modstore::install`; P54: Anti-aliasing on WebGL2, `graphics::webgl2`).
 pub(super) fn locked(o: Opt) -> bool {
-    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads)
+    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads) || o == Msaa && crate::graphics::webgl2()
 }
 
 fn label(o: Opt) -> &'static str {
@@ -155,6 +155,7 @@ fn about(o: Opt) -> &'static str {
         Preset => "High draws at full quality with every speed-up off; Default looks the same with Fewer Shadows and Skip Off-Screen on; Steam Deck, Low and Phone trade detail for frame rate; Lowest is the cheapest (half resolution, no shadows, simpler characters) for the weakest devices. Auto picks one for this device, then times the first seconds of each match and lowers the resolution and shadows until it holds 60 fps.",
         Scale => "Draw the court at this share of the window's resolution, scaled up to fill it (the HUD stays sharp).",
         Shadows => "Off, or the shadow map's detail (Low: one cascade, and only what shades the court casts).",
+        Msaa if locked(o) => "Off on WebGL2: anti-aliasing makes the browser build every drawing setup a second time, which stalls the first match for seconds. WebGPU (Display → Renderer) or the desktop app has it.",
         Msaa => "Smooth the court's jagged edges (MSAA): off, 2x or 4x samples per pixel.",
         Fps => "The most frames drawn a second (the game itself always runs at 60 Hz).",
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
