@@ -48,6 +48,8 @@ const UP_TOP: usize = 2;
 /// The tabs across the title band, in Q/E order.
 const PAGES: [Page; 4] = [Page::Browse, Page::Installed, Page::Upload, Page::Mine];
 
+/// M114: how long the footer says "Uploaded N mods · waiting for review" before it goes back to the count installed.
+const UPPED_SECS: f32 = 4.0;
 const RULE: &str = "Only upload what you have the right to share: you're responsible for it. It goes live for everyone at once.";
 
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
@@ -82,6 +84,9 @@ pub(super) struct View {
     busy: bool,
     /// B250: each upload since the game started, by mod folder (uploads run in the background, not `busy`).
     ups: HashMap<PathBuf, Up>,
+    /// M114: how many went up since none were last under way, and the seconds left of the footer's "Uploaded N mods
+    /// · waiting for review" once the last of them is done.
+    upped: (usize, f32),
     /// B202: the open child buttons (Remove, Upload, Sign in / out, Take down) and the row they hang off.
     child: Option<Child>,
     /// What the last action did (the description bar).
@@ -322,6 +327,36 @@ impl View {
             Err(err) => ("Error", format!("{} not installed: {err}", e.meta.name)),
         };
         self.jobs.insert(e.key(), job);
+    }
+
+    /// B250: upload `dir`'s news `u`, beside the mod (M114: and in the footer's count; the last one done starts its
+    /// "Uploaded N mods").
+    fn uploaded(&mut self, dir: PathBuf, u: Up) {
+        match &u {
+            Up::Done(_) => {
+                self.store = None;
+                self.mine = None;
+                self.upped.0 += 1;
+            }
+            Up::Skipped(s) => self.status = s.clone(),
+            Up::Failed(e) => self.status = format!("Not uploaded: {e}"),
+            _ => {}
+        }
+        let end = !matches!(u, Up::Queued | Up::Uploading);
+        self.ups.insert(dir, u);
+        if end && self.uploads().1 == 0 && self.upped.0 > 0 {
+            self.upped.1 = UPPED_SECS;
+        }
+    }
+
+    /// M114: the mod uploading now (its name) and how many uploads are queued or under way.
+    fn uploads(&self) -> (Option<String>, usize) {
+        let n = self.ups.values().filter(|u| matches!(u, Up::Queued | Up::Uploading)).count();
+        let now = self.ups.iter().find(|(_, u)| **u == Up::Uploading).map(|(dir, _)| {
+            let m = self.list.iter().chain(&self.courts).chain(&self.umpires).find(|m| m.dir == *dir);
+            m.map(|m| m.name.clone()).unwrap_or_else(|| dir.file_name().unwrap_or_default().to_string_lossy().into_owned())
+        });
+        (now, n)
     }
 
     /// B335: "3/50 done. " while a batch of installs (Download all) is under way.
@@ -867,11 +902,15 @@ impl Menu {
     fn queue(&mut self, mods: Vec<Mod>, name: String, token: String) {
         let v = &mut self.add;
         let mods: Vec<Mod> = mods.into_iter().filter(|m| !matches!(v.ups.get(&m.dir), Some(Up::Queued | Up::Uploading))).collect();
-        v.status = match mods.len() {
-            0 => "Those are uploading already.".into(),
-            1 => format!("Uploading {} in the background...", mods[0].name),
-            n => format!("Uploading {n} mods one at a time in the background. You can keep using the menu."),
-        };
+        if mods.is_empty() {
+            v.status = "Those are uploading already.".into();
+        } else {
+            // M114: the footer's status says how they go (on every Mods page)
+            v.status = if v.page == Page::Upload { RULE.into() } else { String::new() };
+            if v.uploads().1 == 0 {
+                v.upped = (0, 0.0);
+            }
+        }
         let ups = mods
             .into_iter()
             .map(|m| {
@@ -1486,6 +1525,20 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
         m.sel = 0;
         v.nophone = (screen == "phonemods-ask").then_some(0);
     }
+    // M114: `HST_UPS=1`: the first installed mod uploading, the next two queued (`=2`: and two downloads under way);
+    // `=done`: three just went up
+    let v = &mut m.add;
+    if let Ok(n) = std::env::var("HST_UPS") {
+        if n == "done" {
+            v.upped = (3, UPPED_SECS);
+        } else {
+            v.ups = v.list.iter().take(3).enumerate().map(|(i, md)| (md.dir.clone(), if i == 0 { Up::Uploading } else { Up::Queued })).collect();
+            if n == "2" {
+                v.doing = v.entries().iter().take(2).cloned().collect();
+            }
+        }
+        v.status = if v.page == Page::Upload { RULE.into() } else { String::new() };
+    }
     // B373: a kind tab with nothing on it has no rows to open buttons on
     if v.empty_kind() {
         (v.child, m.sel) = (None, 0);
@@ -1525,6 +1578,7 @@ fn page(
     mut was: Local<Option<[f32; 4]>>,
     mut on: Local<bool>,
     (mut card, mut baked): (ResMut<super::previews::ModCard>, Local<u32>),
+    time: Res<Time>,
 ) {
     if (menu.screen == Screen::Mods) != *on {
         *on = !*on;
@@ -1577,6 +1631,10 @@ fn page(
             shelf.shots.retain(|k, _| !k.starts_with("local/"));
         }
         menu.add.status = format!("{}{s}", menu.add.count());
+    }
+    // M114: the footer's "Uploaded N mods" runs out
+    if menu.add.upped.1 > 0.0 {
+        menu.add.upped.1 = (menu.add.upped.1 - time.delta_secs()).max(0.0);
     }
     let (up, at_once) = (menu.settings.0[super::UPSCALED_DOWNLOADS], menu.settings.downloads_at_once());
     for e in modstore::take() {
@@ -1650,19 +1708,7 @@ fn page(
                     v.wipe_next();
                 }
             }
-            Event::Upload(dir, u) => {
-                match &u {
-                    Up::Done(s) => {
-                        v.store = None;
-                        v.mine = None;
-                        v.status = s.clone();
-                    }
-                    Up::Skipped(s) => v.status = s.clone(),
-                    Up::Failed(e) => v.status = format!("Not uploaded: {e}"),
-                    _ => {}
-                }
-                v.ups.insert(dir, u);
-            }
+            Event::Upload(dir, u) => v.uploaded(dir, u),
             Event::Signed(r) => {
                 v.busy = false;
                 v.status = match r {
@@ -2270,7 +2316,9 @@ mod tests {
         // ✕ goes through the account on disk; signed in, the same as `queue`
         m.add.child = None;
         m.queue(m.add.list.clone(), "me".into(), "hf_test".into());
-        assert!(!m.add.busy && m.add.status.contains("2 mods"));
+        // (M114: the footer's status says it)
+        assert!(!m.add.busy && m.add.status == RULE);
+        assert_eq!(grid::status(&m), ("2 uploading".to_string(), true));
         assert!(m.add.list.iter().all(|x| m.add.ups.get(&x.dir) == Some(&Up::Queued)));
         m.sel = UP_TOP;
         m.mods_step(ok(), &mut out);
@@ -2300,6 +2348,48 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("no outcomes: {:?}", app.world().resource::<Menu>().add.ups);
+    }
+
+    /// M114: uploads in the footer's status on any page, over the last action's words, after the downloads when
+    /// both run; then "Uploaded N mods · waiting for review" till it runs out, then the count installed again.
+    #[test]
+    fn upload_status() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        m.mods_page(Page::Browse, 0);
+        m.add.list = vec![a_mod("t_st_a", "A"), a_mod("t_st_b", "B"), a_mod("t_st_c", "C")];
+        let st = |m: &Menu| grid::status(m);
+        m.add.status.clear();
+        assert_eq!(st(&m), ("3 installed".into(), false));
+        let dirs: Vec<_> = m.add.list.iter().map(|x| x.dir.clone()).collect();
+        for d in &dirs {
+            m.add.ups.insert(d.clone(), Up::Queued);
+        }
+        m.add.ups.insert(dirs[0].clone(), Up::Uploading);
+        m.add.status = "Something said.".into();
+        assert_eq!(st(&m), ("Uploading A · 2 queued".into(), true));
+        m.add.ups.insert(dirs[1].clone(), Up::Done(String::new()));
+        assert_eq!(st(&m), ("Uploading A · 1 queued".into(), true));
+        m.add.ups.insert(dirs[2].clone(), Up::Done(String::new()));
+        assert_eq!(st(&m), ("Uploading A".into(), true));
+        // downloads first
+        let e = Entry { meta: Default::default(), rev: "main".into(), verified: true };
+        m.add.doing = vec![e.clone(), e.clone()];
+        assert_eq!(st(&m), ("2 downloading · 1 uploading".into(), true));
+        m.add.queue.push_back(e);
+        assert_eq!(st(&m), ("2 downloading · 1 queued · 1 uploading".into(), true));
+        (m.add.doing, m.add.queue) = (Vec::new(), Default::default());
+        // the last one up starts the few seconds
+        (m.add.upped, m.add.status) = ((2, 0.0), String::new());
+        m.add.uploaded(dirs[0].clone(), Up::Done("A is up.".into()));
+        assert_eq!((m.add.upped.0, m.add.status.as_str()), (3, ""));
+        assert_eq!(st(&m), ("Uploaded 3 mods · waiting for review".into(), false));
+        m.add.upped.1 = 0.0;
+        assert_eq!(st(&m), ("3 installed".into(), false));
+        // a failure stays said once the uploads are over (`queue` starts a new count)
+        m.add.upped = (0, 0.0);
+        m.add.ups.insert(dirs[0].clone(), Up::Uploading);
+        m.add.uploaded(dirs[0].clone(), Up::Failed("no network".into()));
+        assert_eq!(st(&m), ("Not uploaded: no network".into(), false));
     }
 
     /// B208: on a phone Add mod (B383: Installed's word) and the header's Upload are greyed and put up the popup
