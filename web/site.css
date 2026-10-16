@@ -109,12 +109,12 @@
 #disc figcaption { font-size: 13px; color: var(--muted); margin-top: .7em; }
 
 /* settings & files */
-#disc .rows { display: grid; gap: 0; }
+#disc .rows { display: grid; gap: 0; grid-template-columns: minmax(0, 1fr); }
 #disc .r { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .3em .8em; padding: .5em 0; border-top: 2px solid #eceae2; }
 #disc .r:first-child { border-top: 0; }
 #disc .r > span:first-child { font-weight: 700; }
 #disc .r .v { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
-#disc .r .end { display: flex; flex-wrap: wrap; gap: .4em; align-items: center; justify-content: flex-end; margin-left: auto; }
+#disc .r .end { display: flex; flex-wrap: wrap; gap: .4em; align-items: center; justify-content: flex-end; margin-left: auto; min-width: 0; max-width: 100%; }
 #disc input[type=text], #disc input[type=password], #disc select { font: inherit; font-weight: 700; padding: .35em .7em; border: 3px solid var(--ink);
   border-radius: 12px; background: #fff; color: var(--ink); min-width: 0; max-width: 100%; }
 #disc input[type=range] { accent-color: var(--green); width: 9em; max-width: 100%; }
@@ -131,12 +131,17 @@
 #disc .bad { color: #b3261e; font-weight: 700; }
 #disc .bar { display: flex; height: 22px; border: 3px solid var(--ink); border-radius: 999px; overflow: hidden; background: #eee; margin: .4em 0 .6em; }
 #disc .bar i { display: block; height: 100%; min-width: 0; }
+/* B458: the usage bar's legend wraps item by item (a swatch stays with its label), never past the card's edge */
+#disc .legend { display: flex; flex-wrap: wrap; gap: .2em 1em; }
+#disc .legend > span { white-space: nowrap; }
 #disc .key { display: inline-block; width: .8em; height: .8em; border: 2px solid var(--ink); border-radius: 3px; vertical-align: -.05em; margin-right: .35em; }
 #disc .mods { display: grid; gap: .5em; max-height: 26em; overflow-y: auto; }
-#disc .mod { display: flex; align-items: center; gap: .6em; padding: .45em .6em; border: 2px solid var(--ink); border-radius: 12px; background: #fafaf6; }
-#disc .mod div { flex: 1; min-width: 0; }
-#disc .mod b { display: block; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#disc .mod span { font-size: 13px; color: var(--muted); }
+/* a mod's name and source wrap, never cut off; on a narrow card they get a line of their own (B458) */
+#disc .mod { display: flex; flex-wrap: wrap; align-items: center; gap: .3em .6em; padding: .45em .6em; border: 2px solid var(--ink); border-radius: 12px; background: #fafaf6; }
+#disc .mod div { flex: 1 1 10em; min-width: 0; }
+#disc .mod .pill { margin-left: auto; }
+#disc .mod b { display: block; font-weight: 800; overflow-wrap: anywhere; }
+#disc .mod span { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 #disc .kind { padding: 0 .55em; border: 2px solid var(--ink); border-radius: 999px; font-size: 12px; font-weight: 800; background: #e6f1fb; flex: none; }
 
 /* donate */

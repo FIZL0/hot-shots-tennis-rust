@@ -352,7 +352,7 @@ async function storage(parts) {
   box.replaceChildren(
     el('p', {}, el('b', { textContent: size(used || known + local) }), est?.quota ? ` used of ${size(est.quota)} this browser allows.` : ' used.'),
     el('div', { className: 'bar' }, ...segs.filter(s => s[1] > 0).map(([l, n, c]) => el('i', { title: `${l}: ${size(n)}`, style: `width:${100 * n / total}%;background:${c}` }))),
-    el('p', { className: 'note' }, ...segs.map(([l, , c]) => el('span', { style: 'margin-right:1em;white-space:nowrap' }, el('span', { className: 'key', style: `background:${c}` }), l))),
+    el('p', { className: 'note legend' }, ...segs.map(([l, , c]) => el('span', {}, el('span', { className: 'key', style: `background:${c}` }), l))),
     row('Disc data', pack, pack ? null : 'none imported', pack ? pill('Forget disc', () => {
       if (!confirm('Forget the imported disc? You\'ll pick your ISO again to play. Settings and mods stay.')) return;
       busy('forget the disc', async () => { const a = await drop(dir, 'disc.pack'); await drop(dir, 'disc.part'); if (a === true) parts.have(false); return a; });
