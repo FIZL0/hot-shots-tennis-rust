@@ -389,7 +389,14 @@ impl View {
 
     /// The pills, then the mods (installed ones, or the store's with their uploaders' headings).
     fn rows(&self) -> usize {
-        self.acts() + if self.grid() { self.items().len() } else { self.locals().len() }
+        self.acts() + if self.grid() { self.items().len() } else { self.locals().len() + self.kinds_shown().len() }
+    }
+
+    /// Upload's kind tab under slot `sel` (by `kinds_shown`): they come after the installed mods' grid (touch has no
+    /// L2 / R2).
+    fn up_kind(&self, sel: usize) -> Option<usize> {
+        let j = sel.checked_sub(UP_TOP + self.locals().len())?;
+        (self.page == Page::Upload && j < self.kinds_shown().len()).then_some(j)
     }
 
     /// The store's mods under the pills: Browse's tiles (searched, filtered, sorted), My uploads as listed; only
@@ -904,6 +911,14 @@ impl Menu {
             return;
         }
         let s = self.sel;
+        if let Some(j) = self.add.up_kind(s) {
+            let to = self.add.kinds_shown()[j];
+            self.mods_kind(to, out);
+            // the cursor stays on the tab
+            let v = &self.add;
+            self.sel = UP_TOP + v.locals().len() + v.kinds_shown().iter().position(|k| *k == to).unwrap_or(0);
+            return;
+        }
         match self.add.page {
             Page::Installed => self.installed_step(s, out),
             // (Browse's presses are `browse_press`)
@@ -2810,6 +2825,23 @@ mod tests {
         go(&mut m, Press { left: true, ..default() });
         go(&mut m, Press { up: true, ..default() });
         assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(0), "Browse's Show tab");
+        // Upload: the tabs come after the installed mods' slots; ← from Sign in the last, → from the last Sign in
+        m.add.kind = Kind::Character;
+        m.add.list = vec![a_mod("a", "A")];
+        m.mods_page(Page::Upload, 0);
+        let k0 = UP_TOP + 1;
+        assert_eq!(m.add.rows(), k0 + 3);
+        m.sel = 0;
+        go(&mut m, Press { left: true, ..default() });
+        assert_eq!((m.sel, m.add.up_kind(m.sel)), (k0 + 2, Some(2)));
+        go(&mut m, Press { right: true, ..default() });
+        assert_eq!(m.sel, 0);
+        m.sel = k0 + 1;
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.kind, m.add.up_kind(m.sel)), (Kind::Court, Some(1)));
+        go(&mut m, Press { right: true, ..default() });
+        go(&mut m, Press { right: true, ..default() });
+        assert_eq!(m.sel, 0);
     }
 
     /// B373: the kind tabs filter every page (a court in the store shows on Courts only, never on Characters), L2 /
@@ -2843,7 +2875,7 @@ mod tests {
                 assert_eq!(names(&m), ["a", "b"]);
                 assert_eq!(m.add.kind_counts(), [2, 1, 2, 0]);
             } else if local {
-                assert_eq!(m.add.rows() - m.add.acts(), 2, "{page:?}");
+                assert_eq!(m.add.rows() - m.add.acts() - m.add.kinds_shown().len(), 2, "{page:?}");
                 assert_eq!(m.add.kind_counts(), [2, 1, 2, 0]);
             } else {
                 assert_eq!(names(&m), ["c1", "c2"], "{page:?}");
@@ -2877,7 +2909,7 @@ mod tests {
             assert!(!m.add.empty_kind());
             match page {
                 Page::Installed => assert!(names(&m).is_empty()),
-                Page::Upload => assert_eq!(m.add.rows(), m.add.acts()),
+                Page::Upload => assert_eq!(m.add.rows(), m.add.acts() + m.add.kinds_shown().len()),
                 _ => assert_eq!(names(&m), ["pack"], "{page:?}"),
             }
             // B462: R2 on the last tab stays, L2 back; a tap on Characters' tab
