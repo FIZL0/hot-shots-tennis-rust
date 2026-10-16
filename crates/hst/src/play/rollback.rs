@@ -39,7 +39,8 @@ pub const OWE: i32 = WINDOW as i32;
 pub const CATCH_UP: std::time::Duration = std::time::Duration::from_secs(2);
 /// B198: the most inputs a peer may leave unacked before this machine holds (ggrs drops it past 128).
 const UNACKED: usize = 120;
-/// B198: how long a stall goes before this machine's inputs go again (ggrs' own resend interval).
+/// B198: how long a stall goes before this machine's inputs go again (ggrs' own resend interval), by ggrs' clock (a
+/// test can drive it, B494).
 const RESEND: std::time::Duration = std::time::Duration::from_millis(200);
 
 pub struct Cfg;
@@ -130,7 +131,7 @@ pub struct Rollback {
     pub base: usize,
     pub round: u8,
     /// B198: the frame last run (or inputs last sent again) and when.
-    moved: (i32, web_time::Instant),
+    moved: (i32, ggrs::clock::Instant),
     /// Inputs sent again (`resend`), in all.
     pub resent: u64,
 }
@@ -193,7 +194,7 @@ impl Rollback {
             None => None,
         };
         let wires = Wires::default();
-        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, owed: 0, shift: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1], base: 0, round: 0, moved: (0, web_time::Instant::now()), resent: 0 })
+        Ok(Rollback { sess: b.start_p2p_session(wires.clone())?, wires, seats, sync, texts: Default::default(), frame: 0, since: 0, owed: 0, shift: 0, step, reruns: 0, skipped: 0, held: 0, logged: (0.0, 0, 0), trace: Trace::new(), cells: vec![None; WINDOW + 1], base: 0, round: 0, moved: (0, ggrs::clock::now()), resent: 0 })
     }
 
     /// The tick the next run is.
@@ -256,7 +257,7 @@ pub fn poll(w: &mut World) {
 /// one of the other's lost inputs, kept each other's resends from ever starting (any peer's datagram resets the
 /// clock), each waiting for the other for ever. A peer that has them all drops the copy.
 fn resend(rb: &mut Rollback) {
-    let (frame, now) = (rb.sess.current_frame(), web_time::Instant::now());
+    let (frame, now) = (rb.sess.current_frame(), ggrs::clock::now());
     if frame != rb.moved.0 || now - rb.moved.1 < RESEND {
         if frame != rb.moved.0 {
             rb.moved = (frame, now);
@@ -519,10 +520,12 @@ fn advance(w: &mut World) -> bool {
         return false;
     }
     // this machine's seats' pads (each seat's local device in the slot of the same number, `--pads`)
-    let (handles, seats, frame) = {
+    let (mut handles, seats, frame) = {
         let rb = w.resource::<Rollback>();
         (rb.sess.local_player_handles(), rb.seats.clone(), rb.base as i32 + rb.sync.as_ref().map_or(rb.sess.current_frame(), |s| s.current_frame()))
     };
+    // B494: ggrs lists them in a hash map's order, different every run; mashed pads (tests) come from one generator
+    handles.sort_unstable();
     let mut local: Vec<_> = {
         let mut pads = w.resource_mut::<Pads>();
         handles.iter().map(|&h| tick_input::take(&mut pads.slots[seats[h]])).collect()

@@ -1119,8 +1119,10 @@ mod tests {
         }
 
         /// `play_rollback`, the guest frozen for the rounds in `hitch` (a hiccup: nothing runs, sent or heard), and
-        /// `each(round, apps)` after every round.
+        /// `each(round, apps)` after every round. A round is a tick of time by ggrs' clock (B494), so the outcome
+        /// doesn't depend on how long it really takes (a loaded machine).
         fn play_rollback_with(lag: u32, limit: u32, bad: bool, hitch: std::ops::Range<u32>, mut each: impl FnMut(u32, &mut [App; 2])) -> [App; 2] {
+            ggrs::clock::drive(true);
             let room = room(0);
             let mut apps = ["host", "g"].map(|me| {
                 let mut a = app(&room, me);
@@ -1130,6 +1132,7 @@ mod tests {
             });
             let mut wire: Vec<(usize, u32, String, Vec<u8>)> = Vec::new();
             for round in 0..limit {
+                ggrs::clock::advance(std::time::Duration::from_micros(16_667));
                 for (to, at, from, d) in std::mem::take(&mut wire) {
                     if at <= round && !(to == 1 && hitch.contains(&round)) {
                         take(apps[to].world_mut(), Event::Datagram(from, d));
@@ -1156,6 +1159,7 @@ mod tests {
                     break;
                 }
             }
+            ggrs::clock::drive(false);
             apps
         }
 
@@ -1353,6 +1357,37 @@ mod tests {
             let apps = play_rollback(5, 900, true);
             for a in &apps {
                 std::fs::remove_file(reported(a, 330)).expect("saved");
+            }
+        }
+
+        /// B494: the harness's outcome doesn't depend on how long its rounds really take (ggrs' pings, resends and
+        /// time sync and `rollback`'s resend go by ggrs' clock, a tick a round): rounds slowed now and then (a loaded
+        /// machine) play the forced desync's match the same, tick for tick.
+        #[test]
+        fn rollback_rounds_play_the_same_however_long_they_take() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let outcome = |slow: bool| {
+                let apps = play_rollback_with(5, 420, true, 0..0, |r, _| {
+                    if slow && r % 9 == 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(10 + (r as u64 * 7) % 40));
+                    }
+                });
+                apps.each_ref().map(|a| {
+                    let (np, rb) = (a.world().resource::<Netplay>(), a.world().resource::<Rollback>());
+                    if let Some(at) = &np.report {
+                        let _ = std::fs::remove_file(at);
+                    }
+                    (np.lock.log.clone(), (np.state.0, np.resync.fresh, np.resync.done, rb.frame(), rb.reruns, rb.skipped, rb.held, rb.resent))
+                })
+            };
+            let (quick, slow) = (outcome(false), outcome(true));
+            for (q, s) in quick.iter().zip(&slow) {
+                assert_eq!(q.1, s.1, "state, fresh, resyncs, frame, re-runs, sat out, held, resent");
+                let at = q.0.iter().zip(&s.0).position(|(a, b)| a != b);
+                assert!(at.is_none() && q.0.len() == s.0.len(), "pads differ from tick {at:?} (ticks {} and {})", q.0.len(), s.0.len());
+                assert_eq!(q.1.2, 1, "resyncs");
             }
         }
 
