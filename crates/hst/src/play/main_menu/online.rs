@@ -195,17 +195,22 @@ impl Menu {
     /// Player `p`'s pick as it travels.
     fn wire(&self, p: usize) -> Pick {
         let random = self.players[p].random;
-        let pick = match self.pick(p) {
+        let (w, costume) = self.pick(p);
+        Pick { random, swap: self.players[p].swap, ..self.who_pick(w, costume) }
+    }
+
+    /// Character `w` in `costume` as it goes over the network.
+    fn who_pick(&self, w: super::Who, costume: usize) -> Pick {
+        match w {
             // a mod: its donor, and its gameplay data for every peer
-            (super::Who::Mod(i), costume) => {
+            super::Who::Mod(i) => {
                 let m = &self.mods[i];
                 // ponytail: B336's read-in is asked here but not waited for; a hover in the select has read it already
                 crate::modfs::ready(&m.dir);
                 Pick { r#mod: Wire::of(m, costume).map_err(|e| warn!("{e}")).ok().map(Box::new), ..Pick::disc(m.donor, costume) }
             }
-            (super::Who::Disc(c), costume) => Pick::disc(c, costume),
-        };
-        Pick { random, swap: self.players[p].swap, ..pick }
+            super::Who::Disc(c) => Pick::disc(c, costume),
+        }
     }
 
     /// B216: online, the player `dev` drives on the select (it sits in seat `p`): the host's first device drives the
@@ -673,18 +678,51 @@ impl Menu {
         (0..super::CHARS).filter(|&c| !held(c)).chain(0..super::CHARS).find_map(free)
     }
 
-    /// B217: a computer player added to open seat `i` starts on Random: a disc character with a costume nobody else
-    /// has, then one of its free costumes, each at random by `seed` (the host draws; the pick travels as any bot's).
+    /// The host's Start (B215: a countdown, ready or not): open seats go to computer players on Random (mods too),
+    /// each seated here as drawn so the next draw skips it; the room comes back from the host as usual.
+    fn start(&mut self, out: &mut Vec<Effect>) {
+        self.net.status.clear();
+        out.push(Effect::Sound(2));
+        let open: Vec<usize> = self.net.room.as_ref().map_or(vec![], |r| (0..r.seats.len()).filter(|&i| r.seats[i].is_none()).collect());
+        for i in open {
+            if let Some(p) = self.bot_random(i, super::dice()) {
+                self.net.room.as_mut().unwrap().seats[i] = Some(Seat { peer: crate::net::CPU.into(), pick: p.clone() });
+                out.push(Effect::Online(Fx::Net(Cmd::Bot(i, Some(p)))));
+            }
+        }
+        out.push(Effect::Online(Fx::Net(Cmd::Start)));
+    }
+
+    /// B217: a computer player added to open seat `i` starts on Random: a character (disc, or one of this machine's
+    /// custom ones unless the lobby is vanilla) with a costume nobody else has, then one of its free costumes, each
+    /// at random by `seed` (the host draws; the pick travels as any bot's).
     fn bot_random(&self, i: usize, seed: u64) -> Option<Pick> {
+        let (w, k) = self.bot_draw(i, seed)?;
+        Some(Pick { random: true, ..self.who_pick(w, k) })
+    }
+
+    /// `bot_random`'s draw: the character and costume.
+    fn bot_draw(&self, i: usize, seed: u64) -> Option<(super::Who, usize)> {
+        use super::Who;
         let taken = self.bot_taken(i)?;
-        // ponytail: disc characters only until bots can play mods online (B216)
-        let open: Vec<(usize, Vec<usize>)> = (0..super::CHARS)
-            .map(|c| (c, (0..super::COSTUMES).filter(|&k| !taken.contains(&(c, k))).collect::<Vec<_>>()))
+        let r = self.net.room.as_ref()?;
+        let mods_taken: Vec<(&str, usize)> =
+            r.seats.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, s)| s.as_ref()).filter_map(|s| Some((s.pick.r#mod.as_ref()?.id.as_str(), s.pick.costume))).collect();
+        let mods = if r.vanilla { 0 } else { self.own_mods() };
+        let whos = (0..super::CHARS).map(Who::Disc).chain((0..mods).filter(|&m| self.mods[m].costume_of.is_none()).map(Who::Mod));
+        let open: Vec<(Who, Vec<usize>)> = whos
+            .map(|w| {
+                let ks = match w {
+                    Who::Disc(c) => (0..super::COSTUMES).filter(|&k| !taken.contains(&(c, k))).collect::<Vec<_>>(),
+                    Who::Mod(m) => (0..self.mods[m].costumes.len()).filter(|&k| !self.broken.contains(&(m, k)) && !mods_taken.contains(&(self.mods[m].id.as_str(), k))).collect(),
+                };
+                (w, ks)
+            })
             .filter(|(_, ks)| !ks.is_empty())
             .collect();
         let n = open.len() as u64;
-        let (c, ks) = open.get((seed % n.max(1)) as usize)?;
-        Some(Pick { random: true, ..Pick::disc(*c, ks[(seed / n % ks.len() as u64) as usize]) })
+        let (w, ks) = open.get((seed % n.max(1)) as usize)?;
+        Some((*w, ks[(seed / n % ks.len() as u64) as usize]))
     }
 
     /// B66: the disc characters and costumes the lobby's other seats hold (the readied ones), as `bot_pick` skips them.
@@ -924,8 +962,7 @@ impl Menu {
                     };
                 }
                 if k.name && self.net.hosting && self.net.room.is_some() && self.counting() == 0 {
-                    self.net.status.clear();
-                    return out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Start))]);
+                    return self.start(out);
                 }
                 // B449: the arrows go about the screen as its parts lie
                 let to = self.lobby_step(&items, &rects, k);
@@ -1023,8 +1060,7 @@ impl Menu {
                     out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Cancel))]);
                 } else if item == Item::Button("Start") {
                     // B215: a countdown, ready or not
-                    self.net.status.clear();
-                    out.extend([Sound(2), Effect::Online(Fx::Net(Cmd::Start))]);
+                    self.start(out);
                 } else if item == Item::Button("Chat") {
                     // B396: the chat box (a pad: the phrases, as R2)
                     crate::chat::ASK.store(if self.net.pad { 2 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
@@ -2575,7 +2611,12 @@ mod tests {
         assert_eq!((m.lobby_ok(), net(&m.step(dev, ok))), (Some("Take Out"), Some(Cmd::Kick("k51qzi5uqu5d".into()))));
         assert_eq!(m.items()[m.sel], Item::Seat(1));
         to(&mut m, Item::Button("Start"));
-        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Start), "ACE-42 isn't ready: B215 starts the countdown anyway");
+        let fx = m.step(dev, ok);
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Start))), "ACE-42 isn't ready: B215 starts the countdown anyway");
+        // the open seat goes to a computer player on Random, on a character nobody has
+        let Some(Cmd::Bot(3, Some(p))) = net(&fx) else { panic!("{fx:?}") };
+        assert!(p.random && ![(6, 0), (1, 0)].contains(&(p.char, p.costume)), "{p:?}");
+        m.net.room.as_mut().unwrap().seats[3] = None;
         m.net.room.as_mut().unwrap().count = 4;
         assert_eq!((m.lobby_ok(), net(&m.step(dev, ok))), (Some("Cancel"), Some(Cmd::Cancel)));
         m.net.room.as_mut().unwrap().count = 0;
@@ -2699,6 +2740,20 @@ mod tests {
         let mut m = Menu { screen: Screen::Online, sel: 4, net: View { cfg: Some(Online::default()), ..default() }, ..default() };
         m.step(dev, ok);
         assert_eq!((m.net.url, m.net.naming), (false, true));
+    }
+
+    /// A computer player on Random draws this machine's custom characters too, but not in a vanilla lobby.
+    #[test]
+    fn bot_random_draws_mods() {
+        let w = Wire { id: "emi".into(), name: "Emi".into(), donor: 4, hand: 1.0, base: 4, overrides: vec![], ai_row: 4, names: vec![], parent: vec![], rest: vec![], looks: 7, dir: None };
+        let mut m = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut m);
+        // this machine's own (installed) mod: no skeleton carried over the wire
+        m.mods = vec![crate::mods::Mod { skeleton: None, costumes: vec!["model/c00.glb".into()], ..crate::mods_online::for_match(&w, None) }];
+        let modded = |m: &Menu| (0..2_000u64).any(|s| matches!(m.bot_draw(3, s.wrapping_mul(0x9e37_79b9_7f4a_7c15)), Some((super::super::Who::Mod(0), _))));
+        assert!(modded(&m));
+        m.net.room.as_mut().unwrap().vanilla = true;
+        assert!(!modded(&m));
     }
 
     /// B234: a mod pick is named by the mod, not its donor, on the peer that has it and on one that doesn't (the
