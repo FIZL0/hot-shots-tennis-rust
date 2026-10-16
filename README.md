@@ -23,10 +23,7 @@ Taken from the remaster running on a retail disc (the art comes from the disc; n
 |---|---|
 | ![A rally on a grass court](docs/screenshots/rally-grass.jpg) | ![A rally on an autumn court](docs/screenshots/rally-autumn.jpg) |
 | ![Serving](docs/screenshots/serve.jpg) | ![Celebrating at sunset on the river court](docs/screenshots/closeup-sunset.jpg) |
-| ![On the beach court](docs/screenshots/closeup-beach.jpg) | ![On the indoor court](docs/screenshots/closeup-indoor.jpg) |
-| ![On the autumn court](docs/screenshots/closeup-autumn.jpg) | ![The stock cast and two mod characters](docs/screenshots/cast.jpg) |
 | ![A mod character on a mod court](docs/screenshots/mod-castle.jpg) | ![A mod character](docs/screenshots/mod-character.jpg) |
-| ![A mod character on a mod court](docs/screenshots/mod-amusement.jpg) | ![On a phone](docs/screenshots/phone.jpg) |
 | ![Main menu](docs/screenshots/menu-main.jpg) | ![Character selection with mod characters](docs/screenshots/menu-chars.jpg) |
 | ![Court selection with mod courts](docs/screenshots/menu-courts.jpg) | ![Umpire selection with mod umpires](docs/screenshots/menu-umpires.jpg) |
 | ![Online lobby](docs/screenshots/menu-lobby.jpg) | ![Mod store](docs/screenshots/menu-browsemods.jpg) |
