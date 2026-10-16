@@ -808,21 +808,25 @@ impl Menu {
         out.push(Effect::Sound(2));
     }
 
-    /// B255: Download all on an author's list or on their heading: queues every one of `list` (`author`'s mods) not
-    /// installed at the same or a newer version.
-    fn download_all(&mut self, author: &str, list: Vec<Entry>, out: &mut Vec<Effect>) {
+    /// B255: Download all on an author's list or on their heading: queues every one of `list` (`author`'s mods; B493:
+    /// None, the whole store's mods on view) not installed at the same or a newer version.
+    fn download_all(&mut self, author: Option<&str>, list: Vec<Entry>, out: &mut Vec<Effect>) {
         let (up, at_once) = (self.settings.0[super::UPSCALED_DOWNLOADS], self.settings.downloads_at_once());
         let todo: Vec<Entry> = list.iter().filter(|e| !self.add.skips(e)).cloned().collect();
         let (n, skipped) = (todo.len(), list.len() - todo.len());
         for e in todo {
             self.add.enqueue(e, up, at_once);
         }
-        let author = who(author);
+        let by = author.map_or(String::new(), |a| format!(" by {}", who(a)));
         self.add.status = match (n, skipped) {
-            (0, _) => format!("All of {author}'s mods are installed or queued already."),
-            (n, 0) if at_once > 1 && n > 1 => format!("Downloading {n} mods by {author}, {} at a time.", at_once.min(n)),
-            (n, 0) => format!("Downloading {n} mods by {author}, one after another."),
-            (n, k) => format!("Downloading {n} mods by {author} ({k} installed or queued already)."),
+            (0, _) if list.is_empty() => "No mods listed to download.".into(),
+            (0, _) => match author {
+                Some(a) => format!("All of {}'s mods are installed or queued already.", who(a)),
+                None => "All the mods listed are installed or queued already.".into(),
+            },
+            (n, 0) if at_once > 1 && n > 1 => format!("Downloading {n} mods{by}, {} at a time.", at_once.min(n)),
+            (n, 0) => format!("Downloading {n} mods{by}, one after another."),
+            (n, k) => format!("Downloading {n} mods{by} ({k} installed or queued already)."),
         };
         out.push(Effect::Sound(if n == 0 { 1 } else { 2 }));
     }
@@ -2287,7 +2291,7 @@ mod tests {
         let e = |id: &str| Entry { meta: Meta { id: id.into(), name: id.to_uppercase(), author: "ann".into(), sha256: id.repeat(32), size: 1, ..Default::default() }, rev: "main".into(), verified: true };
         let list: Vec<Entry> = ["a1", "a2", "a3", "a4", "a5"].map(e).into();
         let mut out = Vec::new();
-        m.download_all("ann", list, &mut out);
+        m.download_all(Some("ann"), list, &mut out);
         let ids = |l: Vec<&Entry>| l.iter().map(|x| x.meta.id.clone()).collect::<Vec<_>>();
         assert_eq!((ids(m.add.doing.iter().collect()), ids(m.add.queue.iter().collect())), (vec!["a1".to_string(), "a2".into(), "a3".into()], vec!["a4".to_string(), "a5".into()]));
         assert!(m.add.status.ends_with("3 at a time."), "{}", m.add.status);
@@ -2539,6 +2543,42 @@ mod tests {
         m.add.mine = Some(Vec::new());
         m.mods_step(ok(), &mut out);
         assert!(m.add.wipe.is_none() && m.add.status.starts_with("None of your mods"), "{}", m.add.status);
+    }
+
+    /// B493: the whole store's Browse has Download all in every sort, not only an uploader's list: it queues the
+    /// mods on view (the search's), leaving the installed ones.
+    #[test]
+    fn download_all_in_every_sort() {
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        let e = |id: &str, who: &str| Entry {
+            meta: Meta { id: id.into(), name: id.to_uppercase(), author: who.into(), version: "1".into(), sha256: id.repeat(32), size: 1, ..Default::default() },
+            rev: "main".into(),
+            verified: true,
+        };
+        m.add.store = Some(vec![e("ma1", "ann"), e("mb1", "bob"), e("zz", "cal"), e("ma2", "")]);
+        m.add.have = [("ann/ma1".to_string(), ("ma1".repeat(32), PathBuf::from("mods/ma1")))].into_iter().collect();
+        m.mods_page(Page::Browse, 0);
+        for sort in [grid::Sort::Newest, grid::Sort::Az, grid::Sort::Uploader] {
+            m.add.b.sort = sort;
+            assert_eq!(m.add.words(), ["Refresh", "Download all"], "{sort:?}");
+        }
+        // (something under way: Download all only queues)
+        (m.settings.8, m.add.doing) = (1, vec![e("busy", "x")]);
+        m.add.b.sort = grid::Sort::Newest;
+        m.add.b.search = "m".into();
+        let mut out = Vec::new();
+        m.sel = word(&m, "Download all");
+        m.mods_step(ok(), &mut out);
+        let mut q: Vec<String> = m.add.queue.iter().map(|x| x.meta.id.clone()).collect();
+        q.sort();
+        assert_eq!(q, ["ma2", "mb1"]);
+        assert_eq!(m.add.status, "Downloading 2 mods (1 installed or queued already).");
+        m.mods_step(ok(), &mut out);
+        assert_eq!((m.add.queue.len(), m.add.status.as_str()), (2, "All the mods listed are installed or queued already."));
+        // nothing on view
+        m.add.b.search = "nothing like it".into();
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.status, "No mods listed to download.");
     }
 
     /// B255/B372: △ on a tile lists only that uploader's mods with Download all, which queues each one not installed at
