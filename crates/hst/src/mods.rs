@@ -1069,7 +1069,8 @@ fn eye_materials(dir: &Path) -> Vec<String> {
 /// A mod's own motions (§6 `motions`): each animation, named by its motion (`re_gu`, `sh_f_t`: the disc name
 /// without `_pc%02d`), keys the skeleton's joints by name with their local rotation and translation in game space.
 /// Its key times are seconds at 60 Hz (the source's own speed); it may run past the donor clip (drawn on its own
-/// clock, `Motion::drawn`) but not stop short of it. Gameplay keeps reading the donor's clip.
+/// clock, `Motion::drawn`) but not stop short of it, except a celebration ([`CELEBRATIONS`]). Gameplay keeps reading
+/// the donor's clip.
 fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>, only: Option<&[usize]>) -> Result<HashMap<usize, Clip>, String> {
     use hst_data::ani::{Anim, MOTIONS, Track};
     use gltf::animation::util::ReadOutputs;
@@ -1127,13 +1128,18 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>, o
             }
         }
         let clip = Clip::new(skeleton, &Anim { ticks_per_frame: d.ticks_per_frame as i32, tracks });
-        if clip.length < d.length {
+        if clip.length < d.length && !CELEBRATIONS.contains(&id) {
             return Err(ctx(format!("`{name}` spans {} frames, short of the donor's {}", clip.length, d.length)));
         }
         out.insert(id, clip);
     }
     Ok(out)
 }
+
+/// The point and game reactions (`re_gu`, `re_di`, `re_gu_set`, `re_di_set`): a mod's own may end before the donor's
+/// (B478). They never loop, so its drawn clock holds the last frame until the post-point, game or set transition sets
+/// the next motion, as a stock character holds its own clip's end.
+const CELEBRATIONS: [usize; 4] = [0x2c, 0x2d, 0x2e, 0x2f];
 
 /// A mesh's `extras.noise` deformers (period, rate, amplitudes), as a `.NOI` gives them.
 fn noise_deformers(mesh: &gltf::Mesh) -> Vec<hst_data::noi::Deformer> {
@@ -1540,6 +1546,60 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B478: a celebration of a mod's own that ends before the donor's loads and holds its last frame to the end of the
+    /// transition (the gameplay clock runs the donor's on), while any other clip shorter than the donor's is rejected.
+    #[test]
+    fn short_celebration_holds_its_last_frame() {
+        use hst_data::ani::{Anim, Track};
+        // one joint turning a quarter about y over 0.5 s (30 frames)
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        let glb = |name: &str| -> Vec<u8> {
+            let mut bin: Vec<u8> = [0.0f32, 0.5, 0.0, 0.0, 0.0, 1.0, 0.0, half, 0.0, half].iter().flat_map(|f| f.to_le_bytes()).collect();
+            let json = format!(
+                r#"{{"asset":{{"version":"2.0"}},"nodes":[{{"name":"Bip01"}}],"scenes":[{{"nodes":[0]}}],"buffers":[{{"byteLength":40}}],"bufferViews":[{{"buffer":0,"byteLength":8}},{{"buffer":0,"byteOffset":8,"byteLength":32}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[0.5]}},{{"bufferView":1,"componentType":5126,"count":2,"type":"VEC4"}}],"animations":[{{"name":"{name}","samplers":[{{"input":0,"output":1}}],"channels":[{{"sampler":0,"target":{{"node":0,"path":"rotation"}}}}]}}]}}"#
+            );
+            let mut json = json.into_bytes();
+            json.resize(json.len().next_multiple_of(4), b' ');
+            bin.resize(bin.len().next_multiple_of(4), 0);
+            let mut out = b"glTF".to_vec();
+            out.extend(2u32.to_le_bytes());
+            out.extend((12 + 8 + json.len() as u32 + 8 + bin.len() as u32).to_le_bytes());
+            out.extend((json.len() as u32).to_le_bytes());
+            out.extend(b"JSON");
+            out.extend(json);
+            out.extend((bin.len() as u32).to_le_bytes());
+            out.extend(b"BIN\0");
+            out.extend(bin);
+            out
+        };
+        let sk = Skeleton { names: vec!["Bip01".into()], parent: vec![None], rest: vec![[[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0]]] };
+        // the donor's clips: 90 frames
+        let long = Clip::new(&sk, &Anim { ticks_per_frame: 1, tracks: vec![Track { name: "Bip01".into(), length: 0.0, rotation: vec![(0, [0.0, 0.0, 0.0, 1.0]), (90, [0.0, 0.0, 0.0, 1.0])], position: vec![], parent: None }] });
+        let donor: HashMap<usize, Clip> = [0x10, 0x2f].into_iter().map(|id| (id, long.clone())).collect();
+        let dir = std::env::temp_dir().join(format!("hst_b478_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("motions.glb");
+        std::fs::write(&path, glb("sh_f_t")).unwrap();
+        let e = own_motions(&path, &sk, &donor, None).err().expect("a short stroke is rejected");
+        assert!(e.contains("short of the donor's"), "{e}");
+        std::fs::write(&path, glb("re_di_set")).unwrap();
+        let own = own_motions(&path, &sk, &donor, None).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let clip = &own[&0x2f];
+        assert_eq!((clip.length, donor[&0x2f].length), (30.0, 90.0));
+        // the post-point timeline sets it once, not looping; the transition runs on well past both clips
+        let mut mo = character::Motion::default();
+        mo.set(0x2f, 1.0, false, None, 0);
+        for _ in 0..200 {
+            (mo.drawn.speed, mo.drawn.looping) = (mo.clock.speed, mo.clock.looping);
+            mo.clock.tick(donor[&0x2f].length);
+            mo.drawn.tick(clip.length);
+        }
+        assert_eq!((mo.clock.sampled, mo.drawn.sampled), (90.0, 30.0));
+        let last = clip.sample(0, clip.wrap(mo.drawn.sampled, mo.drawn.looping)).0.unwrap();
+        assert!((last[1].abs() - half).abs() < 1e-6 && (last[3] - half).abs() < 1e-6, "held at the last key: {last:?}");
     }
 
     /// A packaged rerig.py mod (Fore!'s Phoebe on donor 6) plays the forehand and run without breaking up.
