@@ -88,6 +88,31 @@ pub struct Order {
 
 static ORDER: Mutex<Order> = Mutex::new(Order { order: Vec::new(), off: Vec::new() });
 
+/// M5d: what a pack's `mod.json` may say it covers (`"covers"`) and what kind of change it is (`"look"`), as the
+/// store's filters name them; the place in each is what `meta.json` carries. Either may be left out.
+pub const COVERS: [&str; 5] = ["everything", "courts", "characters", "menus", "mixed"];
+pub const LOOKS: [&str; 3] = ["upscale", "recolour", "new"];
+
+/// M5d: a manifest's `"covers"` / `"look"` as its place in [`COVERS`] / [`LOOKS`] (any case; `recolor` too).
+pub fn tag(j: &serde_json::Value, k: &str) -> Option<u8> {
+    let w = j[k].as_str()?.trim().to_ascii_lowercase().replace("recolor", "recolour").replace("menus & hud", "menus");
+    let l: &[&str] = if k == "covers" { &COVERS } else { &LOOKS };
+    l.iter().position(|t| *t == w || w.starts_with(&format!("{t} "))).map(|i| i as u8)
+}
+
+/// M5d: `dir` (a pack just installed from the store) at the top of the order, switched on; the others keep theirs.
+pub fn on_top(root: &Path, dir: &Path) {
+    let rows: Vec<(String, bool)> = ordered(root, list(root), &order()).into_iter().map(|(p, on)| (folder(root, &p.dir), on)).collect();
+    set_order(topped(rows, &folder(root, dir)));
+}
+
+/// [`on_top`]'s order: `rows` (folder and on, top first) with `top` moved first and on.
+pub fn topped(mut rows: Vec<(String, bool)>, top: &str) -> Order {
+    rows.retain(|r| r.0 != top);
+    rows.insert(0, (top.to_string(), true));
+    order_of(&rows)
+}
+
 /// The saved order.
 pub fn order() -> Order {
     ORDER.lock().unwrap().clone()
@@ -232,6 +257,15 @@ mod tests {
         assert_eq!(o2, Order { order: vec!["b".into(), "d".into(), "a".into(), "c".into()], off: vec!["d".into()] });
         assert_eq!(ids(&o2), ["b", "a", "c"]);
         assert_eq!(bytes(&list(&root)[0]), std::fs::metadata(root.join("a/textures/x-0000000000000001.png")).unwrap().len());
+        // M5d: an install from the store goes on top, on (a reinstall of an off one too)
+        let rows = vec![("a".to_string(), true), ("b".into(), false), ("c".into(), true)];
+        assert_eq!(topped(rows.clone(), "new"), Order { order: vec!["new".into(), "a".into(), "b".into(), "c".into()], off: vec!["b".into()] });
+        assert_eq!(topped(rows, "b"), Order { order: vec!["b".into(), "a".into(), "c".into()], off: vec![] });
+        let j: serde_json::Value = serde_json::from_str(r#"{"covers": "Courts", "look": "recolor"}"#).unwrap();
+        assert_eq!((tag(&j, "covers"), tag(&j, "look")), (Some(1), Some(1)));
+        let j: serde_json::Value = serde_json::from_str(r#"{"covers": "Menus & HUD", "look": "new look"}"#).unwrap();
+        assert_eq!((tag(&j, "covers"), tag(&j, "look")), (Some(3), Some(2)));
+        assert_eq!(tag(&serde_json::json!({"covers": "sky"}), "covers"), None);
         assert!(setting("texture_packs", " ../x, ok , /abs"));
         assert_eq!(order().order, ["ok"]);
         set_order(saved);

@@ -30,6 +30,13 @@ use super::{Entry, Kind, Mod, Page, RULE, UP_TOP, Up, View, mb, modstore, mods_k
 const SORTS: [&str; 3] = ["Newest", "A-Z", "Uploader"];
 /// The filter pill's groups.
 const GROUPS: [&str; 3] = ["Game", "Plays like", "Hand"];
+/// M5d: a texture pack's filter groups (plan/B372.md § Kinds): what it covers, its kind of change, its size.
+const PACK_GROUPS: [&str; 3] = ["Covers", "Kind", "Size"];
+const COVERS: [&str; 5] = ["Everything", "Courts", "Characters", "Menus & HUD", "Mixed"];
+const LOOKS: [&str; 3] = ["Upscale", "Recolour", "New look"];
+/// M5d: the Size filter's bands of a pack's download, and their upper ends.
+const SIZES: [&str; 3] = ["Under 100 MB", "100 MB to 1 GB", "Over 1 GB"];
+const SIZE_ENDS: [u64; 2] = [100 << 20, 1 << 30];
 /// The games the filter names (the most mods first); the rest are Other.
 const GAMES: usize = 6;
 /// The tile pictures kept loaded at most (the ones on view and the next screen are never dropped).
@@ -120,6 +127,10 @@ pub(super) struct Browse {
     pub game: Option<Game>,
     pub style: Option<u8>,
     pub left: bool,
+    /// M5d: a texture pack's filters: covers, kind of change and size band (`COVERS` / `LOOKS` / `SIZES` places).
+    pub covers: Option<u8>,
+    pub look: Option<u8>,
+    pub size: Option<u8>,
     pub show: Show,
     /// B448: the filter pill's group (0 Game, 1 Plays like, 2 Hand).
     pub filter: usize,
@@ -145,6 +156,8 @@ pub(super) struct Browse {
     pub tick: u32,
     /// B444: seconds the cursor has been on `Menu::sel` `.1` (a long title's slide starts over on every move).
     pub roll: (f32, usize),
+    /// M5d: where a pointer put the before/after divider on a pack's picture (its share across; None: it sweeps).
+    pub wipe: Option<f32>,
     /// The made-up store of a `sample` screen: no picture is fetched (installed ones show the select's).
     pub offline: bool,
 }
@@ -155,6 +168,9 @@ pub(super) enum Opt {
     Game(Option<Game>),
     Style(Option<u8>),
     Left(bool),
+    Covers(Option<u8>),
+    Look(Option<u8>),
+    Size(Option<u8>),
     Show(Show),
 }
 
@@ -168,13 +184,17 @@ impl Opt {
             Opt::Style(Some(s)) => ["All-round", "Baseline", "Net", "Big Server"][(*s as usize).min(3)].into(),
             Opt::Left(false) => "Either".into(),
             Opt::Left(true) => "Left-handed".into(),
+            Opt::Covers(None) | Opt::Look(None) | Opt::Size(None) => "Any".into(),
+            Opt::Covers(Some(c)) => COVERS[(*c as usize).min(COVERS.len() - 1)].into(),
+            Opt::Look(Some(c)) => LOOKS[(*c as usize).min(LOOKS.len() - 1)].into(),
+            Opt::Size(Some(c)) => SIZES[(*c as usize).min(SIZES.len() - 1)].into(),
             Opt::Show(s) => show_name(*s).into(),
         }
     }
 
     /// No filtering (the group's first option).
     fn any(&self) -> bool {
-        matches!(self, Opt::Game(None) | Opt::Style(None) | Opt::Left(false) | Opt::Show(Show::All))
+        matches!(self, Opt::Game(None) | Opt::Style(None) | Opt::Left(false) | Opt::Covers(None) | Opt::Look(None) | Opt::Size(None) | Opt::Show(Show::All))
     }
 }
 
@@ -315,13 +335,28 @@ impl View {
         (names, other || self.b.game == Some(Game::Other))
     }
 
-    /// The filter's groups on this kind tab (M8f9: play style and handedness are a character's).
+    /// The filter's groups on this kind tab (M8f9: play style and handedness are a character's; M5d: a texture pack's
+    /// are its own, a pack having no source game).
     pub(super) fn groups(&self) -> usize {
-        if self.kind == Kind::Character { 3 } else { 1 }
+        if matches!(self.kind, Kind::Character | Kind::Textures) { 3 } else { 1 }
+    }
+
+    /// Filter group `g`'s name.
+    pub(super) fn group_name(&self, g: usize) -> &'static str {
+        if self.kind == Kind::Textures { PACK_GROUPS[g.min(2)] } else { GROUPS[g.min(2)] }
     }
 
     /// Filter group `g`'s options, the no-filter one first.
     pub(super) fn options(&self, g: usize) -> Vec<Opt> {
+        if self.kind == Kind::Textures {
+            let n = [COVERS.len(), LOOKS.len(), SIZES.len()][g.min(2)] as u8;
+            let at = std::iter::once(None).chain((0..n).map(Some));
+            return match g {
+                0 => at.map(Opt::Covers).collect(),
+                1 => at.map(Opt::Look).collect(),
+                _ => at.map(Opt::Size).collect(),
+            };
+        }
         match g {
             0 => {
                 let (games, other) = self.games();
@@ -339,6 +374,9 @@ impl View {
 
     /// The option chosen in group `g` (3: Show).
     fn chosen(&self, g: usize) -> Opt {
+        if self.kind == Kind::Textures && g < 3 {
+            return [Opt::Covers(self.b.covers), Opt::Look(self.b.look), Opt::Size(self.b.size)][g].clone();
+        }
         match g {
             0 => Opt::Game(self.b.game.clone()),
             1 => Opt::Style(self.b.style),
@@ -352,6 +390,14 @@ impl View {
         let m = &e.meta;
         match o {
             Opt::Game(None) | Opt::Style(None) | Opt::Left(false) | Opt::Show(Show::All) => true,
+            Opt::Covers(None) | Opt::Look(None) | Opt::Size(None) => true,
+            // M5d: a pack that doesn't say what it covers or how passes only Any
+            Opt::Covers(Some(c)) => m.covers == Some(*c),
+            Opt::Look(Some(c)) => m.look == Some(*c),
+            Opt::Size(Some(c)) => {
+                let i = SIZE_ENDS.iter().take_while(|&&e| m.size >= e).count();
+                i == *c as usize
+            }
             Opt::Game(Some(Game::Src(s))) => m.source == *s,
             Opt::Game(Some(Game::Other)) => !games.contains(&m.source),
             // (a court or umpire has neither: those filters aren't on its tab)
@@ -388,7 +434,7 @@ impl View {
     pub(super) fn filter_words(&self) -> String {
         let g = self.b.filter.min(self.groups() - 1);
         let more = (0..self.groups()).filter(|&o| o != g && !self.chosen(o).any()).count();
-        let s = format!("{}: {}", GROUPS[g], self.chosen(g).label());
+        let s = format!("{}: {}", self.group_name(g), self.chosen(g).label());
         if more > 0 { format!("{s} +{more}") } else { s }
     }
 
@@ -402,6 +448,9 @@ impl View {
             Opt::Game(x) => self.b.game = x,
             Opt::Style(x) => self.b.style = x,
             Opt::Left(x) => self.b.left = x,
+            Opt::Covers(x) => self.b.covers = x,
+            Opt::Look(x) => self.b.look = x,
+            Opt::Size(x) => self.b.size = x,
             Opt::Show(_) => {}
         }
     }
@@ -521,6 +570,11 @@ impl View {
         let again = self.b.tapped == Some(sel);
         self.b.tapped = Some(sel);
         again
+    }
+
+    /// M5d: the pointer on strip `i` of a pack's before / after picture: the divider goes there and stays.
+    pub(in super::super) fn wipe_to(&mut self, i: u8) {
+        self.b.wipe = Some(f32::from(i.min(WIPES)) / f32::from(WIPES));
     }
 
     /// The mouse moved onto another tile: the next tap only chooses.
@@ -1131,22 +1185,32 @@ fn mod_face(m: &Menu, md: &Mod) -> Face {
 
 /// One tile `[x, y, w, h]` (`look::tile`: the cursor's white in a dark outline and a ring in the kind's accent `a`),
 /// its picture, its name across its foot, the verified ✓ at its top left, `badges` at its top right, an install's
-/// `progress` along its foot.
+/// `progress` along its foot. M5d: a texture pack's (`pack`: its count of textures, if the store says) labels its
+/// picture's halves "disc" and "pack" and has the count under its name.
 #[allow(clippy::too_many_arguments)]
-fn tile(d: &mut Draw, m: &Menu, a: [f32; 3], rect @ [x, y, w, h]: [f32; 4], on: bool, f: &Face, loading: bool, name: &str, verified: bool, badges: &[(&str, [f32; 3])], prog: Option<(Option<f32>, String)>) {
+fn tile(d: &mut Draw, m: &Menu, a: [f32; 3], rect @ [x, y, w, h]: [f32; 4], on: bool, f: &Face, loading: bool, name: &str, verified: bool, badges: &[(&str, [f32; 3])], prog: Option<(Option<f32>, String)>, pack: Option<Option<u32>>) {
     look::tile(d, rect, a, on);
     let inset = if on { 7.0 } else { 5.0 };
-    let pic = [x + inset * PX, y + inset * PY, w - 2.0 * inset * PX, h - 2.0 * inset * PY - 16.0 * PY];
+    let sub = if pack.is_some() { SUB_LINE } else { 0.0 };
+    let pic = [x + inset * PX, y + inset * PY, w - 2.0 * inset * PX, h - 2.0 * inset * PY - (16.0 + sub) * PY];
     if loading {
         let k = 60.0 + 30.0 * (m.add.b.tick as f32 * 0.12 + x * 0.02).sin();
         rounded(d, pic, 6.0, look::c(look::RULE), k);
     }
     draw_face(d, m, f, pic, a);
+    if let (Some(_), Face::Thumb(_, aspect)) = (pack, f) {
+        split_marks(d, fit(*aspect, pic), false);
+    }
     // the name across the foot
     let size = 11.5 * PY;
-    let ny = y + h - inset * PY - 14.0 * PY;
+    let ny = y + h - inset * PY - (14.0 + sub) * PY;
     let roll = on.then_some(m.add.b.roll.0);
     marquee(d, name, [x + inset * PX + 2.0 * PX, ny], size, w - 2.0 * inset * PX - 4.0 * PX, look::c(look::INK), roll);
+    if let Some(n) = pack {
+        let words = n.map_or("Texture pack".to_string(), |n| super::packs::count(n as usize));
+        let words = ellipsis(d, &words, 10.0 * PY, w - 2.0 * inset * PX - 4.0 * PX);
+        d.text(&words, x + inset * PX + 2.0 * PX, ny + 13.5 * PY, 10.0 * PY, look::c(look::MUTED));
+    }
     if verified {
         let r = 7.0 * PY;
         tick_disc(d, x + inset * PX + r, y + inset * PY + r, r, hex(0x2a5bc4));
@@ -1163,6 +1227,71 @@ fn tile(d: &mut Draw, m: &Menu, a: [f32; 3], rect @ [x, y, w, h]: [f32; 4], on: 
         }
         d.label(&words, pic[0] + pic[2] / 2.0, sy + 1.5 * PY, 10.0 * PY, pic[2] - 6.0 * PX, WHITE);
     }
+}
+
+/// M5d: a pack tile's count line under its name (mockup px).
+const SUB_LINE: f32 = 12.0;
+
+/// The whole of a picture `aspect` wide (over its height) as big as it fits in `[x, y, w, h]`, centred, as
+/// [`draw_face`] puts a thumb.
+fn fit(aspect: f32, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
+    let (pw, ph) = if aspect > w / h { (w, w / aspect) } else { (h * aspect, h) };
+    [x + (w - pw) / 2.0, y + (h - ph) / 2.0, pw, ph]
+}
+
+/// M5d: a texture pack's store picture is the disc's texture on the left and the pack's on the right, a gap of a
+/// 32nd of its height between (`modstore::before_after`): one half's share of its width.
+fn half_of(aspect: f32) -> f32 {
+    ((aspect - 1.0 / 32.0) / 2.0 / aspect).clamp(0.05, 0.5)
+}
+
+/// M5d: "disc" and "pack" on the halves of a pack's picture `[x, y, w, h]` (as drawn), at their bottom corners (`top`:
+/// their top ones, clear of the detail's title).
+fn split_marks(d: &mut Draw, [x, y, w, h]: [f32; 4], top: bool) {
+    let by = if top { y + 4.0 * PY } else { y + h - 10.5 * PY - 9.0 * PY };
+    let lw = d.width("disc", 10.5 * PY) + 12.0 * PX;
+    look::badge(d, "disc", [x + 3.0 * PX + lw, by], look::c(look::TILE));
+    look::badge(d, "pack", [x + w - 3.0 * PX, by], look::c(look::YELLOW));
+}
+
+/// M5d: the divider's places a pointer can put it at (strips across the picture).
+pub(super) const WIPES: u8 = 24;
+
+/// M5d: the chosen pack's before/after picture in `box` (the store's picture: the disc's texture, a gap, the
+/// pack's): the disc's half left of the divider at share `k`, the pack's right of it, both from the same place in
+/// their halves, so dragging it wipes one over the other; strips over it put the divider under the pointer
+/// (`Act::Wipe`).
+fn before_after(d: &mut Draw, slot: u32, aspect: f32, b: [f32; 4], k: f32) {
+    let half = half_of(aspect);
+    // one half on screen, its own shape (a mockup x px is PX / PY of a y px)
+    let [x, y, w, h] = fit(aspect * half * PY / PX, b);
+    let k = k.clamp(0.0, 1.0);
+    let cut = x + w * k;
+    if k > 0.0 {
+        d.q(Tex::Thumb(slot), [0.0, 0.0, half * k, 1.0], [x, y, w * k, h], WHITE, 128.0);
+    }
+    if k < 1.0 {
+        d.q(Tex::Thumb(slot), [1.0 - half * (1.0 - k), 0.0, half * (1.0 - k), 1.0], [cut, y, w * (1.0 - k), h], WHITE, 128.0);
+    }
+    // the divider: a white bar in a dark rim, a round handle at its middle
+    rounded(d, [cut - 2.0 * PX, y, 4.0 * PX, h], 2.0, look::c(look::INK), 128.0);
+    rounded(d, [cut - 1.0 * PX, y, 2.0 * PX, h], 1.0, WHITE, 128.0);
+    let r = 9.0 * PY;
+    rounded(d, [cut - r - 1.5 * PX, y + h / 2.0 - r - 1.5 * PY, 2.0 * r + 3.0 * PX, 2.0 * r + 3.0 * PY], r / PY + 1.5, look::c(look::INK), 128.0);
+    rounded(d, [cut - r, y + h / 2.0 - r, 2.0 * r, 2.0 * r], r / PY, WHITE, 128.0);
+    d.centred("<>", cut, y + h / 2.0 - 6.0 * PY, 12.0 * PY, look::c(look::INK));
+    split_marks(d, [x, y, w, h], true);
+    let n = WIPES as usize + 1;
+    for i in 0..n {
+        let sw = w / WIPES as f32;
+        d.hit([x + sw * (i as f32 - 0.5), y, sw, h], Act::Wipe(i as u8));
+    }
+}
+
+/// M5d: the divider's share across the chosen pack's picture: where a pointer put it, else sweeping slowly side to
+/// side (a pad has ←→ for the tiles).
+fn wipe_at(v: &View) -> f32 {
+    v.b.wipe.unwrap_or_else(|| 0.5 + 0.35 * (v.b.tick as f32 / 60.0 * 0.9).sin())
 }
 
 /// B444: still this long at each end of a long title's slide, which goes this fast (px a second).
@@ -1442,7 +1571,7 @@ fn strip(d: &mut Draw, m: &Menu, l: &Lay) {
         let sw = d.width("Uploader", size) + 50.0 * PX;
         let fw = (d.width(&filter, size) + 50.0 * PX).clamp(150.0 * PX, 260.0 * PX).min(w * 0.5);
         rx -= sw + gap + fw;
-        let unfiltered = v.b.game.is_none() && v.b.style.is_none() && !v.b.left;
+        let unfiltered = (0..v.groups()).all(|g| v.chosen(g).any());
         for (k, (b, word, dim)) in [([rx, ry, sw, h], sort.to_string(), false), ([rx + sw + gap, ry, fw, h], filter, unfiltered)].into_iter().enumerate() {
             let i = SHOWS.len() + k;
             let on = slot == Slot::Pill(i) && v.child.is_none();
@@ -1487,12 +1616,13 @@ fn grid_tiles(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
         if v.page == Page::Upload {
             let Some(md) = locals.get(i) else { continue };
             let badges: Vec<(&str, [f32; 3])> = v.ups.get(&md.dir).map(|u| vec![up_badge(u)]).unwrap_or_default();
-            tile(d, m, a, rect, on, &mod_face(m, md), false, &md.name, false, &badges, None);
+            tile(d, m, a, rect, on, &mod_face(m, md), false, &md.name, false, &badges, None, None);
         } else {
             let Some(e) = items.get(i) else { continue };
             let (f, loading) = entry_face(m, e);
             let badges: Vec<(&str, [f32; 3])> = state_badge(v, e).into_iter().collect();
-            tile(d, m, a, rect, on, &f, loading, &e.meta.name, e.verified, &badges, progress(v, e));
+            let pack = (e.meta.kind == Kind::Textures).then_some(e.meta.textures);
+            tile(d, m, a, rect, on, &f, loading, &e.meta.name, e.verified, &badges, progress(v, e), pack);
         }
         roster::cut(d, n0, foot);
         d.hit(hit, Act::Tile(t0 + i));
@@ -1627,6 +1757,8 @@ struct Shown {
     facts: Vec<String>,
     /// The green verified line (None: not reviewed).
     verified: Option<bool>,
+    /// M5d: its picture is a texture pack's before / after.
+    split: bool,
 }
 
 /// The chosen mod's panel: a header strip in the kind's colour holding its picture, its name outlined white at the
@@ -1671,7 +1803,11 @@ fn detail(d: &mut Draw, m: &Menu, a: [f32; 3], b @ [_, _, _, h]: [f32; 4]) {
         if sh.loading {
             rounded(d, inner, 8.0, WHITE, 40.0);
         }
-        draw_face(d, m, &sh.face, inner, WHITE);
+        match sh.face {
+            // M5d: a texture pack's before / after, the divider to drag
+            Face::Thumb(slot, aspect) if sh.split => before_after(d, slot, aspect, inner, wipe_at(v)),
+            _ => draw_face(d, m, &sh.face, inner, WHITE),
+        }
     }
     if let Some((s, rgb)) = sh.badge {
         let bw = d.width(s, 10.5 * PY) + 12.0 * PX;
@@ -1880,6 +2016,7 @@ fn shown(m: &Menu) -> Option<Shown> {
             stats: player.then(|| stats.map_or((None, None), |(st, g)| (Some(st), g))),
             facts,
             verified: None,
+            split: false,
         });
     }
     if v.packs_page() {
@@ -1898,6 +2035,7 @@ fn shown(m: &Menu) -> Option<Shown> {
             stats: None,
             facts: vec![v.pack_place(i), format!("Folder {}", r.folder), "Where two packs share a texture, the higher wins.".into()],
             verified: None,
+            split: false,
         });
     }
     let e = v.hovered(m.sel)?;
@@ -1911,11 +2049,19 @@ fn shown(m: &Menu) -> Option<Shown> {
         .join(" - ");
     // (M5c: a texture pack has no source game)
     let from = match mt.kind {
-        Kind::Textures => "A texture pack for this game".to_string(),
+        // M5d: what it replaces, what it covers and how
+        Kind::Textures => {
+            let n = mt.textures.map_or("Replaces disc textures".to_string(), |n| format!("Replaces {}", super::packs::count(n as usize)));
+            let what = [mt.covers.map(|c| COVERS[(c as usize).min(COVERS.len() - 1)]), mt.look.map(|c| LOOKS[(c as usize).min(LOOKS.len() - 1)])];
+            std::iter::once(n.as_str()).chain(what.into_iter().flatten()).collect::<Vec<_>>().join(" - ")
+        }
         _ if mt.source.is_empty() => "From another game".to_string(),
         _ => format!("From {}", mt.source),
     };
     let mut facts = vec![from, line];
+    if mt.kind == Kind::Textures && v.state(e).is_none() {
+        facts.push("Installs at the top of your texture packs, switched on".into());
+    }
     if let Some(j) = v.jobs.get(&e.key()) {
         facts.push(j.1.clone());
     }
@@ -1931,6 +2077,7 @@ fn shown(m: &Menu) -> Option<Shown> {
         stats: card(v, e),
         facts,
         verified: Some(e.verified),
+        split: mt.kind == Kind::Textures,
     })
 }
 
@@ -2001,7 +2148,7 @@ pub(super) fn info(m: &Menu) -> String {
                 Sort::Uploader => "Grouped by who shared them. Press for newest or A-Z.",
             }
             .into(),
-            Pill::Filter if v.groups() > 1 => format!("Showing {}: press for the next, Select for {}.", v.filter_words(), GROUPS[(v.b.filter + 1) % v.groups()].to_lowercase()),
+            Pill::Filter if v.groups() > 1 => format!("Showing {}: press for the next, Select for {}.", v.filter_words(), v.group_name((v.b.filter + 1) % v.groups()).to_lowercase()),
             Pill::Filter => format!("Showing {}: press for the next game.", v.filter_words()),
         },
         Slot::Tile(_) if v.packs_page() => match v.hovered(m.sel).and_then(|e| v.pack_of(e)) {

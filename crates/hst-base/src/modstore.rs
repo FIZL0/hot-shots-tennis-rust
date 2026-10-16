@@ -75,6 +75,12 @@ pub struct Meta {
     /// M5c: a texture pack's count of textures. Absent in anything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub textures: Option<u32>,
+    /// M5d: a texture pack's `mod.json` `covers` and `look` (`mods_textures::COVERS` / `LOOKS` places), Browse's
+    /// Covers and Kind filters. Absent when it doesn't say, and in anything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covers: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<u8>,
 }
 
 /// B373: a mod's kind (`meta.json` / `mod.json` `"kind"`): absent is a character, so every older entry still reads;
@@ -323,6 +329,8 @@ fn meta_of(b: &[u8], id: &str) -> Option<Meta> {
     m.costumes = m.costumes.filter(|&c| c < 1000);
     m.like = m.like.filter(|&c| c < 14);
     m.textures = m.textures.filter(|_| m.kind == Kind::Textures);
+    m.covers = m.covers.filter(|&c| m.kind == Kind::Textures && (c as usize) < crate::mods_textures::COVERS.len());
+    m.look = m.look.filter(|&c| m.kind == Kind::Textures && (c as usize) < crate::mods_textures::LOOKS.len());
     (!m.name.is_empty()).then_some(m)
 }
 
@@ -940,6 +948,8 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>, iso: &str) -> Result<Pa
         kind,
         no_upscale: !m.upscale,
         textures: pack.as_ref().map(|p| p.0),
+        covers: crate::mods_textures::tag(&j, "covers").filter(|_| pack.is_some()),
+        look: crate::mods_textures::tag(&j, "look").filter(|_| pack.is_some()),
     };
     let preview = pack.and_then(|p| p.1).or_else(|| preview_of(&files, kind));
     Ok(Package { zip, meta, preview })
@@ -1547,7 +1557,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("hst-store-pack-{}", std::process::id()));
         let src = base.join("src/hd_pack");
         std::fs::create_dir_all(src.join("textures/a")).unwrap();
-        std::fs::write(src.join("mod.json"), r#"{"standard":1,"kind":"textures","id":"hd_pack","name":"HD pack","version":"2"}"#).unwrap();
+        std::fs::write(src.join("mod.json"), r#"{"standard":1,"kind":"textures","id":"hd_pack","name":"HD pack","version":"2","covers":"courts","look":"upscale"}"#).unwrap();
         let file = |i: usize| src.join(format!("textures/a/t{i}-{}.png", picked[i].key));
         let twice = |t: &hst_data::texhash::DiscTexture, tint: bool| {
             let (w, h) = (t.width * 2, t.height * 2);
@@ -1573,6 +1583,8 @@ mod tests {
         let p = package(&m, None, iso).unwrap();
         assert_eq!((p.meta.kind, p.meta.textures, p.meta.version.as_str()), (Kind::Textures, Some(1), "2"));
         assert_eq!((p.meta.style, p.meta.hand, p.meta.costumes), (None, None, None));
+        // M5d: what it covers and its kind of change, for Browse's filters
+        assert_eq!((p.meta.covers, p.meta.look), (Some(1), Some(0)));
         // the disc's on the left, nearest-neighbour up to the pack's height, the pack's on the right
         let pic = image::load_from_memory(p.preview.as_deref().unwrap()).unwrap().into_rgba8();
         let (dw, dh) = (picked[0].width, picked[0].height);
@@ -1588,7 +1600,8 @@ mod tests {
         assert!(meta_of(&serde_json::to_vec(&Meta { kind: Kind::Character, ..big.clone() }).unwrap(), "hd_pack").is_none());
         assert!(meta_of(&serde_json::to_vec(&Meta { size: MAX_PACK_ZIP + 1, ..big }).unwrap(), "hd_pack").is_none());
         // a character's meta never carries a count
-        assert_eq!(meta_of(&serde_json::to_vec(&Meta { kind: Kind::Character, ..p.meta.clone() }).unwrap(), "hd_pack").unwrap().textures, None);
+        let ch = meta_of(&serde_json::to_vec(&Meta { kind: Kind::Character, ..p.meta.clone() }).unwrap(), "hd_pack").unwrap();
+        assert_eq!((ch.textures, ch.covers, ch.look), (None, None, None));
         assert!(Kind::Textures.cap_words().contains("2 GB") && Kind::Character.cap_words().contains("1 GB"));
         // and installs as a pack
         let root = base.join("mods");
