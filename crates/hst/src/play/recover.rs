@@ -82,6 +82,11 @@ impl Recover {
         v.dedup();
         v
     }
+
+    /// P52: `loading` is empty, without listing who (asked every tick).
+    pub fn all_loaded(&self, room: &Room) -> bool {
+        !room.seats.iter().flatten().any(|s| s.human() && !self.loaded.contains(&s.peer))
+    }
 }
 
 /// A recovery message in.
@@ -157,6 +162,17 @@ fn pressed(w: &mut World) -> Option<usize> {
     if yes { Some(sel) } else if no { Some(1) } else { None }
 }
 
+/// P52: seconds since `p` was last heard; a peer not seen yet starts counting (its name copied only then).
+fn quiet(quiet: &mut BTreeMap<String, (f32, bool)>, p: &str) -> f32 {
+    match quiet.get(p) {
+        Some(q) => q.0,
+        None => {
+            quiet.insert(p.to_string(), Default::default());
+            0.0
+        }
+    }
+}
+
 /// Each frame (`dt` real seconds): the keep-alive out, who's silent, the countdowns and answers; the notice to show
 /// (empty: none).
 pub(super) fn tick(w: &mut World, dt: f32) -> String {
@@ -191,7 +207,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     }
     let names = |room: &Room, who: &[String]| who.iter().map(|p| name(room, p)).collect::<Vec<_>>().join(", ");
     if np.me != "host" {
-        let q = r.quiet.entry("host".into()).or_default().0;
+        let q = quiet(&mut r.quiet, "host");
         let limit = if r.loaded.contains("host") { SILENT } else { LOADING };
         if q > limit + HOST_WAIT {
             np.finish(format!("The host stopped answering. The match is over.\n{score}"), false);
@@ -200,26 +216,30 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
         if q > limit {
             return format!("Waiting for the host... {} s", (limit + HOST_WAIT - q).ceil());
         }
-        let Some((who, left, ask)) = r.told.clone() else { return String::new() };
+        let Some((who, left, ask)) = &r.told else { return String::new() };
+        let (left, ask) = (*left, *ask);
         if ask && !r.answered && let Some(bot) = press {
             r.answered = true;
             np.out.push(Msg::Choose(bot));
         }
         r.ask_me = ask && !r.answered;
-        return notice(&names(&np.room, &who), left, ask, r.answered);
+        return notice(&names(&np.room, who), left, ask, r.answered);
     }
     // the host: who's away and who's back
-    let mut peers: Vec<String> = np.room.seats.iter().flatten().filter(|s| s.human() && s.peer != np.me).map(|s| s.peer.clone()).collect();
-    peers.dedup();
-    for p in peers {
-        let q = r.quiet.entry(p.clone()).or_default().0;
-        let away = r.away.contains(&p);
-        if !away && q > if r.loaded.contains(&p) { SILENT } else { LOADING } {
-            info!("online: {} went silent", name(&np.room, &p));
-            r.away.push(p);
+    let mut last = None;
+    for p in np.room.seats.iter().flatten().filter(|s| s.human() && s.peer != np.me).map(|s| s.peer.as_str()) {
+        // consecutive seats of one peer count once
+        if last.replace(p) == Some(p) {
+            continue;
+        }
+        let q = quiet(&mut r.quiet, p);
+        let away = r.away.iter().any(|x| x == p);
+        if !away && q > if r.loaded.contains(p) { SILENT } else { LOADING } {
+            info!("online: {} went silent", name(&np.room, p));
+            r.away.push(p.to_string());
         } else if away && q < SILENT {
-            info!("online: {} is answering again", name(&np.room, &p));
-            r.away.retain(|x| *x != p);
+            info!("online: {} is answering again", name(&np.room, p));
+            r.away.retain(|x| x != p);
         }
     }
     if r.away.is_empty() {

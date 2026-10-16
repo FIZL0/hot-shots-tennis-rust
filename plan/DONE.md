@@ -654,6 +654,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **T2** Direct tests for untested sim modules: oracle tests (>=10k inputs, to_bits) for `hst-sim/src/contact.rs` plane sweep and `quat.rs` matrix<->quat/slerp (t=0/1, opposite quats); a per-tick rally-state replay test for `hst-sim/src/rally.rs` against match_s05.bin (only reached through ai_rally.rs today)
 - [x] **B454** Android app: the mod store can't be read (user 2026-10-15, APK built 19:00); find why the store listing fails natively on Android (network/TLS/storage path) and fix it → modstore.rs · android.rs
 - [x] **B451** Umpire picker over the players (user 2026-10-15, TOP PRIORITY, after B450): same panel as B450 for Umpire (board 'Concept v4: Umpire pressed' on https://claude.ai/artifact/6kpFeK6ya6YUJ66BN9Bjzk, picker=umpire): stock row (Random first), mods row only when installed, each scrolling on its own; face + name + source per card; mod umpires with a voice preview carry a '△ voice' tag and the legend adds △ Hear voice (covers B431) → play/main_menu/umpire_mods.rs · play/main_menu/confirm.rs · play/main_menu/online/lobby.rs · play/main_menu/legend.rs
+- [x] **P52** Per-frame clones in the app: lobby Room deep-copied twice a frame (`play/main_menu/online.rs` settle/align: take() and put back), face morphs allocate 3 buffers per mesh per frame (`effects.rs` morph_on_cpu: write positions in place, same op order), per-tick string/list copies in `play/recover.rs` told/quiet and `play/netplay.rs` mine/loaded (borrow, copy only on insert)
 
 
 ### Shots

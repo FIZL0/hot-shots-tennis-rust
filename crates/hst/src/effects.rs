@@ -7,7 +7,7 @@
 //! Also the landing markers from `PCDATA/PCCG0.XB`: the red one where a shot is aimed, the yellow one where a lob
 //! can be smashed.
 
-use bevy::mesh::morph::MorphWeights;
+use bevy::mesh::{VertexAttributeValues, morph::MorphWeights};
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 use hst_data::{ani, iso::Iso, mdl, mor, mtl::{self, Blend}, xb::Archive};
@@ -190,15 +190,19 @@ pub fn morph_on_cpu(mut parts: Query<(&mut CpuMorph, &Mesh3d)>, weights: Query<&
         if m.last == w.weights() {
             continue;
         }
-        let mut pos = m.base.clone();
+        if m.last.len() == w.weights().len() {
+            m.last.copy_from_slice(w.weights());
+        } else {
+            m.last = w.weights().to_vec();
+        }
+        let Some(mut mesh) = meshes.get_mut(&mesh.0) else { continue };
+        // Written in place (no buffers per frame): per vertex base, then each nonzero target's offset in target order.
+        let Ok(Some(VertexAttributeValues::Float32x3(pos))) = mesh.try_attribute_mut_option(Mesh::ATTRIBUTE_POSITION) else { continue };
+        pos.iter_mut().zip(&m.base).for_each(|(p, b)| *p = b.to_array());
         for (t, &k) in m.targets.iter().zip(w.weights()) {
             if k != 0.0 {
-                pos.iter_mut().zip(t).for_each(|(p, d)| *p += *d * k);
+                pos.iter_mut().zip(t).for_each(|(p, d)| *p = (Vec3::from_array(*p) + *d * k).to_array());
             }
-        }
-        m.last = w.weights().to_vec();
-        if let Some(mut mesh) = meshes.get_mut(&mesh.0) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos.into_iter().map(|p| p.to_array()).collect::<Vec<_>>());
         }
     }
 }
