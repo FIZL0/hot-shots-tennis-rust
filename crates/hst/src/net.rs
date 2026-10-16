@@ -619,6 +619,10 @@ pub enum Msg {
     /// the host with `from` and `name` empty; the host fills them in (the sender's peer and lobby name), cleans and
     /// rate-limits it and passes it to everyone else.
     Chat { from: String, name: String, text: String },
+    /// B460: in the lobby, the player in `seat` emotes (`dir`: the right stick's flick, 0..3 up / down / left / right)
+    /// on its card's model. A guest's goes to the host, which checks the seat is that guest's, rate-limits it
+    /// ([`EMOTE_GAP`]) and passes it to everyone else; never in the match's input.
+    Emote { seat: u8, dir: u8 },
 }
 
 impl Msg {
@@ -796,6 +800,8 @@ pub enum Cmd {
     Vanilla(bool),
     /// M20: a chat line to everyone else in the lobby or match.
     Chat(String),
+    /// B460: this machine's player in seat `.0` emotes (`.1`: the flick) in the lobby.
+    Emote(u8, u8),
 }
 
 /// What the network tells the app.
@@ -828,6 +834,9 @@ pub enum Event {
     /// M20: another peer's chat line (sender's peer, name, text), cleaned by the host. `Net::poll` keeps these for
     /// `Net::chats`.
     Chat { from: String, name: String, text: String },
+    /// B460: another peer's player in a seat emoted in the lobby (`Msg::Emote`). `Net::poll` keeps these for
+    /// `Net::emotes`.
+    Emote { seat: u8, dir: u8 },
 }
 
 /// The network thread's handle (a Bevy resource in the menu).
@@ -837,6 +846,8 @@ pub struct Net {
     events: std::sync::Mutex<mpsc::Receiver<Event>>,
     /// M20: the chat lines `poll` took out, for `chats`; whether this machine is in a lobby or match (chat is open).
     chats: std::sync::Mutex<Vec<(String, String, String)>>,
+    /// B460: the lobby emotes `poll` took out (seat, flick), for `emotes`.
+    emotes: std::sync::Mutex<Vec<(u8, u8)>>,
     in_room: std::sync::atomic::AtomicBool,
 }
 
@@ -858,7 +869,7 @@ impl Net {
         // the browser: a task on the page's event loop
         #[cfg(target_arch = "wasm32")]
         n0_future::task::spawn(run(cfg, cmd_rx, ev));
-        Net { cmd, events: events.into(), chats: Default::default(), in_room: Default::default() }
+        Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default() }
     }
 
     /// A `Net` with no network behind it: what it's told to send comes out of the receiver (tests).
@@ -866,7 +877,7 @@ impl Net {
     pub fn wired() -> (Net, amp::UnboundedReceiver<Cmd>) {
         let (cmd, rx) = amp::unbounded_channel();
         let (_, events) = mpsc::channel();
-        (Net { cmd, events: events.into(), chats: Default::default(), in_room: Default::default() }, rx)
+        (Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default() }, rx)
     }
 
     /// This test `Net` in a lobby (`in_room`), as a `Room` or `Hosting` event would put it.
@@ -895,6 +906,11 @@ impl Net {
         std::mem::take(&mut self.chats.lock().unwrap())
     }
 
+    /// B460: the other peers' lobby emotes (seat, flick) heard since the last call.
+    pub fn emotes(&self) -> Vec<(u8, u8)> {
+        std::mem::take(&mut self.emotes.lock().unwrap())
+    }
+
     /// M20: this machine is in a lobby or its match (seated or hosting).
     pub fn in_room(&self) -> bool {
         self.in_room.load(std::sync::atomic::Ordering::Relaxed)
@@ -913,6 +929,10 @@ impl Net {
             }
             if let Event::Chat { from, name, text } = e {
                 self.chats.lock().unwrap().push((from, name, text));
+                continue;
+            }
+            if let Event::Emote { seat, dir } = e {
+                self.emotes.lock().unwrap().push((seat, dir));
                 continue;
             }
             v.push(e);
@@ -1542,6 +1562,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     let mut wants: std::collections::HashMap<u64, Vec<String>> = Default::default();
     let mut ready: std::collections::HashSet<String> = Default::default();
     let mut rates = Rates::default();
+    let mut emoted = [None; 4];
     let deliver = |to: &str, h: u64, b: &std::sync::Arc<Vec<u8>>, joined: &[(String, Link, Conn)]| {
         if to == "host" {
             cx.say(Event::Pack(h, b.to_vec()));
@@ -1745,6 +1766,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     packs.insert(h, b);
                 }
                 Guest::Said(peer, Msg::Chat { text, .. }) => chat(cx, &peer, &text, &room.names, &joined, &mut rates),
+                Guest::Said(peer, Msg::Emote { seat, dir }) => emote(cx, &peer, seat, dir, &room, &joined, &mut emoted),
                 Guest::Said(peer, Msg::Pong(sent)) => {
                     rtt.insert(peer.clone(), Duration::from_micros(micros(t0).saturating_sub(sent)));
                     let r = recent.entry(peer.clone()).or_default();
@@ -1909,6 +1931,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                 }
                 Some(Cmd::Chat(t)) => chat(cx, "host", &t, &room.names, &joined, &mut rates),
+                Some(Cmd::Emote(seat, dir)) => emote(cx, "host", seat, dir, &room, &joined, &mut emoted),
                 Some(Cmd::Want(h)) => {
                     if let Some(b) = want("host", h, &room, &joined, &mut packs, &mut wants) {
                         deliver("host", h, &b, &joined);
@@ -2101,6 +2124,28 @@ fn chat(cx: &Ctx, from: &str, text: &str, names: &std::collections::BTreeMap<Str
         && let Msg::Chat { from, name, text } = m
     {
         cx.say(Event::Chat { from, name, text });
+    }
+}
+
+/// B460: the least time between two emotes of one seat the host passes on (shorter than any emote's motion, so it
+/// only drops a flood: the app's own limit is the motion's length, as in a match).
+pub const EMOTE_GAP: Duration = Duration::from_millis(500);
+
+/// B460: peer `from`'s player in `seat` emotes `dir` (`"host"`: this machine's): only a seat that peer holds, a
+/// flick 0..3, at most one per seat each [`EMOTE_GAP`] (`last`: each seat's last), to every other peer, and a
+/// guest's to this app too.
+fn emote(cx: &Ctx, from: &str, seat: u8, dir: u8, room: &Room, joined: &[(String, Link, Conn)], last: &mut [Option<n0_future::time::Instant>; 4]) {
+    let held = room.seats.get(seat as usize).and_then(Option::as_ref).is_some_and(|s| s.peer == from);
+    let now = n0_future::time::Instant::now();
+    let Some(l) = last.get_mut(seat as usize).filter(|_| held && dir < 4) else { return };
+    if l.is_some_and(|t| now.saturating_duration_since(t) < EMOTE_GAP) {
+        return;
+    }
+    *l = Some(now);
+    let m = Msg::Emote { seat, dir };
+    joined.iter().filter(|(p, ..)| p != from).for_each(|(_, l, _)| l.send(&m));
+    if from != "host" {
+        cx.say(Event::Emote { seat, dir });
     }
 }
 
@@ -2304,6 +2349,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 }
                 Ok(Msg::Ping(t)) => link.send(&Msg::Pong(t)),
                 Ok(Msg::Chat { from, name, text }) if seated => cx.say(Event::Chat { from, name, text }),
+                Ok(Msg::Emote { seat, dir }) if seated && !playing => cx.say(Event::Emote { seat, dir }),
                 Ok(m) if playing && m.in_match() => cx.say(Event::Match(m)),
                 Ok(Msg::Refused(why)) => {
                     cx.say(Event::Failed(format!("Refused: {why}")));
@@ -2333,6 +2379,7 @@ async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unboun
                 Some(Cmd::Cancel) => link.send(&Msg::Cancel),
                 Some(Cmd::Live(l)) => link.send(&Msg::Live(l)),
                 Some(Cmd::Chat(text)) => link.send(&Msg::Chat { from: String::new(), name: String::new(), text }),
+                Some(Cmd::Emote(seat, dir)) if !playing => link.send(&Msg::Emote { seat, dir }),
                 Some(Cmd::Picks(p)) => {
                     link.send(&Msg::Picks(p.clone()));
                     picks = p;
@@ -3576,6 +3623,73 @@ mod tests {
             assert_eq!(heard(&bev, 1500).await, [ann.clone(), host.clone()]);
             assert_eq!(heard(&hev, 0).await, [ann]);
             assert_eq!(heard(&aev, 0).await, [host]);
+        });
+    }
+
+    /// B460: lobby emotes through the host: everyone else sees a seat's emote; a guest can't emote for a seat it
+    /// doesn't hold, a flick past 3 is dropped, and a second within `EMOTE_GAP` of the seat's last is too.
+    #[test]
+    fn emotes_in_the_lobby() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = |name: &str| {
+                let name = name.to_string();
+                let bootstrap = testnet.bootstrap.clone();
+                async move {
+                    let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                    let (tx, rx) = mpsc::channel();
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), relays: false }, rx)
+                }
+            };
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            /// The emotes heard within `ms` (seat, flick).
+            async fn seen(ev: &mpsc::Receiver<Event>, ms: u64) -> Vec<(u8, u8)> {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                ev.try_iter().filter_map(|e| if let Event::Emote { seat, dir } = e { Some((seat, dir)) } else { None }).collect()
+            }
+            let ((hcx, hev), (acx, aev), (bcx, bev)) = (cx("Host").await, cx("Ann").await, cx("Bob").await);
+            let (hcmd, mut hrx) = amp::unbounded_channel();
+            let (acmd, mut arx) = amp::unbounded_channel();
+            let (bcmd, mut brx) = amp::unbounded_channel();
+            let mut r = room(true);
+            r.take("host", &[Pick::disc(0, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            let c2 = code.clone();
+            tokio::spawn(async move { join(&acx, &code, vec![Pick::disc(1, 0)], &mut arx).await });
+            next(&aev, |e| matches!(e, Event::Room(_))).await;
+            tokio::spawn(async move { join(&bcx, &c2, vec![Pick::disc(2, 0)], &mut brx).await });
+            let Event::Room(r) = next(&hev, |e| matches!(e, Event::Room(r) if r.open() == 1)).await else { unreachable!() };
+            next(&bev, |e| matches!(e, Event::Room(_))).await;
+            let seat = |name: &str| r.seats.iter().position(|s| s.as_ref().is_some_and(|s| r.names.get(&s.peer).map(String::as_str) == Some(name))).unwrap() as u8;
+            let (ann, host) = (seat("Ann"), seat("Host"));
+            // Ann's own seat; her forged one for the host's seat, a flick out of range, the same seat again at once
+            acmd.send(Cmd::Emote(ann, 2)).unwrap();
+            acmd.send(Cmd::Send(Msg::Emote { seat: host, dir: 0 })).unwrap();
+            acmd.send(Cmd::Emote(ann, 7)).unwrap();
+            acmd.send(Cmd::Emote(ann, 1)).unwrap();
+            hcmd.send(Cmd::Emote(host, 3)).unwrap();
+            let mut b = seen(&bev, 1500).await;
+            b.sort();
+            let mut want = vec![(ann, 2), (host, 3)];
+            want.sort();
+            assert_eq!(b, want);
+            assert_eq!(seen(&hev, 0).await, [(ann, 2)]);
+            assert_eq!(seen(&aev, 0).await, [(host, 3)]);
+            // past the gap the seat's next one goes through
+            acmd.send(Cmd::Emote(ann, 1)).unwrap();
+            assert_eq!(seen(&bev, 1500).await, [(ann, 1)]);
         });
     }
 
