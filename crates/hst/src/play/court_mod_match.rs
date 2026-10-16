@@ -45,7 +45,20 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
     if !Path::new(ISO).is_file() || !Path::new(MOD).is_dir() {
         return eprintln!("no ISO or no {MOD}, skipped");
     }
-    let court = crate::mods_court::read(Path::new(MOD)).unwrap();
+    let mut court = crate::mods_court::read(Path::new(MOD)).unwrap();
+    // M112: Get a Grip's courts come without its people; the people pipeline (M8f7) is checked with two stand-ins,
+    // the mod's own sky as their model, cheering a short wav
+    assert_eq!(court.people, None, "a Get a Grip court brought its people");
+    let wav = std::env::temp_dir().join(format!("hst-court-people-{}.wav", std::process::id()));
+    // RIFF, WAVE, fmt (PCM, mono, 22050 Hz, 16 bit), four samples
+    let w = [&b"RIFF"[..], &44u32.to_le_bytes(), b"WAVEfmt ", &16u32.to_le_bytes(), &[1, 0, 1, 0, 0x22, 0x56, 0, 0, 0x44, 0xac, 0, 0, 2, 0, 16, 0], b"data", &8u32.to_le_bytes(), &[0, 1, 0, 2, 0, 3, 0, 4]].concat();
+    std::fs::write(&wav, w).unwrap();
+    let person = |x: f32| crate::mods_court::Person { model: 0, pos: Vec3::new(x, 0.0, -20.0), facing: Vec2::Y, role: crate::mods_court::Role::Gallery };
+    court.people = Some(crate::mods_court::People {
+        models: vec![("sky".into(), Path::new(MOD).join("sky.glb"), true)],
+        people: vec![person(-2.0), person(2.0)],
+        sounds: vec![("cheer".into(), vec![wav.clone()])],
+    });
     let n = court.layout as usize + 1;
     let (mut disc, _) = app(n, None);
     let (mut modded, sound) = app(n, Some(&court));
@@ -76,6 +89,7 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
         }
     }
     assert!(points >= 2, "only {points} points played");
+    std::fs::remove_file(&wav).ok();
     // M8f7: the mod's people stand there, reacted to those points and have their cue sounds
     let (placed, reacted, sounds) = npcs::court_people_seen(modded.world_mut());
     let want = court.people.as_ref().map_or(0, |p| p.people.len());

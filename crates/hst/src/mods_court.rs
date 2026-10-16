@@ -204,11 +204,15 @@ pub fn read(dir: &Path) -> Result<Court, String> {
         }
         ambience.push(Loop { path, at: span(&j["ambience_loop"][n]) });
     }
+    let source: String = j["source"].as_str().unwrap_or("").split(" (").next().unwrap_or("").trim().chars().take(64).collect();
+    // M112: Get a Grip's chibi gallery looks out of place next to HST's cast; the mods repo no longer exports it, and
+    // a court pack built before that keeps its court, props and sound but not its people
+    let with_people = source != GET_A_GRIP && crate::modfs::is_file(&dir.join("npcs.json"));
     Ok(Court {
         dir: dir.to_path_buf(),
         id: text("id")?,
         name: text("name")?,
-        source: j["source"].as_str().unwrap_or("").split(" (").next().unwrap_or("").trim().chars().take(64).collect(),
+        source,
         layout,
         light,
         sky: crate::modfs::is_file(&dir.join("sky.glb")),
@@ -216,9 +220,12 @@ pub fn read(dir: &Path) -> Result<Court, String> {
         bgm,
         ambience,
         lens_flare: j["lens_flare"].as_str().filter(|f| crate::modfs::plain(f)).map(|f| dir.join(f)).filter(|p| crate::modfs::is_file(p)),
-        people: crate::modfs::is_file(&dir.join("npcs.json")).then(|| people(dir).map_err(|e| warn!("{e}")).ok()).flatten(),
+        people: with_people.then(|| people(dir).map_err(|e| warn!("{e}")).ok()).flatten(),
     })
 }
+
+/// The `source` (up to its first " (") of the mods repo's Get a Grip courts.
+const GET_A_GRIP: &str = "Hot Shots Tennis: Get a Grip";
 
 /// Every court mod under `root` (`mods::dirs`' order); a broken one is left out with its reason logged.
 pub fn list(root: &Path) -> Vec<Court> {
@@ -254,8 +261,10 @@ mod tests {
             r#"{"standard":1,"kind":"court","id":"gag_c01","name":"Hill","source":"Hot Shots Tennis: Get a Grip (PSP) court01","layout":5,
                "light":{"sun":[0,-2,0],"sun_colour":[0.7,0.8,0.5],"ambient":[1,1,1],"fill":[1,0,0],"fill_colour":[0,0.2,0.7],"fog":{"colour":[0.5,0.6,0.7],"near":20,"far":300,"amount":[0,0.8]}},
                "bgm_loop":[100,900],"ambience_loop":[[5,50]]}"#,
-            &["court.glb", "sky.glb", "sound/bgm.wav", "sound/ambience_0.wav", "sound/ambience_1.wav"],
+            &["court.glb", "sky.glb", "sound/bgm.wav", "sound/ambience_0.wav", "sound/ambience_1.wav", "npcs.json", "fan.glb"],
         );
+        // M112: an older Get a Grip pack's people are left out
+        std::fs::write(ok.join("npcs.json"), r#"{"models":{"fan":"fan.glb"},"people":[{"model":"fan","pos":[0,0,20]}]}"#).unwrap();
         put("pack/plain", r#"{"standard":1,"kind":"court","id":"plain","name":"Plain","layout":0}"#, &["court.glb"]);
         put("bad_layout", r#"{"standard":1,"kind":"court","id":"x","name":"X","layout":11}"#, &["court.glb"]);
         put("no_glb", r#"{"standard":1,"kind":"court","id":"y","name":"Y","layout":2}"#, &[]);
@@ -268,6 +277,7 @@ mod tests {
         assert_eq!(l.fog, Some(Fog { colour: Vec3::new(0.5, 0.6, 0.7), near: 20.0, far: 300.0, amount: [0.0, 0.8] }));
         assert_eq!(c.bgm.as_ref().map(|b| b.at), Some([100, 900]));
         assert_eq!(c.ambience.iter().map(|a| a.at).collect::<Vec<_>>(), [[5, 50], [0, 0]]);
+        assert_eq!(c.people, None);
         let plain = read(&root.join("pack/plain")).unwrap();
         assert_eq!((plain.light, plain.bgm, plain.ambience.len()), (None, None, 0));
         assert!(read(&root.join("bad_layout")).unwrap_err().contains("`layout`"));
