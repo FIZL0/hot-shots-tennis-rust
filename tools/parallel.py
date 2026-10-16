@@ -249,7 +249,9 @@ def start(n, task):
     brief = sp.run([os.path.join(ROOT, 'tools/ctx.py'), 'brief', tid], cwd=d, capture_output=True, text=True).stdout
     prompt = PROMPT.format(id=tid, n=n, hold=MAX_HOLD // 60) + f' Its brief (tools/ctx.py brief {tid}) follows, so ' \
              f"don't gather it again.\n\n{brief}"
-    cmd = shlex.join(['claude', prompt, '--session-id', sid, '--permission-mode', 'bypassPermissions',
+    # the prompt goes through a file: tmux refuses a command over ~16 KB, and a long brief (M8f: 16 KB) passes that
+    open(pf := os.path.join(NOTES, f'slot{n}.prompt'), 'w').write(prompt)
+    cmd = 'claude "$(cat ' + shlex.quote(pf) + ')" ' + shlex.join(['--session-id', sid, '--permission-mode', 'bypassPermissions',
                       '--disallowedTools', 'AskUserQuestion', '--model', 'opus', *LEAN, '--settings', json.dumps({'hooks': {'Stop': stop, 'StopFailure': stop}})])
     p = pane(f's{n}', d, cmd, [f'HST_PCSX2_MAX_HOLD={MAX_HOLD}', f'HST_PCSX2={n}', 'HST_BG=1',
                     # each slot builds in its own worktree's target/: cargo names a workspace crate's output by its
