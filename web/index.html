@@ -627,7 +627,8 @@ addEventListener('unhandledrejection', e => {
 // B260: a hidden tab gets no animation frames and the game's loop (Bevy on winit) only steps on them, so while the
 // tab is hidden and no match is on (`web.rs` sets hstMatch), a frame comes from a timer instead (the browser throttles
 // it to about one a second): store downloads and their queue, the lobby and its keep-alives go on. A match holds
-// while hidden (the others see "Waiting for …", `play/recover.rs`).
+// while hidden: the others see "… switched away" (B162: `net/keeper.rs` keeps telling them on a timer of its own,
+// `play/recover.rs` holds the match up to 5 min).
 // P58: a window the compositor doesn't show (another workspace, covered: Chrome on Wayland/Hyprland) gets no frames
 // at all while the page still says it's visible; such a window is unfocused, so there, outside a match, a frame that
 // hasn't come in 250 ms comes from a timer too. `hstTimerFrame` says which kind this one is (stall.rs doesn't count a

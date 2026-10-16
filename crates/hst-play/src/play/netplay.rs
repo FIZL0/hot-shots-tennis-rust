@@ -493,6 +493,7 @@ fn setup(mut commands: Commands, np: Option<Res<Netplay>>) {
 /// Each frame: the network, the pause going out, the stall/end text, and closing the match after the end.
 fn watch(w: &mut World) {
     pump(w);
+    super::recover::keep(w);
     super::rollback::poll(w);
     // a long frame (loading, a hidden tab) isn't everyone else going silent
     let dt = w.resource::<Time<Real>>().delta_secs().min(0.25);
@@ -1707,6 +1708,106 @@ mod tests {
             });
             in_step(&[&apps[0]], 600);
             assert_eq!(apps[0].world().resource::<Pads>().seats, Some([true, true, false, false]));
+        }
+
+        /// B162: peer `who` (of `host`, `h`, `g`) switches away at tick 600 for `away` seconds: its frames stop and its
+        /// keeper says `Hidden` once a second; everyone else holds the match with "… switched away" (no bot question,
+        /// nobody ends it), and back, it plays on in step with them. Returns the apps and the notices 20 s in.
+        fn switched_away(who: usize, away: f32) -> (Vec<App>, Vec<String>) {
+            let (gone, back, s) = (600, 600 + (away * 60.0) as u32, |x: f32| (x * 60.0) as u32);
+            let peer = ["host", "h", "g"][who];
+            let mut said = Vec::new();
+            let apps = peers(false, back + 900, |round, apps, live| {
+                if round == gone {
+                    live[who] = false;
+                }
+                if round == back {
+                    live[who] = true;
+                }
+                if (gone + 30..back).contains(&round) && (round - gone) % 60 == 30 {
+                    for i in (0..3).filter(|&i| i != who) {
+                        take(apps[i].world_mut(), Event::Match(Msg::Hidden(peer.into())));
+                    }
+                }
+                if round == gone + s(20.0) {
+                    said = (0..3).filter(|&i| i != who).map(|i| notice(&mut apps[i])).collect();
+                    for a in apps.iter() {
+                        assert!(!a.world().resource::<Netplay>().recover.ask_me);
+                    }
+                }
+            });
+            for a in &apps {
+                let np = a.world().resource::<Netplay>();
+                assert_eq!(np.end, None, "{}", np.me);
+                assert!(np.recover.hidden.is_empty() && np.recover.away.is_empty(), "{}", np.me);
+            }
+            in_step(&apps.iter().collect::<Vec<_>>(), 600);
+            (apps, said)
+        }
+
+        /// B162: a guest tabbed out for 30 s (2 min: `a_player_switched_away_for_2_min_comes_back`).
+        #[test]
+        fn a_player_switched_away_comes_back() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (mut apps, said) = switched_away(2, 30.0);
+            assert!(said.iter().all(|t| t.starts_with("g switched away from the game.\nWaiting for them to come back... 4:4")), "{said:?}");
+            assert_eq!(notice(&mut apps[0]), "");
+        }
+
+        /// B162: the host tabbed out for 30 s: the guests hold too (a silent host ends it after 13 s).
+        #[test]
+        fn the_host_switched_away_comes_back() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let (_, said) = switched_away(0, 30.0);
+            assert!(said.iter().all(|t| t.starts_with("host switched away from the game.")), "{said:?}");
+        }
+
+        /// B162, the task's 2 minutes (~1 min; `tools/check.sh -p hst-play a_player_switched_away_for_2_min -- --ignored`
+        /// after touching `recover.rs`' waits).
+        #[test]
+        #[ignore]
+        fn a_player_switched_away_for_2_min_comes_back() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            switched_away(2, 120.0);
+        }
+
+        /// B162: a player switched away for [`recover::LONG`] (forced: its wait starts 2 s short of it) is away: the
+        /// others wait [`recover::WAIT`] for it as for a silent one.
+        #[test]
+        fn a_player_switched_away_too_long_is_away() {
+            if !Path::new(ISO).is_file() {
+                return eprintln!("no ISO, skipped");
+            }
+            let s = |x: f32| (x * 60.0) as u32;
+            let mut said = Vec::new();
+            peers(false, 610 + s(5.0), |round, apps, live| {
+                if round == 600 {
+                    live[2] = false;
+                }
+                // past its last keep-alive's way here
+                if round == 610 {
+                    for a in &mut apps[..2] {
+                        take(a.world_mut(), Event::Match(Msg::Hidden("g".into())));
+                        *a.world_mut().resource_mut::<Netplay>().recover.hidden.get_mut("g").unwrap() = recover::LONG - 2.0;
+                    }
+                }
+                if round > 600 && round % 60 == 0 {
+                    for a in &mut apps[..2] {
+                        take(a.world_mut(), Event::Match(Msg::Hidden("g".into())));
+                    }
+                }
+                if round == 610 + s(1.0) || round == 610 + s(4.0) {
+                    said.push(notice(&mut apps[1]));
+                }
+            });
+            assert!(said[0].starts_with("g switched away from the game.\nWaiting for them to come back... 0:0"), "{said:?}");
+            assert!(said[1].starts_with("Waiting for g to come back... "), "{said:?}");
         }
 
         /// B196: nobody wants a bot (○ on `h`): both machines left go back to the lobby together.
