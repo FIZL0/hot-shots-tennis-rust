@@ -6,7 +6,8 @@
 //! closes; a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
 //! themselves after a few seconds); the menus' legend strip shows T / R2 L2 as Chat (B320). On a touch screen a
 //! speech-bubble button on the on-screen pad opens the box (the phone's keyboard): beside Start in the browser
-//! (`web/touch.js`, B312), beside Select in the phone apps (`play/touch_pad.rs`, [`BUTTON`]). The chat itself takes no
+//! (`web/touch.js`, B312), beside Select in the phone apps (`play/touch_pad.rs`, [`BUTTON`]); it stays up while typing
+//! (B517: a tap there then brings a put-away keyboard back), and the box moves to the top, over the keyboard. The chat itself takes no
 //! clicks or taps: nothing of it shows until a line is said, then the last few show at the bottom left, fading out,
 //! over the menus and the HUD alike.
 //! `/mute NAME` and `/unmute NAME` (or the phrases' Mute/Unmute rows) hide a player's lines on this machine. Settings
@@ -42,8 +43,20 @@ pub static HIDDEN: AtomicBool = AtomicBool::new(false);
 /// B396: the lobby's Chat button asks for the box (1: the typed line) or the pads' phrases (2).
 pub static ASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-/// The on-screen pad's chat button is up (chat on, the box and phrases closed); a tap on it stores 1 in [`ASK`].
+/// The on-screen pad's chat button is up (chat on, the phrases closed; B517: it stays up while the box is open, where
+/// a tap brings the put-away keyboard back); a tap on it stores 1 in [`ASK`].
 pub static BUTTON: AtomicBool = AtomicBool::new(false);
+
+/// B517: the box is open: the iPhone and Android apps' system keyboard is up for it (`main_menu/osk.rs` owns the
+/// window's IME flag).
+pub static TYPING: AtomicBool = AtomicBool::new(false);
+
+/// B517: the chat button was tapped with the box open: the system keyboard comes back up (put down for a frame).
+pub static RAISE: AtomicBool = AtomicBool::new(false);
+
+/// B517: played by touch with no controller (`osk::mobile`): while the box is open it sits at the top of the screen,
+/// over the device's keyboard.
+pub static TOUCH: AtomicBool = AtomicBool::new(false);
 
 /// B449: the last two lines heard (who, words; a note's who is empty), kept after they fade, for the lobby's chat box.
 pub static RECENT: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
@@ -181,8 +194,12 @@ fn input(
     chat.lines.iter_mut().for_each(|l| l.age += dt);
     chat.lines.retain(|l| l.age < LIFE);
     let on = !HIDDEN.load(Ordering::Relaxed) && net.as_ref().is_some_and(|n| n.in_room());
-    let Some(net) = net else { return phone(&mut was, false) };
+    let Some(net) = net else {
+        TYPING.store(false, Ordering::Relaxed);
+        return phone(&mut was, false);
+    };
     if !on {
+        TYPING.store(false, Ordering::Relaxed);
         (chat.open, chat.phrase) = (false, None);
         chat.draft.clear();
         net.chats();
@@ -201,6 +218,9 @@ fn input(
     let tapped = crate::web::chat_tapped() && !chat.open;
     #[cfg(not(target_arch = "wasm32"))]
     let tapped = false;
+    if chat.open && ask == 1 {
+        RAISE.store(true, Ordering::Relaxed);
+    }
     if !chat.open && (keys.just_pressed(KeyCode::KeyT) || tapped || ask == 1) {
         chat.open = true;
         typed.clear();
@@ -210,6 +230,8 @@ fn input(
         for e in typed.read().filter(|e| e.state.is_pressed()) {
             match &e.logical_key {
                 Key::Enter => send = true,
+                // B517: the iPhone's system keyboard's Return comes as a character
+                Key::Character(c) if c.contains(['\n', '\r']) => send = true,
                 Key::Escape => chat.open = false,
                 Key::Backspace => _ = chat.draft.pop(),
                 Key::Character(c) if chat.draft.chars().count() < MAX => chat.draft.push_str(c),
@@ -236,6 +258,7 @@ fn input(
         typed.clear();
     }
     let open = chat.open;
+    TYPING.store(open, Ordering::Relaxed);
     phone(&mut was, open);
     // the pads: R2 shows / steps the phrases, L2 says the one shown
     let pads: Vec<_> = pads.iter().filter(|g| crate::seats::readable(g)).collect();
@@ -274,7 +297,7 @@ fn draw(
     net: Option<Res<Net>>,
     chat: Res<Chat>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    root: Query<(Entity, &mut Visibility), With<Root>>,
+    root: Query<(Entity, &mut Visibility, &mut Node), (With<Root>, Without<Row>)>,
     mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut BackgroundColor)>,
 ) {
     let on = !HIDDEN.load(Ordering::Relaxed) && (net.is_some_and(|n| n.in_room()) || sampled());
@@ -294,7 +317,7 @@ fn draw(
         }
     }
     let mut root = root;
-    let Ok((_, mut vis)) = root.single_mut() else {
+    let Ok((_, mut vis, mut place)) = root.single_mut() else {
         if on {
             spawn(&mut commands);
         }
@@ -304,13 +327,18 @@ fn draw(
     if *vis != v {
         *vis = v;
     }
-    // B312: in the browser the on-screen pad's own chat button stands in for the label
-    let button = on && !chat.open && chat.phrase.is_none();
+    // B312: in the browser the on-screen pad's own chat button stands in for the label; B517: up while typing too
+    let button = on && chat.phrase.is_none();
     BUTTON.store(button, Ordering::Relaxed);
     #[cfg(target_arch = "wasm32")]
     crate::web::touch_chat(button);
     if !on {
         return;
+    }
+    // B517: typing by touch, the box at the top (under the on-screen pad's top row), clear of the device's keyboard
+    let (top, bottom) = if chat.open && TOUCH.load(Ordering::Relaxed) { (Val::Percent(16.0), Val::Auto) } else { (Val::Auto, Val::Percent(18.0)) };
+    if place.top != top || place.bottom != bottom {
+        (place.top, place.bottom) = (top, bottom);
     }
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
     let px = |n: f32| if tall { bevy::text::FontSize::Vw(n / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(n / 448.0 * 100.0) };
@@ -398,10 +426,14 @@ mod tests {
         assert_eq!(clean(&"x".repeat(200)).map(|s| s.len()), Some(MAX));
     }
 
+    /// The statics (`ASK`, `BUTTON`, …) are shared: one chat app at a time.
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// In a lobby, T opens the box, typed keys go into it (not to the menus' keys), Enter sends the line.
     #[test]
     fn enter_types_and_sends() {
         use bevy::input::{ButtonState, InputPlugin};
+        let _one = ONE.lock();
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, InputPlugin)).add_plugins(plugin);
         let (net, mut rx) = Net::wired();
@@ -423,6 +455,37 @@ mod tests {
         let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).filter_map(|c| if let Cmd::Chat(t) = c { Some(t) } else { None }).collect();
         assert_eq!(sent, ["hi"]);
         assert!(!app.world().resource::<Chat>().open);
+    }
+
+    /// B517: a tap on the touch chat button opens the box and the button stays up; another tap asks for the keyboard
+    /// again; the iPhone keyboard's Return (a "\n" character) sends.
+    #[test]
+    fn the_button_stays_while_typing() {
+        use bevy::input::{ButtonState, InputPlugin};
+        let _one = ONE.lock();
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, InputPlugin)).add_plugins(plugin);
+        let (net, mut rx) = Net::wired();
+        net.enter_room();
+        app.insert_resource(net);
+        app.update();
+        app.update();
+        assert!(BUTTON.load(Ordering::Relaxed));
+        ASK.store(1, Ordering::Relaxed);
+        app.update();
+        assert!(app.world().resource::<Chat>().open && TYPING.load(Ordering::Relaxed), "the tap opens the box");
+        assert!(BUTTON.load(Ordering::Relaxed), "the button stays up while typing");
+        RAISE.store(false, Ordering::Relaxed);
+        ASK.store(1, Ordering::Relaxed);
+        app.update();
+        assert!(app.world().resource::<Chat>().open && RAISE.swap(false, Ordering::Relaxed), "a second tap raises the keyboard");
+        for c in ["o", "k", "\n"] {
+            app.world_mut().write_message(KeyboardInput { key_code: KeyCode::Unidentified(bevy::input::keyboard::NativeKeyCode::Unidentified), logical_key: Key::Character(c.into()), state: ButtonState::Pressed, text: None, repeat: false, window: Entity::PLACEHOLDER });
+            app.update();
+        }
+        let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).filter_map(|c| if let Cmd::Chat(t) = c { Some(t) } else { None }).collect();
+        assert_eq!(sent, ["ok"]);
+        assert!(!app.world().resource::<Chat>().open && !TYPING.load(Ordering::Relaxed));
     }
 
     #[test]
