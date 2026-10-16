@@ -1461,10 +1461,7 @@ impl Menu {
                     out.push(Sound(1));
                 }
             }
-            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => {
-                self.net.pad = matches!(dev, Dev::Pad(_));
-                self.online_step(k, &mut out)
-            }
+            Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => self.online_step(k, &mut out),
             Screen::Mods => {
                 // B383: the search box's ✕ types in place from the keyboard, a pad gets the keyboard on screen
                 self.add.pad = matches!(dev, Dev::Pad(_));

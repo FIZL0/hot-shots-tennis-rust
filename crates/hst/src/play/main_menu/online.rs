@@ -89,8 +89,6 @@ pub struct View {
     pub spin: f32,
     /// B467: why the Online screen's own search came up empty (the lobby list couldn't be read); its card says it.
     pub why: String,
-    /// B396: the last press came from a pad (the lobby's Chat opens the phrases, not the typed line).
-    pub pad: bool,
     /// B216: the host's computer player (its seat) whose character it's picking on the select.
     pub edit: Option<usize>,
     /// The court or umpire select was opened from the lobby's settings row (closing it goes back there).
@@ -1049,8 +1047,9 @@ impl Menu {
                     // B215: a countdown, ready or not
                     self.start(out);
                 } else if item == Item::Button("Chat") {
-                    // B396: the chat box (a pad: the phrases, as R2)
-                    crate::chat::ASK.store(if self.net.pad { 2 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
+                    // B396: the chat box; B512: the typed line on a pad or a touch screen too (the R2/L2 phrases are the
+                    // match's), a second press closes it
+                    crate::chat::ASK.store(1, std::sync::atomic::Ordering::Relaxed);
                     out.push(Sound(2));
                 } else if item == Item::Button("Ready") {
                     self.net.prepared = !self.net.prepared;
@@ -1881,6 +1880,8 @@ pub(super) fn poll(
     art: Option<ResMut<super::Art>>,
 ) {
     menu.net.spin = (menu.net.spin + time.delta_secs()) % 60.0;
+    // B512: the menus are up: the chat's R2/L2 quick-chat phrases are off here
+    crate::chat::MENUS.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(net) = net {
         for e in net.poll() {
             if let Event::Start(r, me) = &e {
