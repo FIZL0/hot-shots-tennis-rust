@@ -116,6 +116,7 @@ pub fn for_match(w: &Wire, looks: Option<&Path>) -> Mod {
         motions: None,
         costume_of: None,
         skeleton: None,
+        upscale: true,
     });
     (m.donor, m.hand, m.base, m.overrides, m.ai_row) = (w.donor, w.hand, w.base, w.overrides.clone(), w.ai_row);
     m.skeleton = Some(Arc::new(w.skeleton()));
