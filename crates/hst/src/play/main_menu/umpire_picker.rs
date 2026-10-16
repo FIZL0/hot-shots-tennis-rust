@@ -9,7 +9,7 @@
 use bevy::prelude::Entity;
 
 use super::frame::{CAPTION, NAVY, PAPER, SLATE, dotted};
-use super::{Anchor, C00, CALLS, Draw, Effect, GOLD, INK, Menu, Press, RANDOM_TILE, Tex, Text, UMPIRES, WHITE, legend, pointer, umpire_mods};
+use super::{Anchor, C00, CALLS, Draw, Effect, GOLD, INK, Menu, Press, RANDOM_TILE, Tex, Text, UMPIRES, WHITE, pointer, umpire_mods};
 
 /// The panel's ground (the roster's navy) and a row's band (the court picker's).
 const GROUND: [f32; 3] = [11.0, 16.5, 30.0];
