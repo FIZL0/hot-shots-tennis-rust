@@ -793,6 +793,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **C31** Check aim.rs OPP_SMASH (3) against the decompile: rally.rs fills Look::opp_kind with Seen::kind (swing branch, 3 = dive, 4 = smash), so the singles aim's 'opponent smashed' branch may fire on a dive instead (found in C3c, research/journal/2026-10-16-c3c-readable-ai) → hst-sim/src/aim.rs · rally.rs
 - [x] **B515** iOS web host stuck on 'Waiting for a relay to put the code online (no internet?)': no iroh home relay within 30 s from Safari; needs the page's console log (Copy the error) and whether iCloud Private Relay is on — crates/hst-base/src/net.rs host()
 - [x] **B532** Mods "More by user" (user 2026-10-16): picking More by <user> in the mods browser drops every other category's count to 0; the other categories must keep their counts (or show that user's counts per category, not zeros) → `crates/hst/src/play/main_menu/mods_screen/` · `modstore.rs`
+- [x] **B530** Online mod looks broken (user 2026-10-16): lobby with 2 web browsers + desktop + Android; lobby said "Anya mod: you'll be asked to download it" but nobody was ever asked, and even the player who picked the mod saw their own stand-in (the plain donor character). The owner must always see their own selected mod; others get the ask (M2i) → `mods_online.rs` · `net.rs` · `mods.rs` · `character.rs`
 
 
 ### Shots

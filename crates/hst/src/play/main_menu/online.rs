@@ -61,6 +61,8 @@ pub struct View {
     /// B484: the prompt's cursor when it's asked over the select or the confirm (the lobby's is `sel`).
     pub ask_row: usize,
     pub ready: Option<u32>,
+    /// B530: the line-up (`Room.ver`) this machine last tried to send its custom characters' picks again for.
+    pub rewired: Option<u32>,
     /// B281: what this machine last told the host about still choosing about a mod.
     pub deciding: bool,
     /// This machine hosts the lobby; as a guest, it said it's ready.
@@ -396,6 +398,39 @@ impl Menu {
         let Some(c) = self.net.room.as_ref().filter(|_| self.net.hosting && !self.net.started).and_then(|r| r.court_mod.as_ref()).filter(|c| c.looks == 0) else { return };
         if let Some(w) = self.court_mod_wire().filter(|w| w.id == c.id && w.looks != 0) {
             net.send(Cmd::CourtMod(Some(w)));
+        }
+    }
+
+    /// B530: this machine's picks again once its custom characters' wires build. The browser reads a mod's files in
+    /// only when asked (`modfs::ready`), so a pick readied before that went out as the bare donor: every peer, this
+    /// one too, played the plain donor, and nobody was asked about its looks. Tried once per line-up; a wire that
+    /// still won't build says why.
+    fn mod_picks_out(&mut self, net: &Net) {
+        let Some(r) = self.net.room.as_ref().filter(|r| !r.vanilla && !self.net.started && !self.net.me.is_empty()) else { return };
+        if !matches!(self.screen, Screen::Lobby | Screen::Confirm) || self.net.rewired == Some(r.ver) {
+            return;
+        }
+        let held: Vec<&Pick> = r.seats.iter().flatten().filter(|s| s.peer == self.net.me).map(|s| &s.pick).collect();
+        let mine: Vec<usize> = (0..self.players()).filter(|&p| self.seats[p].is_some()).collect();
+        let own = self.own_mods();
+        // the seats hold this machine's players in order (`align`); one on its own mod whose seat has none
+        let unwired: Vec<usize> = match held.len() == mine.len() {
+            true => mine.iter().zip(&held).filter(|(_, h)| h.r#mod.is_none()).filter_map(|(&p, _)| match self.pick(p).0 {
+                super::Who::Mod(i) if i < own => Some(i),
+                _ => None,
+            }).collect(),
+            false => Vec::new(),
+        };
+        // read in first (asked again each frame until they are)
+        if unwired.is_empty() || !unwired.iter().fold(true, |ok, &i| crate::modfs::ready(&self.mods[i].dir) && ok) {
+            return;
+        }
+        self.net.rewired = Some(r.ver);
+        let picks = self.picks();
+        if picks.iter().filter(|p| p.r#mod.is_some()).count() > held.iter().filter(|p| p.r#mod.is_some()).count() {
+            net.send(Cmd::Picks(picks));
+        } else if let Some(e) = unwired.iter().find_map(|&i| Wire::of(&self.mods[i], 0).err().map(|e| (i, e))) {
+            self.net.status = format!("{} couldn't go online, so its donor plays it: {}", self.mods[e.0].name, e.1);
         }
     }
 
@@ -1473,10 +1508,16 @@ impl Menu {
             if self.net.looks.contains_key(&h) || self.net.wanted.contains(&h) || self.net.ask == Some(h) {
                 continue;
             }
-            let found = match room.mods().find(|(_, w)| w.looks == h) {
-                Some((_, w)) => mo::find(w, &self.mods, &cache),
+            let own = self.own_mods();
+            // B530: this machine's own pick always draws its own copy, whatever its pack hashes to now
+            let mine = room.mods().find(|(s, w)| s.peer == self.net.me && w.looks == h).and_then(|(_, w)| self.mods[..own].iter().find(|m| m.id == w.id));
+            let found = match (mine, room.mods().find(|(_, w)| w.looks == h)) {
+                (Some(m), _) => Some(m.dir.clone()),
+                // the browser: an installed copy's files read in first, then hashed (asked again next frame)
+                (None, Some((_, w))) if self.mods[..own].iter().any(|m| m.id == w.id && !crate::modfs::ready(&m.dir)) => continue,
+                (None, Some((_, w))) => mo::find(w, &self.mods, &cache),
                 // the court: installed (by id), or fetched before
-                None => self.room_court_dir(room).or_else(|| Some(cache.join(format!("{h:016x}"))).filter(|d| crate::modfs::is_file(&d.join("mod.json")))),
+                (None, None) =>self.room_court_dir(room).or_else(|| Some(cache.join(format!("{h:016x}"))).filter(|d| crate::modfs::is_file(&d.join("mod.json")))),
             };
             if let Some(d) = found {
                 self.net.looks.insert(h, Some(d));
@@ -1503,7 +1544,9 @@ impl Menu {
         // the court mod drawn here read in first (the browser's; asked every frame, so it stays in memory)
         let court_in = self.room_court_dir(room).is_none_or(|d| crate::modfs::ready(&d));
         let court_known = court.is_none_or(|c| self.net.looks.contains_key(&c.looks));
-        if self.net.ready != Some(room.ver) && court_in && court_known && room.mods().all(|(_, w)| self.net.looks.contains_key(&w.looks)) {
+        // B530: and the mods' looks drawn here read in (the browser's, as the court's)
+        let mods_in = room.mods().all(|(_, w)| self.net.looks.get(&w.looks).is_some_and(|d| d.as_ref().is_none_or(|d| crate::modfs::ready(d))));
+        if self.net.ready != Some(room.ver) && court_in && court_known && mods_in {
             self.net.ready = Some(room.ver);
             net.send(Cmd::Ready(room.ver));
         }
@@ -2075,6 +2118,7 @@ pub(super) fn poll(
             menu.settle(&args.iso, &net);
         }
         menu.court_looks_out(&net);
+        menu.mod_picks_out(&net);
         let d = menu.undecided();
         if d != menu.net.deciding {
             menu.net.deciding = d;
@@ -3142,6 +3186,62 @@ mod tests {
         b.net.room = None;
         b.borrow(&mut text);
         assert!(b.mods.is_empty() && text.mods.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// B530: the browser reads a mod's files in only when asked, so a pick readied before then went out as the bare
+    /// donor (every peer, the owner too, played the plain donor, and nobody was asked). Once read in it goes out again
+    /// with the mod, and the owner's own pick draws its own folder without being asked.
+    #[test]
+    fn a_mod_pick_goes_out_again_once_read_in() {
+        fn copy(from: &std::path::Path, to: &std::path::Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let p = std::fs::canonicalize(e.path()).unwrap();
+                if p.is_dir() {
+                    copy(&p, &to.join(e.file_name()));
+                } else {
+                    std::fs::copy(&p, to.join(e.file_name())).unwrap();
+                }
+            }
+        }
+        let src = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/mods/getagrip_pc00_emi"));
+        if !src.is_dir() {
+            return eprintln!("no context/mods/getagrip_pc00_emi, skipped");
+        }
+        let tmp = std::env::temp_dir().join(format!("hst-b530-{}", std::process::id()));
+        let dir = tmp.join("mods/getagrip_pc00_emi");
+        copy(src, &dir);
+        let m = crate::mods::read(&dir).unwrap();
+        // a costume still in the browser's storage
+        crate::modfs::add_lazy(&dir.join(&m.costumes[0]), 1);
+        let (net, mut rx) = Net::wired();
+        let mut a = Menu { screen: Screen::Lobby, mods: vec![m.clone()], ..default() };
+        sample(&mut a);
+        (a.net.me, a.net.go, a.settings.4) = ("host".into(), Some(Go::Code), Ask::Each);
+        a.seats[0] = Some(super::super::Dev::Keys);
+        (a.players[0].modded, a.players[0].pick) = (true, 0);
+        let p = a.picks();
+        assert_eq!((p.len(), p[0].char, p[0].r#mod.is_none()), (1, m.donor, true), "not read in: the donor alone");
+        a.net.room.as_mut().unwrap().seats[0].as_mut().unwrap().pick = p[0].clone();
+        a.mod_picks_out(&net);
+        assert!(rx.try_recv().is_err(), "still being read in");
+        crate::modfs::loaded(&dir.display().to_string());
+        a.mod_picks_out(&net);
+        let Ok(Cmd::Picks(p)) = rx.try_recv() else { panic!("sent again once read in") };
+        let w = p[0].r#mod.clone().expect("with its mod now");
+        assert_eq!((w.id.as_str(), w.looks), (m.id.as_str(), mo::hash(&mo::pack(&dir).unwrap())));
+        a.mod_picks_out(&net);
+        assert!(rx.try_recv().is_err(), "once per line-up");
+        // the host seats it: the owner draws its own folder (even with a looks hash it no longer packs to), unasked
+        let r = a.net.room.as_mut().unwrap();
+        r.seats[0].as_mut().unwrap().pick = Pick { r#mod: Some(Box::new(Wire { dir: None, looks: w.looks ^ 1, ..*w })), ..p[0].clone() };
+        r.ver += 1;
+        a.settle("/nonexistent-b530/hst.iso", &net);
+        assert_eq!((a.net.ask, a.net.looks.get(&(w.looks ^ 1))), (None, Some(&Some(dir.clone()))));
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, Cmd::Ready(_))), "settled: ready");
+        a.mod_picks_out(&net);
+        assert!(rx.try_recv().is_err(), "the seat has it: nothing to send");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
