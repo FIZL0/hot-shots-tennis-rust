@@ -62,19 +62,12 @@ vs 2 CPUs); in singles it plays the opponent. Every other player is a CPU.
 
 ## Mods
 
-Main menu → Mods adds characters, courts and umpires from inside the game, on desktop and in the browser. The store
-is the Hugging Face repo [`FIZL0/opentennis-mods`](https://huggingface.co/datasets/FIZL0/opentennis-mods).
+Main menu → Mods adds characters, courts and umpires from the store
+([`FIZL0/opentennis-mods`](https://huggingface.co/datasets/FIZL0/opentennis-mods)), on desktop and in the browser.
 
-- **Add mod** installs a mod `.zip` from your computer (the system file picker).
-- **Browse mods** lists the store's mods, each with its picture, stats card, author, handedness, costumes and size,
-  tagged *Verified* (merged), *Not reviewed* (an open upload), *Installed* or *Update*. Press one to install it; it
-  appears in the character select when done. *Refresh* fetches the list again.
-- **Upload my mod** sends one of your installed mods to the store as a pull request. Sign in once with your own
-  Hugging Face *Write* token: *Sign in* → *Open token page*, copy the token, then *Paste token* (the game reads
-  it from the clipboard; in the browser, paste it into the page with Ctrl+V first). *Signed in* → *Sign out*
-  signs out. Then a mod → *Upload*
-  uploads it: the game packs it, adds its preview and stats, and reports the pull request's URL. Other players see
-  it in Browse straight away as *Not reviewed* until it is merged.
+- **Browse mods**: pick one to install it.
+- **Upload my mod**: sign in with a Hugging Face *Write* token, then pick a mod to upload. It shows as
+  *Not reviewed* until merged.
 
 Upscaled textures: a PCSX2 texture pack made for the original game works as is, and mods can carry upscaled
 textures of their own (the "upscaled textures" setting). How to make either: [docs/DEVELOPING.md](docs/DEVELOPING.md).
