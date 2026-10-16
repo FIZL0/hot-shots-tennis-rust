@@ -13,3 +13,8 @@ ps2-float = { git = "https://github.com/FIZL0/ps2-float", tag = "v0.3.0", featur
 musl = { package = "libm", version = "0.2.16" }
 # the online resync's state transfer (hst `play/snapshot.rs`)
 serde = { version = "1", features = ["derive"] }
+
+[lints.clippy]
+# ported compares keep the original's branch: `!(a < b)` is the EE's c.lt.s + bc1f, taken for NaN too, which
+# `a >= b` isn't; spelling every one as `partial_cmp` hides which way the game branched
+neg_cmp_op_on_partial_ord = "allow"

@@ -634,7 +634,7 @@ mod tests {
         let server = [3.0, 0.0, -12.25];
         // centred: the deuce box's centre; full tilt reaches its corner exactly
         assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], || false), ([-2.0575, 0.0, 4.7], Miss::default()));
-        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], || false);
+        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2], || false);
         assert!((corner[0] + 4.115).abs() < 1e-3 && (corner[2] - 6.4).abs() < 1e-3, "{corner:?}");
         // the same aim with a late strong toss lands past the service line (fault)
         let hit = [3.0, -2.5, -12.0];

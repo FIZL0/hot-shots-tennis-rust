@@ -222,6 +222,7 @@ mod tests {
     use super::*;
 
     /// A lob from z = −10 toward +z: up at 0.1 m/frame, falling back under gravity.
+    #[allow(clippy::float_arithmetic)] // test input built on the host FPU, not ported math
     fn lob(n: usize) -> Vec<PathEntry> {
         (0..n)
             .map(|i| {

@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 # Android (`tools/apk.sh`): the game as a NativeActivity .so; only built when asked for, never by `cargo test`
 [[example]]
 name = "hst"
-path = "src/main.rs"
+path = "src/android_so.rs"
 crate-type = ["cdylib"]
 required-features = ["android"]
 test = false
@@ -120,3 +120,9 @@ android = ["bevy/android-native-activity"]
 # B492: a build players get (tools/build.sh, apk.sh, ios-ipa.sh, web.sh, pages.yml): debug/trace logs compiled out, the
 # developers' HST_* variables ignored (`main.rs` dev_env). Tests, `cargo run` and tools/shot.sh's release builds keep both
 ship = ["log/release_max_level_info", "tracing/release_max_level_info"]
+
+[lints.clippy]
+# Bevy systems take each query and resource as its own parameter, and queries spell out their filters: clippy's
+# defaults for both fire on ordinary systems (Bevy's own projects turn them off the same way)
+type_complexity = "allow"
+too_many_arguments = "allow"

@@ -5,6 +5,8 @@
 //! included) from the micro memory the game's boot DMA chain fills; it is checked bare (as the motion sampler's squad
 //! calls it) and inside the wrapper (t = 0/1 shortcuts, the shortest-arc flip and its dot).
 
+use std::f32::consts::PI;
+
 use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::contact::{Hit, contact_point, sweep};
 use hst_sim::quat::{self, M4};
@@ -206,10 +208,10 @@ fn matrix(s: &mut u64) -> M4 {
     };
     match rng(s) % 5 {
         0 => rot(s, uni(&mut s.clone(), -0.5, 0.5)),
-        1 => rot(s, uni(&mut s.clone(), 2.6, 3.1416)),
-        2 => rot(s, uni(&mut s.clone(), -3.1416, 3.1416)),
+        1 => rot(s, uni(&mut s.clone(), 2.6, PI)),
+        2 => rot(s, uni(&mut s.clone(), -PI, PI)),
         3 => {
-            let mut m = rot(s, uni(&mut s.clone(), -3.1416, 3.1416));
+            let mut m = rot(s, uni(&mut s.clone(), -PI, PI));
             let k = uni(s, 0.98, 1.02);
             for row in &mut m[..3] {
                 for c in &mut row[..3] {

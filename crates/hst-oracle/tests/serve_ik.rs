@@ -4,6 +4,8 @@
 //! `context/ram/` (skips without them).
 
 use hst_data::{ani, iso::Iso, mdl, xb::Archive};
+use std::f32::consts::PI;
+
 use hst_oracle::{Ee, HstEe, addr, root};
 use hst_sim::pose::{Clip, Path, Skeleton};
 use hst_sim::serve::{ServeArm, overhead_solve, serve_arm, underhand_solve};
@@ -274,7 +276,7 @@ fn dive_slide() {
         for _ in 0..2400 {
             let sd = &mut seed;
             let p = rng(sd) as usize % 4;
-            let a = uni(sd, -3.1416, 3.1416);
+            let a = uni(sd, -PI, PI);
             let dir = [a.sin(), a.cos()];
             let hand = if rng(sd) % 2 == 0 { 1.0f32 } else { -1.0 };
             let pos = [uni(sd, -5.0, 5.0), uni(sd, -0.1, 0.1), uni(sd, -13.0, 13.0), 1.0];

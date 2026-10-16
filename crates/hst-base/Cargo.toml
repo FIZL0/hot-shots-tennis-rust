@@ -104,3 +104,9 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 webgpu = ["bevy/webgpu"]
 # test helpers (`Sound::test`, `Net::wired`, …) for the crates above's tests (`hst`'s dev-dependency turns it on)
 testing = []
+
+[lints.clippy]
+# Bevy systems take each query and resource as its own parameter, and queries spell out their filters: clippy's
+# defaults for both fire on ordinary systems (Bevy's own projects turn them off the same way)
+type_complexity = "allow"
+too_many_arguments = "allow"
