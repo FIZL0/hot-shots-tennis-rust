@@ -5,10 +5,10 @@
 cd "$(dirname "$(realpath "$0")")/.."
 log=context/notes/check.log
 mkdir -p context/notes
-# HST_CHECK_SLOTS test runs at once across main and every worktree (default 2), each capped to its share of the
+# HST_CHECK_SLOTS test runs at once across main and every worktree (default 3: 30 GB RAM fits three Bevy links; more swaps), each capped to its share of the
 # cores: five uncapped at once (each using every core) took ~30 min apiece, one at a time left cores idle
 # during links and long single-threaded tests
-n=${HST_CHECK_SLOTS:-2} jobs=$(( $(nproc) / ${HST_CHECK_SLOTS:-2} )); [ "$jobs" -ge 1 ] || jobs=1
+n=${HST_CHECK_SLOTS:-3} jobs=$(( $(nproc) / ${HST_CHECK_SLOTS:-3} )); [ "$jobs" -ge 1 ] || jobs=1
 lock="$(git rev-parse --git-common-dir)/check.lock"
 until for i in $(seq 0 $((n - 1))); do exec 9>"$lock.$i"; flock -n 9 && break 2; done; false; do sleep 5; done
 export RUST_TEST_THREADS=${RUST_TEST_THREADS:-$jobs}
