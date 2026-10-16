@@ -59,7 +59,7 @@ index out of bounds: the len is 0 but the index is 0"
 
 ### Confirmations
 
-- [~] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs
+- [ ] **P4** All contact branches (dive, skeleton values, arm-IK step open) → `swing.rs` | t: swing.rs — user 2026-10-16: do all three open parts: the dive/reach branch (+0x3e58), the skeleton-derived values for every character (not just character 0), and the arm-IK sideways step (replace the 0.1 m stand-in; P8 was dropped, so it lives here now)
 - [~] **P6** Serve details, lets → `serve.rs` · `play.rs` serve_turn · `ball.rs` (bounce_turn) | t: serve.rs BLOCKED: no recorded let serve (round1's 4 cord serves were net faults); turned serves/effects done | j: 2026-10-08-p6-serve-details
 
 ### Stretch
