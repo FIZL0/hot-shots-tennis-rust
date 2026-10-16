@@ -1,86 +1,307 @@
-//! B407: the v3 frame both the online lobby (B396, `online/lobby.rs`) and the local confirm screen (B397,
-//! `confirm.rs`) draw in: the board's colours, the geometry (the teams either side of the VS disc, the side panel's
-//! parts) and a player card's parts (the status chip, the 3D preview, the costume / hand / style rows over the pink
-//! stats card, the stand-in note) plus the dotted words, the settings pills and the court card. Each screen keeps
-//! what is its own (the lobby's seats, YOU, ✕ and invite box; the confirm screen's umpire card and picked pill).
+//! B449: the v4 frame both the online lobby (`online/lobby.rs`) and the local confirm screen (`confirm.rs`) draw in,
+//! the approved boards "Concept v4: Lobby" / "Ready to play?" (1280×720, the roster's navy). Top bar: the title, the
+//! lobby's join code pill (Copy link, Public), the Singles / Doubles button with its □ on the right. Middle: a top-down
+//! court, the net down the middle with the VS badge, each player a plate on their half (the seat-coloured header with
+//! seat tag, owner and the host's X; the 3D model's well with a mod's stand-in note; the character, style · hand and one
+//! status chip). Under it the scoreboard strip (Court, Umpire, Sets, Games, Mods / Handicap), then the bottom row:
+//! Leave / Back, the chat box (online), the big Start with its ready count. The hints are the legend strip's alone.
+//!
+//! Sizes are the boards' pixels at 720 lines (`roster::PY` units down, `PX` across), all scaled by one factor so the
+//! lot fits any window: extra room goes to the court. A window taller than wide turns the court: the net across, one
+//! team over the other.
 
-use super::{C02, Draw, INK, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who};
+use super::roster::{PX, PY};
+use super::{C00, C02, Draw, Menu, RANDOM_TILE, Tex, Text, UMPIRES, WHITE, Who};
 
-/// Seat colours (1P red, 2P yellow, 3P blue, 4P green), the board's: ring, card, well, soft words.
-pub(super) const RING: [[f32; 3]; 4] = [[127.5, 53.5, 53.5], [127.5, 105.0, 31.5], [46.0, 100.0, 127.5], [63.5, 108.5, 77.0]];
-pub(super) const CARD: [[f32; 3]; 4] = [[37.0, 14.0, 14.0], [30.5, 24.0, 5.5], [9.0, 22.5, 34.0], [10.5, 20.5, 14.5]];
-pub(super) const WELL: [[f32; 3]; 4] = [[47.0, 15.5, 15.5], [39.0, 30.0, 6.0], [10.5, 29.0, 43.5], [12.0, 24.0, 17.0]];
-pub(super) const SOFT: [[f32; 3]; 4] = [[127.5, 104.0, 104.0], [127.5, 120.0, 92.0], [102.5, 119.0, 127.5], [100.5, 121.0, 106.0]];
-/// The play style's gold, the stats card's pink and its rules, each grade's colour (F, E, D, C, B, A: grade 0..5).
-pub(super) const STYLE_GOLD: [f32; 3] = [127.5, 105.0, 31.5];
-const PINK: [f32; 3] = [122.5, 69.0, 96.0];
-const RULE: [f32; 3] = [127.5, 97.0, 111.5];
-const GRADE: [[f32; 3]; 6] = [[67.0, 71.0, 75.0], [78.0, 27.0, 90.5], [14.0, 63.0, 107.0], [23.5, 79.0, 34.0], [107.0, 25.5, 54.0], [120.0, 70.0, 0.0]];
-const STATS: [&str; 5] = ["Serve", "Stroke", "Volley", "Impact", "Footwork"];
-/// The board's navy (VS, words on light boxes), the dark green over the wall, the grey pills, the ready chip's green,
-/// the light boxes' cream and their soft caption; a chosen pill's gold fill.
-pub(super) const NAVY: [f32; 3] = [14.5, 21.5, 34.5];
-pub(super) const LEAF: [f32; 3] = [15.5, 29.0, 11.5];
-const LEAF_RULE: [f32; 3] = [55.5, 87.0, 45.0];
-pub(super) const SLATE: [f32; 3] = [54.0, 55.5, 71.0];
-const READY: [f32; 3] = [23.5, 84.0, 48.0];
+/// `#rrggbb` in the menus' 0–128 colour.
+pub(super) const fn hex(c: u32) -> [f32; 3] {
+    [((c >> 16) & 255) as f32 * 128.0 / 255.0, ((c >> 8) & 255) as f32 * 128.0 / 255.0, (c & 255) as f32 * 128.0 / 255.0]
+}
+
+/// The boards' colours: the navy ground, the panels and their rules, the soft captions, the ‹ › arrows, the grey
+/// buttons, the court's green surround and blue court, the net, the gold, Doubles' green and Singles' blue, the □'s
+/// pink, the ready chip's green, the chat's words.
+pub(super) const NAVY: [f32; 3] = hex(0x0e1a2e);
+pub(super) const PANEL: [f32; 3] = hex(0x16253f);
+pub(super) const RULE: [f32; 3] = hex(0x2b3d5e);
+pub(super) const CAPTION: [f32; 3] = hex(0xa9b8d0);
+/// The court and umpire pickers' lit card and dim caption (B450/B451).
 pub(super) const PAPER: [f32; 3] = [125.5, 123.5, 117.0];
-pub(super) const CAPTION: [f32; 3] = [53.5, 55.0, 71.5];
-pub(super) const SEL_FILL: [f32; 3] = [128.0, 108.0, 37.0];
-/// The board at 1280×720 is 0.6 of it in 640×448 units: the side panel's width (300), the bottom bar's height (64),
-/// the VS disc (56), the gap between the cards and the parts.
-pub(super) const SIDE_W: f32 = 180.0;
-pub(super) const BAR_H: f32 = 38.0;
-pub(super) const VS: f32 = 34.0;
-pub(super) const GAP: f32 = 7.0;
-/// A card's widest (a very wide window: the teams keep to the middle), the team label's row.
-pub(super) const CARD_MAX_W: f32 = 210.0;
-pub(super) const LABEL_H: f32 = 14.0;
-/// The side panel's pills: their height and the gap between them.
-const PILL_H: f32 = 28.0;
-const PILL_GAP: f32 = 4.0;
+pub(super) const SLATE: [f32; 3] = [54.0, 55.5, 71.0];
+const ARROW: [f32; 3] = hex(0x6f82a6);
+pub(super) const BUTTON: [f32; 3] = hex(0x34466a);
+pub(super) const GREEN: [f32; 3] = hex(0x2f7d4f);
+const BLUE: [f32; 3] = hex(0x2f5f9d);
+const COURT: [f32; 3] = hex(0x2f6f9f);
+const NET: [f32; 3] = hex(0xe9eef5);
+pub(super) const GOLD: [f32; 3] = hex(0xffd23f);
+const PINK: [f32; 3] = hex(0xf58ac0);
+const READY: [f32; 3] = hex(0x2fa860);
+pub(super) const CHAT: [f32; 3] = hex(0xd3deef);
 
-/// The cards of `n` players in the teams' room `[x, y, w, h]`: two teams either side of the VS disc, a label row over
-/// each in doubles; the cards no wider than `CARD_MAX_W`, the lot centred.
-pub(super) fn teams(n: usize, [x, y, w, h]: [f32; 4]) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, [f32; 4]) {
-    let per = (n / 2).max(1);
-    let label = if per > 1 { LABEL_H } else { 0.0 };
-    let cw = ((w - VS - 2.0 * GAP - 2.0 * (per - 1) as f32 * GAP) / (2 * per) as f32).min(CARD_MAX_W);
-    let team_w = per as f32 * cw + (per - 1) as f32 * GAP;
-    let x0 = x + (w - 2.0 * team_w - VS - 2.0 * GAP) / 2.0;
-    let team_x = [x0, x0 + team_w + VS + 2.0 * GAP];
-    let cards = (0..n).map(|i| [team_x[(i / per).min(1)] + (i % per) as f32 * (cw + GAP), y + label, cw, h - label]).collect();
-    let labels = if per > 1 { team_x.iter().map(|&tx| [tx, y, team_w, LABEL_H]).collect() } else { vec![] };
-    let vs = [x0 + team_w + GAP, y + label + (h - label - VS) / 2.0, VS, VS];
-    (cards, labels, vs)
+/// A seat's colours (1P red, 2P yellow, 3P blue, 4P green): the ring and header, the plate, the model's well, the
+/// soft words.
+pub(super) struct Seat {
+    pub ring: [f32; 3],
+    pub bg: [f32; 3],
+    pub well: [f32; 3],
+    pub soft: [f32; 3],
 }
 
-/// The portrait layout's teams' height for `n` players across `w` in a `body` high with a `side_h` panel under them:
-/// the cards no taller than they look right.
-pub(super) fn portrait_teams_h(n: usize, w: f32, body: f32, side_h: f32) -> f32 {
-    let per = (n / 2).max(1) as f32;
-    let cw = ((w - VS - 2.0 * GAP - 2.0 * (per - 1.0) * GAP) / (2.0 * per)).min(CARD_MAX_W);
-    (body - side_h - 10.0).min(cw * 2.7 + LABEL_H).max(200.0)
+pub(super) fn seat(p: usize) -> Seat {
+    const C: [[u32; 4]; 4] = [[0xff6b6b, 0x3a1720, 0x5e1f1f, 0xffd0d0], [0xffd23f, 0x33290f, 0x4e3c0c, 0xfff0b8], [0x5cc8ff, 0x10273d, 0x153a57, 0xcdeeff], [0x7fd99a, 0x132619, 0x183022, 0xc9f2d4]];
+    let [ring, bg, well, soft] = C[p.min(3)].map(hex);
+    Seat { ring, bg, well, soft }
 }
 
-/// The side panel's parts in `[x, y, w, h]`: a column (beside the teams) with a `court_h` court card on top, or a wide
-/// strip (under them in a portrait window) with the court card left and the pills right; `N` pills two by two (an odd
-/// last one across), then the last part (at least `min_h` high) under them.
-pub(super) fn side_parts<const N: usize>([x, y, w, h]: [f32; 4], wide: bool, court_h: f32, min_h: f32) -> ([f32; 4], [[f32; 4]; N], [f32; 4]) {
-    let (court, px, py, pw) = if wide {
-        let cw = (w - GAP) / 2.0;
-        ([x, y, cw, h], x + cw + GAP, y, cw)
+/// The boards' sizes (px at 720 lines): the content's padding (top, sides, bottom) and the gap between its rows, the
+/// top bar, the strip, the bottom row; the court's inset in the green; the VS column; a plate's width (doubles,
+/// singles), its header, its well (doubles, singles), its body under the well; the gap between plates, the team label's
+/// row.
+const PAD_T: f32 = 14.0;
+const PAD_B: f32 = 10.0;
+const ROW_GAP: f32 = 12.0;
+const BAR_H: f32 = 44.0;
+const STRIP_H: f32 = 62.0;
+const FOOT_H: f32 = 56.0;
+const INSET_X: f32 = 26.0;
+const INSET_Y: f32 = 18.0;
+const VS_COL: f32 = 72.0;
+const PLATE_W: [f32; 2] = [236.0, 300.0];
+const HEAD_H: f32 = 30.0;
+const WELL_H: [f32; 2] = [170.0, 210.0];
+const BODY_H: f32 = 67.0;
+const PLATE_GAP: f32 = 16.0;
+const LABEL_H: f32 = 30.0;
+/// The bar's parts: the title's room, the code pill's (host with Public, guest without), the mode button's.
+const TITLE_W: f32 = 104.0;
+const CODE_W: [f32; 2] = [254.0, 336.0];
+const MODE_W: f32 = 160.0;
+/// The bottom row's Back and Start, the chat box's least width.
+const BACK_W: f32 = 170.0;
+const START_W: f32 = 340.0;
+const CHAT_MIN: f32 = 220.0;
+/// The strip's cells' shares (Court, Umpire, Sets, Games, Mods / Handicap) and its least width.
+const GROW: [f32; 5] = [2.2, 1.6, 1.0, 1.0, 1.3];
+const STRIP_MIN: f32 = 680.0;
+/// A turned court's plates may grow this much past the board's (a tall window has the room).
+const GROW_MAX: f32 = 1.4;
+
+/// What a screen puts in the frame: `n` players, the lobby's code pill (with the host's Public), the chat box.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Spec {
+    pub n: usize,
+    pub code: bool,
+    pub public: bool,
+    pub chat: bool,
+}
+
+/// Where the frame's parts go (640×448 units, `Grid::reach`); `k` scales the boards' px (with `PX` across and `PY`
+/// down), a plate's own `s` (its parts and words).
+#[derive(Clone, Debug)]
+pub(super) struct Geo {
+    pub k: f32,
+    pub s: f32,
+    /// The court turned (the net across, team 1 over team 2).
+    pub turned: bool,
+    /// The top bar: the title, the code pill (`code` its CODE and join code part) with Copy link and Public in it, the
+    /// mode button.
+    pub title: [f32; 4],
+    pub pill: [f32; 4],
+    pub code: [f32; 4],
+    pub copy: [f32; 4],
+    pub public: [f32; 4],
+    pub mode: [f32; 4],
+    /// The green, the court in it, the teams' labels' rows, the VS badge, a plate a player in seat order.
+    pub stage: [f32; 4],
+    pub court: [f32; 4],
+    pub labels: [[f32; 4]; 2],
+    pub vs: [f32; 4],
+    pub plates: Vec<[f32; 4]>,
+    /// The strip and its cells: Court, Umpire, Sets, Games, Mods / Handicap.
+    pub strip: [f32; 4],
+    pub cells: [[f32; 4]; 5],
+    /// The bottom row: Leave / Back, the chat box (zero wide without one), Start.
+    pub back: [f32; 4],
+    pub chat: [f32; 4],
+    pub start: [f32; 4],
+}
+
+impl Geo {
+    /// `px` board pixels across, down (the frame's scale).
+    pub fn x(&self, px: f32) -> f32 {
+        px * self.k * PX
+    }
+    pub fn y(&self, px: f32) -> f32 {
+        px * self.k * PY
+    }
+}
+
+/// A plate's height for `per` plates a team.
+fn plate_h(per: usize) -> f32 {
+    3.0 + HEAD_H + 8.0 + WELL_H[(per == 1) as usize] + BODY_H + 3.0
+}
+
+/// A team's plates' width.
+fn team_w(per: usize) -> f32 {
+    per as f32 * PLATE_W[(per == 1) as usize] + (per - 1) as f32 * PLATE_GAP
+}
+
+/// The frame on `reach` (left, top, right, bottom) for `spec`: the court beside the plates' sides or (a tall window,
+/// when that gives bigger plates) turned.
+pub(super) fn layout(reach: [f32; 4], spec: Spec) -> Geo {
+    let side = layout_in(reach, spec, false);
+    let turned = layout_in(reach, spec, true);
+    if turned.k * turned.s > side.k * side.s * 1.05 { turned } else { side }
+}
+
+fn layout_in([l, t, r, b]: [f32; 4], spec: Spec, turned: bool) -> Geo {
+    let per = (spec.n / 2).max(1);
+    let (pw, ph) = (team_w(per), plate_h(per));
+    let rows = PAD_T + BAR_H + ROW_GAP + ROW_GAP + STRIP_H + ROW_GAP + FOOT_H + PAD_B;
+    let bar_w = TITLE_W + if spec.code { CODE_W[spec.public as usize] + 14.0 } else { 0.0 } + 14.0 + MODE_W;
+    let foot_w = BACK_W + START_W + 12.0 + if spec.chat { CHAT_MIN + 12.0 } else { 0.0 };
+    let (stage_w, stage_h) = if turned {
+        (2.0 * INSET_X + pw + 40.0, 2.0 * INSET_Y + 2.0 * (LABEL_H + ph) + VS_COL)
     } else {
-        ([x, y, w, court_h], x, y + court_h + 6.0, w)
+        (2.0 * INSET_X + VS_COL + 2.0 * (pw + 40.0), 2.0 * INSET_Y + LABEL_H + ph)
     };
-    let half = (pw - PILL_GAP) / 2.0;
-    let row = |k: usize| py + (PILL_H + PILL_GAP) * k as f32;
-    let pills = std::array::from_fn(|k| match k {
-        _ if k + 1 == N && N % 2 == 1 => [px, row(k / 2), pw, PILL_H],
-        _ => [px + (k % 2) as f32 * (half + PILL_GAP), row(k / 2), half, PILL_H],
+    let need_w = stage_w.max(bar_w).max(foot_w).max(STRIP_MIN);
+    let (w_px, h_px) = ((r - l) / PX, (b - t) / PY);
+    let k = (w_px / need_w).min(h_px / (rows + stage_h)).min(1.0);
+    let x = |px: f32| px * k * PX;
+    let y = |px: f32| px * k * PY;
+    // the rows from the top and from the foot; the green takes what's left
+    let top = t + y(PAD_T);
+    let foot = b - y(PAD_B) - y(FOOT_H);
+    let strip = [l, foot - y(ROW_GAP) - y(STRIP_H), r - l, y(STRIP_H)];
+    let stage_y = top + y(BAR_H) + y(ROW_GAP);
+    let stage = [l, stage_y, r - l, strip[1] - y(ROW_GAP) - stage_y];
+    let court = [l + x(INSET_X), stage[1] + y(INSET_Y), stage[2] - 2.0 * x(INSET_X), stage[3] - 2.0 * y(INSET_Y)];
+    // the bar
+    let title = [l, top, x(TITLE_W), y(BAR_H)];
+    let pill = if spec.code { [l + x(TITLE_W), top + y(2.0), x(CODE_W[spec.public as usize]), y(40.0)] } else { [l + x(TITLE_W), top, 0.0, 0.0] };
+    let copy = [pill[0] + x(14.0 + 46.0 + 8.0 + 90.0 + 8.0), top + y(8.0), x(84.0), y(28.0)];
+    let code = [pill[0], pill[1], copy[0] - x(4.0) - pill[0], pill[3]];
+    let public = if spec.public { [copy[0] + copy[2] + x(8.0), copy[1], x(74.0), copy[3]] } else { [copy[0] + copy[2], copy[1], 0.0, 0.0] };
+    let mode = [r - x(MODE_W), top + y(2.0), x(MODE_W), y(40.0)];
+    // the plates: a team a half, centred in it, the label over them; the VS badge on the net
+    let (cw, ch) = (court[2] / (k * PX), court[3] / (k * PY));
+    let s = if turned {
+        ((cw - 40.0) / pw).min(((ch - VS_COL) / 2.0 - LABEL_H) / ph).clamp(0.5, GROW_MAX)
+    } else {
+        (((cw - VS_COL) / 2.0 - 40.0) / pw).min((ch - LABEL_H) / ph).clamp(0.5, 1.0)
+    };
+    let (tw, th) = (pw * s * k * PX, (LABEL_H + ph * s) * k * PY);
+    let halves: [[f32; 2]; 2] = if turned {
+        let hh = (court[3] - y(VS_COL)) / 2.0;
+        let cx = court[0] + (court[2] - tw) / 2.0;
+        [[cx, court[1] + (hh - th) / 2.0], [cx, court[1] + hh + y(VS_COL) + (hh - th) / 2.0]]
+    } else {
+        let hw = (court[2] - x(VS_COL)) / 2.0;
+        let cy = court[1] + (court[3] - th) / 2.0;
+        [[court[0] + (hw - tw) / 2.0, cy], [court[0] + hw + x(VS_COL) + (hw - tw) / 2.0, cy]]
+    };
+    let labels = halves.map(|[hx, hy]| [hx, hy, tw, y(LABEL_H - 8.0)]);
+    let plates = (0..spec.n)
+        .map(|i| {
+            let [hx, hy] = halves[(i / per).min(1)];
+            let j = (i % per) as f32;
+            [hx + j * (PLATE_W[(per == 1) as usize] + PLATE_GAP) * s * k * PX, hy + y(LABEL_H), PLATE_W[(per == 1) as usize] * s * k * PX, ph * s * k * PY]
+        })
+        .collect();
+    let vs = [court[0] + court[2] / 2.0 - x(32.0), court[1] + court[3] / 2.0 - y(32.0), x(64.0), y(64.0)];
+    // the strip's cells by their shares
+    let sum: f32 = GROW.iter().sum();
+    let mut at = strip[0];
+    let cells = GROW.map(|g| {
+        let w = strip[2] * g / sum;
+        at += w;
+        [at - w, strip[1], w, strip[3]]
     });
-    let top = row(N.div_ceil(2)) + 2.0;
-    (court, pills, [px, top, pw, (y + h - top).max(min_h)])
+    // the bottom row
+    let back = [l, foot, x(BACK_W), y(FOOT_H)];
+    let start = [r - x(START_W), foot, x(START_W), y(FOOT_H)];
+    let chat = if spec.chat { [back[0] + back[2] + x(12.0), foot, start[0] - x(12.0) - (back[0] + back[2] + x(12.0)), y(FOOT_H)] } else { [back[0] + back[2], foot, 0.0, 0.0] };
+    Geo { k, s, turned, title, pill, code, copy, public, mode, stage, court, labels, vs, plates, strip, cells, back, chat, start }
+}
+
+// ---------------------------------------------------------------- drawing
+
+/// A box filled `rgb`, its corners rounded `r` units.
+pub(super) fn rounded(d: &mut Draw, rect: [f32; 4], r: f32, rgb: [f32; 3], alpha: f32) {
+    d.q(Tex::Solid, [0.0; 4], rect, rgb, alpha);
+    d.out.last_mut().unwrap().round = [r.min(rect[2] / 2.0).min(rect[3] / 2.0).max(0.0); 4];
+}
+
+/// A box with a rim `t` units thick in `rim` round `fill` (none: the rim only, as four bars), corners `r`.
+pub(super) fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: [f32; 3], fill: Option<[f32; 3]>) {
+    match fill {
+        Some(f) => {
+            rounded(d, [x, y, w, h], r, rim, 128.0);
+            rounded(d, [x + t, y + t * PY / PX, w - 2.0 * t, h - 2.0 * t * PY / PX], r - t, f, 128.0);
+        }
+        None => {
+            let ty = t * PY / PX;
+            for rect in [[x + r, y, w - 2.0 * r, ty], [x + r, y + h - ty, w - 2.0 * r, ty]] {
+                d.q(Tex::Solid, [0.0; 4], rect, rim, 128.0);
+            }
+            for rect in [[x, y + r, t, h - 2.0 * r], [x + w - t, y + r, t, h - 2.0 * r]] {
+                d.q(Tex::Solid, [0.0; 4], rect, rim, 128.0);
+            }
+            // the corners: short bars round each arc
+            for (cx, cy, a0) in [(x + r, y + r, 180.0f32), (x + w - r, y + r, 270.0), (x + w - r, y + h - r, 0.0), (x + r, y + h - r, 90.0)] {
+                for s in 0..4 {
+                    let a = (a0 + 11.25 + 22.5 * s as f32).to_radians();
+                    let rr = r - t / 2.0;
+                    let len = (r * 0.42).max(t);
+                    let (px, py) = (cx + rr * a.cos(), cy + rr * a.sin() * PY / PX);
+                    d.q(Tex::Solid, [0.0; 4], [px - len / 2.0, py - ty / 2.0, len, ty], rim, 128.0);
+                    d.out.last_mut().unwrap().angle = -(a + std::f32::consts::FRAC_PI_2);
+                }
+            }
+        }
+    }
+}
+
+/// A dashed rim `t` units thick round `[x, y, w, h]` (corners `r` left open): a computer's or open seat's plate, the
+/// Picking… chip.
+pub(super) fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, dash: f32, rgb: [f32; 3]) {
+    let gap = dash * 0.6;
+    let ty = t * PY / PX;
+    let mut i = r;
+    while i < w - r - 0.01 {
+        let l = dash.min(w - r - i);
+        d.q(Tex::Solid, [0.0; 4], [x + i, y, l, ty], rgb, 128.0);
+        d.q(Tex::Solid, [0.0; 4], [x + i, y + h - ty, l, ty], rgb, 128.0);
+        i += dash + gap;
+    }
+    let ry = r * PY / PX;
+    let mut i = ry;
+    while i < h - ry - 0.01 {
+        let l = (dash * PY / PX).min(h - ry - i);
+        d.q(Tex::Solid, [0.0; 4], [x, y + i, t, l], rgb, 128.0);
+        d.q(Tex::Solid, [0.0; 4], [x + w - t, y + i, t, l], rgb, 128.0);
+        i += (dash + gap) * PY / PX;
+    }
+}
+
+/// The focus ring: white, `t` thick, `off` out from `[x, y, w, h]` (corners `r` + `off`).
+pub(super) fn focus(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, off: f32, t: f32) {
+    let oy = off * PY / PX;
+    ringed(d, [x - off, y - oy, w + 2.0 * off, h + 2.0 * oy], r + off, t, WHITE, None);
+}
+
+/// `s` cut to fit `max` wide at `size`, "..." where it was cut.
+pub(super) fn ellipsis(d: &Draw, s: &str, size: f32, max: f32) -> String {
+    if d.width(s, size) <= max {
+        return s.to_string();
+    }
+    let mut cut: String = s.to_string();
+    while !cut.is_empty() && d.width(&format!("{}...", cut.trim_end()), size) > max {
+        cut.pop();
+    }
+    format!("{}...", cut.trim_end())
 }
 
 /// `s` from `x` at `size`, a "·" drawn as a dot (the font has none), squeezed to fit `max`; `centre` centres it on `x`.
@@ -110,191 +331,407 @@ pub(super) fn dotted(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32,
     }
 }
 
-/// The team labels ("TEAM 1" and a rule along the row).
-pub(super) fn team_labels(d: &mut Draw, labels: &[[f32; 4]]) {
-    for (k, &[x, y, w, _]) in labels.iter().enumerate() {
-        let words = format!("TEAM {}", k + 1);
-        let tw = d.width(&words, 10.0);
-        d.text(&words, x + 1.0, y + 1.0, 10.0, LEAF);
-        d.q(Tex::Solid, [0.0; 4], [x + tw + 6.0, y + 6.0, (w - tw - 6.0).max(0.0), 1.5], LEAF_RULE, 128.0);
+/// The navy ground over the whole window.
+pub(super) fn ground(d: &mut Draw) {
+    d.anchor = super::super::widescreen::Anchor::Span;
+    d.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 448.0], NAVY, 128.0);
+    d.anchor = super::super::widescreen::Anchor::Centre;
+}
+
+/// The top bar's title, and the Singles / Doubles button with its □ (`page`: the host's □ / a tap switches).
+pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, page: bool, sel: bool) {
+    let [tx, ty, tw, th] = g.title;
+    let size = g.y(30.0);
+    let _ = tw;
+    d.text(title, tx, ty + (th - size) / 2.0, size, WHITE);
+    let [mx, my, mw, mh] = g.mode;
+    let (words, fill) = if doubles { ("Doubles", GREEN) } else { ("Singles", BLUE) };
+    ringed(d, g.mode, mh / 2.0, g.x(2.0), WHITE, Some(fill));
+    if sel {
+        focus(d, g.mode, mh / 2.0, g.x(3.0), g.x(3.0));
+    }
+    // the □ on its navy disc
+    let disc = [mx + g.x(8.0), my + (mh - g.y(28.0)) / 2.0, g.x(28.0), g.y(28.0)];
+    rounded(d, disc, g.x(14.0), NAVY, 128.0);
+    let sq = [disc[0] + g.x(9.0), disc[1] + g.y(9.0), g.x(10.0), g.y(10.0)];
+    ringed(d, sq, 0.0, g.x(2.0), PINK, Some(NAVY));
+    let ws = g.y(20.0);
+    let lx = disc[0] + disc[2] + g.x(10.0);
+    super::left(d, words, lx, my + (mh - ws) / 2.0, ws, mx + mw - g.x(16.0) - lx, WHITE);
+    if page {
+        d.hit(g.mode, super::pointer::press(|k| k.page = true));
     }
 }
 
-/// The VS disc.
-pub(super) fn vs_disc(d: &mut Draw, [vx, vy, vw, _]: [f32; 4]) {
-    d.pill_at([vx, vy, vw, vw], [INK, WHITE, NAVY], 128.0);
-    d.centred("VS", vx + vw / 2.0, vy + vw / 2.0 - 8.0, 16.0, [127.5, 77.5, 30.5]);
+/// The court: the green, the blue court with its lines, the net down the middle (across, turned), the teams' labels
+/// and the VS badge on it.
+pub(super) fn stage(d: &mut Draw, g: &Geo, labels: [&str; 2]) {
+    rounded(d, g.stage, g.x(18.0), GREEN, 128.0);
+    let [x, y, w, h] = g.court;
+    let (t, ty) = (g.x(3.0), g.y(3.0));
+    d.q(Tex::Solid, [0.0; 4], [x, y, w, h], WHITE, 128.0);
+    d.q(Tex::Solid, [0.0; 4], [x + t, y + ty, w - 2.0 * t, h - 2.0 * ty], COURT, 128.0);
+    // the lines: the board's along its length, across when turned
+    let lines: Vec<[f32; 4]> = if g.turned {
+        let (sx, sy) = (w * 0.12, h * 0.22);
+        vec![[x + sx, y, t, h], [x + w - sx - t, y, t, h], [x + sx, y + sy, w - 2.0 * sx, ty], [x + sx, y + h - sy - ty, w - 2.0 * sx, ty], [x + w / 2.0 - t / 2.0, y + sy, t, h - 2.0 * sy]]
+    } else {
+        let (sx, sy) = (w * 0.22, h * 0.12);
+        vec![[x, y + sy, w, ty], [x, y + h - sy - ty, w, ty], [x + sx, y + sy, t, h - 2.0 * sy], [x + w - sx - t, y + sy, t, h - 2.0 * sy], [x + sx, y + h / 2.0 - ty / 2.0, w - 2.0 * sx, ty]]
+    };
+    for l in lines {
+        d.q(Tex::Solid, [0.0; 4], l, WHITE, 128.0);
+    }
+    let net = if g.turned { [x - g.x(12.0), y + h / 2.0 - g.y(3.0), w + g.x(24.0), g.y(6.0)] } else { [x + w / 2.0 - g.x(3.0), y - g.y(12.0), g.x(6.0), h + g.y(24.0)] };
+    rounded(d, net, g.x(3.0), NET, 128.0);
+    // the labels
+    for (k, &[lx, ly, lw, lh]) in g.labels.iter().enumerate() {
+        let size = g.y(14.0) * g.s.min(1.2);
+        let words = labels[k];
+        let ww = d.width(words, size) + words.len() as f32 * g.x(2.0) + g.x(24.0);
+        let pill = [lx + (lw - ww) / 2.0, ly, ww, lh];
+        rounded(d, pill, lh / 2.0, NAVY, 128.0);
+        spaced(d, words, lx + lw / 2.0, ly + (lh - size) / 2.0, size, g.x(2.0), WHITE);
+    }
+    // VS
+    let [vx, vy, vw, vh] = g.vs;
+    ringed(d, g.vs, vw / 2.0, g.x(3.0), WHITE, Some(NAVY));
+    let size = g.y(26.0);
+    let at = d.out.len();
+    d.centred("VS", vx + vw / 2.0, vy + (vh - size) / 2.0, size, GOLD);
+    // italic: each glyph leaned
+    d.out[at..].iter_mut().for_each(|q| q.angle = -0.12);
 }
 
-/// The court card: court value `c`'s picture, COURT over `name`, "OK: change" with `change`; gold-rimmed with `sel`.
-pub(super) fn court_card(d: &mut Draw, m: &super::Menu, c: usize, name: &str, [x, y, w, h]: [f32; 4], sel: bool, change: bool) {
-    d.box3([x, y, w, h], 12.0, [Some(INK), Some(if sel { super::GOLD } else { WHITE }), Some(PAPER)], 128.0);
-    let ph = h - 34.0;
-    let pic = [x + 3.0, y + 3.0, w - 6.0, ph];
-    let first = d.out.len();
-    super::court_picture(d, m, c, pic);
-    let rr = 12.0 * 11.0 / 16.0 - (3.0 - 12.0 * 4.0 / 16.0);
-    d.out[first..].iter_mut().filter(|q| q.dst == pic).for_each(|q| q.round = [rr, rr, 0.0, 0.0]);
-    let ny = y + 3.0 + ph + 3.0;
-    d.text("COURT", x + 9.0, ny, 7.0, CAPTION);
-    let change = change.then_some("OK: change");
-    let cw = change.map_or(0.0, |c| d.width(c, 8.0) + 6.0);
-    super::left(d, name, x + 9.0, ny + 9.0, 15.0, w - 18.0 - cw, NAVY);
-    if let Some(c) = change {
-        d.text(c, x + w - 9.0 - d.width(c, 8.0), ny + 13.0, 8.0, CAPTION);
+/// `s` centred on `cx` with `gap` between its letters (the boards' letter-spacing).
+pub(super) fn spaced(d: &mut Draw, s: &str, cx: f32, y: f32, size: f32, gap: f32, rgb: [f32; 3]) {
+    let w = d.width(s, size) + gap * (s.chars().count().max(1) - 1) as f32;
+    let mut x = cx - w / 2.0;
+    for c in s.chars() {
+        let cs = c.to_string();
+        d.text(&cs, x, y, size, rgb);
+        x += d.width(&cs, size) + gap;
     }
 }
 
-/// A settings pill: `cap` small over `value`, ‹ › with `arrows`; gold while `sel`.
-pub(super) fn setting_pill(d: &mut Draw, [x, y, w, h]: [f32; 4], cap: &str, value: &str, sel: bool, arrows: bool) {
-    d.pill_at([x, y, w, h], [INK, if sel { super::GOLD } else { WHITE }, if sel { SEL_FILL } else { SLATE }], 128.0);
-    let (cap_rgb, rgb) = if sel { (INK, INK) } else { ([108.0, 109.0, 117.0], WHITE) };
-    d.text(cap, x + 12.0, y + 3.5, 6.5, cap_rgb);
-    if arrows {
-        let a = if sel { INK } else { [100.5, 101.5, 112.0] };
-        d.text("<", x + 9.0, y + 11.0, 12.0, a);
-        d.text(">", x + w - 9.0 - d.width(">", 12.0), y + 11.0, 12.0, a);
-    }
-    d.label(value, x + w / 2.0, y + 11.0, 12.0, w - 34.0, rgb);
-}
-
-/// A status chip's look: Ready ✓ (green), the computer's COM · Lv N (white), Picking… (dashed gold), Not ready (dashed
-/// in the seat's soft colour), Open (dashed white).
+/// A plate's status chip.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Chip {
     Ready,
-    Com,
     Picking,
-    Waiting([f32; 3]),
+    /// Picked, not readied yet (a guest's Ready).
+    Waiting,
+    Com,
     Open,
 }
 
-/// The status chip `words` ending at `right` on the header row at `y`, at most `max` wide; its left edge.
-pub(super) fn chip(d: &mut Draw, words: &str, kind: Chip, right: f32, y: f32, max: f32) -> f32 {
-    let size = 8.5;
-    let tick = kind == Chip::Ready;
-    let tw = d.width(words, size) + if tick { 10.0 } else { 0.0 };
-    let w = (tw + 12.0).min(max);
-    let (x, h) = (right - w, 14.0);
-    let (fill, ink, ring, dashed) = match kind {
-        Chip::Com => (Some(WHITE), NAVY, WHITE, false),
-        Chip::Ready => (Some(READY), WHITE, WHITE, false),
-        Chip::Picking => (None, STYLE_GOLD, STYLE_GOLD, true),
-        Chip::Waiting(soft) => (None, soft, soft, true),
-        Chip::Open => (None, WHITE, WHITE, true),
-    };
-    if dashed {
-        dashes(d, [x, y, w, h], ring);
-    } else {
-        d.pill_at([x, y, w, h], [INK, ring, fill.unwrap_or(ring)], 128.0);
-    }
-    let inner = w - 12.0 - if tick { 10.0 } else { 0.0 };
-    let words_w = d.width(words, size).min(inner);
-    let wx = x + (w - words_w - if tick { 10.0 } else { 0.0 }) / 2.0;
-    dotted(d, words, wx, y + 2.5, size, inner, ink, false);
-    if tick {
-        self::tick(d, wx + words_w + 3.0, y + 3.0, 8.0, ink);
-    }
-    x
+/// What a plate shows.
+pub(super) struct Plate<'a> {
+    /// The seat (its colours and tag).
+    pub p: usize,
+    pub owner: &'a str,
+    /// Its owner's ping is high (a navy dot after the owner).
+    pub slow: bool,
+    pub name: &'a str,
+    pub sub: &'a str,
+    pub chip: Chip,
+    pub chip_words: &'a str,
+    /// A computer's or open seat's rim is dashed.
+    pub dashed: bool,
+    pub remove: bool,
+    pub focus: bool,
+    /// The X has the focus.
+    pub remove_focus: bool,
+    /// The 3D preview: Random's "?" tile, hidden (a popup over it), an open seat's empty well.
+    pub random: bool,
+    pub hide: bool,
+    pub empty: bool,
+    pub mod_note: Option<String>,
 }
 
-/// A chip's dashed rim: dashes along a pill's straight edges, its round ends as short arcs of dashes.
-fn dashes(d: &mut Draw, [x, y, w, h]: [f32; 4], rgb: [f32; 3]) {
-    let r = h / 2.0;
-    let (dash, gap, t) = (3.5f32, 2.5, 1.3);
-    let mut i = 0.0;
-    while i < w - 2.0 * r {
-        let l = dash.min(w - 2.0 * r - i);
-        d.q(Tex::Solid, [0.0; 4], [x + r + i, y, l, t], rgb, 128.0);
-        d.q(Tex::Solid, [0.0; 4], [x + r + i, y + h - t, l, t], rgb, 128.0);
-        i += dash + gap;
+/// A plate's X (the host's remove) in plate `rect` at scale `s` (`Geo::k * Geo::s`).
+pub(super) fn remove_rect([x, y, w, _]: [f32; 4], s: f32) -> [f32; 4] {
+    let (sx, sy) = (s * PX, s * PY);
+    [x + w - 3.0 * sx - 8.0 * sx - 22.0 * sx, y + 3.0 * sy + 4.0 * sy, 22.0 * sx, 22.0 * sy]
+}
+
+/// Player plate `pl` in `rect` at scale `s` (`Geo::k * Geo::s`).
+pub(super) fn plate(d: &mut Draw, pl: &Plate, [x, y, w, h]: [f32; 4], s: f32) {
+    let c = seat(pl.p);
+    let (sx, sy) = (s * PX, s * PY);
+    let (t, r) = (3.0 * sx, 14.0 * sx);
+    if pl.focus {
+        focus(d, [x, y, w, h], r, 6.0 * sx, 3.0 * sx);
     }
-    for (cx, a0) in [(x + r, std::f32::consts::FRAC_PI_2), (x + w - r, -std::f32::consts::FRAC_PI_2)] {
-        for s in 0..3 {
-            let a = a0 + (s as f32 + 0.5) * std::f32::consts::PI / 3.0;
-            let (px, py) = (cx + (r - t / 2.0) * a.cos(), y + r - (r - t / 2.0) * a.sin());
-            d.q(Tex::Solid, [0.0; 4], [px - dash * 0.4, py - t / 2.0, dash * 0.8, t], rgb, 128.0);
-            d.out.last_mut().unwrap().angle = -(a + std::f32::consts::FRAC_PI_2);
+    if pl.dashed {
+        rounded(d, [x, y, w, h], r, c.bg, 128.0);
+        dashed(d, [x, y, w, h], r, t, 10.0 * sx, c.ring);
+    } else {
+        ringed(d, [x, y, w, h], r, t, c.ring, Some(c.bg));
+    }
+    // the header: the ring's colour, the seat tag on navy, the owner, the X
+    let (hx, hy, hw, hh) = (x + t, y + 3.0 * sy, w - 2.0 * t, HEAD_H * sy);
+    d.q(Tex::Solid, [0.0; 4], [hx, hy, hw, hh], c.ring, 128.0);
+    d.out.last_mut().unwrap().round = [r - t, r - t, 0.0, 0.0];
+    let tag = format!("{}P", pl.p + 1);
+    let ts = 15.0 * sy;
+    let tw = d.width(&tag, ts) + 20.0 * sx;
+    d.q(Tex::Solid, [0.0; 4], [hx, hy, tw, hh], NAVY, 128.0);
+    d.out.last_mut().unwrap().round = [r - t, 0.0, 0.0, 0.0];
+    d.text(&tag, hx + 10.0 * sx, hy + (hh - ts) / 2.0, ts, c.ring);
+    let ox = hx + tw + 8.0 * sx;
+    let right = if pl.remove { remove_rect([x, y, w, h], s)[0] - 8.0 * sx } else { hx + hw - 8.0 * sx };
+    let os = 14.0 * sy;
+    let owner = ellipsis(d, pl.owner, os, right - ox - if pl.slow { 10.0 * sx } else { 0.0 });
+    d.text(&owner, ox, hy + (hh - os) / 2.0, os, NAVY);
+    if pl.slow {
+        // a high ping: a dot after it in the plate's colour on navy
+        let dx = ox + d.width(&owner, os) + 4.0 * sx;
+        rounded(d, [dx, hy + hh / 2.0 - 3.0 * sy, 6.0 * sx, 6.0 * sy], 3.0 * sx, NAVY, 128.0);
+    }
+    if pl.remove {
+        let xr = remove_rect([x, y, w, h], s);
+        ringed(d, xr, xr[2] / 2.0, 2.0 * sx, NAVY, Some(c.ring));
+        let xs = 12.0 * sy;
+        d.centred("X", xr[0] + xr[2] / 2.0, xr[1] + (xr[3] - xs) / 2.0, xs, NAVY);
+        if pl.remove_focus {
+            focus(d, xr, xr[2] / 2.0, 3.0 * sx, 3.0 * sx);
+        }
+    }
+    // the well: the 3D model, a mod's stand-in note over its foot
+    let wh = h - 6.0 * sy - hh - 8.0 * sy - BODY_H * sy;
+    let well = [x + t + 8.0 * sx, hy + hh + 8.0 * sy, w - 2.0 * t - 16.0 * sx, wh];
+    rounded(d, well, 10.0 * sx, c.well, 128.0);
+    if pl.empty {
+        let fs = 13.0 * sy;
+        d.label("Open", well[0] + well[2] / 2.0, well[1] + (well[3] - fs) / 2.0, fs, well[2] - 8.0 * sx, c.soft);
+    } else {
+        preview(d, pl.p, pl.random, pl.hide, well);
+    }
+    if let Some(note) = &pl.mod_note {
+        let ns = 12.0 * sy;
+        let lines = super::wrap(note, ((well[2] - 28.0 * sx) / (ns * 0.5)).max(8.0) as usize);
+        let n = lines.len().min(3);
+        let nh = (6.0 + 14.4 * n as f32) * sy;
+        let nr = [well[0] + 6.0 * sx, well[1] + well[3] - 6.0 * sy - nh, well[2] - 12.0 * sx, nh];
+        rounded(d, nr, 8.0 * sx, GOLD, 128.0);
+        for (k, l) in lines.iter().take(3).enumerate() {
+            super::left(d, l, nr[0] + 8.0 * sx, nr[1] + 3.0 * sy + 14.4 * sy * k as f32, ns, nr[2] - 16.0 * sx, NAVY);
+        }
+    }
+    // the body: the name, then style · hand and the chip
+    let bx = x + t + 10.0 * sx;
+    let bw = w - 2.0 * t - 20.0 * sx;
+    let ny = well[1] + well[3] + 6.0 * sy;
+    let ns = 24.0 * sy;
+    let name = ellipsis(d, pl.name, ns, bw);
+    d.text(&name, bx, ny, ns, WHITE);
+    let ry = ny + 25.0 * sy + 4.0 * sy;
+    let (cs, chh) = (13.0 * sy, 21.0 * sy);
+    let cw = (d.width(pl.chip_words, cs) + 24.0 * sx).min(bw * 0.6);
+    let chip_rect = [bx + bw - cw, ry, cw, chh];
+    chip(d, pl.chip, pl.chip_words, chip_rect, s);
+    let ss = 13.0 * sy;
+    dotted(d, pl.sub, bx, ry + (chh - ss) / 2.0, ss, bw - cw - 6.0 * sx, c.soft, false);
+}
+
+/// The status chip in `rect`: Ready (green), Picking… (dashed gold), Not ready (dashed soft), COM (white), Open
+/// (dashed white).
+fn chip(d: &mut Draw, kind: Chip, words: &str, [x, y, w, h]: [f32; 4], s: f32) {
+    let t = 2.0 * s * PX;
+    let ink = match kind {
+        Chip::Ready => {
+            ringed(d, [x, y, w, h], h / 2.0 * PX / PY, t, WHITE, Some(READY));
+            WHITE
+        }
+        Chip::Com => {
+            rounded(d, [x, y, w, h], h, WHITE, 128.0);
+            NAVY
+        }
+        Chip::Picking | Chip::Waiting | Chip::Open => {
+            let ink = match kind {
+                Chip::Picking => GOLD,
+                Chip::Waiting => CAPTION,
+                _ => WHITE,
+            };
+            dashed(d, [x, y, w, h], h / 2.0 * PX / PY, t, 5.0 * s * PX, ink);
+            ink
+        }
+    };
+    let size = 13.0 * s * PY;
+    dotted(d, words, x + w / 2.0, y + (h - size) / 2.0, size, w - 12.0 * s * PX, ink, true);
+}
+
+/// The 3D preview (`previews.rs`: `Tex::Preview(i)`), 4:5 and as big as `[x, y, w, h]` allows; the Random "?" tile;
+/// nothing with `hide`.
+pub(super) fn preview(d: &mut Draw, i: usize, random: bool, hide: bool, [x, y, w, h]: [f32; 4]) {
+    if h < 12.0 || hide {
+        return;
+    }
+    if random {
+        let fw = (w - 8.0).min((h - 8.0) * 92.0 / 68.0).min(110.0);
+        d.q(C02, RANDOM_TILE, [x + (w - fw) / 2.0, y + (h - fw * 68.0 / 92.0) / 2.0, fw, fw * 68.0 / 92.0], WHITE, 128.0);
+        return;
+    }
+    let ph = h - 4.0;
+    let pw = (ph * super::previews::CARD_W).min(w - 4.0);
+    let ph = pw / super::previews::CARD_W;
+    d.q(Tex::Preview(i), [0.0; 4], [x + (w - pw) / 2.0, y + (h - ph) / 2.0, pw, ph], WHITE, 128.0);
+}
+
+/// A strip cell: what it shows.
+pub(super) struct Cell {
+    pub label: &'static str,
+    pub value: String,
+    /// ‹ › (a value that steps).
+    pub arrows: bool,
+    pub sel: bool,
+    /// Its thumb: the court's picture (court value) or the umpire's face (umpire value).
+    pub thumb: Thumb,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Thumb {
+    None,
+    Court(usize),
+    Umpire(usize),
+}
+
+/// The strip: its cells with the rules between them.
+pub(super) fn strip(d: &mut Draw, m: &Menu, g: &Geo, cells: &[Cell; 5]) {
+    let [x, y, w, h] = g.strip;
+    ringed(d, [x, y, w, h], g.x(12.0), g.x(2.0), RULE, Some(PANEL));
+    for (k, (c, &[cx, cy, cw, ch])) in cells.iter().zip(&g.cells).enumerate() {
+        let inner = [cx + if k == 0 { g.x(2.0) } else { 0.0 }, cy + g.y(2.0), cw - if k == 0 || k == 4 { g.x(2.0) } else { 0.0 }, ch - g.y(4.0)];
+        if c.sel {
+            d.q(Tex::Solid, [0.0; 4], inner, RULE, 128.0);
+            let r = if k == 0 || k == 4 { g.x(10.0) } else { 0.0 };
+            d.out.last_mut().unwrap().round = if k == 0 { [r, 0.0, 0.0, r] } else { [0.0, r, r, 0.0] };
+            ringed(d, inner, g.x(3.0), g.x(3.0), WHITE, None);
+        }
+        if k > 0 {
+            d.q(Tex::Solid, [0.0; 4], [cx - g.x(1.0), cy + g.y(2.0), g.x(2.0), ch - g.y(4.0)], RULE, 128.0);
+        }
+        let mut tx = cx + g.x(14.0);
+        match c.thumb {
+            Thumb::Court(v) => {
+                let pic = [tx, cy + (ch - g.y(40.0)) / 2.0, g.x(58.0), g.y(40.0)];
+                let first = d.out.len();
+                super::court_picture(d, m, v, pic);
+                let rr = g.x(6.0);
+                d.out[first..].iter_mut().for_each(|q| q.round = [rr; 4]);
+                tx += g.x(58.0 + 10.0);
+            }
+            Thumb::Umpire(u) => {
+                let size = g.y(40.0);
+                umpire_face(d, m, u, [tx + g.x(20.0), cy + ch / 2.0], size);
+                tx += g.x(40.0 + 10.0);
+            }
+            Thumb::None => {}
+        }
+        let right = cx + cw - g.x(14.0);
+        let (ls, vs) = (g.y(11.0), g.y(20.0));
+        let top = cy + (ch - ls - g.y(2.0) - vs) / 2.0;
+        super::left(d, c.label, tx, top, ls, right - tx, CAPTION);
+        let vy = top + ls + g.y(2.0);
+        if c.arrows {
+            let aw = d.width("<", vs);
+            d.text("<", tx, vy, vs, ARROW);
+            d.text(">", right - aw, vy, vs, ARROW);
+            let vx = tx + aw + g.x(8.0);
+            let value = ellipsis(d, &c.value, vs, right - aw - g.x(8.0) - vx);
+            let vw = d.width(&value, vs);
+            d.text(&value, vx + ((right - aw - g.x(8.0) - vx) - vw).max(0.0) / 2.0, vy, vs, WHITE);
+        } else {
+            let value = ellipsis(d, &c.value, vs, right - tx);
+            d.text(&value, tx, vy, vs, WHITE);
         }
     }
 }
 
-/// The seat tag ("1P" on the seat's colour) at the card's inner left `ix`, header row `y`; its width.
-pub(super) fn seat_tag(d: &mut Draw, i: usize, ix: f32, y: f32) -> f32 {
-    let tag = format!("{}P", i + 1);
-    let tag_w = d.width(&tag, 10.0) + 8.0;
-    d.box3([ix, y, tag_w, 14.0], 4.0, [None, None, Some(RING[i.min(3)])], 128.0);
-    d.text(&tag, ix + 4.0, y + 2.0, 10.0, NAVY);
-    tag_w
-}
-
-/// A card's rows inside `[x, y, w, h]`, from the foot up: the stats card, the style, the chips, the name's two lines;
-/// the preview's well takes the rest.
-pub(super) struct Rows {
-    pub ix: f32,
-    pub iw: f32,
-    pub well: [f32; 4],
-    pub name_y: f32,
-    pub sub_y: f32,
-    pub chips_y: f32,
-    pub style_y: f32,
-    pub stats: [f32; 4],
-}
-
-/// A stats row's height.
-const STATS_ROW: f32 = 11.5;
-
-pub(super) fn rows([x, y, w, h]: [f32; 4]) -> Rows {
-    let (ix, iw) = (x + 6.0, w - 12.0);
-    let foot = y + h - 6.0;
-    let stats_h = 5.0 * STATS_ROW + 4.0;
-    let stats_y = foot - stats_h;
-    let style_y = stats_y - 15.0;
-    let chips_y = style_y - 15.0;
-    let sub_y = chips_y - 12.0;
-    let name_y = sub_y - 17.0;
-    let well = [ix, y + 25.0, iw, name_y - 3.0 - (y + 25.0)];
-    Rows { ix, iw, well, name_y, sub_y, chips_y, style_y, stats: [ix, stats_y, iw, stats_h] }
-}
-
-/// The stand-in note over the preview's foot (online: `name` is a mod this machine lacks).
-pub(super) fn stand_in(d: &mut Draw, name: &str, r: &Rows) {
-    let (ix, iw, well) = (r.ix, r.iw, r.well);
-    let note = format!("{name}: you don't have it, so you'll see its stand-in");
-    let lines = super::wrap(&note, ((iw - 10.0) / 4.4).max(8.0) as usize);
-    let nh = 5.0 + 9.5 * lines.len().min(3) as f32;
-    let ny = well[1] + well[3] - 4.0 - nh;
-    d.box3([ix + 4.0, ny, iw - 8.0, nh], 5.0, [None, None, Some(STYLE_GOLD)], 128.0);
-    for (k, l) in lines.iter().take(3).enumerate() {
-        super::left(d, l, ix + 8.0, ny + 3.0 + 9.5 * k as f32, 8.0, iw - 16.0, NAVY);
+/// Umpire value `u`'s round face centred on `[x, y]`, `size` high: a mod's own head, Random's "?", the disc's face
+/// (a mod without its own: its donor's).
+pub(super) fn umpire_face(d: &mut Draw, m: &Menu, u: usize, [fx, fy]: [f32; 2], size: f32) {
+    let donor = m.umpire_donor(u);
+    if super::umpire_mods::face(d, m, u, [fx, fy], size) {
+        // B400: a mod's own head
+    } else if donor == UMPIRES {
+        // B356: the "?" in the same circle as a disc face
+        let [fu, fv, tw, th] = RANDOM_TILE;
+        super::random_face(d, [fu + (tw - th) / 2.0 + 4.0, fv + 4.0, th - 8.0, th - 8.0], [fx, fy], size);
+    } else {
+        // B350: the disc's round face (`Confirmation_00`) has its own rim; M8f3: a mod shows its donor's
+        let fw = size * 46.0 / 44.0;
+        d.q(C00, [63.0 + 48.0 * donor as f32, 272.0, 46.0, 44.0], [fx - fw / 2.0, fy - size / 2.0, fw, size], WHITE, 128.0);
     }
 }
 
-/// The card's foot for seat colour `p`: the costume (the shirt) and hand chips, the play style over the pink stats
-/// card; "?"s for Random.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn card_foot(d: &mut Draw, text: &Text, p: usize, r: &Rows, who: Who, random: bool, costume: usize, hand: f32) {
-    let (ix, iw) = (r.ix, r.iw);
-    let words = [
-        if random { "Costume ?".to_string() } else { format!("Costume {}", costume + 1) },
-        if random { "?".into() } else if hand < 0.0 { "Left".into() } else { "Right".into() },
-    ];
-    let cw = (iw - 4.0) / 2.0;
-    for (k, words) in words.iter().enumerate() {
-        let px = ix + (cw + 4.0) * k as f32;
-        d.pill_at([px, r.chips_y, cw, 12.0], [WELL[p]; 3], 128.0);
-        let lx = if k == 0 && cw > 46.0 {
-            super::shirt(d, [px + 5.0, r.chips_y + 2.5, 8.0, 7.0], RING[p], WELL[p]);
-            px + 15.0
-        } else {
-            px + 4.0
-        };
-        d.label(words, (lx + px + cw - 4.0) / 2.0, r.chips_y + 2.0, 8.5, px + cw - 4.0 - lx, WHITE);
+/// The bottom row's Leave / ‹ Back pill.
+pub(super) fn back(d: &mut Draw, g: &Geo, words: &str, sel: bool) {
+    let [x, y, w, h] = g.back;
+    ringed(d, g.back, h / 2.0 * PX / PY, g.x(3.0), WHITE, Some(BUTTON));
+    if sel {
+        focus(d, g.back, h / 2.0 * PX / PY, g.x(4.0), g.x(3.0));
     }
-    d.box3([ix, r.style_y, iw, 12.0], 3.0, [None, None, Some(WELL[p])], 128.0);
-    let style = if random { "?" } else { STYLE_NAMES[style_of(text, who).min(3)] };
-    d.label(style, ix + iw / 2.0, r.style_y + 2.0, 9.0, iw - 8.0, STYLE_GOLD);
-    stats(d, text, who, random, r.stats, STATS_ROW);
+    let size = g.y(20.0);
+    d.label(words, x + w / 2.0, y + (h - size) / 2.0, size, w - g.x(24.0), WHITE);
+}
+
+/// The big Start: `big` over `small` (a ▶ after `big` with `play`).
+pub(super) fn start(d: &mut Draw, g: &Geo, big: &str, small: &str, play: bool, sel: bool) {
+    let [x, y, w, h] = g.start;
+    ringed(d, g.start, h / 2.0 * PX / PY, g.x(4.0), WHITE, Some(GOLD));
+    if sel {
+        focus(d, g.start, h / 2.0 * PX / PY, g.x(4.0), g.x(3.0));
+    }
+    let (bs, ss) = (g.y(28.0), g.y(13.0));
+    let top = y + (h - bs - ss) / 2.0;
+    let tri = if play { g.x(22.0) } else { 0.0 };
+    let bw = d.width(big, bs).min(w - g.x(40.0) - tri);
+    let bx = x + (w - bw - tri) / 2.0;
+    super::left(d, big, bx, top, bs, bw, NAVY);
+    if play {
+        // ▶: the font has none
+        let (tx, ty, s) = (bx + bw + g.x(8.0), top + bs * 0.22, bs * 0.55);
+        for c in 0..8 {
+            let f = c as f32 / 8.0;
+            d.q(Tex::Solid, [0.0; 4], [tx + s * 0.85 * f * PX / PY, ty + s * f / 2.0, s * 0.85 / 8.0 * PX / PY + 0.3, s * (1.0 - f)], NAVY, 128.0);
+        }
+    }
+    dotted(d, small, x + w / 2.0, top + bs, ss, w - g.x(40.0), NAVY, true);
+}
+
+/// The chat box: the last lines heard ("who" bold in their colour, then the words).
+pub(super) fn chat(d: &mut Draw, g: &Geo, lines: &[(String, String)], sel: bool) {
+    let [x, y, w, h] = g.chat;
+    if w <= 0.0 {
+        return;
+    }
+    rounded(d, g.chat, g.x(12.0), PANEL, 128.0);
+    if sel {
+        focus(d, g.chat, g.x(12.0), g.x(4.0), g.x(3.0));
+    }
+    let size = g.y(14.0);
+    let pitch = size * 1.25 + g.y(2.0);
+    let n = lines.len().min(2);
+    let top = y + (h - pitch * n as f32) / 2.0;
+    for (k, (who, words)) in lines.iter().rev().take(2).rev().enumerate() {
+        let ly = top + pitch * k as f32;
+        let mut lx = x + g.x(16.0);
+        let room = w - g.x(32.0);
+        if !who.is_empty() {
+            let ww = d.width(who, size).min(room * 0.5);
+            super::left(d, who, lx, ly, size, ww, GOLD);
+            lx += ww + g.x(6.0);
+        }
+        let rest = ellipsis(d, words, size, x + w - g.x(16.0) - lx);
+        d.text(&rest, lx, ly, size, CHAT);
+    }
+}
+
+/// A play style's short name (the boards': "Net Player · Right"), Random's "?".
+pub(super) fn style_short(text: &Text, who: Who) -> &'static str {
+    ["All-round", "Baseline", "Net Player", "Big Server"][style_of(text, who).min(3)]
 }
 
 /// `who`'s play style (an index into `STYLE_NAMES`).
@@ -305,78 +742,70 @@ pub(super) fn style_of(text: &Text, who: Who) -> usize {
     }
 }
 
-/// The 3D preview (`previews.rs`: `Tex::Preview(i)`), 4:5 and as big as `[x, y, w, h]` allows, on the seat's well;
-/// the Random card's "?" tile; just the well with `hide`.
-pub(super) fn preview(d: &mut Draw, i: usize, random: bool, hide: bool, [x, y, w, h]: [f32; 4], well: [f32; 3]) {
-    if h < 12.0 {
-        return;
-    }
-    d.box3([x, y, w, h], 8.0, [None, None, Some(well)], 128.0);
-    if random {
-        let fw = (w - 8.0).min((h - 8.0) * 92.0 / 68.0);
-        d.q(C02, RANDOM_TILE, [x + (w - fw) / 2.0, y + (h - fw * 68.0 / 92.0) / 2.0, fw, fw * 68.0 / 92.0], WHITE, 128.0);
-        return;
-    }
-    if hide {
-        return;
-    }
-    let ph = h - 4.0;
-    let pw = (ph * super::previews::CARD_W).min(w - 4.0);
-    let ph = pw / super::previews::CARD_W;
-    d.q(Tex::Preview(i), [0.0; 4], [x + (w - pw) / 2.0, y + (h - ph) / 2.0, pw, ph], WHITE, 128.0);
-}
-
-/// The pink stats card: five rows `row` high, each a label and its grade's letter in a light circle; "?" for Random.
-fn stats(d: &mut Draw, text: &Text, who: Who, random: bool, [x, y, w, h]: [f32; 4], row: f32) {
-    let grades = super::grades_of(text, who);
-    d.box3([x, y, w, h], 3.0, [None, None, Some(PINK)], 128.0);
-    for (k, label) in STATS.iter().enumerate() {
-        let ry = y + 2.0 + row * k as f32;
-        if k > 0 {
-            d.q(Tex::Solid, [0.0; 4], [x + 3.0, ry - 0.5, w - 6.0, 1.2], RULE, 128.0);
-        }
-        d.outlined(|d| super::left(d, label, x + 5.0, ry + 1.5, 8.5, w - 22.0, WHITE));
-        let gs = row - 2.0;
-        let gx = x + w - 3.0 - gs;
-        d.pill_at([gx, ry + 1.0, gs, gs], [[126.0; 3]; 3], 128.0);
-        let g = grades[k].min(5) as usize;
-        let (letter, rgb) = if random { ("?", GRADE[0]) } else { (&"FEDCBA"[g..g + 1], GRADE[g]) };
-        d.label(letter, gx + gs / 2.0, ry + 1.5, 8.0, gs, rgb);
-    }
-}
-
-/// A tick mark `s` high from (x, y), two strokes.
-fn tick(d: &mut Draw, x: f32, y: f32, s: f32, rgb: [f32; 3]) {
-    for (dst, a) in [([x, y + s * 0.55, s * 0.45, 1.6], 0.8), ([x + s * 0.25, y + s * 0.35, s * 0.8, 1.6], -1.0)] {
-        d.q(Tex::Solid, [0.0; 4], dst, rgb, 128.0);
-        d.out.last_mut().unwrap().angle = a;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn equal_cards_either_side_of_vs() {
-        let (cards, labels, vs) = teams(4, [0.0, 0.0, 500.0, 300.0]);
-        assert_eq!(labels.len(), 2);
-        assert!(cards.windows(2).all(|c| (c[0][2] - c[1][2]).abs() < 0.01), "{cards:?}");
-        // team 1 left of VS, team 2 right of it
-        assert!(cards[1][0] + cards[1][2] <= vs[0] && vs[0] + vs[2] <= cards[2][0]);
-        let (cards, labels, _) = teams(2, [0.0, 0.0, 500.0, 300.0]);
-        assert!(labels.is_empty() && cards.len() == 2 && cards[0][3] == 300.0);
+    fn inside([x, y, w, h]: [f32; 4], [l, t, r, b]: [f32; 4]) -> bool {
+        x >= l - 0.01 && y >= t - 0.01 && x + w <= r + 0.01 && y + h <= b + 0.01
     }
 
+    fn apart(a: [f32; 4], b: [f32; 4]) -> bool {
+        a[0] + a[2] <= b[0] + 0.01 || b[0] + b[2] <= a[0] + 0.01 || a[1] + a[3] <= b[1] + 0.01 || b[1] + b[3] <= a[1] + 0.01
+    }
+
+    /// Any window: the parts inside, apart, the plates on the court either side of the net, all at one scale (a
+    /// part's shape doesn't change with the window's).
     #[test]
-    fn side_pills_two_by_two_an_odd_one_across() {
-        let (court, four, last) = side_parts::<4>([0.0, 0.0, 180.0, 400.0], false, 116.0, 50.0);
-        assert_eq!(court, [0.0, 0.0, 180.0, 116.0]);
-        assert_eq!(four[1][0], four[0][0] + four[0][2] + PILL_GAP);
-        assert_eq!(four[2][1], four[0][1] + PILL_H + PILL_GAP);
-        assert_eq!(last[1], four[3][1] + PILL_H + PILL_GAP + 2.0);
-        let (_, five, last) = side_parts::<5>([0.0, 0.0, 180.0, 400.0], false, 88.0, 56.0);
-        assert_eq!(five[4][2], 180.0);
-        assert_eq!(last[1], five[4][1] + PILL_H + PILL_GAP + 2.0);
+    fn fits_any_window_at_one_scale() {
+        for aspect in [0.4, 9.0 / 16.0, 0.75, 1.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
+            for (n, code, public, chat) in [(4, true, true, true), (2, true, false, true), (4, false, false, false), (2, false, false, false)] {
+                let reach = super::super::Grid::fit(aspect).reach();
+                let g = layout(reach, Spec { n, code, public, chat });
+                let mut parts = vec![g.title, g.mode, g.stage, g.strip, g.back, g.start];
+                if code {
+                    parts.push(g.pill);
+                }
+                if chat {
+                    parts.push(g.chat);
+                }
+                for (i, a) in parts.iter().enumerate() {
+                    assert!(inside(*a, reach), "{aspect} {n}: part {i} {a:?} outside {reach:?}");
+                    assert!(a[2] > 10.0 && a[3] > 10.0, "{aspect} {n}: part {i} {a:?}");
+                    for b in &parts[i + 1..] {
+                        if !(code && (*a == g.title || *b == g.title)) {
+                            assert!(apart(*a, *b), "{aspect} {n}: {a:?} over {b:?}");
+                        }
+                    }
+                }
+                assert!(apart(g.title, g.mode) && apart(g.pill, g.mode));
+                for (i, p) in g.plates.iter().enumerate() {
+                    assert!(inside(*p, [g.court[0], g.court[1], g.court[0] + g.court[2], g.court[1] + g.court[3]]), "{aspect} {n}: plate {p:?}");
+                    assert!(apart(*p, g.vs), "{aspect} {n}: plate {p:?} over VS");
+                    for q in &g.plates[i + 1..] {
+                        assert!(apart(*p, *q));
+                    }
+                    // the board's shape at any scale
+                    let per = (n / 2).max(1);
+                    let want = PLATE_W[(per == 1) as usize] / plate_h(per) * PX / PY;
+                    assert!((p[2] / p[3] - want).abs() < 1e-3, "{aspect} {n}: {p:?}");
+                }
+                // team 1 left of (over) the net, team 2 right of (under) it
+                let first = g.plates[0];
+                let last = g.plates[n - 1];
+                if g.turned {
+                    assert!(first[1] + first[3] <= g.vs[1] && g.vs[1] + g.vs[3] <= last[1]);
+                } else {
+                    assert!(first[0] + first[2] <= g.vs[0] && g.vs[0] + g.vs[2] <= last[0]);
+                }
+                assert!(g.k * g.s > 0.6, "{aspect} {n}: plates at {}", g.k * g.s);
+            }
+        }
+        // 16:9 is the board's own: scale 1, the plates its size
+        let g = layout(super::super::Grid::fit(16.0 / 9.0).reach(), Spec { n: 4, code: true, public: true, chat: true });
+        assert!(!g.turned && g.k > 0.99 && g.s > 0.99, "{} {}", g.k, g.s);
+        // a tall window turns the court
+        let g = layout(super::super::Grid::fit(9.0 / 16.0).reach(), Spec { n: 4, code: true, public: true, chat: true });
+        assert!(g.turned);
     }
 }

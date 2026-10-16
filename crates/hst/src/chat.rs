@@ -45,6 +45,13 @@ pub static ASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0
 /// The on-screen pad's chat button is up (chat on, the box and phrases closed); a tap on it stores 1 in [`ASK`].
 pub static BUTTON: AtomicBool = AtomicBool::new(false);
 
+/// B449: the last two lines heard (who, words; a note's who is empty), kept after they fade, for the lobby's chat box.
+pub static RECENT: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// B449: the lobby drew its chat box this frame: the lines show there, not at the bottom left (the box and the phrase
+/// still do, while typing).
+pub static BOXED: AtomicBool = AtomicBool::new(false);
+
 /// `text` as a chat line: control and bidi-override characters out, spaces trimmed, at most [`MAX`] characters;
 /// `None` if nothing is left.
 pub fn clean(text: &str) -> Option<String> {
@@ -271,6 +278,21 @@ fn draw(
     mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut BackgroundColor)>,
 ) {
     let on = !HIDDEN.load(Ordering::Relaxed) && (net.is_some_and(|n| n.in_room()) || sampled());
+    let boxed = BOXED.swap(false, Ordering::Relaxed);
+    if let Ok(mut recent) = RECENT.lock() {
+        if !on {
+            recent.clear();
+        } else if let Some(l) = chat.lines.last().map(|l| (l.name.clone(), l.text.clone())) {
+            // the older one may have faded already: kept until a newer line pushes it out
+            if chat.lines.len() >= 2 {
+                *recent = chat.lines[chat.lines.len() - 2..].iter().map(|l| (l.name.clone(), l.text.clone())).collect();
+            } else if recent.last() != Some(&l) {
+                recent.push(l);
+                let n = recent.len().saturating_sub(2);
+                recent.drain(..n);
+            }
+        }
+    }
     let mut root = root;
     let Ok((_, mut vis)) = root.single_mut() else {
         if on {
@@ -299,6 +321,7 @@ fn draw(
     for (row, mut text, mut font, mut colour, mut shadow, mut node, mut back) in &mut rows {
         let (s, alpha, c) = match row.0 {
             i if i < SHOWN => match shown.get(i) {
+                Some(_) if boxed && !busy => (String::new(), 0.0, Color::WHITE),
                 Some(l) => {
                     let a = if busy { 1.0 } else { ((LIFE - l.age) / FADE).clamp(0.0, 1.0) };
                     let s = if l.name.is_empty() { l.text.clone() } else { format!("{}: {}", l.name, l.text) };

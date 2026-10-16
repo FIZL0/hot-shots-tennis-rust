@@ -62,13 +62,10 @@ pub(super) struct Geo {
     pub bar: Vec<[f32; 4]>,
 }
 
-/// The players' area the panel covers: between the title and the bottom bar, left of the side panel (over it in a
-/// portrait window). The confirm screen's and the lobby's frames agree on it (`frame.rs`).
+/// The players' area the panel covers: the court stage between the top bar and the strip. The confirm screen's and
+/// the lobby's frames agree on it (`frame.rs`).
 fn area(m: &Menu) -> [f32; 4] {
-    let [l, t, r, b] = m.grid.reach();
-    let (top, foot) = (t + 46.0, b - super::frame::BAR_H - 8.0);
-    let court = if m.net.venue { m.lobby_geo().court } else { m.confirm_geo().court };
-    if court[0] > l + 1.0 { [l, top, court[0] - 10.0 - l, foot - top] } else { [l, top, r - l, (court[1] - 10.0 - top).max(120.0)] }
+    if m.net.venue { m.lobby_geo().stage } else { m.confirm_geo().stage }
 }
 
 impl Menu {
@@ -261,7 +258,7 @@ mod tests {
     fn picker(mods: usize, aspect: f32) -> Menu {
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], grid: Grid::fit(aspect), ..default() };
         m.court_mods = (0..mods).map(court).collect();
-        m.step(Dev::Keys, press(|p| &mut p.down));
+        m.sel = 1;
         m.step(Dev::Keys, press(|p| &mut p.ok));
         assert_eq!((m.sel, m.picking), (1, Some(COURTS)), "OK on Court opens the picker");
         m
@@ -316,7 +313,7 @@ mod tests {
                     let [l, t, r, b] = m.grid.reach();
                     assert!(inside(g.panel, [l, t, r - l, b - t]), "{aspect}: {:?}", g.panel);
                     assert_eq!(g.band.len(), if mods > 0 { 2 } else { 1 });
-                    let side = m.confirm_geo().court;
+                    let side = m.confirm_geo().cells[0];
                     assert!(!(g.panel[0] < side[0] + side[2] && side[0] < g.panel[0] + g.panel[2] && g.panel[1] < side[1] + side[3] && side[1] < g.panel[1] + g.panel[3]), "{aspect}: the panel covers the court card");
                     for (k, band) in g.band.iter().enumerate() {
                         assert!(inside(*band, g.panel), "{aspect}: band {band:?}");
