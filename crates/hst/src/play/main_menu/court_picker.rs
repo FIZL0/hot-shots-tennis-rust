@@ -232,7 +232,7 @@ fn card(d: &mut Draw, m: &Menu, text: &Text, c: usize, [x, y, w, h]: [f32; 4], o
     let (name, sub) = match m.court_mod_of(c) {
         Some(_) => (m.court_title(text, c), m.court_lines(text, c)[1].clone()),
         None if c < COURTS => (m.court_title(text, c), ["Grass Court", "Clay Court", "Hard Court"][SURFACE[c]].to_string()),
-        None => ("Random".to_string(), format!("Any of the {COURTS} courts")),
+        None => ("Random".to_string(), format!("Any of the {} courts", COURTS + super::court_mods::values(m).count())),
     };
     super::left(d, &name, x + 5.0, ty, 10.0, w - 10.0, NAVY);
     dotted(d, &sub, x + 5.0, ty + 12.0, 7.5, w - 10.0, if on && live { CAPTION } else { SLATE }, false);

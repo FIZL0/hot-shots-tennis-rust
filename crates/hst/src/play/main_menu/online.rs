@@ -283,7 +283,8 @@ impl Menu {
             rest.iter().map(|b| Item::Button(b)).chain(chat).chain([Item::Button(last)]).collect::<Vec<_>>()
         };
         let n = room.map_or(0, |r| r.seats.len());
-        if self.net.hosting {
+        // no room yet ("Creating lobby...", or it failed): only Leave is drawn
+        if self.net.hosting && room.is_some() {
             let taken = |i: usize| room.is_some_and(|r| r.seats[i].is_some()) && !self.mine(i);
             let seats = (0..n).flat_map(|i| [Some(Item::Seat(i)), taken(i).then_some(Item::Remove(i))]).flatten();
             seats.chain(lobby::SIDE).chain(with_chat(&HOST_BUTTONS)).collect()
@@ -663,7 +664,7 @@ impl Menu {
         }
     }
 
-    /// B311: the pick an open seat gets at Start (`Room::bots`): the first disc character in number order nobody
+    /// B311: where L1 / R1 start on an open seat: the first disc character in number order nobody
     /// holds, else any with a free costume, on its first free costume (B66).
     fn bot_default(&self, i: usize) -> Option<Pick> {
         let taken = self.bot_taken(i)?;
@@ -2512,6 +2513,15 @@ mod tests {
         let fx = m.step(dev, Press { down: true, ..default() });
         assert_eq!((m.screen, m.seats), (Screen::Lobby, [Some(dev), None, None, None]));
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
+    }
+
+    #[test]
+    fn creating_lobby_ok_leaves() {
+        // no room yet: the hidden side panel isn't there, ✕ is on Leave (not Select Court)
+        let mut m = Menu { screen: Screen::Lobby, net: View { hosting: true, pick_next: true, ..default() }, ..default() };
+        assert_eq!(m.items(), [Item::Button("Leave")]);
+        let fx = m.step(super::super::Dev::Keys, Press { ok: true, ..default() });
+        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Leave))), "{fx:?}");
     }
 
     #[test]

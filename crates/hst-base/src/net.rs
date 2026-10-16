@@ -420,12 +420,16 @@ impl Room {
         self.open() == 0 && self.picking.is_empty() && self.all_ready() && self.seats.iter().flatten().any(|s| s.peer != "host" && s.human())
     }
 
-    /// The open seats to the computer: disc characters nobody picked, in grid order.
+    /// The open seats to the computer: disc characters nobody picked, drawn at random by the match's `seed`.
     fn bots(&mut self) {
         let taken: Vec<usize> = self.seats.iter().flatten().map(|s| s.pick.char).collect();
-        let mut free = (0..14).filter(|c| !taken.contains(c));
+        let mut free: Vec<usize> = (0..14).filter(|c| !taken.contains(c)).collect();
+        let mut x = self.seed as u64;
         for s in self.seats.iter_mut().filter(|s| s.is_none()) {
-            *s = Some(Seat { peer: CPU.into(), pick: Pick::disc(free.next().unwrap_or(0), 0) });
+            // ponytail: an LCG step per seat is plenty for picking a stand-in
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let c = if free.is_empty() { 0 } else { free.swap_remove((x >> 33) as usize % free.len()) };
+            *s = Some(Seat { peer: CPU.into(), pick: Pick::disc(c, 0) });
         }
     }
 
@@ -3020,6 +3024,26 @@ mod tests {
         assert!(r.repick("g", &[Pick::disc(3, 1), Pick::disc(5, 0)]));
         let chars: Vec<_> = r.seats.iter().flatten().map(|s| s.pick.char).collect();
         assert_eq!((chars, r.picking.is_empty(), r.ready.is_empty(), r.ver), (vec![0, 3, 5], true, true, v + 1));
+    }
+
+    /// Start's open seats go to random disc characters nobody holds, not always the first (Ashley).
+    #[test]
+    fn start_bots_are_random() {
+        let drawn = |seed| {
+            let mut r = room(true);
+            assert!(r.take("host", &[Pick::disc(3, 0)]));
+            r.seed = seed;
+            r.bots();
+            r.seats.iter().map(|s| s.as_ref().unwrap().pick.char).collect::<Vec<_>>()
+        };
+        let all: Vec<_> = (1..40).map(drawn).collect();
+        for d in &all {
+            let mut u = d.clone();
+            u.sort();
+            u.dedup();
+            assert_eq!((u.len(), d.iter().filter(|&&c| c == 3).count()), (4, 1), "{d:?}");
+        }
+        assert!(all.iter().any(|d| !d.contains(&0)) && all.iter().any(|d| d != &all[0]), "{all:?}");
     }
 
     /// B201: the host's computer players (open and people's seats only), singles/doubles (the taken seats first, if
