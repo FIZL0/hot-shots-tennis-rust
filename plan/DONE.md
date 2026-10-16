@@ -700,6 +700,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B481** Character select: make it clear a controller can take over a COM seat (user 2026-10-16). On each COM card a local device could take over (not seated, can_join/join_seat), draw a translucent dark bar across the portrait + stats with thin gold edges and '<confirm glyph> to join' (Ⓐ on Xbox pads, ✕ on PlayStation, from the device's glyph set), slow opacity pulse; hide it when no unseated device is connected. Concept: context/concept-com/coms-concept2.png (HST_MENU=coms). Any aspect ratio. → crates/hst/src/play/main_menu.rs (join_seat, can_join), play/main_menu/frame.rs (card chips), play/main_menu/roster.rs
 - [x] **B478** Mod characters: when a win/loss (celebration) motion is shorter than the post-point, game or set transition, hold its last frame until the transition ends, instead of looping it or snapping back to idle
 - [x] **B479** Doubles: when one player dashes for the ball but won't reach it, can the teammate still hit it? Check the original's rule for who goes for the ball (PINE recording of that case) and match the port to it exactly
+- [x] **B482** Menu: hide the Handicap button for now, since it doesn't work yet; bring it back when Set Handicap (B40g1) is working (user 2026-10-16) → crates/hst/src/play/main_menu/confirm.rs · crates/hst/src/play/main_menu.rs
 
 
 ### Shots
