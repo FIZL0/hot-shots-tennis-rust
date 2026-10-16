@@ -1,7 +1,7 @@
 //! B373: the Mods page's kind tabs (spec `plan/B372.md` § Kinds); B383: the page's one tab row, in the title band
 //! between the L2 / R2 buttons (keyboard 1 / 3) in the legend's art: Characters · Courts · Umpires · Texture packs,
 //! each with its count (a kind with none hidden until it has some), the current one filled in its colours (B448); how the kind behaves online
-//! is the footer's line. Every Show (Everything, Installed, My uploads, …) and Upload lists only the chosen kind (`modstore::Meta::kind`; an installed mod's from its `mod.json`). The store
+//! is the footer's line. Every Show (Browse, Installed, My uploads, …) and Upload lists only the chosen kind (`modstore::Meta::kind`; an installed mod's from its `mod.json`). The store
 //! carries characters, courts and umpires (M8f9); the Texture packs tab shows what is coming and from which task (M5b)
 //! until it lands (M5a's packs already play, `mods_textures.rs`).
 

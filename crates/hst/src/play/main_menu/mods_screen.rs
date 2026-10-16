@@ -518,7 +518,7 @@ impl Menu {
         out.push(Effect::Sound(0));
     }
 
-    /// B383: Show `s`: Everything, Updates and Saved mods filter the store's mods, Installed and My uploads are their
+    /// B383: Show `s`: Browse, Updates and Saved mods filter the store's mods, Installed and My uploads are their
     /// own grids.
     fn mods_show(&mut self, s: grid::Show, out: &mut Vec<Effect>) {
         let to = match s {

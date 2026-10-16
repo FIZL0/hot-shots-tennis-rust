@@ -2,7 +2,7 @@
 //! box (✕ types into it from the keyboard, a pad's or a phone's opens an on-screen keyboard; it never takes the keys
 //! by itself), the Upload button and the downloads' pill. B448: the page in the character select's look (`look.rs`,
 //! `roster.rs`), in the chosen kind's colours (`mods_kind::seat_of`): the left column has a header row (where the
-//! mods are, what they are, the last action's outcome), the Show pills (Everything, Installed, Updates, My uploads,
+//! mods are, what they are, the last action's outcome), the Show pills (Browse, Installed, Updates, My uploads,
 //! Saved; Installed and My uploads are those grids, the pages the old tab row had) with the sort and the one filter
 //! pill on their right (Select picks Game, Plays like or Hand, ✕ / L1 / R1 its value), the tiles under a heading per
 //! game (per uploader when sorted by them) and the scroll bar, the page's own words in the footer; the chosen mod's
@@ -163,7 +163,7 @@ pub(super) fn show_ends(v: &View) -> [bool; 2] {
 
 fn show_name(s: Show) -> &'static str {
     match s {
-        Show::All => "Everything",
+        Show::All => "Browse",
         Show::Installed => "Installed",
         Show::Updates => "Updates",
         Show::Mine => "My uploads",
@@ -337,6 +337,19 @@ impl View {
             Opt::Show(Show::Installed | Show::Mine) => true,
             Opt::Show(Show::Updates) => self.state(e) == Some("Update"),
             Opt::Show(Show::Wish) => self.b.wish.as_ref().is_some_and(|w| w.contains(&e.key())),
+        }
+    }
+
+    /// Show tab `s`'s mods of the chosen kind, before search and filters (None: its list isn't loaded yet).
+    fn show_count(&self, s: Show) -> Option<usize> {
+        let kind = |l: &[Entry]| l.iter().filter(|e| e.meta.kind == self.kind).count();
+        let store = self.store.as_deref();
+        match s {
+            Show::All => store.map(kind),
+            Show::Installed => Some(kind(&self.inst)),
+            Show::Mine => self.mine.as_deref().map(kind),
+            Show::Updates => store.map(|l| l.iter().filter(|e| e.meta.kind == self.kind && self.state(e) == Some("Update")).count()),
+            Show::Wish => self.b.wish.as_ref().zip(store).map(|(w, l)| l.iter().filter(|e| e.meta.kind == self.kind && w.contains(&e.key())).count()),
         }
     }
 
@@ -1263,7 +1276,10 @@ fn page(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay, tab_end: f32) {
     if !v.empty_kind() {
         let (left, ty, right) = l.shows;
         let sx = left.unwrap_or(tab_end);
-        let words: Vec<String> = SHOWS.iter().map(|s| show_name(*s).to_string()).collect();
+        let words: Vec<String> = SHOWS.iter().map(|s| match v.show_count(*s) {
+            Some(n) => format!("{} {n}", show_name(*s)),
+            None => show_name(*s).to_string(),
+        }).collect();
         let on = SHOWS.iter().position(|s| *s == v.b.show).filter(|_| v.grid());
         let cursor = match slot {
             Some(Slot::Pill(i)) if i < SHOWS.len() && v.child.is_none() => Some(i),
@@ -1384,7 +1400,7 @@ fn grid_tiles(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
             if v.page == Page::Mine { "Reading your uploads..." } else { "Reading the mod store..." }
         } else if v.entries().is_empty() {
             match v.page {
-                Page::Installed => "No mods installed yet. Install one from Everything, or use Add mod.",
+                Page::Installed => "No mods installed yet. Install one from Browse, or use Add mod.",
                 Page::Mine => "None of your mods are on the store.",
                 _ => "Nobody has shared a mod yet.",
             }
