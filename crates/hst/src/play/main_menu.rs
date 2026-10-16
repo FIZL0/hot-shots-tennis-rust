@@ -2147,9 +2147,14 @@ impl Draw<'_> {
         self.outside = outside;
     }
 
+    /// The screen's wall, tiled over the whole window.
+    fn wall(&mut self, wall: usize) {
+        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0, round: [0.0; 4] });
+    }
+
     /// The screen's wall (tiled) and title bar.
     fn frame(&mut self, title: usize, wall: usize) {
-        self.out.push(Quad { tex: Tex::Sheet(wall), src: [0.0, 0.0, 32.0, 32.0], dst: [0.0, 0.0, 640.0, 448.0], rgb: WHITE, alpha: 128.0, tile: true, anchor: Anchor::Span, angle: 0.0, round: [0.0; 4] });
+        self.wall(wall);
         self.anchor = Anchor::Span;
         // B141, ours: the screen's colour along the top over a white and a dark rule, and a tab hanging from it with
         // the title in our font, its soft shadow down and right

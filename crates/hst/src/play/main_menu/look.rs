@@ -1,10 +1,10 @@
-//! B448: the character select's look (B422, `roster.rs`) for the Mods and Settings pages: the navy background
-//! with no grid paper, a plain white "< Title", tab pills with a ring round them (the chosen one filled), columns
+//! B448: the character select's look (B422, `roster.rs`) for the Mods and Settings pages: the main menu's tiled wall,
+//! an outlined white "< Title", tab pills with a ring round them (the chosen one filled), columns
 //! with a 3 px ring and 14 px corners, pills in the well colour (chosen ones filled with the ring colour), tiles,
 //! section headings and the 6 px scroll bar, all in one of the four seats' colour sets. Sizes are the mockup's px at
 //! 720 lines (`roster::PY` down, `roster::PX` across).
 
-use super::roster::{self, PX, PY, Seat, ellipsis, hex, rounded};
+use super::roster::{self, PX, PY, Seat, ellipsis, rounded};
 use super::Anchor;
 use super::{Draw, Tex, WHITE, legend, pointer};
 
@@ -19,11 +19,9 @@ pub(super) const PILL: f32 = 26.0;
 pub(super) const BAR: f32 = 6.0;
 pub(super) const HEADING: f32 = 22.0;
 
-/// The background over the whole window.
+/// The background over the whole window: the main menu's tiled wall.
 pub(super) fn backdrop(d: &mut Draw) {
-    d.anchor = Anchor::Span;
-    d.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 448.0], hex(roster::BG), 128.0);
-    d.anchor = Anchor::Centre;
+    d.wall(5);
 }
 
 /// The plain white "< `title`" at the view's top left (`view` left, top, right, bottom); a tap on it is Back. Returns
@@ -31,7 +29,7 @@ pub(super) fn backdrop(d: &mut Draw) {
 pub(super) fn title(d: &mut Draw, view: [f32; 4], title: &str) -> f32 {
     let [l, t, ..] = view;
     let size = 30.0 * PY;
-    d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE);
+    d.outlined(|d| d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE));
     let w = d.width(title, size) + 40.0;
     d.hit([l, t, w, TOP_BAR * PY], pointer::press(|k| k.back = true));
     d.outlined(|d| d.text("<", l + 10.0, t + 5.0, 30.0, WHITE));

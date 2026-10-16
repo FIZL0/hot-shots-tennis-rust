@@ -8,7 +8,6 @@
 use bevy::prelude::*;
 
 use super::super::controls::Bindings;
-use super::super::widescreen::Anchor;
 use super::tabs::{self, Line, Section};
 use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, pointer, shirt, tile_face};
 
@@ -370,13 +369,11 @@ pub(super) fn chip_w(d: &Draw, s: &str, h: f32) -> f32 {
 pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
     // the background over the whole window
-    d.anchor = Anchor::Span;
-    d.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 448.0], hex(BG), 128.0);
-    d.anchor = Anchor::Centre;
+    super::look::backdrop(d);
     // the top bar: the title (Back for the pointer, after the "<" `drawn` puts over it), the players and the mode
     let size = 30.0 * PY;
     let title = "Choose your player";
-    d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE);
+    d.outlined(|d| d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE));
     d.hit([l, t, d.width(title, size) + 40.0, TOP_BAR * PY], pointer::press(|k| k.back = true));
     let (mode, fill) = if m.doubles { ("Doubles", 0x2f7d4f) } else { ("Singles", 0x2f5f9d) };
     let ms = 16.0 * PY;
@@ -407,7 +404,7 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     let ws = 14.0 * PY;
     let ww = d.width(&who, ws).min(mx - 12.0 * PX - (l + 40.0 + d.width(title, size)));
     if ww > 20.0 {
-        d.label(&who, mx - 12.0 * PX - ww / 2.0, my + 8.0 * PY, ws, ww, hex(0xa8b4c8));
+        d.outlined(|d| d.label(&who, mx - 12.0 * PX - ww / 2.0, my + 8.0 * PY, ws, ww, WHITE));
     }
     let c = m.columns();
     let pointer_p = m.driven(pointer::device(m, pads));
