@@ -62,6 +62,10 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
     let n = court.layout as usize + 1;
     let (mut disc, _) = app(n, None);
     let (mut modded, sound) = app(n, Some(&court));
+    // B509: only the ambience heard (presentation only: the hashes below stay the disc court's)
+    let ambience_only = crate::audio::Volumes([10, 0, 0, 0, 10]);
+    sound.set_volumes(ambience_only);
+    let mut heard = Vec::new();
     let meshes = |app: &mut App| app.world_mut().query::<&Mesh3d>().iter(app.world()).count();
     assert!(meshes(&mut modded) > meshes(&mut disc) + 400, "the mod's court wasn't drawn");
     // B436: the layout court's trigger creatures (court 6's six fences and its bear) run but stand under the hidden
@@ -78,6 +82,7 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
             super::snapshot::state_hash(app.world_mut())
         };
         assert_eq!(hash(&mut disc), hash(&mut modded), "tick {t}: the court mod moved the match");
+        heard.extend(sound.render_frame());
         if t == 0 {
             let music = modded.world().resource::<crate::audio::MusicBanks>();
             assert!(music.bgm.as_ref().is_some_and(|b| b.0.stream.is_some()), "the mod's BGM isn't the match music");
@@ -94,6 +99,20 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
         }
     }
     assert!(points >= 2, "only {points} points played");
+    // B509: the ambience group is the mod's loops alone, from the first tick, through the points and between them
+    // (Get a Grip streams env_coNN nonstop): the layout court's creature sounds (program 7) stay silent and nothing
+    // restarts or holds the loops
+    let alone = crate::audio::Sound::bare();
+    alone.set_volumes(ambience_only);
+    let level = 1.0 / (court.ambience.len() as f32).sqrt();
+    for l in &court.ambience {
+        let track = crate::audio::Track::read(&std::fs::read(&l.path).unwrap(), l.at, crate::audio::Track::AMBIENCE_RMS).unwrap();
+        alone.play_loop(&std::sync::Arc::new(track), crate::audio::Group::Ambience, level);
+    }
+    let want: Vec<f32> = (0..heard.len() / (2 * 800)).flat_map(|_| alone.render_frame()).collect();
+    assert!(want.iter().any(|&x| x != 0.0), "the mod's ambience is silent");
+    let first = heard.iter().zip(&want).position(|(a, b)| a != b);
+    assert_eq!(first.map(|i| i / 2 / 800), None, "tick of the first ambience difference");
     std::fs::remove_file(&wav).ok();
     // M8f7: the mod's people stand there, reacted to those points and have their cue sounds
     let (placed, reacted, sounds) = npcs::court_people_seen(modded.world_mut());
@@ -101,3 +120,4 @@ fn a_court_mod_is_seen_and_heard_and_never_moves_the_match() {
     assert!(want > 0 && placed == want, "{placed} of the mod's {want} people placed");
     assert_eq!((reacted, sounds), (placed, true), "the people didn't all react, or have no sounds");
 }
+
