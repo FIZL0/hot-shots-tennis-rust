@@ -2,6 +2,7 @@ package io.github.fizl0.hst;
 
 import android.app.NativeActivity;
 import android.content.Intent;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
@@ -14,6 +15,9 @@ public class HstActivity extends NativeActivity {
     /** The picked document's file descriptor (the native side owns it), -1 when the picker was cancelled, -2 when
      *  there's nothing new. */
     private volatile int picked = -2;
+    /** B455: Wi-Fi drops multicast an app hasn't asked for, so mDNS (the LAN's lobbies, `net.rs` `watch_lan`) heard
+     *  nothing: held while the game is in front. */
+    private WifiManager.MulticastLock lan;
 
     /** M106: the window reaches under the camera cutout on every Android, as it must from Android 15 on; the game keeps
      *  its picture inside the safe area itself (`android.rs` `safe_area`, `widescreen.rs`). */
@@ -27,6 +31,31 @@ public class HstActivity extends NativeActivity {
             getWindow().setAttributes(a);
         }
         super.onCreate(state);
+        try {
+            WifiManager w = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (w != null) {
+                lan = w.createMulticastLock("hst-lan");
+                lan.setReferenceCounted(false);
+            }
+        } catch (Exception e) {
+            lan = null;
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        try {
+            if (lan != null) lan.acquire();
+        } catch (Exception e) {
+            // no CHANGE_WIFI_MULTICAST_STATE: the LAN list stays empty, the internet's still works
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        if (lan != null && lan.isHeld()) lan.release();
+        super.onPause();
     }
 
     /** Opens the system's document picker (any file: a disc image has no MIME type of its own). */

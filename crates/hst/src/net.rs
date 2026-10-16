@@ -965,6 +965,28 @@ fn watch_lan(mdns: MdnsAddressLookup) -> Lan {
     lan
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl Ctx {
+    /// B455: a DHT node whose bootstrap names didn't resolve when it started (a phone's network still coming up)
+    /// never gets a routing table and stays empty for good: Find listed nothing while a Host still went out through
+    /// the relays. One still without a table `DHT_REVIVE` after it started (`since`) is replaced by a fresh node,
+    /// which resolves them again; nothing waits for it (B321: a Host opens at once).
+    async fn revive_dht(&mut self, since: &mut n0_future::time::Instant) {
+        if since.elapsed() < DHT_REVIVE || self.dht.info().await.is_ok_and(|i| i.routing_table_size() > 0) {
+            return;
+        }
+        bevy::log::warn!("DHT: no routing table after {:?} (no internet, or UDP blocked?): starting it again", since.elapsed());
+        match Dht::client() {
+            Ok(d) => (self.dht, *since) = (d, n0_future::time::Instant::now()),
+            Err(e) => bevy::log::warn!("DHT: {e}"),
+        }
+    }
+}
+
+/// How long a DHT node gets to fill its routing table before `revive_dht` replaces it (bootstrapping takes ~1 s).
+#[cfg(not(target_arch = "wasm32"))]
+const DHT_REVIVE: Duration = Duration::from_secs(20);
+
 /// The open lobbies on the LAN.
 fn lan_list(lan: &Lan) -> Vec<Listing> {
     lan.lock().unwrap().values().filter(|l| l.open() > 0).cloned().collect()
@@ -1068,6 +1090,8 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             return;
         }
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut dht_since = n0_future::time::Instant::now();
     let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone(), courts: Vec::new(), relays: cfg.relay != Relay::Off };
     bevy::log::info!("online in {:?}", t0.elapsed());
     cx.say(Event::Status("Online.".into()));
@@ -1080,6 +1104,10 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
         }) else {
             break;
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(c, Cmd::Host(_) | Cmd::Find | Cmd::Quick(_) | Cmd::Join(..)) {
+            cx.revive_dht(&mut dht_since).await;
+        }
         match c {
             Cmd::Host(room) => host(&cx, room, &mut cmds).await,
             Cmd::Find => {
@@ -1186,6 +1214,9 @@ impl<'a> Finding<'a> {
     /// None once all have.
     async fn next(&mut self, cx: &Ctx) -> Option<Vec<Listing>> {
         let (i, l) = n0_future::StreamExt::next(&mut self.left).await?;
+        // B455: which lookup came back with how many, so a phone's hst-log.txt says where an empty list came from
+        let n = if i == 2 { lan_list(&cx.lan).len() } else { l.len() };
+        bevy::log::info!("lobby find: {n} from {}", ["the DHT board", "the board slots", "the LAN"][i]);
         if let Some(d) = self.dht.get_mut(i) {
             *d = l;
         }
