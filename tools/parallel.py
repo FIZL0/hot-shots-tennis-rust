@@ -714,6 +714,13 @@ def main():
                 stall_logged.add(procs[n][1])
                 log(f'slot {n}: {running[n][0]} looks stalled ({why}); attach to pane s{n} to see')
                 print(f'\a*** slot {n} ({running[n][0]}) looks stalled: {why} ***', flush=True)
+            if n not in procs and (old := panes().get(f's{n}')) and alive(old[1]):
+                # a session no runner tracks still sits in this slot (a restart missed it, 2026-10-16: B471 and B481
+                # both ran in s2): never reset the worktree under it; the slot waits until that pane ends
+                if old[1] not in stall_logged:
+                    stall_logged.add(old[1])
+                    log(f'slot {n}: an untracked session (pid {old[1]}, pane {old[0]}) still runs there; slot held')
+                continue
             if not stopping and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 if capped():
                     if not cap_logged:
