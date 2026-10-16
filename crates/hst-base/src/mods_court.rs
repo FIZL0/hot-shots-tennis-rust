@@ -232,7 +232,7 @@ impl Court {
     }
 }
 
-/// M117: a court mod's own loading screen picture, inside the mod.
+/// M117: a court mod's own loading screen picture, inside the mod (the mods repo's court standard §2; M119).
 pub const LOADING: &str = "previews/loading.png";
 
 /// The `source` (up to its first " (") of the mods repo's Get a Grip courts.
