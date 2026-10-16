@@ -141,3 +141,11 @@ See 24-P11L4-SINGLES-VPAD-FINAL.md: a singles save with a human P1 (`context/rec
 From it, the singles receive's out-of-court aims (plans 10/11) and the level-3 plan-10 upgrade are reached
 unpoked: the upgrade with P1 at ×2.5 speed (`HST_SPEED`) and COM row 29. The last-entry pick and smash find use
 P11k4's pokes. Test: `singles_vpad_serves_receive_matches_the_game`.
+
+## P11l5 (singles NET/BASE branches from pad-driven rallies)
+
+See 25-P11L5-SINGLES-NETBASE-VPAD-FINAL.md. The walk back's 60-frame redraw, the chase walk's arrival and the
+line-margin hold, each from a poked singles vpad match: no singles row has a centre rate under 100 (redraw:
+`HST_RATE=0`); the arrival needs the CPU's contact heights poked in rallies (`HST_CHAR_RALLY`); the hold needs the
+`HST_LINE`/`HST_MARGIN` pokes, from a point's third shot only (`HST_LINE_FROM`). Test:
+`singles_vpad_net_and_base_match_the_game`.
