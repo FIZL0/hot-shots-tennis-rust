@@ -54,8 +54,8 @@ pub mod contact {
     pub const DIVE: u8 = 4;
 }
 
-/// The opponent's last shot kind when it smashed (`Look::opp_kind`).
-const OPP_SMASH: i32 = 3;
+/// The opponent's last shot kind when it dove (`Look::opp_kind`, the hitter's swing branch).
+const OPP_DIVE: i32 = crate::shot::branch::DIVE as i32;
 /// A third, two thirds and five sixths, as the game's literals (the stick length bands).
 const THIRD: f32 = f32::from_bits(0x3eaa_aaab);
 const TWO_THIRDS: f32 = f32::from_bits(0x3f2a_aaab);
@@ -86,7 +86,7 @@ pub struct Look {
     pub singles: bool,
     /// The contact it found (`contact`).
     pub kind: u8,
-    /// The opponent's last shot kind (`OPP_SMASH`).
+    /// The opponent's last shot kind: the hitter's swing branch (`shot::branch`; `OPP_DIVE`).
     pub opp_kind: i32,
     /// The opponent plays left-handed.
     pub opp_lefty: bool,
@@ -301,7 +301,7 @@ impl AiParams {
         let near = ((F(l.opp[1]) - l.mark[1]) * s).0 <= 1.5;
         let low = 0.2 <= if l.kind <= contact::REACH { (F(l.contact_y) - l.heights[1]).0 } else { 0.0 };
         let by_fine = if fine < 3 { 2 } else { 0 };
-        let (x, d, plan) = if l.opp_kind == OPP_SMASH && l.kind != contact::DIVE {
+        let (x, d, plan) = if l.opp_kind == OPP_DIVE && l.kind != contact::DIVE {
             (by_fine, 2, plan::VOLLEY)
         } else {
             let x = match ox {

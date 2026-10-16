@@ -587,7 +587,7 @@ fn singles_aims_match_the_game() {
     let table = AiParams::table(&csv);
     let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
     let at = |b: &[u8], o: usize| [f(b, o), f(b, o + 4)];
-    let mut seen = [[0; 5]; 2];
+    let (mut seen, mut opp) = ([[0; 5]; 2], [0; 5]);
     let recs: Vec<&[u8]> = d.chunks_exact(0xc90).collect();
     for w in recs.chunks_exact(2) {
         let (a, b) = (w[0], w[1]);
@@ -621,8 +621,12 @@ fn singles_aims_match_the_game() {
             assert_eq!(short, b[0x10 + 0x257] != 0, "{ctx}: short flag");
         }
         seen[tag as usize - 1][l.kind as usize] += 1;
+        if let Some(n) = opp.get_mut(l.opp_kind as usize) {
+            *n += 1;
+        }
     }
-    eprintln!("singles aims (receive, rally) by contact kind: {seen:?}");
+    // the rally chooser's "opponent dove" branch reads the opponent's swing branch (3 = dive, C31)
+    eprintln!("singles aims (receive, rally) by contact kind: {seen:?}, by opponent's swing branch: {opp:?}");
     // ponytail: bot-only singles never took the return-of-serve chooser in 8000 frames (every call is the rally's),
     // so `receive_aim` stays checked by hand only; record a human-served game to cover it
     assert!(seen[1].iter().sum::<i32>() > 0, "{seen:?}");

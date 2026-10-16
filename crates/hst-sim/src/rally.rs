@@ -327,7 +327,8 @@ pub struct Rally {
     pub dash: bool,
     pub last: [f32; 4],
     pub return_level: u8,
-    /// Singles NET/BASE: the aim's short-ball flag, the high-ball level pick, the opponent's last shot kind.
+    /// Singles NET/BASE: the aim's short-ball flag, the high-ball level pick, the opponent's last shot kind
+    /// (its swing branch, `shot::branch`).
     pub short: bool,
     pub high_level: u8,
     pub opp_kind: i32,
