@@ -151,7 +151,7 @@ fn live(g: &Game, q: &Query<(&Figure, &Motion)>, i: usize) -> [M4; 5] {
     let b = body(p);
     let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
     let bones = q.iter().find(|(f, _)| f.0 == i).and_then(|(_, m)| {
-        let bone = |n| super::cutaway::bone(p, &g.data[i], m.id, m.clock.sampled, pos, n);
+        let bone = |n| drawn_bone(p, &g.data[i], m, pos, n);
         Some((bone("Bip01Head")?, bone("Bip01Spine2")?, bone("Bip01Pelvis")?))
     });
     let Some((h, s, pv)) = bones else { return [b; 5] };
@@ -160,6 +160,18 @@ fn live(g: &Game, q: &Query<(&Figure, &Motion)>, i: usize) -> [M4; 5] {
     bone[3][1] += 0.2;
     let turn = |m: M4| [m[1], m[0], m[2].map(|v| -v), m[3]];
     [b, head, bone, turn(s), turn(pv)]
+}
+
+/// A bone of player `p` as drawn (B366): a mod's own clip for the motion (its reactions can face another way than
+/// the donor's the game plays) on its own clock, else the gameplay clip, so a shot frames the body on screen.
+fn drawn_bone(p: &Player, data: &crate::character::CharacterData, m: &Motion, pos: [f32; 4], name: &str) -> Option<M4> {
+    let t = if data.visual.contains_key(&m.id) { m.drawn.sampled } else { m.clock.sampled };
+    let sk = &data.skeleton;
+    let c = data.drawn(m.id)?;
+    let n = sk.names.iter().position(|s| s == name)?;
+    let mut w = super::player_matrix(p);
+    w[3] = pos;
+    Some(hst_sim::pose::node_world(sk, &c.locals(sk, t.min(c.length)), n, &w))
 }
 
 /// The recorder's [`At`] of player `i` now.
@@ -431,6 +443,25 @@ mod tests {
         assert_eq!(cams[0], Some(lists.tracking[0][0]), "didn't start on the first tracking shot");
         assert!(cams.contains(&Some(0x1d)), "no serve shot");
         assert!(lists.end.iter().flatten().any(|&e| Some(e) == *cams.last().unwrap()), "didn't close on an end shot");
+    }
+
+    /// B366: the frames come from the clip drawn: a stock player's gameplay clip as before, a mod's own clip (its
+    /// reactions 0x2c..0x2f can face half a turn from the donor's) on its own clock.
+    #[test]
+    fn frames_follow_the_drawn_clip() {
+        let Ok(mut iso) = hst_data::iso::Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let (mut a, mut b, mut c, mut d) = (Assets::default(), Assets::default(), Assets::default(), Assets::default());
+        let mut data = character::load_disc(&mut iso, 6, 0, &mut a, &mut b, &mut c, &mut d).unwrap();
+        let mut p = Player { hand: 1.0, ..default() };
+        p.body.face.dir = [0.6, 0.0, 0.8, 0.0];
+        let pos = [1.0, 0.0, 2.0, 1.0];
+        let mut m = character::Motion::default();
+        m.set(0x2c, 1.0, false, None, 0);
+        (m.clock.sampled, m.drawn.sampled) = (5.0, 9.0);
+        let head = |data: &character::CharacterData, m: &character::Motion| super::drawn_bone(&p, data, m, pos, "Bip01Head").unwrap();
+        assert_eq!(head(&data, &m), cutaway::bone(&p, &data, 0x2c, 5.0, pos, "Bip01Head").unwrap(), "stock frames changed");
+        data.visual.insert(0x2c, data.motions[&0x10].clone());
+        assert_eq!(head(&data, &m), cutaway::bone(&p, &data, 0x10, 9.0, pos, "Bip01Head").unwrap(), "not the drawn clip");
     }
 }
 
