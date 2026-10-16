@@ -6,7 +6,7 @@
 
 use super::super::widescreen::{ASPECTS, aspect_choices};
 use super::roster::{self, PX, PY, rounded};
-use super::{legend, look, CHAT, EMOTE_VOICES, KEEP_DOWNLOADS, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{legend, look, CHAT, EMOTE_VOICES, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::{KeyCode, default};
@@ -181,7 +181,7 @@ fn about(o: Opt) -> &'static str {
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
         AtOnce => "How many mods the mod store downloads side by side (Download all, or several installs). Auto: 3 on a computer, 2 in a browser, 1 on a phone; a browser keeps each one in memory until it's saved, so it allows fewer.",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
-        KeepDownloads => "Save the mods you downloaded in an online lobby to your installed mods once the match is over (nothing is saved during it).",
+        KeepDownloads => "After an online match, the mods you downloaded for it: ask whether to add them to your mods, always add them, or never.",
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. A change asks first: the page reloads into it.",
         Vibration => vibration_about(),
@@ -245,7 +245,7 @@ fn choices(o: Opt) -> Vec<String> {
         ButtonIcons => super::legend::LAYOUTS.iter().map(|l| l.0.to_string()).collect(),
         Fps => FPS.map(fps_name).to_vec(),
         Volume(_) => (0..=10).map(|v| v.to_string()).collect(),
-        OnlineMods => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
+        OnlineMods | KeepDownloads => ASK_VALUES.iter().map(|(_, n)| n.to_string()).collect(),
         AtOnce => (0..=super::max_downloads()).map(at_once_name).collect(),
         Advanced => Vec::new(),
         _ => words(&["Off", "On"]),
@@ -336,7 +336,7 @@ impl Settings {
             }
             Downloads => self.0[UPSCALED_DOWNLOADS] = !self.0[UPSCALED_DOWNLOADS],
             AtOnce => self.8 = (self.8 as isize + d).rem_euclid(super::max_downloads() as isize + 1) as u8,
-            KeepDownloads => self.0[KEEP_DOWNLOADS] = !self.0[KEEP_DOWNLOADS],
+            KeepDownloads => self.10 = cycle(&ASK_VALUES.map(|(a, _)| a), self.10, d),
             OnlineMods => self.4 = cycle(&ASK_VALUES.map(|(a, _)| a), self.4, d),
             Chat => {
                 self.0[CHAT] = !self.0[CHAT];
@@ -410,7 +410,7 @@ impl Settings {
             MenuMusic => on_off(self.0[1]),
             MatchMusic => on_off(self.0[2]),
             EmoteVoices => on_off(self.0[EMOTE_VOICES]),
-            KeepDownloads => on_off(self.0[KEEP_DOWNLOADS]),
+            KeepDownloads => ASK_VALUES.iter().find(|(a, _)| *a == self.10).unwrap().1.into(),
             Downloads => on_off(self.0[UPSCALED_DOWNLOADS]),
             AtOnce => at_once_name(self.8 as usize),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),

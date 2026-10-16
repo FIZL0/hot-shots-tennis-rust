@@ -96,7 +96,7 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
     let items = m.items();
     let g = m.lobby_geo();
     let at = |it: Item| items.iter().position(|x| *x == it);
-    let on = |it: Item| m.net.ask.is_none() && !m.net.qr_big && at(it).is_some_and(|k| k == m.sel);
+    let on = |it: Item| !m.lobby_asking() && !m.net.qr_big && at(it).is_some_and(|k| k == m.sel);
     let Some(rm) = m.net.room.as_ref() else { return };
     // the top bar: the title, the code pill, Singles / Doubles (the host's □ or a tap)
     frame::bar(d, &g, "Lobby", rm.doubles, false, on(Item::Mode));
@@ -272,7 +272,7 @@ fn seat_pick(m: &Menu, r: &Room, i: usize, s: &crate::net::Seat) -> (String, Who
 #[allow(clippy::too_many_arguments)]
 fn plate(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32, focus: bool, remove: bool, remove_focus: bool) {
     let text = d.text;
-    let hide = m.net.ask.is_some() || m.net.qr_big;
+    let hide = m.lobby_asking() || m.net.qr_big;
     let seat = r.seats.get(i).and_then(Option::as_ref);
     let Some(st) = seat else {
         // an open seat: the computer plays it unless someone joins
