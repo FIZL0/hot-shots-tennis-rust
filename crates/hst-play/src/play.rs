@@ -96,6 +96,7 @@ mod umpire_mod;
 mod court_mod_match;
 mod replay_pace;
 mod weather;
+pub mod no_hud;
 pub use hst_base::widescreen;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
@@ -608,6 +609,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(intro::plugin);
     app.add_plugins(key_hints::plugin);
     app.add_plugins(umpire_mod::plugin);
+    app.add_plugins(no_hud::plugin);
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Last, |g: Option<Res<Game>>| crate::web::in_match(g.is_some()));
     app.insert_resource(Time::<Fixed>::from_hz(60.0))

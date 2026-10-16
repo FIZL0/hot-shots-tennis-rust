@@ -30,6 +30,9 @@
 
 /* the logo band: the badge on the left, the title beside it, over a darkened court */
 #disc .band { position: relative; color: #fff; border-bottom: 6px solid var(--gold); background: #17311f; overflow: hidden; }
+/* M98: the hero shot; a portrait phone gets the portrait one */
+#disc .band { --shot: url(shots/hero.jpg); }
+@media (orientation: portrait) and (max-width: 760px) { #disc .band { --shot: url(shots/phone.jpg); } }
 #disc .band::before { content: ''; position: absolute; inset: 0; background: var(--shot, none) center 40% / cover no-repeat; filter: brightness(.42) saturate(1.1); }
 #disc .band .wrap { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: clamp(12px, 3vw, 40px); padding-block: clamp(18px, 4vw, 40px); }
 #disc .band .logo { width: clamp(180px, 34vw, 380px); height: auto; flex: none; filter: drop-shadow(0 6px 10px #0008); }
@@ -127,6 +130,8 @@
 #disc figure { margin: 0; }
 #disc figure img { display: block; width: 100%; height: auto; border: 4px solid var(--ink); border-radius: 16px; box-shadow: 0 6px 0 var(--ink); background: #233; }
 #disc figure img[hidden] { display: none; }
+#disc .shots { display: grid; gap: clamp(10px, 1.8vw, 18px); margin-top: clamp(14px, 2.4vw, 24px); grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+#disc .shots img { aspect-ratio: 2 / 1; object-fit: cover; }
 #disc figcaption { font-size: 13px; color: var(--muted); margin-top: .7em; }
 
 /* settings & files */

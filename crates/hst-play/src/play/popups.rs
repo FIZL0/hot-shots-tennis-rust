@@ -1747,4 +1747,11 @@ mod speed_tests {
     }
 }
 
+impl Calls {
+    /// Each call model's root (M98's HUD-off hides them).
+    pub(super) fn roots(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.models.iter().map(|(_, v)| v.root)
+    }
+}
+
 impl super::snapshot::Wire for Calls {}
