@@ -3,7 +3,8 @@
 //! Random card, then the disc cast), then one per mod game (`Mod::game`, "Mods" for an untagged mod) in name order,
 //! "Mods" last. Each section starts on a row of its own. ←→ walk the tiles in order across the rows and sections,
 //! stopping at the ends; ↑↓ a row, the same place across (the row's last if it's shorter), headings passed over;
-//! L2 / R2 (keyboard 1 / 3; L1 / R1 stay the costume) jump to the previous / next section's first tile, wrapping;
+//! L2 / R2 (keyboard 1 / 3; L1 / R1 stay the costume) jump to the previous / next section's first tile,
+//! stopping at the ends (B462: L2 on the first section's first tile and R2 in the last do nothing, their hint dims);
 //! a tap on a heading jumps there too. A favorite shows in Favorites and in its own section: `Player::tab` is the
 //! section the cursor is in. □ marks the highlighted character a favorite (or not): saved in `favorites.txt` beside
 //! `settings.txt`, a star on its tile. (B369's per-game tabs and B391's tab row are gone: squished, unclear.)
@@ -169,8 +170,8 @@ impl Menu {
 
     /// B382: a not-ready player's ↑↓←→ and L2 / R2 on the grid (B66: past a full tile the same way): ←→ the next
     /// tile in order, across rows and sections, stopping at the ends; ↑↓ a row, headings passed over; L2 this
-    /// section's first tile (the previous section's from there), R2 the next section's, wrapping. Whether the cursor
-    /// moved.
+    /// section's first tile (the previous section's from there), R2 the next section's, stopping at the ends (B462).
+    /// Whether the cursor moved.
     pub(super) fn grid_move(&mut self, p: usize, k: Press) -> bool {
         let (dx, dy) = (k.right as i32 - k.left as i32, k.down as i32 - k.up as i32);
         let jump = k.kind_next as i32 - k.kind_prev as i32;
@@ -184,12 +185,7 @@ impl Menu {
             return false;
         }
         if jump != 0 {
-            let first = secs[s].cells.iter().position(|&c| !self.full(p, c));
-            if jump < 0 && first.is_some_and(|f| f < i) {
-                return self.jump(p, &secs, s);
-            }
-            let n = secs.len();
-            return (1..n).map(|d| if jump > 0 { (s + d) % n } else { (s + n - d) % n }).any(|u| self.jump(p, &secs, u));
+            return self.jump_to(p, &secs, s, i, jump < 0).is_some_and(|u| self.jump(p, &secs, u));
         }
         let to = if dy != 0 {
             self.row_step(p, &secs, s, i, dy)
@@ -209,6 +205,30 @@ impl Menu {
             }
             _ => false,
         }
+    }
+
+    /// B382 / B462: the section L2 (`back`) / R2 takes player `p` to from section `s`'s `i`th tile: L2 this section's
+    /// own first open tile while past it, else the nearest earlier section with an open tile; R2 the nearest later
+    /// one. None at the ends (no wrapping).
+    fn jump_to(&self, p: usize, secs: &[Section], s: usize, i: usize, back: bool) -> Option<usize> {
+        let open = |u: usize| secs[u].cells.iter().any(|&c| !self.full(p, c));
+        if back {
+            let first = secs[s].cells.iter().position(|&c| !self.full(p, c));
+            if first.is_some_and(|f| f < i) {
+                return Some(s);
+            }
+            (0..s).rev().find(|&u| open(u))
+        } else {
+            (s + 1..secs.len()).find(|&u| open(u))
+        }
+    }
+
+    /// B462: whether player `p`'s L2 / R2 would do nothing (the first section's first tile, the last section):
+    /// the legend dims that half of the hint.
+    pub(super) fn section_ends(&self, p: usize) -> [bool; 2] {
+        let secs = self.sections();
+        let Some((s, i)) = self.place(p, &secs).and_then(|at| unflat(&secs, at)) else { return [true; 2] };
+        [self.jump_to(p, &secs, s, i, true).is_none(), self.jump_to(p, &secs, s, i, false).is_none()]
     }
 
     /// The tile `dy` rows down from section `s`'s `i`th (up for -1): the same place across, the row's last if it's
@@ -408,7 +428,7 @@ mod tests {
         assert_eq!(k(&mut m, |p| &mut p.up), (hst, 0));
     }
 
-    /// L2 / R2: the next section's first tile, wrapping; L2 inside a section its own first first.
+    /// L2 / R2: the next section's first tile, stopping at the ends (B462); L2 inside a section its own first first.
     #[test]
     fn l2_r2_jump_sections() {
         let mut m = menu();
@@ -422,8 +442,20 @@ mod tests {
         assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Golf".into(), 0), "back to its own heading first");
         assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Get a Grip".into(), 0));
         assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Hot Shots Tennis".into(), 0));
-        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Mods".into(), 0), "wraps");
-        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Hot Shots Tennis".into(), 0));
+        assert_eq!(m.section_ends(0), [true, false]);
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Hot Shots Tennis".into(), 0), "L2 on the first doesn't wrap");
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Get a Grip".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Golf".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Mods".into(), 0));
+        assert_eq!(m.section_ends(0), [false, true]);
+        // the legend's L2 / R2 hint dims its R2 half
+        let groups = super::super::legend::groups(&m, Dev::Keys, &Default::default());
+        let hint = groups.iter().flat_map(|g| &g.items).find(|it| it.act == super::super::legend::Act::Kind).unwrap();
+        assert_eq!(hint.dim, [false, true]);
+        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Mods".into(), 0), "R2 on the last doesn't wrap");
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Golf".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Get a Grip".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Hot Shots Tennis".into(), 0));
         // L1 / R1 stay the costume: no move
         m.players[0].random = false;
         m.put(0, Some(Who::Mod(5)));
@@ -431,9 +463,12 @@ mod tests {
         // a favorite: Favorites first, its tile there and in its own section; jumps reach both
         let mut out = Vec::new();
         m.toggle_favorite(0, &mut out);
-        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Mods".into(), 0));
-        assert_eq!(k(&mut m, |p| &mut p.kind_next), ("Favorites".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Golf".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Get a Grip".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Hot Shots Tennis".into(), 0));
+        assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Favorites".into(), 0));
         assert_eq!(m.cell(0), Some(Who::Mod(5)));
+        assert_eq!(m.section_ends(0), [true, false]);
         assert_eq!(k(&mut m, |p| &mut p.right), ("Hot Shots Tennis".into(), 0), "on past Favorites' end");
     }
 

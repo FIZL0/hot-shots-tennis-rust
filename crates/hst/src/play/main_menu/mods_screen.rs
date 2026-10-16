@@ -610,7 +610,7 @@ impl Menu {
         }
         self.sel = self.sel.min(n.max(1) - 1);
         if k.kind_prev || k.kind_next {
-            // B373: the kind tabs, round (an open child closes); B383: only the ones shown
+            // B373: the kind tabs (an open child closes), stopping at the ends (B462); B383: only the ones shown
             let to = mods_kind::step(self.add.kind, k.kind_prev, &self.add.kinds_shown());
             if to != self.add.kind {
                 self.add.child = None;
@@ -2866,11 +2866,11 @@ mod tests {
                 Page::Upload => assert_eq!(m.add.local(m.add.acts() + 1).unwrap().id, "gag_ump01"),
                 _ => assert_eq!(names(&m), ["ump"], "{page:?}"),
             }
-            // R2 round to Characters (Texture packs is hidden), L2 back; a tap on Characters' tab
+            // B462: R2 on the last tab (Texture packs is hidden) stays, L2 back; a tap on Characters' tab
             m.mods_step(r2, &mut out);
-            assert_eq!(m.add.kind, Kind::Character);
+            assert_eq!(m.add.kind, Kind::Umpire, "{page:?}: R2 doesn't wrap");
             m.mods_step(l2, &mut out);
-            assert_eq!(m.add.kind, Kind::Umpire);
+            assert_eq!(m.add.kind, Kind::Court);
             m.add.kind = Kind::Court;
             let tab = super::super::pointer::tests::hits(&m).0.into_iter().find(|h| h.act == super::super::pointer::Act::Kind(0)).unwrap().rect;
             assert_eq!(super::super::pointer::tests::act_at(&m, tab[0] + 4.0, tab[1] + 4.0), Some(super::super::pointer::Act::Kind(0)));

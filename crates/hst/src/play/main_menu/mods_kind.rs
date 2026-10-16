@@ -46,21 +46,29 @@ pub(super) fn shown(at: Kind, total: [usize; 4]) -> Vec<Kind> {
     KINDS.iter().zip(total).filter(|(k, n)| **k == at || *n > 0 && coming(**k).is_none()).map(|(k, _)| *k).collect()
 }
 
-/// The tab after `at` among `shown` (L2 back, R2 on), round.
+/// The tab after `at` among `shown` (L2 back, R2 on), stopping at the ends (B462: R2 on the last and L2 on the first
+/// stay put).
 pub(super) fn step(at: Kind, back: bool, shown: &[Kind]) -> Kind {
-    let n = shown.len();
     let Some(i) = shown.iter().position(|k| *k == at) else { return shown.first().copied().unwrap_or(at) };
-    shown[if back { (i + n - 1) % n } else { (i + 1) % n }]
+    let to = if back { i.checked_sub(1) } else { Some(i + 1) };
+    to.and_then(|t| shown.get(t)).copied().unwrap_or(at)
+}
+
+/// B462: which of L2 / R2 do nothing on `at` among `shown` (the first tab's L2, the last's R2): their hints dim.
+pub(super) fn ends(at: Kind, shown: &[Kind]) -> [bool; 2] {
+    [step(at, true, shown) == at, step(at, false, shown) == at]
 }
 
 /// B383: the page's one tab row, in the title band from `x` (`top` its top, `room` wide): the L2 / R2 buttons in the
 /// legend's art (the device last used: a pad's, or the keyboard's 1 / 3 keys) round the `shown` kinds' tabs, each
 /// with its count (`counts`, by [`KINDS`]; a tap on one is `Act::Kind(i)`), the current one gold. The buttons go
-/// while there's only one kind to show. The row shrinks as one where it doesn't fit.
+/// while there's only one kind to show; B462: on the first tab L2's dims, on the last R2's. The row shrinks as one
+/// where it doesn't fit.
 pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind]) {
     let style = legend::last_style();
     let (size, th, gh) = (15.0, 24.0, 21.0);
     let caps = shown.len() > 1;
+    let dim = ends(at, shown);
     let gw = |i: u8| if caps { gh * legend::glyph_aspect(style, i) } else { 0.0 };
     let words: Vec<(usize, String)> =
         shown.iter().filter_map(|k| KINDS.iter().position(|q| q == k)).map(|i| (i, format!("{} {}", name(KINDS[i]), counts[i]))).collect();
@@ -71,7 +79,7 @@ pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usi
     let cap = |d: &mut Draw, i: u8, cx: &mut f32| {
         if caps {
             let (w, h) = (gw(i) * k, gh * k);
-            d.q(Tex::Glyph(style, i), [0.0; 4], [*cx, top + 3.0 + (th - h) / 2.0, w, h], WHITE, 128.0);
+            d.q(Tex::Glyph(style, i), [0.0; 4], [*cx, top + 3.0 + (th - h) / 2.0, w, h], WHITE, if dim[i as usize] { legend::DIM_ALPHA } else { 128.0 });
             *cx += w + 6.0 * k;
         }
     };
@@ -109,24 +117,30 @@ pub(super) fn empty(d: &mut Draw, k: Kind, [x, y, w, h]: [f32; 4]) {
 mod tests {
     use super::*;
 
-    /// L2 / R2 go round the four tabs; characters, courts and umpires are in the store (M8f9), texture packs name
+    /// L2 / R2 walk the four tabs, stopping at the ends (B462); characters, courts and umpires are in the store (M8f9), texture packs name
     /// the task that brings them.
     #[test]
-    fn tabs_go_round_and_say_what_is_coming() {
+    fn tabs_stop_at_the_ends_and_say_what_is_coming() {
         let mut k = Kind::Character;
         let mut seen = Vec::new();
         for _ in 0..4 {
             k = step(k, false, &KINDS);
             seen.push(k);
         }
-        assert_eq!(seen, [Kind::Court, Kind::Umpire, Kind::Textures, Kind::Character]);
-        assert_eq!(step(Kind::Character, true, &KINDS), Kind::Textures);
+        assert_eq!(seen, [Kind::Court, Kind::Umpire, Kind::Textures, Kind::Textures], "R2 on the last stays");
+        assert_eq!(step(Kind::Character, true, &KINDS), Kind::Character, "L2 on the first stays");
+        assert_eq!(step(Kind::Textures, true, &KINDS), Kind::Umpire);
+        assert_eq!(ends(Kind::Character, &KINDS), [true, false]);
+        assert_eq!(ends(Kind::Court, &KINDS), [false, false]);
+        assert_eq!(ends(Kind::Textures, &KINDS), [false, true]);
         assert_eq!(step(Kind::Other, false, &KINDS), Kind::Character);
         // B383: a kind with no mods is hidden (the chosen one stays); texture packs wait for M5 whatever the count
         assert_eq!(shown(Kind::Character, [3, 0, 2, 5]), [Kind::Character, Kind::Umpire]);
         assert_eq!(shown(Kind::Court, [0, 0, 0, 0]), [Kind::Court]);
-        assert_eq!(step(Kind::Umpire, false, &[Kind::Character, Kind::Umpire]), Kind::Character);
+        assert_eq!(step(Kind::Umpire, false, &[Kind::Character, Kind::Umpire]), Kind::Umpire);
+        assert_eq!(step(Kind::Umpire, true, &[Kind::Character, Kind::Umpire]), Kind::Character);
         assert_eq!(step(Kind::Court, true, &[Kind::Court]), Kind::Court);
+        assert_eq!(ends(Kind::Court, &[Kind::Court]), [true, true]);
         assert!([Kind::Character, Kind::Court, Kind::Umpire].iter().all(|k| coming(*k).is_none()));
         assert!(coming(Kind::Textures).unwrap().contains("M5") && coming(Kind::Textures).unwrap().contains("mods/texture-replacements/"));
         assert!(KINDS.iter().all(|k| online(*k).starts_with("Online: ")));

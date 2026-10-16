@@ -95,7 +95,12 @@ pub(crate) struct Item {
     pub label: String,
     /// The keycaps it shows for the keyboard.
     pub keys: Vec<String>,
+    /// B462: its first / second glyph (a pair's L2 / R2) drawn faded: that press does nothing here.
+    pub dim: [bool; 2],
 }
+
+/// B462: a dimmed L2 / R2 hint's alpha (of 128) where the menus draw the art themselves (the Mods page's tab row).
+pub(super) const DIM_ALPHA: f32 = 45.0;
 
 /// Devices (None: the keyboard) with the same actions, and their player's tag when groups differ.
 #[derive(Clone, PartialEq, Debug)]
@@ -133,7 +138,7 @@ impl Legend {
 
 /// An item with keyboard caps.
 pub(crate) fn item(act: Act, label: &str, keys: &[&str]) -> Item {
-    Item { act, label: label.into(), keys: keys.iter().map(|s| s.to_string()).collect() }
+    Item { act, label: label.into(), keys: keys.iter().map(|s| s.to_string()).collect(), dim: [false; 2] }
 }
 
 /// The main menus' keys for `act` (`main_menu::step`): the bound ones, and the fixed Enter, Esc, Q/E, Tab.
@@ -409,7 +414,8 @@ pub(super) fn groups(m: &Menu, last: Dev, bind: &Bindings) -> Vec<Group> {
             continue;
         }
         seen.push(dev);
-        let items: Vec<Item> = acts(m, dev).into_iter().map(|(act, label)| Item { act, keys: menu_keys(act, bind), label }).collect();
+        let items: Vec<Item> =
+            acts(m, dev).into_iter().map(|(act, label)| Item { act, keys: menu_keys(act, bind), label, dim: kind_ends(m, act, p) }).collect();
         let id = match dev {
             Dev::Keys => None,
             Dev::Pad(e) => Some(e),
@@ -430,6 +436,16 @@ pub(super) fn groups(m: &Menu, last: Dev, bind: &Bindings) -> Vec<Group> {
     out
 }
 
+/// B462: which half of the L2 / R2 hint (`act` [`Act::Kind`]) does nothing for player `p` on `m`'s screen: the
+/// select's first section's first tile (L2) and last section (R2), the Mods page's first and last kind tab.
+fn kind_ends(m: &Menu, act: Act, p: Option<usize>) -> [bool; 2] {
+    match (act, m.screen, p) {
+        (Act::Kind, Screen::Chars, Some(p)) => m.section_ends(p),
+        (Act::Kind, Screen::Mods, _) => super::mods_kind::ends(m.add.kind, &m.add.kinds_shown()),
+        _ => [false; 2],
+    }
+}
+
 /// B348: the select's players all do the same things, so its legend is one bar for every device instead of a tagged
 /// group per player: each action once, in the select's order, its labels where players differ joined ("Cancel /
 /// Leave").
@@ -445,8 +461,14 @@ fn shared(groups: Vec<Group>) -> Vec<Group> {
         one.devs.extend(g.devs);
         for it in g.items {
             match one.items.iter().position(|x| x.act == it.act) {
-                Some(i) if !labels[i].contains(&it.label) => labels[i].push(it.label),
-                Some(_) => {}
+                Some(i) => {
+                    // B462: a half dims only where it does nothing for every player
+                    let d = &mut one.items[i].dim;
+                    *d = [d[0] && it.dim[0], d[1] && it.dim[1]];
+                    if !labels[i].contains(&it.label) {
+                        labels[i].push(it.label);
+                    }
+                }
                 None => {
                     labels.push(vec![it.label.clone()]);
                     one.items.push(it);
@@ -891,13 +913,27 @@ fn chip(styles: &[Style], it: &Item) -> Option<Pixmap> {
         if !parts.is_empty() {
             parts.push(draw_glyph(&Glyph::Slash));
         }
-        parts.extend(gs.iter().map(draw_glyph));
+        parts.extend(gs.iter().enumerate().map(|(i, g)| {
+            let mut p = draw_glyph(g);
+            if it.dim.get(i) == Some(&true) {
+                fade(&mut p);
+            }
+            p
+        }));
     }
     // a pad can't type: no entry for it
     if parts.is_empty() && it.act == Act::Type && !styles.contains(&Style::Keys) {
         return None;
     }
     Some(row(parts, &it.label, WHITE))
+}
+
+/// B462: a glyph's art at [`DIM_ALPHA`]'s share of its opacity (premultiplied: every channel scales).
+fn fade(p: &mut Pixmap) {
+    let k = DIM_ALPHA / 128.0;
+    for b in p.data_mut() {
+        *b = (*b as f32 * k).round() as u8;
+    }
 }
 
 fn row(parts: Vec<Pixmap>, label: &str, c: [u8; 3]) -> Pixmap {
@@ -1069,7 +1105,7 @@ mod tests {
     /// The hand swap's pill names the pad's Select button: "Select" (not Xbox's "View"), "Create" on a PlayStation pad.
     #[test]
     fn hand_hint_says_select() {
-        let it = Item { act: Act::Hand, label: "Hand".into(), keys: vec![] };
+        let it = Item { act: Act::Hand, label: "Hand".into(), keys: vec![], dim: [false; 2] };
         for (style, want) in [(Style::Xbox, "Select"), (Style::Deck, "Select"), (Style::Ps, "Create")] {
             assert_eq!(glyphs(style, &it), vec![Glyph::Small(want)], "{style:?}");
         }
@@ -1083,7 +1119,7 @@ mod tests {
         for (k, (_, _, s)) in LAYOUTS.iter().enumerate().skip(1) {
             assert_eq!([0x054c, 0x057e, 0x28de].map(|v| pad_style(v, k as u8, true)), [s.unwrap(); 3], "{k}: every pad");
         }
-        let it = |act| Item { act, label: String::new(), keys: vec![] };
+        let it = |act| Item { act, label: String::new(), keys: vec![], dim: [false; 2] };
         assert_eq!(glyphs(Style::Switch, &it(Act::Costume)), [Glyph::Shoulder("L"), Glyph::Shoulder("R")]);
         assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [Glyph::Shoulder("ZR"), Glyph::Shoulder("ZL")]);
         assert_eq!(glyphs(Style::Switch, &it(Act::Kind)), [Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")]);
