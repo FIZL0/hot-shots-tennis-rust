@@ -159,7 +159,9 @@ pub fn add(
 ) -> Handle<Image> {
     // the PNG decode runs unlocked: other threads' textures and the UI's `ui_rects` don't wait on it
     let Some(files) = STATE.lock().unwrap().as_ref().map(|s| s.files(&key, &names)) else {
-        return images.add(img);
+        let h = images.add(img);
+        crate::asset_use::made(h.id(), &key);
+        return h;
     };
     let disc = img.size_f32();
     let r = READY.lock().unwrap().as_ref().and_then(|r| r.get(&key).cloned()).or_else(|| files.load());
@@ -169,6 +171,10 @@ pub fn add(
     });
     let size = img.size_f32();
     let h = images.add(img);
+    crate::asset_use::made(h.id(), &key);
+    if let (Some(_), Some(f)) = (&replaced, &files.pack) {
+        hst_data::uselog::note("tex-pack", || crate::modfs::key(f));
+    }
     let mut s = STATE.lock().unwrap();
     // switched off meanwhile: nothing to track
     let Some(s) = s.as_mut() else { return h };

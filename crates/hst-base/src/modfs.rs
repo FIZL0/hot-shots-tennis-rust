@@ -110,6 +110,7 @@ pub fn add(path: &Path, bytes: Arc<[u8]>) {
 }
 
 pub fn read(p: &Path) -> io::Result<Vec<u8>> {
+    hst_data::uselog::note("file", || key(p));
     match MEM.lock().unwrap().get(&key(p)) {
         Some(b) => Ok(b.to_vec()),
         None if LAZY.lock().unwrap().contains_key(&key(p)) => Err(io::Error::new(io::ErrorKind::WouldBlock, "still in the browser's storage (the mod is being read in)")),

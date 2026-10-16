@@ -410,6 +410,7 @@ fn start(argv: Vec<String>) {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, effects::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
+    app.add_plugins(asset_use::plugin);
     app.add_plugins(shade::plugin);
     app.add_plugins(cull::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)

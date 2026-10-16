@@ -490,6 +490,7 @@ impl Sound {
 
     /// `play` in volume group `group`.
     fn play_as(&self, bank: &Arc<SoundBank>, program: usize, key: usize, level: Level, scale: u32, group: Group) -> u64 {
+        hst_data::uselog::used("snd", &bank.hd, || format!(" {program}:{key}"));
         // a mod's take: a voice keyed on at once with the disc voices' tone at velocity 127, at the wav's rate; a
         // program the mod ships no wav for falls to `hd`, empty on a mod bank (B181: never its donor's), so silence
         // ponytail: a key past the takes wraps round them (the game only asks for keys its disc bank has)

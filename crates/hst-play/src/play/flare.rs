@@ -141,6 +141,7 @@ fn draw(
         *spawned = true;
         let Some(texture) = args.and_then(|a| Iso::open(&a.iso).ok()).and_then(|mut iso| sheet(&mut iso)) else { return };
         let texture = images.add(texture);
+        crate::asset_use::source(texture.id(), &[], "CMN/GAME.XB:flare3.bmp");
         for textured in [true, false] {
             let m = materials.add(StandardMaterial {
                 base_color_texture: textured.then(|| texture.clone()),

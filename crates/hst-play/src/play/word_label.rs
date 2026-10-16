@@ -86,10 +86,13 @@ pub fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str) -> Handle<Image
         }
     }
     if let Some(h) = super::menu_art::relabel(images, w, h, &rgba, s) {
+        crate::asset_use::source(h.id(), &font, "word.tm2");
         return h;
     }
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    images.add(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD))
+    let h = images.add(Image::new(Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::RENDER_WORLD));
+    crate::asset_use::source(h.id(), &font, "word.tm2");
+    h
 }
 
 /// A `wide`×`h` coverage row scaled by `w / wide` both ways (box filter), centred on a `w`×`h` one.
