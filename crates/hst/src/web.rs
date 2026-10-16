@@ -337,6 +337,13 @@ pub fn code_entry(on: bool, url: bool) {
     }
 }
 
+/// B464: Copy Link on a touch screen: the page shows the text on a card with its own Copy and Share buttons (iOS Safari
+/// writes the clipboard only inside a tap's own event, which is over by the time the game sees it). False where the
+/// page has no card for it (a mouse and keyboard): the clipboard is written directly.
+pub fn copy_sheet(text: &str) -> bool {
+    page_fn("hstCopySheet").and_then(|f| f.call1(&JsValue::NULL, &text.into()).ok()).is_some_and(|v| v.is_truthy())
+}
+
 /// The page's size in CSS px (the canvas fills it): where touches and the mouse are measured. The canvas's own box
 /// first (B333: on iOS the window's inner size can lag the screen the canvas was just fitted to), else the window's.
 pub fn page_size() -> Option<bevy::math::Vec2> {

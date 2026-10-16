@@ -2017,6 +2017,24 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
     });
 }
 
+/// What Copy Link did with the text.
+enum Copied {
+    Done,
+    /// B464: a touch screen in the browser: the page's card holds it, with Copy / Share buttons of its own (iOS Safari
+    /// copies only inside a tap's own event, and the game sees the tap a frame later)
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Sheet,
+    Failed,
+}
+
+fn copy(clipboard: &mut bevy::clipboard::Clipboard, text: &str) -> Copied {
+    #[cfg(target_arch = "wasm32")]
+    if crate::web::copy_sheet(text) {
+        return Copied::Sheet;
+    }
+    if clipboard.set_text(text.to_owned()).is_ok() { Copied::Done } else { Copied::Failed }
+}
+
 /// An Online effect (from `Menu::step`).
 /// Returns the sounds to play.
 pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Option<&Net>, clipboard: &mut bevy::clipboard::Clipboard, iso: &str) -> Vec<u8> {
@@ -2054,13 +2072,19 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
         }
         Fx::Copy if !menu.net.short.is_empty() || ticket_only(&menu.net) => {
             let link = shared(&menu.net).unwrap_or_default();
-            let ok = clipboard.set_text(link.clone()).is_ok();
-            menu.net.status = if ok { "Link copied: send it to a friend (it opens this lobby), or they type the code in Join by Code.".into() } else { link };
+            menu.net.status = match copy(clipboard, &link) {
+                Copied::Done => "Link copied: send it to a friend (it opens this lobby), or they type the code in Join by Code.".into(),
+                Copied::Sheet => "Tap Copy or Share on the link's card to send it to a friend (it opens this lobby).".into(),
+                Copied::Failed => link,
+            };
         }
         Fx::Copy => {
             // only the browser's LAN offer gets here (`shared`): the long iroh ticket is never offered (B224)
-            let ok = clipboard.set_text(menu.net.code.clone()).is_ok();
-            menu.net.status = if ok { "Code copied: send it to the other players (they paste it in Join by Code).".into() } else { format!("Code: {}", menu.net.code) };
+            menu.net.status = match copy(clipboard, &menu.net.code) {
+                Copied::Done => "Code copied: send it to the other players (they paste it in Join by Code).".into(),
+                Copied::Sheet => "Tap Copy or Share on the code's card to send it to the other players.".into(),
+                Copied::Failed => format!("Code: {}", menu.net.code),
+            };
         }
         Fx::Load => {
             menu.net.cfg.get_or_insert_with(|| Online::load(iso));

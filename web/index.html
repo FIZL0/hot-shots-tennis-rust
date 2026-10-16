@@ -53,6 +53,18 @@
   #help span:has(+ a[hidden]) { display: none; }
   #boot.err #step { color: #f88; white-space: pre-wrap; max-width: 40em; overflow-wrap: anywhere; max-height: 60vh; overflow-y: auto; }
   #boot a { color: #8cf; }
+  /* B464: Copy Link's card on a touch screen (web.rs copy_sheet): over the game and the touch pad */
+  #copysheet { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+    background: #000a; touch-action: manipulation; }
+  #copysheet[hidden] { display: none; }
+  #copysheet > div { display: flex; flex-direction: column; gap: .7em; width: min(30em, 88vw); padding: 1em;
+    background: #222; border: 1px solid #fff4; border-radius: .6em; }
+  #copysheet input { font: 16px monospace; padding: .5em; border: 1px solid #fff4; border-radius: .3em; background: #111; color: #fff; }
+  #copysheet p { margin: 0; text-align: center; }
+  #copysheet .row { display: flex; gap: .6em; justify-content: center; }
+  #copysheet button { min-width: 6em; padding: .6em 1em; border: 0; border-radius: 999px; background: #fd4; color: #000;
+    font-weight: 600; touch-action: manipulation; }
+  #copysheet button.done { background: #555; color: #fff; }
   /* M16: the Mods screen's Add mod row (web.rs mod_picker): a tap on it is the file input's own */
   #modzip { position: fixed; z-index: 5; opacity: 0; cursor: pointer; }
   /* B298: Firefox/Zen notice, a tap closes it */
@@ -62,6 +74,11 @@
 </head>
 <body>
 <input id="modzip" type="file" accept=".zip,application/zip" hidden aria-label="Add mod">
+<div id="copysheet" hidden><div>
+  <p id="copywhat">Send this link to a friend</p>
+  <input id="copytext" readonly aria-label="Lobby link">
+  <div class="row"><button id="copybtn">Copy</button><button id="sharebtn" hidden>Share</button><button class="done" id="copydone">Done</button></div>
+</div></div>
 <input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" aria-label="Lobby code">
 <!-- M96: the site (site.css, site.js): the page every visit opens on; with a disc imported its play section is one Play
      button. -->
@@ -800,6 +817,46 @@ async function start() {
   // B207: Return / Go finishes the entry (as Save / Join) and closes the keyboard
   keys.onkeydown = e => { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); typed_code('\n'); keys.blur(); } };
   keys.oninput = e => { typed_code(e.inputType?.startsWith('delete') ? '\b' : (e.data ?? keys.value.trim())); keys.value = ' '; };
+  // B464: Copy Link on a touch screen (web.rs copy_sheet). iOS Safari writes the clipboard only inside a tap's own
+  // event and the game reads its taps a frame later, so the link waits on a card whose Copy and Share buttons do it in
+  // their own click: the selected field and execCommand('copy') first, else navigator.clipboard; where both fail the
+  // link stays selected in the field to copy by hand. A mouse and keyboard keep the game's own clipboard write.
+  const sheet = document.getElementById('copysheet'), copytext = document.getElementById('copytext');
+  const copybtn = document.getElementById('copybtn'), sharebtn = document.getElementById('sharebtn');
+  // the canvas tap that asked for the card can still send its click when the card is up, onto a button or the backdrop
+  let opened = 0;
+  const fresh = () => performance.now() - opened < 400;
+  const closeSheet = () => { copytext.blur(); getSelection()?.removeAllRanges(); sheet.hidden = true; };
+  const pick = () => { copytext.focus(); copytext.setSelectionRange(0, copytext.value.length); };
+  window.hstCopySheet = text => {
+    if (!(window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)) return false;
+    const link = /^https?:/.test(text);
+    document.getElementById('copywhat').textContent = link ? 'Send this link to a friend: it opens the lobby' : 'Send this code to the other players';
+    copytext.ariaLabel = link ? 'Lobby link' : 'Lobby code';
+    copytext.value = text;
+    copybtn.textContent = 'Copy';
+    sharebtn.hidden = !navigator.share;
+    sheet.hidden = false;
+    opened = performance.now();
+    return true;
+  };
+  copybtn.onclick = () => {
+    if (fresh()) return;
+    const text = copytext.value, copied = () => { copybtn.textContent = 'Copied'; setTimeout(closeSheet, 700); };
+    pick();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch {}
+    if (ok) return copied();
+    const failed = () => { copybtn.textContent = 'Select and copy it'; pick(); };
+    try { navigator.clipboard.writeText(text).then(copied, failed); } catch { failed(); }
+  };
+  sharebtn.onclick = () => {
+    if (fresh()) return;
+    const text = copytext.value;
+    navigator.share(/^https?:/.test(text) ? { url: text } : { text }).then(closeSheet, () => {});
+  };
+  document.getElementById('copydone').onclick = () => fresh() || closeSheet();
+  sheet.onclick = e => { if (e.target === sheet && !fresh()) closeSheet(); };
   // a LAN answer from a tab opened by scanning a guest's code
   new BroadcastChannel('hst-rtc').onmessage = e => paste(String(e.data));
   try {
