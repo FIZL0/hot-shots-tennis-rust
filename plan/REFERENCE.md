@@ -70,7 +70,8 @@ LAN between browsers (M2k, `net/rtc.rs`): relay Off → Host gives a WebRTC offe
 QR (`?code=rtca…`) goes back to the host's tab (a tab opened with it hands it over by BroadcastChannel, or paste).
 Two-browser check: `tools/web_lan.mjs` (host, guest and answer pages in one headless Chromium, RTC stats, hashes).
 Headless check: `tools/web_check.mjs` (`WEB_INPUT` key/click script, `PROFILE`, `CHROME_FLAGS="--enable-features=Vulkan
---use-angle=vulkan"` for the real GPU; SwiftShader's WebGPU loses its device). M9: installable (manifest, "Add to Home Screen"; fullscreen landscape), plays offline once loaded
+--use-angle=vulkan"` for the real GPU; SwiftShader's WebGPU loses its device); Firefox/Zen: `tools/web_zen.mjs ISO OUT [query] [s]`
+(WebDriver BiDi, headless Zen, `RENDERER=webgpu|webgl2`; B456). M9: installable (manifest, "Add to Home Screen"; fullscreen landscape), plays offline once loaded
 (`web/sw.js`), on-screen touch controls on touch screens (`web/touch.js`: a virtual standard gamepad, hidden while a
 real pad is connected; `?touch` forces them on a desktop), settings/controls in localStorage, phones start on the Low
 graphics preset. Touch check: `tools/web_touch.mjs` (phone viewport, taps, offline).
