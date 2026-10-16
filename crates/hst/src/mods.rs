@@ -1044,7 +1044,11 @@ pub fn load_with(
         }
     }
     let visual = match &m.motions {
-        Some(f) => own_motions(&m.dir.join(f), &skeleton, &motions, only)?,
+        Some(f) => {
+            let springy = crate::spring::moved(&nodes, &joints);
+            let swung: Vec<&str> = joints.iter().zip(springy).filter(|(_, s)| *s).map(|(j, _)| j.name.as_str()).collect();
+            own_motions(&m.dir.join(f), &skeleton, &motions, only, &swung)?
+        }
         None => HashMap::new(),
     };
     let binds = crate::character::part_skins(&joints, &parts, meshes, bindposes);
@@ -1069,8 +1073,9 @@ fn eye_materials(dir: &Path) -> Vec<String> {
 /// A mod's own motions (§6 `motions`): each animation, named by its motion (`re_gu`, `sh_f_t`: the disc name
 /// without `_pc%02d`), keys the skeleton's joints by name with their local rotation and translation in game space.
 /// Its key times are seconds at 60 Hz (the source's own speed); it may run past the donor clip (drawn on its own
-/// clock, `Motion::drawn`) but not stop short of it. Gameplay keeps reading the donor's clip.
-fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>, only: Option<&[usize]>) -> Result<HashMap<usize, Clip>, String> {
+/// clock, `Motion::drawn`) but not stop short of it. Gameplay keeps reading the donor's clip. Joints in `swung`
+/// (spring chains, `spring::moved`) keep their rest pose for the springs to move.
+fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>, only: Option<&[usize]>, swung: &[&str]) -> Result<HashMap<usize, Clip>, String> {
     use hst_data::ani::{Anim, MOTIONS, Track};
     use gltf::animation::util::ReadOutputs;
     let (doc, blob) = open(path)?;
@@ -1093,7 +1098,7 @@ fn own_motions(path: &Path, skeleton: &Skeleton, donor: &HashMap<usize, Clip>, o
             let joint = c.target().node().name().unwrap_or("").replace(' ', "");
             // one motions file serves every costume, and costumes' extra joints differ: a joint this one lacks is skipped
             // (B99: costumes 4+ of many Fore! mods failed to load over it)
-            if !skeleton.names.contains(&joint) {
+            if !skeleton.names.contains(&joint) || swung.contains(&joint.as_str()) {
                 continue;
             }
             let tick = |t: f32| (t * 60.0).round() as i32 * d.ticks_per_frame as i32;
@@ -1345,7 +1350,8 @@ mod tests {
 
     /// An Out of Bounds mod's hair and earring chains (§3b `extras.spring`) reach the costume as spring joints. The
     /// rig whips 0.2 m sideways over 10 frames, then stands: the hair's joints swing off where they hang at rest
-    /// (the pose plus gravity's sag), then settle back there; the head they hang on is never turned.
+    /// (the pose plus gravity's sag), then settle back there; the head they hang on is never turned. B435: each
+    /// record's own joint swings (an earring's first link from the ear, a chain's last link), at any frame rate.
     #[test]
     fn oob_hair_swings_and_settles() {
         let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
@@ -1353,34 +1359,55 @@ mod tests {
         let Ok(m) = read(&dir) else { return eprintln!("no mods/hst-mods/oob_pc00_jasmine, skipped") };
         let mut s = Stores(default(), default(), default(), default());
         let c = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
-        // 23 records, 5 of them chain anchors (pinned)
-        assert_eq!(c.noise.as_ref().map_or(0, |n| n.springs.len()), 18);
+        // 23 records, two of them 0° ponytail roots (rigid)
+        assert_eq!(c.noise.as_ref().map_or(0, |n| n.springs.len()), 21);
+        // the mod's own reactions key the hair joints; the springs move them instead
+        let ering = c.joint("R_ering00").unwrap();
+        assert!(c.visual.values().all(|clip| clip.tracks.iter().all(|t| t.node != ering)), "an own motion keys a spring joint");
         use bevy::ecs::system::RunSystemOnce;
         let data = std::sync::Arc::new(c);
-        let run = |whip: f32| {
+        // the root's place at `t` s, drawn at `hz`: one Vec of joint rotations per frame
+        let run = |hz: u64, frames: usize, at: &dyn Fn(f32) -> Vec3| {
             let mut w = World::new();
             w.insert_resource(Time::<()>::default());
             let joints: Vec<Entity> = data.joints.iter().map(|j| w.spawn(j.rest).id()).collect();
             let root = w.spawn((crate::character::Rig { data: data.clone(), joints: joints.clone() }, GlobalTransform::IDENTITY, crate::spring::Spring::default())).id();
-            let mut frames = Vec::new();
-            for f in 0..240 {
+            let mut out = Vec::new();
+            for f in 0..frames {
                 for (e, j) in joints.iter().zip(&data.joints) {
                     *w.get_mut::<Transform>(*e).unwrap() = j.rest;
                 }
-                *w.get_mut::<GlobalTransform>(root).unwrap() = GlobalTransform::from_translation(Vec3::X * whip * f.min(10) as f32);
-                w.resource_mut::<Time>().advance_by(std::time::Duration::from_micros(16_667));
+                *w.get_mut::<GlobalTransform>(root).unwrap() = GlobalTransform::from_translation(at(f as f32 / hz as f32));
+                w.resource_mut::<Time>().advance_by(std::time::Duration::from_nanos(1_000_000_000 / hz));
                 w.run_system_once(crate::spring::swing).unwrap();
-                frames.push(joints.iter().map(|e| w.get::<Transform>(*e).unwrap().rotation).collect::<Vec<_>>());
+                out.push(joints.iter().map(|e| w.get::<Transform>(*e).unwrap().rotation).collect::<Vec<_>>());
             }
-            frames
+            out
         };
-        let (calm, whipped) = (run(0.0), run(0.02));
+        let whip = |t: f32| Vec3::X * 0.2 * (t * 6.0).min(1.0);
+        let (calm, whipped) = (run(60, 240, &|_| Vec3::ZERO), run(60, 240, &whip));
         let head = data.joint("Bip01Head").unwrap();
-        let apart = |f: usize| calm[f].iter().zip(&whipped[f]).map(|(a, b)| a.angle_between(*b)).fold(0f32, f32::max).to_degrees();
-        eprintln!("whipped vs calm, largest joint difference every 10 frames: {:?}", (0..240).step_by(10).map(|f| apart(f).round()).collect::<Vec<_>>());
-        assert!((0..12).any(|f| apart(f) > 5.0), "the hair never trailed");
-        assert!(apart(239) < 0.5, "the hair never settled: {}", apart(239));
+        let apart = |f: usize, of: &[usize]| of.iter().map(|&j| calm[f][j].angle_between(whipped[f][j])).fold(0f32, f32::max).to_degrees();
+        let all: Vec<usize> = (0..data.joints.len()).collect();
+        eprintln!("whipped vs calm, largest joint difference every 10 frames: {:?}", (0..240).step_by(10).map(|f| apart(f, &all).round()).collect::<Vec<_>>());
+        assert!((0..12).any(|f| apart(f, &all) > 5.0), "the hair never trailed");
+        assert!(apart(239, &all) < 0.5, "the hair never settled: {}", apart(239, &all));
         assert!(whipped.iter().all(|f| f[head] == data.joints[head].rest.rotation), "the hair turned the head");
+        // an earring's first link and the ponytail's last swing on their own records
+        for name in ["R_ering00", "pc00_pony05"] {
+            let j = data.joint(name).unwrap();
+            assert!((0..30).any(|f| apart(f, &[j]) > 2.0), "{name} never swung");
+        }
+        // drawn at 144 Hz, the hair swings as at 60 (a step's lag at most) and moves on every frame while it does
+        let fast = run(144, 576, &whip);
+        let pony = data.joint("pc00_pony03").unwrap();
+        let off = |f: &Vec<Quat>| f[pony].angle_between(data.joints[pony].rest.rotation).to_degrees();
+        let peak = |r: &[Vec<Quat>]| r.iter().map(off).fold(0f32, f32::max);
+        let (a, b) = (peak(&whipped[..30]), peak(&fast[..72]));
+        assert!((a - b).abs() < 3.0, "peak in the first half second: {a}° at 60 Hz, {b}° at 144 Hz");
+        let (a, b) = (off(&whipped[239]), off(&fast[575]));
+        assert!((a - b).abs() < 0.5, "at rest: {a}° at 60 Hz, {b}° at 144 Hz");
+        assert!(fast[1..40].windows(2).all(|w| w[0][pony] != w[1][pony]), "the hair held still between steps");
     }
 
     /// A Get a Grip mod's own reactions (§6 `motions`) are drawn in place of the donor's at the source's own

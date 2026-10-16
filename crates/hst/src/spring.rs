@@ -1,18 +1,27 @@
-//! Spring bones (character standard §3b), mods only: a joint with `extras.spring` is a point mass hung on its
-//! parent joint. Each drawn frame, after the pose, the mass trails where the pose puts it (pulled back by
-//! `stiffness`, velocity kept by `damping`, sagging by `gravity`, at most `limit` degrees off the posed direction)
-//! and its parent turns to point at it; a chain's first record (whose parent has none) is its pinned anchor. Out of Bounds' chains carry these (its `.rem` dynamics records); the
-//! game's own solver is not ported (notes/oob.md *Dynamics*), so this is a plain mass-spring that looks the part.
+//! Spring bones (character standard §3b), mods only: a joint with `extras.spring` swings about its own origin. Its
+//! tip (its child in the chain, else its rest offset carried on) is a point mass: each drawn frame, after the pose,
+//! the mass trails where the pose puts it (velocity kept by `damping`, sagging by `gravity`, drawn `stiffness` of
+//! the way back to the pose each 60 Hz step, at most `limit` degrees off the posed direction) and the joint turns to point at it; a 0° record is
+//! rigid. Out of Bounds' chains carry these (its `.rem` dynamics records: a chain's first record is the bone at the
+//! head, an earring's swinging, a ponytail root's held by stiffness 1 and a 0–5° limit); the game's own solver is
+//! not ported (notes/oob.md *Dynamics*), so this is a plain mass-spring that looks the part.
 //! Stock characters have no spring joints: their pose and the sim are untouched.
 
 use bevy::prelude::*;
 
 use crate::character::{Joint, Rig};
 
-/// A spring joint: the joint, its parent (the one that turns) and its §3b parameters.
+/// Where a spring joint's mass sits: on a child joint, or at an offset in the joint's own frame (a chain's leaf).
+#[derive(Clone, Copy)]
+enum Tip {
+    Child(usize),
+    Offset(Vec3),
+}
+
+/// A spring joint: the joint (the one that turns), its tip and its §3b parameters.
 pub struct Mass {
-    joint: usize,
-    pub(crate) parent: usize,
+    pub(crate) joint: usize,
+    tip: Tip,
     limit: f32,
     stiffness: f32,
     gravity: f32,
@@ -29,30 +38,65 @@ pub fn masses(nodes: &[gltf::Node], joints: &[Joint]) -> Vec<Mass> {
         }
         d
     };
-    let mut out: Vec<(usize, Mass)> = nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(k, n)| {
-            let e: serde_json::Value = serde_json::from_str(n.extras().as_ref()?.get()).ok()?;
-            let s = &e["spring"];
+    let spring = |k: usize| spring_of(nodes, k);
+    let springy: Vec<bool> = (0..joints.len()).map(|k| spring(k).is_some()).collect();
+    let mut out: Vec<(usize, Mass)> = (0..joints.len())
+        .filter_map(|k| {
+            let s = spring(k)?;
             let f = |key: &str, default: f64| s[key].as_f64().unwrap_or(default) as f32;
-            s.is_object().then_some(())?;
-            Some((depth(k), Mass { joint: k, parent: joints[k].parent?, limit: f("limit", 30.0).to_radians(), stiffness: f("stiffness", 0.5), gravity: f("gravity", 4.9), damping: f("damping", 0.83) }))
+            let limit = f("limit", 30.0).to_radians();
+            // a 0° record (a ponytail's root) never turns; neither does a joint at the skeleton's top
+            joints[k].parent?;
+            (limit > 0.0).then_some(())?;
+            // the tip: a child in the chain first (a pre-mirrored costume hangs its twin's chain beside its own), else
+            // any child, else the joint's rest offset from its parent carried on in its own frame
+            let children: Vec<usize> = (0..joints.len()).filter(|&c| joints[c].parent == Some(k)).collect();
+            let rest = joints[k].rest;
+            let tip = children.iter().find(|&&c| springy[c]).or(children.first()).map_or(Tip::Offset(rest.rotation.inverse() * rest.translation), |&c| Tip::Child(c));
+            Some((depth(k), Mass { joint: k, tip, limit, stiffness: f("stiffness", 0.5), gravity: f("gravity", 4.9), damping: f("damping", 0.83) }))
         })
         .collect();
-    // a chain's first record is its anchor (stiffness 1, limit 0..5°): pinned, it never turns the head it hangs on
-    let springy: Vec<usize> = out.iter().map(|(_, m)| m.joint).collect();
-    out.retain(|(_, m)| springy.contains(&m.parent));
     out.sort_by_key(|(d, _)| *d);
     out.into_iter().map(|(_, m)| m).collect()
 }
 
-/// A rig's masses in world space: position, last step's motion and the anchor it hung from then; `None` until the
-/// first pose.
+/// Joint `k`'s §3b `extras.spring`.
+fn spring_of(nodes: &[gltf::Node], k: usize) -> Option<serde_json::Value> {
+    let e: serde_json::Value = serde_json::from_str(nodes.get(k)?.extras().as_ref()?.get()).ok()?;
+    e["spring"].is_object().then(|| e["spring"].clone())
+}
+
+/// The joints a rig's springs move: the spring joints and everything under them. A mod's own motions leave them
+/// to the springs (Out of Bounds' clips key these bones in a space of their own, 60°+ jumps within a reaction).
+pub fn moved(nodes: &[gltf::Node], joints: &[Joint]) -> Vec<bool> {
+    let springy: Vec<bool> = (0..joints.len()).map(|k| spring_of(nodes, k).is_some()).collect();
+    (0..joints.len())
+        .map(|mut j| loop {
+            if springy[j] {
+                break true;
+            }
+            match joints[j].parent {
+                Some(p) => j = p,
+                None => break false,
+            }
+        })
+        .collect()
+}
+
+/// A rig's masses: position and motion in world space, and the direction each pointed at the last two steps in its
+/// joint's parent's frame (drawn between them); `None` until the first pose.
 #[derive(Component, Default)]
 pub struct Spring {
-    state: Vec<Option<(Vec3, Vec3, Vec3)>>,
+    state: Vec<Option<State>>,
     clock: f32,
+}
+
+#[derive(Clone, Copy)]
+struct State {
+    x: Vec3,
+    v: Vec3,
+    was: Vec3,
+    now: Vec3,
 }
 
 pub fn plugin(app: &mut App) {
@@ -75,10 +119,12 @@ fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig), Added<Rig>>) {
     }
 }
 
-/// One 60 Hz step of a mass toward `target`, hung at `origin`; returns the new position and motion.
+/// One 60 Hz step of a mass toward `target`, hung at `origin`; returns the new position and motion. The motion
+/// kept (`damping`) and gravity carry the mass on, then it is drawn `stiffness` of the way back to the pose: 1 holds
+/// the pose (Out of Bounds' chain roots), 0.1 lets a tip sway.
 fn step(m: &Mass, origin: Vec3, target: Vec3, (x, v): (Vec3, Vec3)) -> (Vec3, Vec3) {
     let len = (target - origin).length();
-    let v = v * m.damping + (target - x) * m.stiffness + Vec3::NEG_Y * m.gravity / 3600.0;
+    let v = v * m.damping + Vec3::NEG_Y * m.gravity / 3600.0;
     let posed = (target - origin).normalize_or_zero();
     // only the motion across the segment turns it: a pull along it (gravity on a tip posed upright) would shorten
     // the step and the renormalised turn would overshoot, swinging for ever
@@ -86,7 +132,8 @@ fn step(m: &Mass, origin: Vec3, target: Vec3, (x, v): (Vec3, Vec3)) -> (Vec3, Ve
     // ponytail: at most half the segment a step, so a whipped short one (an earring's 8 mm tip) can't flip through
     // its anchor; a sub-stepped solver if fast swings ever look stiff
     let v = (v - r * v.dot(r)).clamp_length_max(len * 0.5);
-    let mut dir = (x + v - origin).normalize_or(posed);
+    let free = x + v;
+    let mut dir = (free + (target - free) * m.stiffness - origin).normalize_or(posed);
     let off = posed.angle_between(dir);
     if off > m.limit {
         dir = Quat::from_rotation_arc(posed, dir).slerp(Quat::IDENTITY, 1.0 - m.limit / off) * posed;
@@ -109,53 +156,77 @@ pub(crate) fn swing(time: Res<Time>, mut rigs: Query<(&Rig, &GlobalTransform, &m
         }
         let masses = springs(rig);
         s.state.resize(masses.len(), None);
-        // ponytail: whole 60 Hz steps against this frame's pose (none while paused); sub-frame targets if it judders
+        // whole 60 Hz steps against this frame's pose (none while paused), each mass hung on where the step before it
+        // in the chain left its parent; then the frame draws each joint part way from the last step's direction to
+        // this one's, held in its parent's frame so it moves with the body between steps
         s.clock += time.delta_secs() * 60.0;
         let steps = (s.clock.floor() as usize).min(4);
         s.clock = (s.clock - s.clock.floor()).min(1.0);
-        let mut world: Vec<Option<Mat4>> = vec![None; rig.joints.len()];
-        fn posed(j: usize, rig: &Rig, root: Mat4, joints: &Query<&mut Transform>, w: &mut [Option<Mat4>]) -> Mat4 {
-            if let Some(m) = w[j] {
-                return m;
-            }
-            let local = joints.get(rig.joints[j]).map_or(Mat4::IDENTITY, |t| t.to_matrix());
-            let m = rig.data.joints[j].parent.map_or(root, |p| posed(p, rig, root, joints, w)) * local;
-            w[j] = Some(m);
-            m
-        }
+        let along = s.clock;
         let root = global.to_matrix();
-        for (m, state) in masses.iter().zip(s.state.iter_mut()) {
-            let parent = posed(m.parent, rig, root, &joints, &mut world);
-            let target = posed(m.joint, rig, root, &joints, &mut world).w_axis.truncate();
-            let origin = parent.w_axis.truncate();
-            // a fresh rig, or one placed somewhere new (a point's set-up), starts at the pose
-            let (mut x, mut v, mut at) = state.filter(|(x, ..)| x.distance(target) < 1.0).unwrap_or((target, Vec3::ZERO, origin));
-            for _ in 0..steps {
-                (x, v) = step(m, origin, target, (x, v));
-                at = origin;
+        let pose: Vec<Quat> = masses.iter().map(|m| joints.get(rig.joints[m.joint]).map_or(Quat::IDENTITY, |t| t.rotation)).collect();
+        let fresh = s.state.iter().all(Option::is_none);
+        for pass in 0..steps.max(fresh as usize) + 1 {
+            let draw = pass == steps.max(fresh as usize);
+            let mut world: Vec<Option<Mat4>> = vec![None; rig.joints.len()];
+            for (k, m) in masses.iter().enumerate() {
+                if let Ok(mut tf) = joints.get_mut(rig.joints[m.joint]) {
+                    tf.rotation = pose[k];
+                }
             }
-            *state = Some((x, v, at));
-            // between steps the head has moved on: the hair keeps the last step's direction (aiming at that step's
-            // world point would swing it round as fast as the body runs), still within the limit of this pose
-            let posed_dir = (target - origin).normalize_or_zero();
-            let mut dir = (x - at).normalize_or(posed_dir);
-            let off = posed_dir.angle_between(dir);
-            if off > m.limit {
-                dir = Quat::from_rotation_arc(posed_dir, dir).slerp(Quat::IDENTITY, 1.0 - m.limit / off) * posed_dir;
+            for (k, m) in masses.iter().enumerate() {
+                let above = rig.data.joints[m.joint].parent.map_or(root, |p| posed(p, rig, root, &joints, &mut world));
+                let at = posed(m.joint, rig, root, &joints, &mut world);
+                let origin = at.w_axis.truncate();
+                let target = match m.tip {
+                    Tip::Child(c) => posed(c, rig, root, &joints, &mut world).w_axis.truncate(),
+                    Tip::Offset(o) => at.transform_point3(o),
+                };
+                let posed_dir = (target - origin).normalize_or_zero();
+                let back = above.inverse();
+                let local = |d: Vec3| back.transform_vector3(d).normalize_or_zero();
+                let mut dir = if draw {
+                    s.state[k].map_or(posed_dir, |st| above.transform_vector3(st.was.lerp(st.now, along)).normalize_or(posed_dir))
+                } else {
+                    // a fresh rig, or one placed somewhere new (a point's set-up), starts at the pose
+                    let mut st = s.state[k].filter(|st| st.x.distance(target) < 1.0).unwrap_or(State { x: target, v: Vec3::ZERO, was: local(posed_dir), now: local(posed_dir) });
+                    if pass < steps {
+                        (st.x, st.v) = step(m, origin, target, (st.x, st.v));
+                        (st.was, st.now) = (st.now, local(st.x - origin));
+                    }
+                    s.state[k] = Some(st);
+                    (st.x - origin).normalize_or(posed_dir)
+                };
+                let off = posed_dir.angle_between(dir);
+                if off > m.limit {
+                    dir = Quat::from_rotation_arc(posed_dir, dir).slerp(Quat::IDENTITY, 1.0 - m.limit / off) * posed_dir;
+                }
+                let turn = Quat::from_rotation_arc(posed_dir, dir);
+                if turn.is_nan() || turn.angle_between(Quat::IDENTITY) < 1e-6 {
+                    continue;
+                }
+                // the joint's world rotation turned by `turn`, back in its parent's frame: through the whole matrix, as
+                // a left-hander's root mirrors (scale x −1) and a decomposed rotation would turn the hair the wrong way
+                let Ok(mut tf) = joints.get_mut(rig.joints[m.joint]) else { continue };
+                tf.rotation = turned(above, turn, tf.rotation);
+                world[m.joint] = Some(above * tf.to_matrix());
+                if let Tip::Child(c) = m.tip {
+                    world[c] = None;
+                }
             }
-            let turn = Quat::from_rotation_arc(posed_dir, dir);
-            if turn.is_nan() || turn.angle_between(Quat::IDENTITY) < 1e-6 {
-                continue;
-            }
-            // the parent's world rotation turned by `turn`, back in its parent's frame: through the whole matrix, as a
-            // left-hander's root mirrors (scale x −1) and a decomposed rotation would turn the hair the wrong way
-            let above = rig.data.joints[m.parent].parent.map_or(root, |p| posed(p, rig, root, &joints, &mut world));
-            let Ok(mut tf) = joints.get_mut(rig.joints[m.parent]) else { continue };
-            tf.rotation = turned(above, turn, tf.rotation);
-            world[m.parent] = Some(above * tf.to_matrix());
-            world[m.joint] = None;
         }
     }
+}
+
+/// Joint `j`'s world matrix under `root` as its transforms stand, cached in `w`.
+fn posed(j: usize, rig: &Rig, root: Mat4, joints: &Query<&mut Transform>, w: &mut [Option<Mat4>]) -> Mat4 {
+    if let Some(m) = w[j] {
+        return m;
+    }
+    let local = joints.get(rig.joints[j]).map_or(Mat4::IDENTITY, |t| t.to_matrix());
+    let m = rig.data.joints[j].parent.map_or(root, |p| posed(p, rig, root, joints, w)) * local;
+    w[j] = Some(m);
+    m
 }
 
 #[cfg(test)]
@@ -163,7 +234,7 @@ mod tests {
     use super::*;
 
     fn mass(limit: f32) -> Mass {
-        Mass { joint: 1, parent: 0, limit: limit.to_radians(), stiffness: 0.5, gravity: 4.9, damping: 0.83 }
+        Mass { joint: 0, tip: Tip::Child(1), limit: limit.to_radians(), stiffness: 0.5, gravity: 4.9, damping: 0.83 }
     }
 
     #[test]
@@ -198,10 +269,17 @@ mod tests {
         }
     }
 
+    fn k_tip(m: &Mass) -> usize {
+        match m.tip {
+            Tip::Child(c) => c,
+            Tip::Offset(_) => unreachable!(),
+        }
+    }
+
     /// A chain hung off a head moved by `head(frame)` (translation): per frame the masses step in order, each turning its
-    /// parent's subtree as `swing` does; returns each frame's largest angle off the pose.
+    /// own subtree as `swing` does; returns each frame's largest angle off the pose.
     fn chain(params: &[(f32, f32, f32)], seg: f32, frames: usize, head: impl Fn(usize) -> Vec3) -> Vec<f32> {
-        let masses: Vec<Mass> = params.iter().enumerate().map(|(k, &(limit, stiffness, damping))| Mass { joint: k + 1, parent: k, limit: limit.to_radians(), stiffness, gravity: 4.9, damping }).collect();
+        let masses: Vec<Mass> = params.iter().enumerate().map(|(k, &(limit, stiffness, damping))| Mass { joint: k, tip: Tip::Child(k + 1), limit: limit.to_radians(), stiffness, gravity: 4.9, damping }).collect();
         // rest: hanging out sideways and down, a slight curve
         let rest: Vec<Vec3> = (0..=params.len()).map(|k| Vec3::new(k as f32 * seg * 0.7, -(k as f32) * seg * 0.7, 0.0)).collect();
         let mut state: Vec<Option<(Vec3, Vec3)>> = vec![None; masses.len()];
@@ -211,14 +289,14 @@ mod tests {
             let posed = p.clone();
             let mut worst = 0f32;
             for (i, m) in masses.iter().enumerate() {
-                let (origin, target) = (p[m.parent], p[m.joint]);
+                let (origin, target) = (p[m.joint], p[k_tip(m)]);
                 let st = step(m, origin, target, state[i].unwrap_or((target, Vec3::ZERO)));
                 state[i] = Some(st);
                 let turn = Quat::from_rotation_arc((target - origin).normalize(), (st.0 - origin).normalize());
-                for q in p.iter_mut().skip(m.joint) {
+                for q in p.iter_mut().skip(m.joint + 1) {
                     *q = origin + turn * (*q - origin);
                 }
-                worst = worst.max((p[m.joint] - p[m.parent]).angle_between(posed[m.joint] - posed[m.parent]));
+                worst = worst.max((p[k_tip(m)] - p[m.joint]).angle_between(posed[k_tip(m)] - posed[m.joint]));
             }
             out.push(worst);
         }
