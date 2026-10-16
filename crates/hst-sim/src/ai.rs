@@ -4,19 +4,57 @@
 //! picked per player from its character and outfit (`menu_row`) and placed at match start (`Choice::new`).
 #![deny(clippy::float_arithmetic)]
 
+use crate::lines::{self, BASELINE, BOX_MIDDLE, DOUBLES_SIDELINE};
+use crate::player::{STAMINA_FRAMES, TIRED};
 use crate::ps2::{self, F};
+use crate::rng::{coin, r15};
+use crate::shot::branch;
 
 /// Rows in AIParam.csv.
 pub const ROWS: usize = 168;
+/// The characters in a block of rows, the blocks per half, and the doubles half's first row.
+pub const CHARACTERS: usize = 14;
+pub const DOUBLES_ROWS: usize = 84;
 
-/// One AIParam.csv row as the game stores it (0x118 bytes; frame counts, percentages, metres, degrees).
+/// A row's play style (`AiParams::style`).
+pub mod style {
+    pub const NET: u8 = 1;
+    pub const BASE: u8 = 2;
+    /// Either, by the AI's net pick (`Mind::net`).
+    pub const ALL: u8 = 3;
+}
+
+/// A doubles formation (`AiParams::formation`, the player's formation byte).
+pub mod formation {
+    /// One up at the net, one back (雁行).
+    pub const STAGGERED: u8 = 0;
+    /// Both up.
+    pub const ATTACKING: u8 = 1;
+    /// Both back.
+    pub const DEFENSIVE: u8 = 2;
+}
+
+/// A player's move state as the AI's run estimates read it (`Runner::moving`, `rally::Body::moving`).
+pub mod moving {
+    /// Standing: the estimate starts from a standstill.
+    pub const STANDING: u8 = 0;
+    /// Running: it runs on from the frames run so far.
+    pub const RUNNING: u8 = 1;
+    /// Also read as a standstill (the original's third state; the app sets only the other two).
+    pub const STOPPED: u8 = 2;
+}
+
+/// The size of a row as the game holds it in memory (`AiParams::bytes`).
+pub const RECORD_BYTES: usize = 0x118;
+
+/// One AIParam.csv row as the game stores it (`RECORD_BYTES`; frame counts, percentages, metres, degrees).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AiParams {
     /// 段位 (rank) modulo 17.
     pub rank: u8,
-    /// Play style: 1 NET, 2 BASE, 3 ALL.
+    /// Play style (`style::*`).
     pub style: u8,
-    /// Doubles formation beside a human partner: 0 staggered (雁行), 1 attacking, 2 defensive.
+    /// Doubles formation beside a human partner (`formation::*`).
     pub formation: u8,
     /// Timing error (frames): stroke, volley, smash base, smash random, serve.
     pub stroke_error: i32,
@@ -132,9 +170,9 @@ impl AiParams {
         c.next(); // name
         let rank = (int(c) % 17) as u8;
         let style = match c.next() {
-            Some(b"ALL") => 3,
-            Some(b"NET") => 1,
-            Some(b"BASE") => 2,
+            Some(b"ALL") => style::ALL,
+            Some(b"NET") => style::NET,
+            Some(b"BASE") => style::BASE,
             _ => return None,
         };
         Some(AiParams {
@@ -207,7 +245,7 @@ impl AiParams {
         rows
     }
 
-    /// The record's 0x118 bytes as the game holds them in memory.
+    /// The record's `RECORD_BYTES` bytes as the game holds them in memory.
     pub fn bytes(&self) -> Vec<u8> {
         let mut b = vec![self.rank, self.style, self.formation, 0];
         let mut put = |v: &[i32]| v.iter().for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
@@ -242,7 +280,7 @@ pub fn menu_row(character: u8, outfit: u8) -> u8 {
     if block == 2 {
         block = 3;
     }
-    block * 14 + character
+    block * CHARACTERS as u8 + character
 }
 
 /// A computer player's row and level at match start.
@@ -261,24 +299,24 @@ impl Choice {
     /// From the player's setup word (row in the low byte; a forced level 1..=4 in the second byte, which then puts
     /// the character in that block) and the character; doubles use the second half of the table.
     pub fn new(setup: u32, character: u8, doubles: bool) -> Self {
-        let forced = (setup >> 8) & 0xff;
+        let [menu_row, forced, strategy, _] = setup.to_le_bytes();
         let (level, row) = if (1..=4).contains(&forced) {
-            (forced as u8 - 1, character as u32 + 14 * (forced - 1))
+            (forced - 1, character as usize + CHARACTERS * (forced - 1) as usize)
         } else {
             // the game looks the level up in a six-entry table by block; every entry is 3
-            (3, setup & 0xff)
+            (3, menu_row as usize)
         };
-        let row = row.min(83) + if doubles { 84 } else { 0 };
+        let row = row.min(DOUBLES_ROWS - 1) + if doubles { DOUBLES_ROWS } else { 0 };
         let reach = match level {
             0 => 2.5,
             1 => (F(2.5) + 0.35000002).0,
             _ => (F(2.5) + 0.70000005).0,
         };
-        Choice { row: row as usize, level, strategy: (setup >> 16) as u8, reach }
+        Choice { row, level, strategy, reach }
     }
 }
 
-/// An opponent's shot as the AI remembers it: its kind (0 serve, 1 ground stroke, 2 volley, 3 smash, …) and the
+/// An opponent's shot as the AI remembers it: its kind (the hitter's swing branch, `shot::branch::*`) and the
 /// ball's velocity off the racket (m/frame).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Seen {
@@ -325,15 +363,18 @@ fn pace(last: [f32; 3], earlier: [f32; 3], p: [i32; 4]) -> Option<i32> {
     (pct >= p[0]).then(|| (p[1] * (pct - p[0]) / 5).min(p[2]) * sign)
 }
 
-/// A `p` % chance on the game's generator (bits 16..30, mod 100).
+/// The serve as a `Seen::kind`.
+const SERVE: i32 = branch::SERVE as i32;
+
+/// A `p` % chance on the game's generator (its 15-bit draw, mod 100).
 fn chance(roll: &mut impl FnMut() -> u32, p: i32) -> bool {
-    ((roll() >> 16 & 0x7fff) % 100) < p.max(0) as u32
+    (r15(roll()) % 100) < p.max(0) as u32
 }
 
 /// A random error of up to `n` frames either way (`base` added to its size): a sign draw, then a size draw.
 fn error(roll: &mut impl FnMut() -> u32, base: i32, n: i32) -> i32 {
-    let sign = if roll() >> 16 & 1 == 0 { -1 } else { 1 };
-    sign * (base + (roll() >> 16 & 0x7fff) as i32 % (n + 1))
+    let sign = if coin(roll()) { 1 } else { -1 };
+    sign * (base + r15(roll()) as i32 % (n + 1))
 }
 
 /// The pace error adds to an error's size and gives it its sign.
@@ -362,13 +403,13 @@ impl AiParams {
         if let Some(s) = shots {
             // the rally's change of pace (the shot before wasn't a serve), else the serve's against the last serve
             let rally = match s.before {
-                Some(b) if b.kind != 0 && chance(roll, self.pace_error[3]) => Some(pace(s.last.vel, b.vel, self.pace_error)),
+                Some(b) if b.kind != SERVE && chance(roll, self.pace_error[3]) => Some(pace(s.last.vel, b.vel, self.pace_error)),
                 _ => None,
             };
             let paced = match rally {
                 Some(p) => p,
                 None => match s.serve_before {
-                    Some(v) if s.last.kind == 0 && receiver && chance(roll, self.serve_pace_error[3]) => {
+                    Some(v) if s.last.kind == SERVE && receiver && chance(roll, self.serve_pace_error[3]) => {
                         pace(s.last.vel, v, self.serve_pace_error)
                     }
                     _ => None,
@@ -379,7 +420,7 @@ impl AiParams {
             // a ball faster than react_speed[0] km/h adds react_speed[1] frames, react_speed[2] % of the time
             if !first
                 && chance(roll, self.react_speed[2])
-                && (s.last.kind != 0 || receiver)
+                && (s.last.kind != SERVE || receiver)
                 && 3600.0 * (60.0 * F(speed(s.last.vel))) / 1000.0 > self.react_speed[0] as f32
             {
                 t.fast_ball = self.react_speed[1];
@@ -432,7 +473,7 @@ pub struct Picks {
 
 /// A level picked from a % mix: the first bucket the draw (mod 100) falls under, else the last.
 fn level(roll: &mut impl FnMut() -> u32, mix: &[i32]) -> u8 {
-    let u = ((roll() >> 16 & 0x7fff) % 100) as i32;
+    let u = (r15(roll()) % 100) as i32;
     let mut edge = 0;
     for (i, &m) in mix[..mix.len() - 1].iter().enumerate() {
         edge += m;
@@ -466,10 +507,11 @@ impl AiParams {
 
 impl AiParams {
     /// The reaction (frames the AI stands before going for the ball) drawn after an opponent's hit, after the
-    /// timing errors and the shot-choice draws: after a smash (`last.kind` 4) the after-smash frames, else the base
+    /// timing errors and the shot-choice draws: after a smash the after-smash frames, else the base
     /// one (the net value within 6.4 m of the net, `near_net`; the doubles columns beside a human partner, else the
     /// singles ones) plus the fast-ball frames; then a random part up to the row's, and a lob (`lob`: a △ ground
-    /// stroke, volley or dive) or special serve adds half its frames plus up to half again.
+    /// stroke, volley or dive) or special serve adds half its frames plus up to half again. `near_net`: within the
+    /// service line.
     pub fn reaction(
         &self,
         t: &Timing,
@@ -480,8 +522,8 @@ impl AiParams {
         near_net: bool,
         roll: &mut impl FnMut() -> u32,
     ) -> i32 {
-        let mut upto = |n: i32| (roll() >> 16 & 0x7fff) as i32 % (n + 1);
-        let r = if last.kind == 4 {
+        let mut upto = |n: i32| r15(roll()) as i32 % (n + 1);
+        let r = if last.kind == branch::SMASH as i32 {
             self.react_after_smash + upto(self.react_random)
         } else {
             let base = match (beside_human, near_net) {
@@ -493,9 +535,9 @@ impl AiParams {
             t.fast_ball + upto(self.react_random) + base
         };
         let half = |n: i32, upto: &mut dyn FnMut(i32) -> i32| n / 2 + upto(n / 2);
-        r + if (1..=3).contains(&last.kind) && lob {
+        r + if (branch::GROUND as i32..=branch::DIVE as i32).contains(&last.kind) && lob {
             half(self.react_lob, &mut upto)
-        } else if last.kind == 0 && special_serve {
+        } else if last.kind == SERVE && special_serve {
             half(self.react_special_serve, &mut upto)
         } else {
             0
@@ -521,8 +563,8 @@ impl Guess {
     /// is the half the serve comes from (`ad`: the ad court serves), else the centre line. `side`: its side sign.
     pub fn target_x(self, side: f32, ad: bool) -> f32 {
         match (self, ad) {
-            (Guess::Wide, false) => (F(side) * 5.485).0,
-            (Guess::Other, true) => (F(side) * -5.485).0,
+            (Guess::Wide, false) => (F(side) * DOUBLES_SIDELINE).0,
+            (Guess::Other, true) => (F(side) * -F(DOUBLES_SIDELINE)).0,
             _ => 0.0,
         }
     }
@@ -544,6 +586,22 @@ impl Guess {
     }
 }
 
+/// TParam's hand byte as the contact search reads it: the strong side it runs round to (`stand_side`).
+pub mod strong {
+    /// Right-handed: ball x − reach·side.
+    pub const MINUS: u8 = 1;
+    /// Left-handed: ball x + reach·side.
+    pub const PLUS: u8 = 2;
+}
+
+/// The AI never plays a ball nearer the net than this (|z|, m).
+pub const NET_GAP: f32 = 1.5;
+/// How far out (|x|) and back (|z|: 6 m past the baseline) a spot can lie and still be run to (m).
+const RUN_WIDTH: f32 = 8.685;
+const RUN_DEPTH: f32 = 17.885;
+/// The run estimate for a spot it can't reach.
+pub const UNREACHABLE: i32 = 9999;
+
 /// A side of the ball the AI's contact search can stand on: the path entry it found (its index, counted from the
 /// path's start) and the ball's x and z there.
 pub type Spot = (i32, [f32; 2]);
@@ -557,14 +615,13 @@ impl AiParams {
 
     /// How far out the AI runs round: the court's half width (singles or doubles) plus the row's extend.
     pub fn run_round_width(&self, singles: bool) -> f32 {
-        (F(if singles { 4.115 } else { 5.485 }) + self.strong_side_extend).0
+        (F(lines::sideline(!singles)) + self.strong_side_extend).0
     }
 }
 
 /// Where the AI stands when its contact search found the ball on both sides of it: `minus` (standing at ball x −
 /// reach·side, the forehand of a right-hander) or `plus` (ball x + reach·side). It keeps the stand spot nearer to
-/// `from` (its position, x and z), unless the farther one is its `strong` side (1 minus, 2 plus: TParam's hand,
-/// right 1) and the run-round roll passed (`width`: Some(`run_round_width`)) and that spot's |x| is inside the
+/// `from` (its position, x and z), unless the farther one is its `strong` side (`strong::*`) and the run-round roll passed (`width`: Some(`run_round_width`)) and that spot's |x| is inside the
 /// width. Each spot stands `depth` (player stat) · side / 2 short of the ball. Some(true) for minus, Some(false) for
 /// plus, None when neither was found. As the game, a side found at the path's first entry (index 0) isn't weighed.
 /// ponytail: only minus at index 0 found makes the game read the entry before the path; this keeps minus then.
@@ -593,8 +650,8 @@ pub fn stand_side(
     };
     let nearer_minus = dist(x[0], m[1]) <= dist(x[1], p[1]);
     let strong_minus = match strong {
-        1 => true,
-        2 => false,
+        strong::MINUS => true,
+        strong::PLUS => false,
         _ => return Some(nearer_minus),
     };
     let run = strong_minus != nearer_minus
@@ -660,7 +717,7 @@ impl Mind {
 
     /// The tail of a timing draw made at a point reset or the serve: its team gets 2 to 4 hits before the next pick.
     pub fn count(&mut self, roll: &mut impl FnMut() -> u32) {
-        self.net_left = (roll() >> 16 & 0x7fff) as i32 % 3 + 2;
+        self.net_left = r15(roll()) as i32 % 3 + 2;
     }
 
     /// Its team has hit (the hit-message draw, in place of `count`).
@@ -690,11 +747,11 @@ impl Mind {
         }
     }
 
-    /// The routine its rally state plays, by the row's style: 1 net, 2 baseline, 3 (ALL) its pick.
+    /// The routine its rally state plays, by the row's style: NET, BASE, or (ALL) its pick.
     pub fn play(&self, style: u8) -> Play {
         match style {
-            1 => Play::Net,
-            2 => Play::Base,
+            style::NET => Play::Net,
+            style::BASE => Play::Base,
             _ if self.net => Play::Net,
             _ => Play::Base,
         }
@@ -705,10 +762,10 @@ impl Mind {
         self.active = chance(roll, 50);
     }
 
-    /// The players react to the point: an ALL-style AI (`style` 3) leans 5 toward the pick that won it (away from
+    /// The players react to the point: an ALL-style AI leans 5 toward the pick that won it (away from
     /// the one that lost), within `NET_RATE`, and picks again.
     pub fn point_result(&mut self, style: u8, won: bool, roll: &mut impl FnMut() -> u32) {
-        if style != 3 {
+        if style != style::ALL {
             return;
         }
         self.net_rate += if won == self.net { 5 } else { -5 };
@@ -720,24 +777,29 @@ impl Mind {
 /// Where a serving AI walks along the baseline before its toss (x; its side sign `side`, `ad` the ad court): its
 /// usual spot near the centre mark, or at serve level 0 one of three spots out to the singles or doubles sideline.
 pub fn serve_spot(level0: bool, doubles: bool, side: f32, ad: bool, roll: &mut impl FnMut() -> u32) -> f32 {
+    // near the centre mark; the middle of the half (the doubles half's, or the service box's); near the sideline
+    // (0.7 in from it, one ulp off the round numbers 4.785 and 3.415, as the game has them)
+    const CENTRE: f32 = 0.7;
+    const DOUBLES_MIDDLE: f32 = 2.7425;
+    const DOUBLES_WIDE: f32 = f32::from_bits(0x4099_1eb9);
+    const SINGLES_WIDE: f32 = f32::from_bits(0x405a_8f5b);
     let x = if level0 {
-        match (roll() >> 16 & 0x7fff) % 3 {
-            0 => 0.7,
-            1 if doubles => 2.7425,
-            1 => 2.0575,
-            // one ulp off the round numbers, as the game has them
-            _ if doubles => f32::from_bits(0x4099_1eb9), // 4.785
-            _ => f32::from_bits(0x405a_8f5b),            // 3.415
+        match r15(roll()) % 3 {
+            0 => CENTRE,
+            1 if doubles => DOUBLES_MIDDLE,
+            1 => BOX_MIDDLE,
+            _ if doubles => DOUBLES_WIDE,
+            _ => SINGLES_WIDE,
         }
     } else {
-        0.7
+        CENTRE
     };
     (F(x) * side * if ad { -1.0 } else { 1.0 }).0
 }
 
 /// How long a serving AI stands on its spot before the toss: 60 to 119 frames.
 pub fn serve_wait(roll: &mut impl FnMut() -> u32) -> i32 {
-    (roll() >> 16 & 0x7fff) as i32 % 60 + 60
+    r15(roll()) as i32 % 60 + 60
 }
 
 /// What the AI's run estimate reads off its player: its side and spot, its running state and the match's
@@ -755,8 +817,8 @@ pub struct Runner {
     /// Frames into the current stamina second, and frames run so far.
     pub tick: i32,
     pub run: i32,
-    /// Its move state: 1 running (the estimate runs on from `run`), 0 and 2 standing (from a standstill); any
-    /// other keeps `run`.
+    /// Its move state (`moving::*`): running, the estimate runs on from `run`; standing or stopped, from a
+    /// standstill; any other keeps `run`.
     pub moving: u8,
     pub players: i32,
     pub rally: bool,
@@ -774,8 +836,8 @@ impl Runner {
     pub fn frames_to(&self, to: [f32; 2]) -> i32 {
         let sign = |v: f32| if v < 0.0 { -1 } else { 1 };
         let [x, z] = to;
-        if sign(self.side) == sign(z) || !(abs(x) <= 8.685) || abs(z) < 1.5 || !(abs(z) <= 17.885) {
-            return 9999;
+        if sign(self.side) == sign(z) || !(abs(x) <= RUN_WIDTH) || abs(z) < NET_GAP || !(abs(z) <= RUN_DEPTH) {
+            return UNREACHABLE;
         }
         let (dz, dx) = (F(z) - self.pos[1], F(x) - self.pos[0]);
         let mut dist = (dz * dz).madd(dx, dx).sqrt();
@@ -792,8 +854,8 @@ impl Runner {
         };
         let (mut st, mut tick, mut run) = (self.stamina, self.tick, self.run);
         match self.moving {
-            0 | 2 => run = 0,
-            1 => {
+            moving::STANDING | moving::STOPPED => run = 0,
+            moving::RUNNING => {
                 run += 1;
                 (st, tick) = drain(st, tick);
             }
@@ -809,18 +871,18 @@ impl Runner {
             frames += 1;
             dist -= v;
         }
-        if st >= crate::player::TIRED {
+        if st >= TIRED {
             // the frames left before it tires, in one go
-            let n = (59 - tick) + (st - crate::player::TIRED) * 60;
+            let n = (STAMINA_FRAMES - 1 - tick) + (st - TIRED) * STAMINA_FRAMES;
             let fresh = F(v) * n as f32;
             if dist <= fresh {
                 return frames + fit(dist, v);
             }
             dist -= fresh;
-            (frames, tick, st) = (frames + n, 59, crate::player::TIRED);
+            (frames, tick, st) = (frames + n, STAMINA_FRAMES - 1, TIRED);
         }
         while !(dist <= 0.0) {
-            let drained = tick + 1 >= crate::player::STAMINA_FRAMES;
+            let drained = tick + 1 >= STAMINA_FRAMES;
             (st, tick) = drain(st, tick);
             if drained {
                 v = speed(st, run);
@@ -855,7 +917,7 @@ pub struct Contact {
 pub struct Searcher<'a> {
     pub row: &'a AiParams,
     pub reach: &'a crate::player::ReachStats,
-    /// TParam's hand: 1 minus, 2 plus (see `stand_side`).
+    /// TParam's hand (`strong::*`).
     pub strong: u8,
     pub singles: bool,
     /// A doubles AI beside a human partner (voids the run-round roll).
@@ -890,7 +952,7 @@ impl Searcher<'_> {
         roll: &mut impl FnMut() -> u32,
     ) -> Option<Contact> {
         let r = self.reach;
-        let far = 1.3 * F(r.reach);
+        let far = crate::swing::STRETCH * F(r.reach);
         let run = self.row.run_round(self.beside_human, roll);
         let top = F(r.base) + far;
         let w = Window {
@@ -937,7 +999,7 @@ impl Searcher<'_> {
         let over = |v: F| 0.05 * v / 0.5;
         let score = |b: [f32; 3]| {
             let mut s = F(abs((F(h) - b[1]).0));
-            for p in [over(F(abs(b[2])) - 11.885), over(F(abs(b[0])) - width)] {
+            for p in [over(F(abs(b[2])) - BASELINE), over(F(abs(b[0])) - width)] {
                 if !(p <= 0.0) {
                     s += p;
                 }
@@ -979,7 +1041,7 @@ impl Searcher<'_> {
                 break;
             }
             let [x, y, z] = b.pos;
-            if sign(side) == sign(z) || abs(z) < 1.5 {
+            if sign(side) == sign(z) || abs(z) < NET_GAP {
                 continue;
             }
             if b.bounces >= min_bounces && w.low <= y && y <= w.top {
