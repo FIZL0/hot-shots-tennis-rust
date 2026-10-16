@@ -845,7 +845,7 @@ const pkg = webgpu ? './pkg-webgpu/' : './pkg/';
 // hst.js and its wasm from the build this page is (B470: sw.js serves `?v=` from that build's cache)
 const pin = /^[0-9a-z]{1,40}$/.test(loaded) ? `?v=${loaded}` : '';
 say('Loading the game…');
-const { default: init, pack_begin, pack_part, run, paste, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js' + pin);
+const { default: init, pack_begin, pack_part, run, paste, clipboard, typed_code, add_card, add_mod_file, add_mod_lazy, mod_loaded, mod_saved, import_mod, mod_paths, mod_file, mod_status, drop_mod } = await import(pkg + 'hst.js' + pin);
 
 // the game's wasm, with how much of it has arrived
 async function wasm() {
@@ -1023,6 +1023,17 @@ async function start() {
   window.hstModSave = (id, name) => track(save(id, name));
   // Join by Code takes the last text pasted on the page
   addEventListener('paste', e => paste(e.clipboardData.getData('text')));
+  // B526: Paste reads the clipboard (web.rs read_clipboard). iOS Safari reads it only inside a tap's own event (then
+  // shows its own Paste button) and the game sees the tap a frame later: refused then, the next tap or click reads it
+  let clipTap = false, clipBusy = false;
+  const readClip = again => {
+    if (clipBusy) return;
+    clipBusy = true;
+    const done = (t, more) => { clipBusy = false; clipTap = more; clipboard(t, more); };
+    try { navigator.clipboard.readText().then(t => done(t, false), () => done(null, again)); } catch { done(null, false); }
+  };
+  window.hstReadClipboard = () => readClip(true);
+  for (const e of ['touchend', 'click']) addEventListener(e, () => clipTap && readClip(false), true);
   // Join by Code's code entry on a phone (web.rs code_entry): the input over the canvas takes the taps, its keys go
   // to the game one at a time (a space kept in it so Backspace always fires)
   const keys = document.getElementById('codekeys');
@@ -1047,7 +1058,7 @@ async function start() {
   window.hstCopySheet = text => {
     if (!(window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)) return false;
     const link = /^https?:/.test(text);
-    document.getElementById('copywhat').textContent = link ? 'Send this link to a friend: it opens the lobby' : 'Send this code to the other players';
+    document.getElementById('copywhat').textContent = /code=rtca/.test(text) ? 'Send this link back to the host: they Paste it in their lobby' : link ? 'Send this link to a friend: it opens the lobby' : 'Send this code to the other players';
     copytext.ariaLabel = link ? 'Lobby link' : 'Lobby code';
     copytext.value = text;
     copybtn.textContent = 'Copy';
@@ -1073,7 +1084,7 @@ async function start() {
   };
   document.getElementById('copydone').onclick = () => fresh() || closeSheet();
   sheet.onclick = e => { if (e.target === sheet && !fresh()) closeSheet(); };
-  // a LAN answer from a tab opened by scanning a guest's code
+  // a LAN answer from a tab opened with a guest's link
   new BroadcastChannel('hst-rtc').onmessage = e => paste(String(e.data));
   try {
     run();

@@ -14,7 +14,7 @@
 
 use super::super::frame::{self, Cell, Chip, Plate, Spec, Thumb};
 use super::super::{Draw, Menu, WHITE, Who};
-use super::{Act, Item, OK, SETTINGS, shared, spinner, ticket_only};
+use super::{Act, HOST_LAN, Item, OK, SETTINGS, shared, spinner, ticket_only};
 use crate::net::Room;
 use bevy::prelude::default;
 
@@ -81,7 +81,7 @@ impl Menu {
                 Item::Button("Start" | "Ready") => g.start,
                 Item::Button("Code") => g.code,
                 Item::Button("Copy Link") => g.copy,
-                Item::Button("Public") => g.public,
+                Item::Button("Public" | "Paste") => g.public,
                 Item::Button("Chat") => g.chat,
                 Item::Button(_) => g.back,
             })
@@ -107,7 +107,7 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
         frame::rounded(d, g.mode, g.mode[3] / 2.0, frame::NAVY, 64.0);
     }
     code_pill(d, m, rm, &g, &on);
-    for (b, rect) in [("Code", g.code), ("Copy Link", g.copy), ("Public", g.public)] {
+    for (b, rect) in [("Code", g.code), ("Copy Link", g.copy), ("Public", g.public), ("Paste", g.public)] {
         if let Some(k) = at(Item::Button(b)) {
             d.hit(rect, Act::Row(k, OK));
         }
@@ -167,7 +167,9 @@ fn code_pill(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, on: &dyn Fn(Item)
     }
     let dim = shared(&m.net).is_none();
     let public = !r.private;
-    let buttons = [(Item::Button("Copy Link"), g.copy, "Copy link", frame::BUTTON), (Item::Button("Public"), g.public, if public { "Public" } else { "Private" }, if public { frame::GREEN } else { frame::BUTTON })];
+    // B526: a browser's LAN lobby's Paste (a guest's link back) where Public is
+    let side = if m.lan_host() { (Item::Button("Paste"), g.public, "Paste", frame::BUTTON) } else { (Item::Button("Public"), g.public, if public { "Public" } else { "Private" }, if public { frame::GREEN } else { frame::BUTTON }) };
+    let buttons = [(Item::Button("Copy Link"), g.copy, "Copy link", frame::BUTTON), side];
     for (it, rect, words, fill) in buttons {
         let [bx, by, bw, bh] = rect;
         if bw <= 0.0 {
@@ -264,7 +266,9 @@ fn plate(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32, foc
     let seat = r.seats.get(i).and_then(Option::as_ref);
     let Some(st) = seat else {
         // an open seat: the computer plays it unless someone joins
-        let pl = Plate { p: i, owner: "Open seat", slow: false, name: "Computer", sub: "Until someone joins", chip: Chip::Open, chip_words: "Open", dashed: true, remove: false, focus, remove_focus: false, random: false, hide, empty: true, mod_note: None, device: None };
+        // B526: a browser's LAN lobby says how it's joined, in the well
+        let mod_note = m.lan_host().then(|| HOST_LAN.to_string());
+        let pl = Plate { p: i, owner: "Open seat", slow: false, name: "Computer", sub: "Until someone joins", chip: Chip::Open, chip_words: "Open", dashed: true, remove: false, focus, remove_focus: false, random: false, hide, empty: true, mod_note, device: None };
         return frame::plate(d, &pl, rect, s);
     };
     let com = !st.human();
