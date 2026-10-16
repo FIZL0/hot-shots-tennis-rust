@@ -3,6 +3,8 @@
 //! nine ways, one hint (`MENU/WALL/WALLnn.XB0` → `L_txtNN.tm2`, 512×256, text and pictures baked in) on the pane, and
 //! "Now Loading..." bottom right. Rects are the original's, on its 640×448 screen; the screen is the centred 4:3
 //! picture (`widescreen.rs`), the court picture fills the window's width. Shown only while the port loads (`mode.rs`).
+//! M117: a court mod's own picture (`mods_court::LOADING`, any size) stands in for its layout court's, covering the
+//! window at its own aspect (cropped, never stretched); a mod without one shows the layout court's.
 //!
 //! Which hint: the original keeps a "seen" bit per hint and game mode in the save (here `hints.txt` beside the disc).
 //! Hint 0 (the welcome) comes first; then the mode's first list in order while any of it is unseen; then a random
@@ -102,6 +104,19 @@ fn bmp(d: &[u8]) -> Option<Image> {
     Some(image(rgba, w, h))
 }
 
+/// M117: a court mod's loading picture (PNG).
+fn png(d: &[u8]) -> Option<Image> {
+    use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+    Image::from_buffer(d, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok()
+}
+
+/// M117: a `w × h` picture covering the window at its own aspect, centred and cropped: as wide as the window or as
+/// the window's height at that aspect, whichever is more.
+fn covering(w: f32, h: f32) -> Node {
+    let aspect = w / h.max(1.0);
+    Node { width: Val::Vw(100.0), min_width: Val::Vh(100.0 * aspect), aspect_ratio: Some(aspect), flex_shrink: 0.0, ..default() }
+}
+
 /// A piece of `Loading.tm2`: source rect, destination rect on the 640×448 screen, alpha.
 type Piece = ([f32; 4], [f32; 4], f32);
 
@@ -131,15 +146,19 @@ fn pieces() -> Vec<Piece> {
 const WORDS: Piece = ([0.0, 152.0, 256.0, 104.0], [416.0, 392.0, 256.0, 104.0], 1.0);
 const HINT: [f32; 4] = [64.0, 96.0, 512.0, 256.0];
 
-/// What to draw on the loading cover before a match on `court` (the disc's `COURT/nn`).
-pub fn cover(iso: String, court: usize) -> impl FnOnce(&mut World, Entity) + Send + Sync {
+/// What to draw on the loading cover before a match on `court` (the disc's `COURT/nn`); `picture`: a court mod's
+/// own loading picture, drawn in place of the court's (M117).
+pub fn cover(iso: String, court: usize, picture: Option<std::path::PathBuf>) -> impl FnOnce(&mut World, Entity) + Send + Sync {
     move |world, root| {
         let Ok(mut disc) = Iso::open(&iso) else { return };
         let hint = next_hint(&iso);
         let wall = entry(&mut disc, &format!("MENU/WALL/WALL{:02}.XB0", hint + 1), &format!("/l_txt{hint:02}.tm2"));
-        let back = court.checked_sub(1).and_then(|c| entry(&mut disc, &format!("MENU/WALL/SUB{court:02}.XB"), &format!("/l_bg{c:02}.bmp")));
+        // a mod picture that won't read or decode falls back to the court's
+        let own = picture.and_then(|p| crate::modfs::read(&p).map_err(|e| warn!("{}: {e}", p.display())).ok()).and_then(|d| png(&d));
+        let back = own.is_none().then(|| court.checked_sub(1).and_then(|c| entry(&mut disc, &format!("MENU/WALL/SUB{court:02}.XB"), &format!("/l_bg{c:02}.bmp")))).flatten();
         let art = entry(&mut disc, "MENU/MENU00B.XB0", "/loading.tm2");
         let mut images = world.resource_mut::<Assets<Image>>();
+        let own = own.map(|i| (covering(i.width() as f32, i.height() as f32), images.add(i)));
         let [wall, back] = [wall.as_deref().and_then(sheet), back.as_deref().and_then(bmp)].map(|i| i.map(|i| images.add(i)));
         let art = art.map(|d| crate::play::menu_art::image(&mut images, &d, "loading"));
         let abs = |[x, y, w, h]: [f32; 4]| Node {
@@ -160,7 +179,9 @@ pub fn cover(iso: String, court: usize) -> impl FnOnce(&mut World, Entity) + Sen
         });
         world.entity_mut(root).with_children(|p| {
             // the court picture fills the window's width (cropped top and bottom when wider than 4:3)
-            if let Some(back) = back {
+            if let Some((node, own)) = own {
+                p.spawn((ImageNode::new(own), node));
+            } else if let Some(back) = back {
                 p.spawn((ImageNode::new(back), Node { width: Val::Percent(100.0), aspect_ratio: Some(4.0 / 3.0), flex_shrink: 0.0, ..default() }));
             }
             // the 640×448 screen as a centred 4:3 picture, as the HUD (`widescreen.rs`)
