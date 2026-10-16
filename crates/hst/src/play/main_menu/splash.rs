@@ -5,7 +5,7 @@
 //! It fixes an idle connected pad taking a keyboard player's controls over.
 //!
 //! Behind it the confirm screen's court pictures (`MENU/WALL/COURTnn.XB`, read with the menus: nothing more to load)
-//! fill the window, panning slowly and crossfading from court to court, dimmed and softened (568×256 is soft blown up
+//! fill the window, still, crossfading slowly from court to court, dimmed and softened (568×256 is soft blown up
 //! to a big window), court mods with their own picture among them; the site's logo (`web/logo.svg`) over them.
 
 use bevy::prelude::*;
@@ -17,10 +17,9 @@ use hst_base::widescreen::Anchor;
 const LOGO_PNG: &[u8] = include_bytes!("../../../assets/logo.png");
 const LOGO: [f32; 2] = [640.0, 505.0];
 /// Seconds a court is up, and the crossfade into the next at its end.
-const SHOW: f32 = 8.0;
-const FADE: f32 = 1.6;
-/// How far the picture is zoomed in past filling the window: room for its pan.
-const ZOOM: f32 = 1.12;
+/// Still, and slow: a moving or quickly changing backdrop is sickening (user 2026-10-16).
+const SHOW: f32 = 20.0;
+const FADE: f32 = 3.0;
 /// The softening: the picture drawn again this many picture pixels off each way, averaged.
 const BLUR: f32 = 1.4;
 /// The backdrop's brightness (128 = as is).
@@ -95,22 +94,20 @@ impl Menu {
     }
 }
 
-/// The source rect of a `[pw, ph]` picture filling a window of `aspect`, zoomed in by [`ZOOM`] and panned `p` (0..1)
-/// across the slack that leaves, left to right (`flip`: right to left), centred the other way.
-fn pan([pw, ph]: [f32; 2], aspect: f32, p: f32, flip: bool) -> [f32; 4] {
-    let [_, _, w, h] = super::cover([pw, ph], [aspect, 1.0]).map(|v| v / ZOOM);
-    let p = if flip { 1.0 - p } else { p };
-    [(pw - w) * p, (ph - h) / 2.0, w, h]
+/// The source rect of a `[pw, ph]` picture filling a window of `aspect`, centred.
+fn fill([pw, ph]: [f32; 2], aspect: f32) -> [f32; 4] {
+    let [_, _, w, h] = super::cover([pw, ph], [aspect, 1.0]);
+    [(pw - w) / 2.0, (ph - h) / 2.0, w, h]
 }
 
-/// Court value `c`'s picture over the window at weight `w` (1: covers what's under it) and pan `p`: [`BLUR`]'s taps,
+/// Court value `c`'s picture over the window at weight `w` (1: covers what's under it): [`BLUR`]'s taps,
 /// each at the alpha that leaves them all an equal share of `w` when drawn over one another in turn.
-fn court(d: &mut Draw, m: &Menu, c: usize, w: f32, p: f32, flip: bool) {
+fn court(d: &mut Draw, m: &Menu, c: usize, w: f32) {
     let (tex, size) = match m.court_pic(c) {
         Some((i, size)) => (Tex::CourtMod(i), size),
         None => (court_pic(c), [568.0, 256.0]),
     };
-    let [x, y, sw, sh] = pan(size, m.splash.aspect, p, flip);
+    let [x, y, sw, sh] = fill(size, m.splash.aspect);
     let taps = [[0.0, 0.0], [BLUR, 0.0], [-BLUR, 0.0], [0.0, BLUR], [0.0, -BLUR]];
     let n = taps.len() as f32;
     for (j, [dx, dy]) in taps.into_iter().enumerate() {
@@ -127,14 +124,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, pads: &[Entity], controllers: usize
     let k = (s.t / SHOW) as usize;
     let into = s.t - k as f32 * SHOW;
     let at = |i: usize| courts[i % courts.len()];
-    // a court pans over the whole time it shows, its fade in and out included
-    let p = |t: f32| (t / (SHOW + FADE)).clamp(0.0, 1.0);
     d.anchor = Anchor::Span;
     d.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 128.0);
-    court(d, m, at(k), 1.0, p(into + FADE), k % 2 == 1);
+    court(d, m, at(k), 1.0);
     if into > SHOW - FADE {
         let w = (into - (SHOW - FADE)) / FADE;
-        court(d, m, at(k + 1), w * w * (3.0 - 2.0 * w), p(into - (SHOW - FADE)), k % 2 == 0);
+        court(d, m, at(k + 1), w * w * (3.0 - 2.0 * w));
     }
     d.anchor = Anchor::Centre;
     d.q(Tex::Logo, [0.0, 0.0, LOGO[0], LOGO[1]], [180.0, 34.0, 280.0, 280.0 * LOGO[1] / LOGO[0]], [128.0; 3], 128.0);
@@ -160,15 +155,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pans_inside_the_picture() {
+    fn fills_inside_the_picture() {
         for aspect in [0.5, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 4.0] {
-            for p in [0.0, 0.5, 1.0] {
-                let [x, y, w, h] = pan([568.0, 256.0], aspect, p, false);
-                assert!(x >= 0.0 && y >= 0.0 && x + w <= 568.01 && y + h <= 256.01, "{aspect} {p}");
-                assert!((w / h - aspect).abs() < 1e-3);
-            }
+            let [x, y, w, h] = fill([568.0, 256.0], aspect);
+            assert!(x >= 0.0 && y >= 0.0 && x + w <= 568.01 && y + h <= 256.01, "{aspect}");
+            assert!((w / h - aspect).abs() < 1e-3);
         }
-        assert_eq!(pan([568.0, 256.0], 2.0, 0.0, true), pan([568.0, 256.0], 2.0, 1.0, false));
     }
 
     /// Every device's first press takes 1P, only the first, and the card then hands over to the main menu.
