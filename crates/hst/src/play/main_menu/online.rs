@@ -19,6 +19,7 @@ use super::osk::{self, Did};
 use super::pointer::{Act, OK};
 use super::{Draw, Effect, Menu, Press, Screen, Tex, WHITE};
 
+mod arrange;
 mod lobby;
 use crate::mods_online::{self as mo, Ask, Wire};
 use crate::net::{Cmd, Event, Listing, Live, Msg, Net, Online, Pick, Relay, Room, SHORT, SYMBOLS, Seat, is_short};
@@ -93,6 +94,10 @@ pub struct View {
     pub edit: Option<usize>,
     /// The court or umpire select was opened from the lobby's settings row (closing it goes back there).
     pub venue: bool,
+    /// B523: the host's held card (its seat), carried to another to swap them; the kick being confirmed (the seat,
+    /// and the lobby item to go back to; the prompt's cursor is `sel`).
+    pub grab: Option<usize>,
+    pub kick: Option<(usize, usize)>,
 }
 
 /// What an Online press asks of the app.
@@ -174,7 +179,7 @@ const NOT_NOW: usize = 2;
 impl Menu {
     /// A prompt is up over the lobby: a mod to download, or the downloads to keep.
     pub(super) fn lobby_asking(&self) -> bool {
-        self.net.ask.is_some() || !self.net.keep.is_empty()
+        self.net.ask.is_some() || !self.net.keep.is_empty() || self.net.kick.is_some()
     }
 
     pub(super) fn online(&self) -> bool {
@@ -460,6 +465,7 @@ impl Menu {
     pub(super) fn lobby_ok(&self) -> Option<&'static str> {
         Some(match self.items().get(self.sel).copied().unwrap_or(Item::Button("Leave")) {
             // B396: their own seat's card is where a player picks again
+            Item::Seat(i) if self.movable(i) => "Move",
             Item::Seat(i) if self.mine(i) => "Change Character",
             Item::Seat(i) if self.guest(i).is_some() => return None,
             Item::Seat(_) if self.lobby_bot() => "Pick",
@@ -951,6 +957,9 @@ impl Menu {
                     self.answer_keep(if k.back { NOT_NOW } else { self.sel }, out);
                 }
             }
+            // B523: the host's kick prompt; a card carried to another
+            Screen::Lobby if self.net.kick.is_some() => self.kick_step(k, out),
+            Screen::Lobby if self.net.grab.is_some() => self.carry_step(k, out),
             Screen::Lobby => {
                 let items = self.items();
                 let bot = match items.get(self.sel) {
@@ -1006,17 +1015,18 @@ impl Menu {
                     out.push(Sound(0));
                 }
                 let item = items.get(self.sel).copied().unwrap_or(Item::Button("Leave"));
-                if let Some(i) = bot.filter(|_| k.card) {
+                if let Some(i) = self.kickable().filter(|_| k.card) {
+                    // B523: △ on a guest's card: kick them, once confirmed
+                    self.ask_kick(i, out);
+                } else if let Some(i) = bot.filter(|_| k.card) {
                     // B216: △ takes the computer player off its seat
                     out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
                 } else if let (true, Item::Remove(i)) = (k.ok, item) {
                     // back onto the seat, as the ✕ goes with its player
                     self.sel -= 1;
                     match self.guest(i) {
-                        Some((peer, name)) => {
-                            self.net.status = format!("Taking {name} out...");
-                            out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Kick(peer)))]);
-                        }
+                        // B523: asked first, as △
+                        Some(_) => self.ask_kick(i, out),
                         None => out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]),
                     }
                 } else if k.back || (k.ok && item == Item::Button("Leave")) {
@@ -1024,7 +1034,10 @@ impl Menu {
                     self.back_to_online(out);
                 } else if !k.ok {
                 } else if let Item::Seat(i) = item {
-                    if self.mine(i) {
+                    if self.movable(i) {
+                        // B523: the host picks up another player's card, to put it down on another
+                        self.pick_up(i, out);
+                    } else if self.mine(i) {
                         // B396: their own card: pick again, not ready meanwhile
                         self.pick_again(out);
                     } else if self.guest(i).is_some() {
@@ -1640,6 +1653,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 ask_popup(d, name, court, room.map_or(0, |r| r.wait), m.sel, None);
                 return;
             }
+            if let Some((title, help)) = m.kick_words() {
+                // B523: the host's kick, confirmed (a press off the box: Cancel)
+                lobby::draw(d, m, status.as_deref());
+                rows_popup(d, &title, &arrange::KICK_ROWS, &help, m.sel, Some(Act::Press(Press { back: true, ..Default::default() })));
+                return;
+            }
             if room.is_some() {
                 lobby::draw(d, m, status.as_deref());
                 return;
@@ -1898,7 +1917,8 @@ fn keep_popup(d: &mut Draw, keep: &[(PathBuf, String)], sel: usize) {
 /// A centred box: `title`, a pill per row (`sel` gold), two lines of `help` under them.
 fn rows_popup(d: &mut Draw, title: &str, rows: &[&str], help: &str, sel: usize, outside: Option<Act>) {
     d.popup(outside);
-    let (sw, sh) = (260.0, 230.0);
+    // B523: as tall as its rows (four: 230)
+    let (sw, sh) = (260.0, 70.0 + 40.0 * rows.len() as f32);
     let (sx, sy) = (320.0 - sw / 2.0, 224.0 - sh / 2.0);
     d.box3([sx, sy, sw, sh], 14.0, [Some(super::INK), Some(WHITE), Some(super::CREAM)], 128.0);
     d.label(title, sx + sw / 2.0, sy + 14.0, 14.0, sw - 20.0, super::BROWN);
@@ -1908,7 +1928,7 @@ fn rows_popup(d: &mut Draw, title: &str, rows: &[&str], help: &str, sel: usize, 
         d.hit(rect, Act::Row(i, OK));
     }
     for (k, l) in super::wrap(help, 44).iter().take(2).enumerate() {
-        d.label(l, sx + sw / 2.0, sy + 202.0 + 12.0 * k as f32, 10.0, sw - 20.0, super::BROWN);
+        d.label(l, sx + sw / 2.0, sy + sh - 28.0 + 12.0 * k as f32, 10.0, sw - 20.0, super::BROWN);
     }
 }
 
@@ -2168,6 +2188,15 @@ pub(super) fn sample(m: &mut Menu) {
         m.net.go = Some(if m.net.hosting { Go::Host } else { Go::Code });
         m.seats[0] = Some(super::Dev::Keys);
         m.align();
+    }
+    // B523: the host carrying Sunny Day's card onto ACE-42's; asked to kick Sunny Day
+    if menu == "lobby-move" {
+        m.net.grab = Some(1);
+        m.sel = m.items().iter().position(|it| *it == Item::Seat(2)).unwrap_or(0);
+    }
+    if menu == "lobby-kick" {
+        m.sel = m.items().iter().position(|it| *it == Item::Seat(1)).unwrap_or(0);
+        m.ask_kick(1, &mut vec![]);
     }
     m.net.short = "K7QX".into();
     if !m.net.naming {
@@ -2653,11 +2682,15 @@ mod tests {
         assert_eq!(items[..12], [Item::Seat(0), Item::Seat(1), Item::Remove(1), Item::Seat(2), Item::Remove(2), Item::Seat(3), Item::Set(0), Item::Set(1), Item::Set(2), Item::Set(3), Item::Set(4), Item::Mode]);
         assert_eq!(items[12..16], [Item::Button("Code"), Item::Button("Copy Link"), Item::Button("Public"), Item::Button("Leave")]);
         assert_eq!(*items.last().unwrap(), Item::Button("Start"));
+        // B523: a guest's card: ✕ picks it up (○ puts it back); its ✕ asks to kick them, Kick takes them out
         to(&mut m, Item::Seat(1));
-        assert_eq!((m.lobby_ok(), net(&m.step(dev, ok))), (None, None), "a guest's card: the ✕ takes them out");
+        assert_eq!((m.lobby_ok(), net(&m.step(dev, ok)), m.net.grab), (Some("Move"), None, Some(1)));
+        assert_eq!((net(&m.step(dev, Press { back: true, ..default() })), m.net.grab, m.items()[m.sel]), (None, None, Item::Seat(1)));
         to(&mut m, Item::Remove(1));
-        assert_eq!((m.lobby_ok(), net(&m.step(dev, ok))), (Some("Take Out"), Some(Cmd::Kick("k51qzi5uqu5d".into()))));
-        assert_eq!(m.items()[m.sel], Item::Seat(1));
+        assert_eq!((m.lobby_ok(), net(&m.step(dev, ok)), m.net.kick, m.sel), (Some("Take Out"), None, Some((1, 1)), 1), "asked, on Cancel");
+        m.step(dev, Press { up: true, ..default() });
+        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Kick("k51qzi5uqu5d".into())));
+        assert_eq!((m.items()[m.sel], m.net.kick), (Item::Seat(1), None));
         to(&mut m, Item::Button("Start"));
         let fx = m.step(dev, ok);
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Start))), "ACE-42 isn't ready: B215 starts the countdown anyway");
