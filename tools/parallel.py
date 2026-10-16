@@ -165,11 +165,25 @@ def family(tid):
     return re.match(r'[A-Za-z]*\d*', tid).group()
 
 
+def left(tid):
+    """The master's last outcome line for tid in master.md says it left the branch unmerged."""
+    try:
+        lines = [l for l in open(os.path.join(NOTES, 'master.md'), errors='replace') if l.startswith(f'{tid}: ')]
+    except OSError:
+        return False
+    return bool(lines) and lines[-1].startswith(f'{tid}: left')
+
+
 def pick(running, tried):
     busy, seen = list(running.values()), set()
     for tid, section, files in tasks():
         if all(tid != b[0] for b in busy) and git('rev-list', '-1', f'main..task/{tid}').stdout.strip():
-            continue  # finished, its branch waits for a merge: starting it again would reset that branch to main
+            if not left(tid):
+                continue  # finished, its branch waits for a merge: starting it again would reset that branch to main
+            # the master gave up on merging it but the task is still open (B447 sat 12 h, 2026-10-16): park the
+            # branch as wip/<ID> for the redo to read, then start the task again
+            git('branch', '-M', f'task/{tid}', f'wip/{tid}')
+            log(f'{tid}: the master left its branch unmerged; parked it as wip/{tid}, starting the task again')
         if any(family(tid) == family(b[0]) for b in busy):
             continue
         if MODE == 'p':
