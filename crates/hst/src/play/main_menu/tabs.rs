@@ -292,12 +292,16 @@ impl Menu {
     }
 }
 
-/// Player `p`'s footer: the section and where the tile is in it (`Golf   3 of 7`).
-pub(super) fn foot(m: &Menu, p: usize) -> String {
+/// Player `p`'s footer: where the tile is in its section and the whole cast's size, Random not counted
+/// (B424: `8 of 16 in Hot Shots Tennis · 28 characters`), so a section's count never reads as the total. Then the
+/// same without the section's name (the rail above says it) for a column too narrow for the whole line.
+pub(super) fn foot(m: &Menu, p: usize) -> [String; 2] {
     let secs = m.sections();
     let s = m.section_at(p, &secs);
     let at = secs[s].cells.iter().position(|&c| c == m.cell(p)).unwrap_or(0) + 1;
-    format!("{}   {at} of {}", secs[s].name, secs[s].cells.len())
+    let all = m.roster().iter().filter(|c| c.is_some()).count();
+    let total = format!("{all} character{}", if all == 1 { "" } else { "s" });
+    [format!("{at} of {} in {} · {total}", secs[s].cells.len(), secs[s].name), format!("{at} of {} · {total}", secs[s].cells.len())]
 }
 
 /// A favorite's star in a tile's top-right corner (the font's `*`, gold over a dark ring).
@@ -372,6 +376,20 @@ mod tests {
         let secs = m.sections();
         let s = m.section_at(0, &secs);
         (secs[s].name.clone(), secs[s].cells.iter().position(|&c| c == m.cell(0)).unwrap())
+    }
+
+    /// B424: the footer says where the tile is in its section and how many characters there are in all.
+    #[test]
+    fn the_footer_states_the_whole_cast() {
+        let mut m = menu();
+        let all = CHARS + 12;
+        assert_eq!(foot(&m, 0)[0], format!("1 of {} in Hot Shots Tennis · {all} characters", 1 + CHARS));
+        m.put(0, Some(Who::Mod(4)));
+        assert_eq!(foot(&m, 0), [format!("2 of 7 in Golf · {all} characters"), format!("2 of 7 · {all} characters")]);
+        // as a favorite it counts once in the total, its place now in Favorites when the cursor is there
+        let mut out = Vec::new();
+        m.toggle_favorite(0, &mut out);
+        assert!(foot(&m, 0)[0].ends_with(&format!("· {all} characters")));
     }
 
     #[test]

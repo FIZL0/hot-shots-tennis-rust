@@ -620,10 +620,11 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let ty = by + (bh - thumb) * v.top as f32 / c.last_top(&v.lines).max(1) as f32;
     rounded(d, [bx, ty, bw, thumb], 3.0, s.ring, 128.0);
 
-    // the footer: the tab and where the tile is in it
+    // the footer: where the tile is in its tab and the whole cast (B424), without the tab's name if that won't fit
     let [fx, fy, fw, fh] = at.foot;
-    let line = tabs::foot(m, p);
     let fs = 12.0 * PY;
+    let [long, short] = tabs::foot(m, p);
+    let line = if d.width(&long, fs) <= fw { long } else { short };
     let lw = d.width(&line, fs).min(fw);
     d.label(&line, fx + lw / 2.0, fy + (fh - fs) / 2.0, fs, lw, s.soft);
 }
