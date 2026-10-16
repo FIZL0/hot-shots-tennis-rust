@@ -292,23 +292,39 @@ fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: [f32; 3], f
     rounded(d, [x + t * PX, y + t * PY, w - 2.0 * t * PX, h - 2.0 * t * PY], (r - t).max(0.0), fill, 128.0);
 }
 
-/// A dashed `t`-px rim round a box with `r`-px corners (left open): a computer player's column.
-fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rgb: [f32; 3]) {
+/// A dashed `t`-px rim round a box with `r`-px corners on a `fill` box: a computer player's column. The corners are
+/// whole arcs; each side's dashes are spread to end flush with them.
+fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rgb: [f32; 3], fill: [f32; 3]) {
     let (dash, gap) = (10.0, 6.0);
     let (tx, ty) = (t * PX, t * PY);
-    let mut i = r * PX;
-    while i < w - r * PX {
-        let l = (dash * PX).min(w - r * PX - i);
-        d.q(Tex::Solid, [0.0; 4], [x + i, y, l, ty], rgb, 128.0);
-        d.q(Tex::Solid, [0.0; 4], [x + i, y + h - ty, l, ty], rgb, 128.0);
-        i += (dash + gap) * PX;
-    }
-    let mut i = r * PY;
-    while i < h - r * PY {
-        let l = (dash * PY).min(h - r * PY - i);
-        d.q(Tex::Solid, [0.0; 4], [x, y + i, tx, l], rgb, 128.0);
-        d.q(Tex::Solid, [0.0; 4], [x + w - tx, y + i, tx, l], rgb, 128.0);
-        i += (dash + gap) * PY;
+    // the dashes along a side from `r` to `len - r` (`k` units to the axis'), first and last touching the corners
+    let run = |d: &mut Draw, len: f32, k: f32, at: &dyn Fn(f32, f32) -> [[f32; 4]; 2]| {
+        let span = len - 2.0 * r * k;
+        let n = ((span + gap * k) / ((dash + gap) * k)).floor().max(1.0);
+        let l = (dash * k).min(span);
+        let step = if n > 1.0 { (span - l) / (n - 1.0) } else { 0.0 };
+        let first = if n > 1.0 { r * k } else { r * k + (span - l) / 2.0 };
+        for i in 0..n as usize {
+            for rect in at(first + step * i as f32, l) {
+                d.q(Tex::Solid, [0.0; 4], rect, rgb, 128.0);
+            }
+        }
+    };
+    run(d, w, PX, &|s, l| [[x + s, y, l, ty], [x + s, y + h - ty, l, ty]]);
+    run(d, h, PY, &|s, l| [[x, y + s, tx, l], [x + w - tx, y + s, tx, l]]);
+    // the corners: an arc of rim with the box's fill inside it
+    let (cw, ch) = (r * PX, r * PY);
+    for (c, [cx, cy]) in [[x, y], [x + w - cw, y], [x + w - cw, y + h - ch], [x, y + h - ch]].into_iter().enumerate() {
+        let mut round = [0.0; 4];
+        round[c] = cw;
+        d.q(Tex::Solid, [0.0; 4], [cx, cy, cw, ch], rgb, 128.0);
+        d.out.last_mut().unwrap().round = round;
+        // inside: inset `t` from the two outer sides
+        let ix = if c == 0 || c == 3 { cx + tx } else { cx };
+        let iy = if c < 2 { cy + ty } else { cy };
+        round[c] = (cw - tx).max(0.0);
+        d.q(Tex::Solid, [0.0; 4], [ix, iy, cw - tx, ch - ty], fill, 128.0);
+        d.out.last_mut().unwrap().round = round;
     }
 }
 
@@ -428,7 +444,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     if !active && (m.seats[p] == Some(Dev::Open) || !online && m.local_roster()) {
         let [x, y, w, h] = at.card;
         rounded(d, at.card, 14.0, hex(BG), 128.0);
-        dashed(d, at.card, 14.0, 2.0, s.soft);
+        dashed(d, at.card, 14.0, 2.0, s.soft, hex(BG));
         let big = (64.0 * PY).min(w * 0.4);
         let cy = y + h / 2.0;
         let start = d.out.len();
@@ -444,7 +460,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         ringed(d, at.card, 14.0, 3.0, s.ring, s.bg);
     } else {
         rounded(d, at.card, 14.0, s.bg, 128.0);
-        dashed(d, at.card, 14.0, 3.0, s.ring);
+        dashed(d, at.card, 14.0, 3.0, s.ring, s.bg);
     }
     if mine {
         d.hit(at.card, pointer::Act::Grid(p));
