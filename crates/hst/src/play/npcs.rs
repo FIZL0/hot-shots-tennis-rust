@@ -130,7 +130,7 @@ fn setup(
     let Ok(root) = root.single() else { return };
     // B436: under a court mod the layout court's trigger creatures (court 6's fences, court 4's and 7's props, the
     // animals) still run, as the match draws for them, but under a hidden node: the mod's own gimmicks stand in
-    let triggers_root = court_mod.map_or(root, |_| commands.spawn((crate::court_mod::DiscCourt, Transform::default(), Visibility::Hidden, ChildOf(root))).id());
+    let triggers_root = court_mod.as_ref().map_or(root, |_| commands.spawn((crate::court_mod::DiscCourt, Transform::default(), Visibility::Hidden, ChildOf(root))).id());
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let n = g.stage as usize;
     let (Ok(data), Some((list, plants))) = (iso.read(&format!("COURTSET/{n:02}/HOLE01.XB")), crate::court_layout(&mut iso, n)) else {
@@ -158,6 +158,7 @@ fn setup(
     let mut npcs = Npcs { umpire: None, walkers: Vec::new(), triggers: Vec::new(), tick: 0, motion: 0, decided: false, near: default(), ends: false, serving: false, fade: Vec::new(), uncull: Vec::new(), cheers: npc::Cheers::new(g.stage), mark: Vec::new(), marks: Vec::new(), figures: Vec::new(), sprites: default(), sizes: game.cheer_sprites(), started: false, over: None, reacted: false, crowd: Vec::new(), surf: default(), games: 0 };
     let (umpire, rng) = (g.umpire.clone(), &mut g.rng.court);
     let mut voices = game.deciding_voices().into_iter();
+    let mut other_side = false;
     let mut roll = || rng.next();
     for c in npc::spawn(&list, &plants, &game.npc_roster(n as u32), &walkers, players) {
         match c.kind {
@@ -165,7 +166,11 @@ fn setup(
                 let Some(data) = modded.clone().or_else(|| load(layout::umpire_files(args.umpire))) else { continue };
                 // she faces the court centre: rows (up × forward, up, forward, chair)
                 let ([x, z], p) = (umpire.forward, umpire.pos);
+                // B433: a court mod's own chair seats her, drawn only (the match keeps the layout's chair)
+                let seat = court_mod.as_ref().and_then(|c| crate::court_mod::umpire_seat(&c.0, args.singles));
+                let ([x, z], p) = seat.map_or(([x, z], p), |s| (Vec2::new(-s[0], -s[2]).normalize_or(Vec2::NEG_X).to_array(), s));
                 let world = [[z, 0.0, -x, 0.0], [0.0, 1.0, 0.0, 0.0], [x, 0.0, z, 0.0], [p[0], p[1], p[2], 1.0]];
+                other_side = (p[0] < 0.0) != (umpire.pos[0] < 0.0);
                 npcs.umpire = Some((place(&data, &world, 1.0, root), Anim::default()));
             }
             npc::Kind::Walker(k) => {
@@ -255,6 +260,9 @@ fn setup(
     if let Some((e, _)) = &npcs.umpire {
         commands.entity(*e).remove::<crate::shadow::Minor>();
     }
+    if let (Some((e, _)), true) = (&npcs.umpire, other_side) {
+        commands.entity(*e).insert(OtherSide);
+    }
     if let (Some((e, _)), Some(_)) = (&npcs.umpire, &modded) {
         commands.entity(*e).insert(ModUmpire::default());
     }
@@ -315,6 +323,7 @@ fn step(
     (mats, mut materials): (Query<&MeshMaterial3d<crate::gs::GsMaterial>>, ResMut<Assets<crate::gs::GsMaterial>>),
     globals: Query<&GlobalTransform>,
     args: Res<Args>,
+    other_side: Query<(), With<OtherSide>>,
 ) {
     let umpire_id = args.umpire;
     let Some(mut npcs) = npcs else {
@@ -472,6 +481,7 @@ fn step(
     }
     npcs.ends = ends;
     if let Some((e, a)) = &mut npcs.umpire {
+        let motion = turned(motion, other_side.contains(*e));
         if let Ok((rig, mut m)) = q.get_mut(*e) {
             let len = rig.data.motions.get(&(motion as usize)).map_or(0.0, |c| c.length);
             if motion != npcs.motion {
@@ -1040,6 +1050,16 @@ mod b283_tests {
     }
 }
 
+/// B433: the umpire sits on a court mod's chair on the other side of the court from the layout's: facing the other
+/// way, she turns to the winner's end with the other arm.
+#[derive(Component)]
+struct OtherSide;
+
+/// The umpire's motion as drawn: a turn (1, 2) the other way round on [`OtherSide`].
+fn turned(motion: u8, other_side: bool) -> u8 {
+    if other_side && motion != 0 { 3 - motion } else { motion }
+}
+
 /// M8f4: the umpire is a mod's model (`mods::umpire`), on its own `wait` clock.
 #[derive(Component, Default)]
 struct ModUmpire {
@@ -1048,9 +1068,9 @@ struct ModUmpire {
 
 /// A mod umpire's clips over `step`'s: during play (the disc's still first idle frame) its `wait` loops if it has
 /// one; a turn it lacks holds the idle's first frame. Looks only: the match never reads the umpire's pose.
-fn mod_umpire(g: Res<Game>, mut q: Query<(&character::Rig, &mut Motion, &mut ModUmpire)>) {
-    let (motion, over) = (g.umpire.motion as usize, g.umpire.over);
-    for (rig, mut m, mut u) in &mut q {
+fn mod_umpire(g: Res<Game>, mut q: Query<(&character::Rig, &mut Motion, &mut ModUmpire, Has<OtherSide>)>) {
+    for (rig, mut m, mut u, other_side) in &mut q {
+        let (motion, over) = (turned(g.umpire.motion, other_side) as usize, g.umpire.over);
         match rig.data.motions.get(&crate::mods::umpire::WAIT) {
             Some(c) if motion == 0 && !over => {
                 show(&mut m, crate::mods::umpire::WAIT, u.wait, true);
