@@ -99,6 +99,84 @@ pub fn import_disc(iso: File, out: FileSystemSyncAccessHandle, progress: js_sys:
     Ok(format!("{hash:016x}"))
 }
 
+/// The pack written without OPFS (B457: a private window refuses it): the first 1 MB (the header, whose hash is
+/// written last) kept here, every later MB handed to `chunk` as it fills, so the worker's memory holds little of it.
+struct Chunks {
+    head: Vec<u8>,
+    cur: Vec<u8>,
+    pos: u64,
+    len: u64,
+    chunk: js_sys::Function,
+}
+
+const HEAD: usize = 1 << 20;
+
+impl Chunks {
+    fn send(&mut self) -> io::Result<()> {
+        if !self.cur.is_empty() {
+            self.chunk.call1(&JsValue::NULL, &js_sys::Uint8Array::from(&self.cur[..])).map_err(io_err)?;
+            self.cur.clear();
+        }
+        Ok(())
+    }
+}
+
+impl Write for Chunks {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let p = self.pos as usize;
+        let n = if p < HEAD {
+            // the header's part: overwrites in place (the hash), else grows it to HEAD
+            let n = buf.len().min(HEAD - p);
+            let end = p + n;
+            if self.head.len() < end {
+                if p > self.head.len() {
+                    return Err(io::Error::other("gap in the pack"));
+                }
+                self.head.resize(end, 0);
+            }
+            self.head[p..end].copy_from_slice(&buf[..n]);
+            n
+        } else if self.pos == self.len {
+            self.cur.extend_from_slice(buf);
+            if self.cur.len() >= HEAD {
+                self.send()?;
+            }
+            buf.len()
+        } else {
+            return Err(io::Error::other("rewrite past the pack's header"));
+        };
+        self.pos += n as u64;
+        self.len = self.len.max(self.pos);
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Seek for Chunks {
+    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+        seek(&mut self.pos, self.len, to)
+    }
+}
+
+/// Worker, B457: `import_disc` for a browser without OPFS: the pack's parts go to `chunk(bytes)` in order after the
+/// first, which is returned with the hash as `[hash, first]` (the page joins them in a Blob, first in front).
+#[wasm_bindgen]
+pub fn import_disc_to_memory(iso: File, progress: js_sys::Function, chunk: js_sys::Function) -> Result<js_sys::Array, JsValue> {
+    let err = |e: io::Error| JsValue::from_str(&e.to_string());
+    let mut disc = Iso::from_source(Box::new(Picked { file: iso, reader: FileReaderSync::new()?, pos: 0 })).map_err(err)?;
+    let mut w = BufWriter::with_capacity(1 << 20, Chunks { head: Vec::new(), cur: Vec::new(), pos: 0, len: 0, chunk });
+    let hash = disc
+        .write_pack_to(&mut w, |i, n| {
+            let _ = progress.call2(&JsValue::NULL, &(i as u32).into(), &(n as u32).into());
+        })
+        .map_err(err)?;
+    let mut c = w.into_inner().map_err(|e| err(e.into_error()))?;
+    c.send().map_err(err)?;
+    Ok(js_sys::Array::of2(&format!("{hash:016x}").into(), &js_sys::Uint8Array::from(&c.head[..])))
+}
+
 /// Page: start the game from the pack's bytes, with the URL's flags.
 #[wasm_bindgen]
 pub fn run(pack: js_sys::Uint8Array) {
@@ -205,16 +283,27 @@ pub fn pasted() -> Option<String> {
 /// localStorage under the file's path (`crate::store`): settings.txt and controls.txt last between visits.
 pub fn read_to_string(path: impl AsRef<std::path::Path>) -> io::Result<String> {
     let key = path.as_ref().to_string_lossy();
-    local()?.get_item(&key).map_err(io_err)?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.into_owned()))
+    let Ok(local) = local() else {
+        return MEMORY.lock().unwrap().get(&*key).cloned().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.into_owned()));
+    };
+    local.get_item(&key).map_err(io_err)?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.into_owned()))
 }
 
 pub fn write(path: impl AsRef<std::path::Path>, text: impl AsRef<[u8]>) -> io::Result<()> {
-    local()?.set_item(&path.as_ref().to_string_lossy(), &String::from_utf8_lossy(text.as_ref())).map_err(io_err)
+    let Ok(local) = local() else {
+        let (k, v) = (path.as_ref().to_string_lossy().into_owned(), String::from_utf8_lossy(text.as_ref()).into_owned());
+        MEMORY.lock().unwrap().insert(k, v);
+        return Ok(());
+    };
+    local.set_item(&path.as_ref().to_string_lossy(), &String::from_utf8_lossy(text.as_ref())).map_err(io_err)
 }
 
 fn local() -> io::Result<web_sys::Storage> {
     web_sys::window().unwrap().local_storage().map_err(io_err)?.ok_or_else(|| io::Error::other("no localStorage"))
 }
+
+/// B457: the files for this visit only when the browser refuses localStorage (blocked site data, a private window).
+static MEMORY: std::sync::Mutex<std::collections::BTreeMap<String, String>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// The page's on-screen keyboard's keys (`index.html`; Backspace as `\u{8}`) for Join by Code, since the last call.
 static TYPED: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());

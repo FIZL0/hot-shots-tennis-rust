@@ -104,6 +104,8 @@ Self-updater (B374): a release build (`tools/release.sh`, built with `HST_VERSIO
 
 Button legend (M14): every menu, the pause menu and the result screen list their actions with our own glyphs along the bottom strip (`play/main_menu/legend.rs`), for the device last used (keyboard keys as bound, Xbox, PlayStation by vendor, Steam Deck), per player on the select and seat assignment; a touch hides it. `HST_LEGEND=keys|xbox|ps|deck` forces a style for `--shot`s; the test `legend_lists_what_each_screen_handles` probes `Menu::step` for each screen's presses.
 
+Private windows (B457): a browser that refuses OPFS (Firefox/Zen private browsing) plays from memory: the site says so, the ISO is picked again each visit, settings and mods last until the window closes; Copy the error falls back to execCommand.
+
 ## Done (ported and verified against the original)
 
 - M102: Android app plays by touch: the on-screen pad (`play/touch_pad.rs`) is on for Android as for iOS, with the window's safe area (system bars, cutout) and the haptic tick through JNI (`android.rs`); the pad draws through its own UI camera over the whole window, so the 16:9 view on a 20:9 phone no longer clips it. Emulator multi-touch: `adb root` + `sendevent` on `virtio_input_multi_touch_1` (journal 2026-10-15-m102-android-touch).

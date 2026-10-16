@@ -1,15 +1,25 @@
 // Imports the picked ISO into OPFS `disc.pack` with the game's own pack writer (sync file APIs: workers only).
-import init, { import_disc } from './pkg/hst.js';
+// B457: `{ file, memory: true }` (a browser without OPFS, such as a Firefox private window) writes it into a Blob
+// instead, handed back as `pack` for this visit only.
+import init, { import_disc, import_disc_to_memory } from './pkg/hst.js';
 
-onmessage = async ({ data: file }) => {
+onmessage = async ({ data }) => {
+  const { file, memory } = data instanceof Blob ? { file: data } : data;
+  const progress = (i, n) => postMessage({ progress: [i, n] });
   try {
     await init();
+    if (memory) {
+      const parts = [];
+      const [hash, head] = import_disc_to_memory(file, progress, c => parts.push(new Blob([c])));
+      postMessage({ hash, pack: new Blob([head, ...parts]) });
+      return;
+    }
     const dir = await navigator.storage.getDirectory();
     const part = await dir.getFileHandle('disc.part', { create: true });
     const h = await part.createSyncAccessHandle();
     let hash;
     try {
-      hash = import_disc(file, h, (i, n) => postMessage({ progress: [i, n] }));
+      hash = import_disc(file, h, progress);
       h.flush();
     } finally {
       h.close();
