@@ -627,7 +627,7 @@ fn conform(doc: &gltf::Document, blob: &[u8], morph_face: bool) -> Result<Vec<St
             over4 |= p.get(&gltf::Semantic::Joints(1)).is_some();
         }
     }
-    if !(feet.abs() < 0.06) {
+    if feet.is_nan() || feet.abs() >= 0.06 {
         warn.push(format!("feet at y=0 (lowest point {feet:.3})"));
     }
     if over4 || sums > 0 {

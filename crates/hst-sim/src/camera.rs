@@ -4,6 +4,7 @@
 //! 2. zooms in, keeping the top edge, until the bottom edge is halfway to the lowest point it must show (4 m
 //!    behind a near player, or the ball's spot on the court);
 //! 3. slides sideways and widens so the court (±5 m) and every player (±1.7 m) fit across;
+//!
 //! then eases the shown view 10 % toward that target and finally widens upward if the ball would leave the top
 //! 2 % of the picture. Game space (Y down); the camera's rows are right, down, forward.
 //! Arithmetic through `ps2::F` (the FPU's rounding; transcendentals from `musl`, the same on every platform), but

@@ -104,7 +104,7 @@ impl Popup {
         }
         self.scale = match self.frames {
             ..10 => (F(self.scale) + 0.15).0,
-            ..SWELL_FRAMES => (F(self.scale) - 0.05).0,
+            10..SWELL_FRAMES => (F(self.scale) - 0.05).0,
             _ => 1.0,
         };
         self.frames += 1;

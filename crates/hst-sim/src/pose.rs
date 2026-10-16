@@ -45,9 +45,7 @@ pub fn first_frame(sk: &Skeleton, anim: &Anim) -> Vec<M4> {
         if let Some(t) = anim.tracks.iter().find(|t| t.name == sk.names[i]) {
             if let Some(&(_, q)) = t.rotation.first() {
                 let r = rotation(q);
-                for row in 0..3 {
-                    local[row] = r[row];
-                }
+                local[..3].copy_from_slice(&r[..3]);
             }
             if let Some(&(_, p)) = t.position.first() {
                 local[3] = [p[0], p[1], p[2], 1.0];
@@ -199,8 +197,8 @@ impl Keys {
         use crate::quat::micro_slerp;
         match self.find(t) {
             Err(i) => self.value[i],
-            Ok((i, u)) if u == 1.0 => self.value[i + 1],
-            Ok((i, u)) if u == 0.0 => self.value[i],
+            Ok((i, 1.0)) => self.value[i + 1],
+            Ok((i, 0.0)) => self.value[i],
             Ok((i, u)) => {
                 let a = micro_slerp(self.value[i], self.value[i + 1], u);
                 let b = micro_slerp(self.tan[i][0], self.tan[i + 1][0], u);
@@ -469,10 +467,10 @@ impl Path {
 /// Model-space matrices from local ones down the hierarchy.
 pub fn model(sk: &Skeleton, local: &[M4]) -> Vec<M4> {
     let mut out: Vec<M4> = Vec::with_capacity(local.len());
-    for i in 0..local.len() {
+    for (i, l) in local.iter().enumerate() {
         out.push(match sk.parent[i] {
-            Some(p) => mul(&local[i], &out[p]),
-            None => local[i],
+            Some(p) => mul(l, &out[p]),
+            None => *l,
         });
     }
     out

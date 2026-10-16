@@ -133,8 +133,8 @@ pub fn search(r: &Reach, path: &[PathPoint], pos: [f32; 3], facing: f32, kind: i
     };
     let best = |max_bounces: i32, ok: &dyn Fn(usize) -> bool, metric: &dyn Fn(usize) -> f32| {
         let mut best: Option<usize> = None;
-        for k in 0..n {
-            if path[k].bounces > max_bounces {
+        for (k, e) in path.iter().enumerate().take(n) {
+            if e.bounces > max_bounces {
                 break;
             }
             if ours(k) && ok(k) && best.is_none_or(|b| metric(k) < metric(b)) {
@@ -212,7 +212,8 @@ pub struct Dive {
 pub fn dive(r: &Reach, path: &[PathPoint], pos: [f32; 3], end: f32, face: [f32; 2], vel: [f32; 2]) -> Option<Dive> {
     let speed = ((F(vel[0]) * vel[0] + F(vel[1]) * vel[1]).sqrt() * 1.25).0;
     let wide = (F(r.reach) * STRETCH).0;
-    let (mut hit, mut miss): (Option<(usize, f32)>, Option<(usize, f32, f32)>) = (None, None);
+    let mut hit: Option<(usize, f32)> = None;
+    let mut miss: Option<(usize, f32, f32)> = None;
     for (k, p) in path.iter().enumerate().take(DIVE_HORIZON).skip(5) {
         let (z, h) = (p.pos[2], (-F(p.pos[1])).0);
         if !(z.abs() >= NET_CLEAR && (z >= 0.0) != (end >= 0.0) && (F(r.stroke_height) * 0.2).0 <= h && h <= (F(r.stroke_height) * 1.8).0) {
@@ -288,7 +289,7 @@ impl Dive {
     }
 
     /// Frames the dive locks the player, counting the search frame.
-    pub fn len(&self) -> usize {
+    pub fn lock_frames(&self) -> usize {
         self.frame + DIVE_RECOVERY + 1
     }
 
@@ -298,7 +299,7 @@ impl Dive {
     /// player more than 25° off `dir` from the start ends the slide (or, later, the lunge).
     pub fn step(&mut self, pos: [f32; 2], root_z: impl Fn(f32) -> f32, mover: impl FnOnce([f32; 2]) -> [f32; 2]) -> Option<[f32; 2]> {
         let (n, k) = (self.tick, self.frame);
-        if n >= self.len() {
+        if n >= self.lock_frames() {
             return None;
         }
         self.tick += 1;

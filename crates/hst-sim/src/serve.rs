@@ -336,6 +336,7 @@ pub fn scatter_along(side: f32, depth: f32, hit: [f32; 3], aim: [f32; 3]) -> [f3
 /// scatter toward the aim, and the ball flies to aim + scatter. `turn` is the shot record's spin and side angle
 /// (radians; only slice serves have a side angle) and whether the server is left-handed (see
 /// `shot::launch_turned`), and `bend` the special serve's (`shot::effect`).
+#[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
 pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3], turn: (f32, f32, bool), bend: f32) -> shot::Launch {
     let l = shot::lookup(table, &Bounds::serve(underhand, radius), [(F(hit[0]) - scatter[0]).0, hit[1], (F(hit[2]) - scatter[2]).0], aim);
     let target = [(F(aim[0]) + scatter[0]).0, aim[1], (F(aim[2]) + scatter[2]).0, 1.0];

@@ -93,8 +93,9 @@ fn inverse(m: &M4) -> M4 {
         a[c].iter_mut().for_each(|v| *v /= d);
         for r in (0..4).filter(|&r| r != c) {
             let f = a[r][c];
-            for k in 0..8 {
-                a[r][k] -= f * a[c][k];
+            let pivot = a[c];
+            for (x, p) in a[r].iter_mut().zip(pivot) {
+                *x -= f * p;
             }
         }
     }
@@ -318,8 +319,8 @@ fn export(model: &mdl::Model, mats: &mtl::Mtl, noise: &[noi::Deformer], motions:
     let ibm: Vec<[f32; 16]> = (0..n)
         .map(|i| {
             let mut m = inverse(&model.node_bind[i]);
-            for r in 0..3 {
-                m[r][3] = 0.0;
+            for row in m.iter_mut().take(3) {
+                row[3] = 0.0;
             }
             m[3][3] = 1.0;
             std::array::from_fn(|k| m[k / 4][k % 4])

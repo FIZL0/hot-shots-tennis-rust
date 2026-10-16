@@ -279,7 +279,6 @@ fn foot_extras_s05() {
                     dive: fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3,
                     lunge: f(x, 0),
                     dive_over: x[0x10 + 9] != 0,
-                    ..Runner::default()
                 }
             })
             .collect();
@@ -483,7 +482,7 @@ fn dive_inputs_s05() {
             for fr in &frames {
                 let (vsync, x) = (i(fr, 0), &fr[EX + EXSZ * p..]);
                 let event = fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3;
-                // a dive lasts its search frame and its counter's run to +0x3f84 (the app's `Dive::len`)
+                // a dive lasts its search frame and its counter's run to +0x3f84 (the app's `Dive::lock_frames`)
                 if event {
                     until = Some(vsync + i(x, 4));
                     seen = true;

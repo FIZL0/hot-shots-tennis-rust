@@ -197,6 +197,9 @@ impl Caster {
     }
 }
 
+/// A triangle's three corners (model space) and their texture coordinates.
+pub type Tri = ([[f32; 3]; 3], [[f32; 2]; 3]);
+
 /// An alpha-tested material's triangles (model space, with their texture coordinates) and its texture's alpha
 /// (PS2, 0x80 opaque) and GS wrap modes.
 #[derive(Clone, Default)]
@@ -207,7 +210,7 @@ pub struct Cutout {
     pub wrap: [u8; 2],
     /// The red its triangles blend toward: 0x80, fogged (PRIM FGE, fog 0xff) 0x7f.
     pub red: u8,
-    pub tris: Vec<([[f32; 3]; 3], [[f32; 2]; 3])>,
+    pub tris: Vec<Tri>,
 }
 
 /// A caster model as its shadow texture draws it: an alpha-tested (TEST mode 10..29), textured material's

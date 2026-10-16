@@ -191,6 +191,7 @@ fn director_s05() {
 /// and turned the shot away from the winner.
 #[test]
 fn prediction_s05() {
+    type Anims = std::collections::HashMap<usize, (ani::Anim, Option<Path>)>;
     use hst_data::{ani, mdl, xb::Archive};
     use hst_sim::cutaway;
     use hst_sim::pose::{Clip, Path, Skeleton, node_world};
@@ -225,7 +226,7 @@ fn prediction_s05() {
             if !(0x2c..0x35).contains(&m) {
                 continue;
             }
-            let (skeletons, anims): &(Vec<Skeleton>, std::collections::HashMap<usize, (ani::Anim, Option<Path>)>) = chars.entry(c).or_insert_with(|| {
+            let (skeletons, anims): &(Vec<Skeleton>, Anims) = chars.entry(c).or_insert_with(|| {
                 let sks = (0..10)
                     .filter_map(|costume| {
                         let d = iso.read(&format!("PC/PC{c:02}C{costume:02}.XB")).ok()?;

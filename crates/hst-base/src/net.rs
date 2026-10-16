@@ -1240,13 +1240,10 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
     cx.say(Event::Status("Online.".into()));
     // B321: a Host, Join, Quickplay or Find that came in during a Find (dropped for it)
     let mut cut: Option<Cmd> = None;
-    loop {
-        let Some(c) = (match cut.take() {
-            Some(c) => Some(c),
-            None => cmds.recv().await,
-        }) else {
-            break;
-        };
+    while let Some(c) = match cut.take() {
+        Some(c) => Some(c),
+        None => cmds.recv().await,
+    } {
         #[cfg(not(target_arch = "wasm32"))]
         if matches!(c, Cmd::Host(_) | Cmd::Find | Cmd::Quick(_) | Cmd::Join(..)) {
             cx.revive_dht(&mut dht_since).await;
@@ -1450,6 +1447,7 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
 }
 
 /// A joiner's side, inside the host task.
+#[allow(clippy::large_enum_variant)] // `Said` keeps its `Msg` by value so the host's match arms destructure it
 enum Guest {
     In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device },
     Said(String, Msg),
@@ -1678,12 +1676,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let mut last = None;
                 while let Some(a) = addrs.next().await {
                     let r = a.relay_urls().next().cloned();
-                    if r.is_some() && r != last {
+                    if let Some(url) = &r
+                        && r != last
+                    {
                         bevy::log::info!("home relay {r:?}");
-                        last = r.clone();
-                        if htx.send(r.unwrap()).is_err() {
+                        if htx.send(url.clone()).is_err() {
                             return;
                         }
+                        last = r;
                     }
                 }
             });
@@ -4163,8 +4163,8 @@ mod tests {
             let ann = ("Ann".to_string(), "hi all".to_string());
             let host = ("Host".to_string(), "welcome".to_string());
             assert_eq!(heard(&bev, 1500).await, [ann.clone(), host.clone()]);
-            assert_eq!(heard(&hev, 0).await, [ann.clone()]);
-            assert_eq!(heard(&aev, 0).await, [host.clone()]);
+            assert_eq!(heard(&hev, 0).await, std::slice::from_ref(&ann));
+            assert_eq!(heard(&aev, 0).await, std::slice::from_ref(&host));
             // a burst: only the first few get through
             for i in 0..8 {
                 bcmd.send(Cmd::Chat(format!("spam {i}"))).unwrap();

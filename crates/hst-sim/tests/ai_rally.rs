@@ -845,7 +845,7 @@ fn rally_state_tick_by_tick_on_match_s05() {
     let mts = [Mt::of(&rd[8..8 + MT_SIZE]), Mt::of(&nd[8..8 + MT_SIZE])];
     let (rc, nc) = (calls(&rd, &[1]), calls(&nd, &[2, 3]));
     let end = nc.last().unwrap().0;
-    let mut ticks: Vec<(u32, usize, usize, &[u8], &[u8])> = rc.into_iter().filter(|c| c.0 <= end).map(|(v, k, e, x)| (v, 0, k, e, x)).collect();
+    let mut ticks: Vec<_> = rc.into_iter().filter(|c| c.0 <= end).map(|(v, k, e, x)| (v, 0, k, e, x)).collect();
     ticks.extend(nc.into_iter().map(|(v, k, e, x)| (v, 1, k, e, x)));
     ticks.sort_by_key(|t| (t.0, t.1, t.2));
     // per AI object: the game's exit block of its last call, and the port's

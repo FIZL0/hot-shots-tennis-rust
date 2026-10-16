@@ -512,6 +512,7 @@ impl AiParams {
     /// singles ones) plus the fast-ball frames; then a random part up to the row's, and a lob (`lob`: a △ ground
     /// stroke, volley or dive) or special serve adds half its frames plus up to half again. `near_net`: within the
     /// service line.
+    #[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
     pub fn reaction(
         &self,
         t: &Timing,
@@ -625,6 +626,7 @@ impl AiParams {
 /// width. Each spot stands `depth` (player stat) · side / 2 short of the ball. Some(true) for minus, Some(false) for
 /// plus, None when neither was found. As the game, a side found at the path's first entry (index 0) isn't weighed.
 /// ponytail: only minus at index 0 found makes the game read the entry before the path; this keeps minus then.
+#[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
 pub fn stand_side(
     minus: Option<Spot>,
     plus: Option<Spot>,

@@ -278,7 +278,7 @@ async fn pulls() -> Result<Vec<(u32, String)>, String> {
             break;
         }
     }
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|p| std::cmp::Reverse(p.0));
     Ok(out)
 }
 
@@ -997,7 +997,7 @@ fn pack_check(m: &Mod, files: &[(String, Vec<u8>)], iso: &str) -> Result<(u32, O
 fn before_after(before: (u32, u32, &[u8]), after: (u32, u32, &[u8])) -> Option<Vec<u8>> {
     let img = |(w, h, rgba): (u32, u32, &[u8])| image::RgbaImage::from_raw(w, h, rgba.to_vec());
     let (a, b) = (img(after)?, img(before)?);
-    let h = a.height().min(PAIR).max(1);
+    let h = a.height().clamp(1, PAIR);
     let fit = |i: &image::RgbaImage, f| image::imageops::resize(i, (i.width() as u64 * h as u64 / i.height().max(1) as u64).max(1) as u32, h, f);
     let (b, a) = (fit(&b, image::imageops::FilterType::Nearest), fit(&a, image::imageops::FilterType::Lanczos3));
     let gap = (h / 32).max(2);
@@ -1599,7 +1599,7 @@ mod tests {
             assert_eq!((got.id.as_str(), crate::mods::Kind::of_dir(&got.dir)), (m.id.as_str(), kind.clone()));
             match kind {
                 crate::mods::Kind::Umpire => assert_eq!(crate::mods_umpire::list(&root).iter().map(|u| (u.id.as_str(), u.donor)).collect::<Vec<_>>(), [("gag_ump09", 2)]),
-                _ => assert_eq!(crate::mods_court::list(&root).iter().map(|c| c.id.clone()).collect::<Vec<_>>(), [m.id.clone()]),
+                _ => assert_eq!(crate::mods_court::list(&root).iter().map(|c| c.id.clone()).collect::<Vec<_>>(), std::slice::from_ref(&m.id)),
             }
             // not a character: the roster leaves it out
             assert!(crate::mods::list(&root).is_empty());

@@ -436,8 +436,8 @@ impl Flight {
         let v = self.ball.vel;
         let mut d: V4 = [v[0], v[1], v[2], 0.0];
         if self.bounces == 0 {
-            for k in 0..3 {
-                d[k] = (F(d[k]) + F(shot.wind[k]) * 1.0).0;
+            for (d, w) in d.iter_mut().zip(shot.wind).take(3) {
+                *d = (F(*d) + F(w) * 1.0).0;
             }
             // curve profile: Δ of sin(π·progress) over this frame, progress capped at 1
             let n = self.frame + 1;
@@ -504,6 +504,7 @@ impl Flight {
 
     /// Contact response to a surface with normal `n` (pointing out of the surface toward the ball, as the
     /// sweep reports it); returns the new velocity. `counted`: the bounce counters were already advanced this frame.
+    #[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
     fn respond(&mut self, shot: &Shot, s: &Surface, d: V4, n: V4, material: Material, ghost: bool, f: &mut FrameFlags) -> V4 {
         use crate::{quat, vu0};
         let r = F(shot.params.radius);

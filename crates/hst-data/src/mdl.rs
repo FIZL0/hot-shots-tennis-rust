@@ -174,6 +174,7 @@ impl Model {
         let mut verts = Vec::with_capacity(n);
         let mut kick = Vec::with_capacity(n);
         let mut morph = vec![vec![[0.0f32; 3]; n]; pk.morphs.len()];
+        #[allow(clippy::needless_range_loop)] // v walks the bone ranges (v, v + 1), UVs, colours and each morph target together
         for v in 0..n {
             let (a, b) = (pk.bones[v] as usize, (pk.bones[v + 1] as usize).min(pk.vertices.len()));
             let mut sv = SkinVertex { uv: pk.uvs[v], color: pk.colors.get(v).copied().unwrap_or([0x80; 4]), ..Default::default() };
@@ -474,7 +475,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                                 }
                             }
                             _ => {
-                                for (v, uv) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(16)) {
+                                for (v, uv) in pk.vertices[strip_start..].iter_mut().zip(data.as_chunks::<16>().0) {
                                     v.uv = [f32_at(uv, 0), f32_at(uv, 4)];
                                 }
                                 pk.uvs.extend(data.as_chunks::<16>().0.iter().map(|uv| [f32_at(uv, 0), f32_at(uv, 4)]));
@@ -495,7 +496,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                     (3, 1, _) => {
                         let mut kick = Vec::new();
                         pk.entry_flags.extend(data.as_chunks::<8>().0.iter().map(|nb| u16::from_le_bytes([nb[6], nb[7]])));
-                        for (i, (v, nb)) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(8)).enumerate() {
+                        for (i, (v, nb)) in pk.vertices[strip_start..].iter_mut().zip(data.as_chunks::<8>().0).enumerate() {
                             let s = |o: usize| i16::from_le_bytes([nb[o], nb[o + 1]]);
                             v.normal = [s(0) as f32 / 16384.0, s(2) as f32 / 16384.0, s(4) as f32 / 16384.0];
                             if s(6) as u16 & 0x8000 == 0 && i >= 2 {
@@ -509,7 +510,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                         }
                     }
                     (3, 2, _) => {
-                        for (v, c) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(4)) {
+                        for (v, c) in pk.vertices[strip_start..].iter_mut().zip(data.as_chunks::<4>().0) {
                             v.color = [c[0], c[1], c[2], c[3]];
                         }
                         pk.colors.extend(data.as_chunks::<4>().0.iter().take(n).map(|c| [c[0], c[1], c[2], c[3]]));

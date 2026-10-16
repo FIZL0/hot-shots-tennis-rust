@@ -7,6 +7,7 @@
 //!   blocks in raster order;
 //! - anything smaller than a block, and 16/24-bit: the texture expanded row by row (8-bit indices for palettes,
 //!   RGBA32 otherwise).
+//!
 //! With mipmapping on, each level of the drawn LOD range is hashed after the base into the same digest.
 
 use std::collections::HashMap;

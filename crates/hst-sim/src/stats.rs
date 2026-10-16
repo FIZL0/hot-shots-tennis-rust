@@ -103,6 +103,7 @@ impl Stats {
 
     /// Shot `shot` (1 = the serve) struck by `who` on contact branch `branch` (0 serve, 1 ground, 2 volley,
     /// 3 dive, 4 smash), `net_z` its distance from the net.
+    #[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
     pub fn hit(&mut self, who: usize, shot: i32, server: usize, branch: u8, forehand: bool, sweet: bool, net_z: f32) {
         let p = &mut self.players[who];
         p.hits += 1;
@@ -159,8 +160,8 @@ impl Stats {
     pub fn game(&mut self, points: [i32; 2]) {
         let top = points[0].max(points[1]) as f32;
         self.games += 1;
-        for t in 0..2 {
-            self.share[t] += (F(100.0) / top * points[t] as f32 + 0.5).0 as i32;
+        for (share, p) in self.share.iter_mut().zip(points) {
+            *share += (F(100.0) / top * p as f32 + 0.5).0 as i32;
         }
     }
 

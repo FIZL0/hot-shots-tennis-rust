@@ -414,18 +414,18 @@ fn shared_draws_like_the_game() {
             let (u0, u1) = (draw(), draw());
             assert_eq!((uniform(u0), uniform(u1)), (u(bb, 0x258), u(bb, 0x25c)), "vsync {v}: the launch's uniforms");
         }
-        for p in 0..4 {
+        for (p, voice) in voices.iter_mut().enumerate().take(4) {
             if pb(b, p, 0x3ec1) == 3 && pb(a, p, 0x3ec1) != 3 {
-                voices[p].shout(p, sound::DIVE_SHOUT, 4, draw() >> 16 & 0x7fff);
+                voice.shout(p, sound::DIVE_SHOUT, 4, draw() >> 16 & 0x7fff);
                 tally[4] += 1;
             }
         }
         if (0..4).any(|p| pi(a, p, 0x3db0) == 0 && pi(b, p, 0x3db0) != 0) {
             let mut taken = Vec::new();
-            for p in 0..4 {
+            for (p, &ch) in chars.iter().enumerate().take(4) {
                 let want = pi(b, p, 0x3db0);
                 let base = if want >= 0x30 { 0x2c } else { want };
-                let id = motion::team_reaction(base, chars[p], &taken, |m| (draw() >> 16 & 0x7fff) % m);
+                let id = motion::team_reaction(base, ch, &taken, |m| (draw() >> 16 & 0x7fff) % m);
                 assert_eq!(id, want, "vsync {v}: player {p}'s team reaction");
                 if id >= 0x30 {
                     taken.push(id - 0x30);
@@ -736,12 +736,12 @@ fn menu_flame_draws_like_the_game() {
         // the frame loop's calls (the spawn's own, made from a helper, carry other s0s)
         let mut ends = vec![];
         let mut prev = 0;
-        for k in first..seed {
-            if (0x37ba20..0x37c2ac).contains(&rec[k][1]) {
-                if rec[k][2] < prev {
+        for (k, r) in rec.iter().enumerate().take(seed).skip(first) {
+            if (0x37ba20..0x37c2ac).contains(&r[1]) {
+                if r[2] < prev {
                     ends.push(k);
                 }
-                prev = rec[k][2];
+                prev = r[2];
             }
         }
         ends.push(seed);
@@ -870,7 +870,7 @@ fn clouds_remade_like_the_game() {
         }
         let ours = clouds::spawn(&draws, models.len(), [y0 * 40.0, y1 * 40.0]);
         assert_eq!(ours.len() * 0x1e0, list.len());
-        for (i, (a, b)) in ours.iter().zip(list.chunks_exact(0x1e0)).enumerate() {
+        for (i, (a, b)) in ours.iter().zip(list.as_chunks::<0x1e0>().0).enumerate() {
             assert_eq!(a.pos[1].to_bits(), f(b, 0x154).to_bits(), "weather {w}, cloud {i}: y");
             assert_eq!(models[a.model], u(b, 0x1b4), "weather {w}, cloud {i}: model");
             assert!((a.pos[0] - f(b, 0x150)).abs() < 5.0 && (a.pos[2] - f(b, 0x158)).abs() < 5.0, "weather {w}, cloud {i}: x, z");

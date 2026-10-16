@@ -93,7 +93,6 @@ impl SpecializedRenderPipeline for Pipeline {
                 shader_defs: if mix { vec!["PERSIST".into()] } else { vec![] },
                 entry_point: Some("fragment".into()),
                 targets: vec![Some(ColorTargetState { format, blend: None, write_mask: ColorWrites::ALL })],
-                ..default()
             }),
             ..default()
         }

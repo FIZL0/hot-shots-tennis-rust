@@ -12,6 +12,9 @@ use hst_sim::umpire::{Look, Umpire};
 
 const N: usize = 0x1d4;
 
+/// The umpire's compared state, in `S::state`'s field order.
+type State = (i32, [bool; 4], i32, i32, i32, [bool; 3], i32, [i32; 2], [u8; 2]);
+
 struct S<'a>(&'a [u8]);
 
 impl S<'_> {
@@ -60,7 +63,7 @@ impl S<'_> {
             _ => None,
         }
     }
-    fn state(&self) -> (i32, [bool; 4], i32, i32, i32, [bool; 3], i32, [i32; 2], [u8; 2]) {
+    fn state(&self) -> State {
         let b = |o| self.0[self.u(o)] != 0;
         (
             self.i(self.u(0xd0)),
@@ -76,7 +79,7 @@ impl S<'_> {
     }
 }
 
-fn port(u: &Umpire) -> (i32, [bool; 4], i32, i32, i32, [bool; 3], i32, [i32; 2], [u8; 2]) {
+fn port(u: &Umpire) -> State {
     let look = match u.look {
         Look::Centre => 0,
         Look::Ball => 1,

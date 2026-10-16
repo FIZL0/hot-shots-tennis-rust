@@ -112,7 +112,7 @@ fn serve_ik() {
             let sd = &mut seed;
             let p = rng(sd) as usize % 4;
             let (pl, kind) = (pls[p], rng(sd) % 3);
-            let side = if rng(sd) % 2 == 0 { 1.0f32 } else { -1.0 };
+            let side = if rng(sd).is_multiple_of(2) { 1.0f32 } else { -1.0 };
             let pos = [uni(sd, -5.0, 5.0), uni(sd, -0.2, 0.2), uni(sd, -13.0, 13.0), 1.0];
             // heights are −y: from knee height to well over the head (a jump)
             let off = [uni(sd, -1.8, 1.8), uni(sd, -3.8, -0.3), uni(sd, -1.8, 1.8)];
@@ -183,7 +183,7 @@ fn serve_ik_captures() {
         let Ok(d) = std::fs::read(root().join(format!("context/b29/run3/{file}.bin"))) else { return eprintln!("skip: no {file}") };
         let Some(ee) = Ee::from_ram(&format!("{slot}.bin")) else { return eprintln!("skip: no {slot}.bin") };
         let gm = ee.read(0x422f80, 4) as u32;
-        let rows: Vec<&[u8]> = d.chunks_exact(S).collect();
+        let rows: Vec<&[u8]> = d.as_chunks::<S>().0.iter().map(|s| s.as_slice()).collect();
         let w = |r: &[u8], o: usize| u32::from_le_bytes(r[o..o + 4].try_into().unwrap());
         let pf = |r: &[u8], o: u32| f32::from_bits(w(r, 0xac + (o - 0x3d40) as usize));
         let pi = |r: &[u8], o: u32| w(r, 0xac + (o - 0x3d40) as usize) as i32;
@@ -278,9 +278,9 @@ fn dive_slide() {
             let p = rng(sd) as usize % 4;
             let a = uni(sd, -PI, PI);
             let dir = [a.sin(), a.cos()];
-            let hand = if rng(sd) % 2 == 0 { 1.0f32 } else { -1.0 };
+            let hand = if rng(sd).is_multiple_of(2) { 1.0f32 } else { -1.0 };
             let pos = [uni(sd, -5.0, 5.0), uni(sd, -0.1, 0.1), uni(sd, -13.0, 13.0), 1.0];
-            let m: M4 = if rng(sd) % 4 == 0 {
+            let m: M4 = if rng(sd).is_multiple_of(4) {
                 std::array::from_fn(|_| std::array::from_fn(|_| uni(sd, -1.5, 1.5)))
             } else {
                 [[dir[1] * hand, 0.0, -dir[0] * hand, 0.0], [0.0, 1.0, 0.0, 0.0], [dir[0], 0.0, dir[1], 0.0], pos]

@@ -1444,7 +1444,7 @@ mod tests {
         }
         let (lo, hi) = all.iter().fold((f32::MAX, 0f32), |(l, h), &r| (l.min(r), h.max(r)));
         assert!((lo..=hi).contains(&Track::AMBIENCE_RMS), "{lo}..{hi}");
-        assert!(Track::AMBIENCE_RMS < Track::BGM_RMS / 3.0);
+        const { assert!(Track::AMBIENCE_RMS < Track::BGM_RMS / 3.0) };
     }
 
     /// P0b4c: umpire 4 a's clips as the match times them (`centre_frames`), the lengths behind the slot-5 voice

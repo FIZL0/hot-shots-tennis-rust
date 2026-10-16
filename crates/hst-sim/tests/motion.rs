@@ -17,8 +17,10 @@ fn f(b: &[u8], o: usize) -> f32 {
 /// The match recordings and their save states' RAM.
 const MATCHES: [(&str, &str); 2] = [("match_s05.bin", "slot5_ee.bin"), ("1p3goodcpus.bin", "1p3goodcpus_ee.bin")];
 
+type Match = (&'static str, Vec<u8>, [(i32, f32); 4]);
+
 /// Every match present: its name, recording and per player the character (+0x12bc) and hand (+0x12b4) in its RAM.
-fn matches() -> Vec<(&'static str, Vec<u8>, [(i32, f32); 4])> {
+fn matches() -> Vec<Match> {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     MATCHES
         .iter()
@@ -44,7 +46,7 @@ fn match_stroke_motions() {
             if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
                 break;
             }
-            for p in 0..4 {
+            for (p, l) in lineup.iter().enumerate().take(4) {
                 if p_u8(fr, p, 0x3fa4) != 0 {
                     continue;
                 }
@@ -71,7 +73,7 @@ fn match_stroke_motions() {
                 if p_i32(a, p, 0x3ec4) == 1 && left == -1 && fr.global(0x423058) == p as i32 {
                     let b = fr.live_ball();
                     let v = [f(b, 0x140), f(b, 0x144), f(b, 0x148)];
-                    let soft = soft_follow(branch, p_i32(fr, p, 0x3e44), v, p_i32(fr, p, 0x3f50) as u32, lineup[p].1);
+                    let soft = soft_follow(branch, p_i32(fr, p, 0x3e44), v, p_i32(fr, p, 0x3f50) as u32, l.1);
                     let m = p_i32(next, p, 0x3df0);
                     match soft {
                         Some(s) => assert_eq!(m, s, "{name} soft k={k} p={p}"),
@@ -95,7 +97,7 @@ fn match_serve_walk() {
         let mut n = 0;
         for k in 1..frames.len() {
             let (a, fr) = (frames[k - 1], frames[k]);
-            for p in 0..4 {
+            for (p, l) in lineup.iter().enumerate().take(4) {
                 let m = p_i32(fr, p, 0x3df0);
                 if p_u8(fr, p, 0x3fa4) != 1 || !(0x21..=0x22).contains(&m) {
                     continue;
@@ -105,7 +107,7 @@ fn match_serve_walk() {
                     continue;
                 }
                 let fwd = if fr.player_pos(p)[2] < 0.0 { 1.0 } else { -1.0 };
-                assert_eq!(serve_walk(dx, fwd, lineup[p].1), m, "{name} k={k} p={p}");
+                assert_eq!(serve_walk(dx, fwd, l.1), m, "{name} k={k} p={p}");
                 n += 1;
             }
         }
@@ -128,7 +130,7 @@ fn match_reactions() {
             if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
                 break;
             }
-            for p in 0..4 {
+            for (p, l) in lineup.iter().enumerate().take(4) {
                 if p_u8(fr, p, 0x3fa4) != 2 || p_u8(a, p, 0x3fa4) == 2 {
                     continue;
                 }
@@ -140,7 +142,7 @@ fn match_reactions() {
                 let got = p_i32(fr, p, 0x3db0);
                 if got >= 0x30 {
                     let c = got - 0x30;
-                    assert!((0x2c..=0x2d).contains(&base) && team_reactions(lineup[p].0).contains(&c) && !taken.contains(&c), "{name} k={k} p={p} {got:#x}");
+                    assert!((0x2c..=0x2d).contains(&base) && team_reactions(l.0).contains(&c) && !taken.contains(&c), "{name} k={k} p={p} {got:#x}");
                     taken.push(c);
                     team += 1;
                 } else {
@@ -196,8 +198,8 @@ fn clip_sampler_ram() {
                     let q = rot.unwrap();
                     assert_eq!(q.map(f32::to_bits), [0, 4, 8, 12].map(|o| u(node + 0xe0 + o) as u32), "{ctx} quat");
                     let mm = q_matrix(q);
-                    for r in 0..3 {
-                        assert_eq!(mm[r][..3].iter().map(|v| v.to_bits()).collect::<Vec<_>>(), (0..3).map(|j| u(cache + 16 * r + 4 * j) as u32).collect::<Vec<_>>(), "{ctx} row {r}");
+                    for (r, row) in mm.iter().enumerate().take(3) {
+                        assert_eq!(row[..3].iter().map(|v| v.to_bits()).collect::<Vec<_>>(), (0..3).map(|j| u(cache + 16 * r + 4 * j) as u32).collect::<Vec<_>>(), "{ctx} row {r}");
                     }
                 }
                 if list_n(u(track(k) + 0x10)) > 1 {
@@ -657,8 +659,8 @@ fn fade_mix_ram() {
                 let ctx = format!("{s} p{p} motion {old:#x} t {t} w {w} track {k}");
                 if rot.is_some() {
                     let m = q_matrix(q);
-                    for r in 0..3 {
-                        assert_eq!(m[r][..3].iter().map(|v| v.to_bits()).collect::<Vec<_>>(), (0..3).map(|j| u(cache + 16 * r + 4 * j) as u32).collect::<Vec<_>>(), "{ctx} row {r}");
+                    for (r, row) in m.iter().enumerate().take(3) {
+                        assert_eq!(row[..3].iter().map(|v| v.to_bits()).collect::<Vec<_>>(), (0..3).map(|j| u(cache + 16 * r + 4 * j) as u32).collect::<Vec<_>>(), "{ctx} row {r}");
                     }
                 }
                 if pos.is_some() {
