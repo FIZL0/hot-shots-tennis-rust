@@ -1,7 +1,7 @@
 #!/bin/bash
 # tools/release.sh VERSION [notes.md] [publish] — a full release (v1.0.0, "OpenTennis 1.0.0"): set
 # crates/hst's version to VERSION (a "Release vVERSION" commit if it changes), build Linux + Windows + the unsigned
-# iOS IPA (tools/build.sh all) + the Android APK (tools/apk.sh, signed with this machine's ~/.android/debug.keystore:
+# iOS IPA + the Android APK (tools/build.sh all; the APK via tools/apk.sh, signed with this machine's ~/.android/debug.keystore:
 # keep that file, a phone only takes an update signed with the same key), sign SHA256SUMS with the minisign key (~/.config/hst/release.key, asks its password) and upload to GitHub:
 #   opentennis-windows-x86_64.zip  opentennis-linux-x86_64.tar.gz  opentennis-ios.ipa  opentennis-android.apk   what players download
 #   opentennis-windows-x86_64.exe  opentennis-linux-x86_64             the bare binaries the updater fetches (plan/B374.md)
@@ -54,7 +54,6 @@ for f in tools/build.sh tools/apk.sh tools/ios-ipa.sh; do
     grep -q 'features[ =].*ship' "$f" || { echo "$f doesn't build with --features ship (B492)" >&2; exit 1; }
 done
 HST_VERSION=$tag tools/build.sh all  # B374: update.rs compares this tag
-HST_VERSION=$tag tools/apk.sh
 out=dist/release
 rm -rf "$out" && mkdir -p "$out"
 tar -czf "$out/opentennis-linux-x86_64.tar.gz" -C dist/linux .
