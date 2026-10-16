@@ -136,7 +136,8 @@ fn idle(g: &Game, i: usize) -> bool {
 fn voice(g: &mut Game, i: usize, motion: usize) {
     // ponytail: every emote has two keys, so avoiding the last one alternates them; the draw only matters past two
     let draw = g.players[i].pos[0].to_bits() ^ g.players[i].pos[2].to_bits();
-    if let Some(play) = line(&mut g.voices[i], i, motion, draw) {
+    // B474: muted here only after the pick, so the key memory (match state) moves the same on every peer
+    if let Some(play) = line(&mut g.voices[i], i, motion, draw).filter(|_| crate::audio::EMOTE_VOICES.load(std::sync::atomic::Ordering::Relaxed)) {
         g.lines.push(Line::Emote(i, play));
     }
 }
