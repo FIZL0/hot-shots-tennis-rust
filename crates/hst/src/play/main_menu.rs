@@ -1637,6 +1637,16 @@ const fn court_pic(k: usize) -> Tex {
 }
 /// The "?" court tile on `C02` (a random court; B217's Random card).
 const RANDOM_TILE: [f32; 4] = [96.0, 360.0, 92.0, 68.0];
+/// Its inside, within the 2-px dark rim; the "?" spans rows 11..55 of the tile, its middle at 33.
+const RANDOM_INNER: [f32; 4] = [99.0, 363.0, 86.0, 62.0];
+
+/// [`RANDOM_INNER`] cropped (never stretched) to `[w, h]`'s shape, kept on the "?" where it cuts rows.
+fn random_cover([w, h]: [f32; 2]) -> [f32; 4] {
+    let [u, v, iw, ih] = RANDOM_INNER;
+    let [cx, _, cw, ch] = cover([iw, ih], [w, h]);
+    let cy = (RANDOM_TILE[1] + 33.0 - ch / 2.0).clamp(v, v + ih - ch);
+    [u + cx, cy, cw, ch]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Quad {
@@ -2516,7 +2526,7 @@ fn cell_face(c: Option<Who>) -> (Tex, [f32; 4]) {
 fn tile_face(c: Option<Who>) -> (Tex, [f32; 4]) {
     let (tex, [x, y, w, h]) = cell_face(c);
     let src = match c {
-        None => [x + (w - h) / 2.0, y, h, h],
+        None => random_cover([1.0, 1.0]),
         Some(_) => [x + w * 0.13, y + h * 0.09, w * 0.74, h * 0.74],
     };
     (tex, src)
@@ -2678,17 +2688,14 @@ fn cover([pw, ph]: [f32; 2], [w, h]: [f32; 2]) -> [f32; 4] {
 }
 
 /// B192: court value `c`'s picture over `dst`, cropped (never stretched) to its shape: a court mod's own (B401) else
-/// its layout court's, Random's "?" tile on a dark field.
+/// its layout court's, Random's "?" tile filling it.
 fn court_picture(d: &mut Draw, m: &Menu, c: usize, [x, y, w, h]: [f32; 4]) {
     if let Some((i, size)) = m.court_pic(c) {
         return d.q(Tex::CourtMod(i), cover(size, [w, h]), [x, y, w, h], WHITE, 128.0);
     }
     let k = m.court_layout(c);
     if k >= COURTS {
-        d.q(Tex::Solid, [0.0; 4], [x, y, w, h], [30.0, 45.0, 28.0], 128.0);
-        let t = (h * 0.3).min(w * 0.3);
-        d.q(C02, RANDOM_TILE, [x + w / 2.0 - t * 0.68, y + h * 0.35 - t / 2.0, t * 1.35, t], [70.0; 3], 128.0);
-        return;
+        return d.q(C02, random_cover([w, h]), [x, y, w, h], WHITE, 128.0);
     }
     d.q(court_pic(k), cover([568.0, 256.0], [w, h]), [x, y, w, h], WHITE, 128.0);
 }
