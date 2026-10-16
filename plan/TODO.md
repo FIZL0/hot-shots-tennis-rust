@@ -42,7 +42,6 @@ index out of bounds: the len is 0 but the index is 0"
 ### Match
 
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
-- [ ] **P14c** (split into P14c1–5) Trigger creatures (types, triggers, paths) → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` | t: npc.rs
 
 ### Presentation
 
