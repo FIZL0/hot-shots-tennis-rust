@@ -94,7 +94,6 @@ pub enum Relay {
 
 /// `online.txt` beside the disc image: `name = …` (this player's name, shown on their lobby seats; a host's lobby is
 /// listed under it), `relay = n0 | own | off`, `relay_url = https://…`, `private = yes | no` (B213: Host's last choice),
-/// `won = n`, `lost = n` (M120: this player's online record),
 /// `code_server = https://…` (B529: own pkarr relay for short codes, empty = [`OWN`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Online {
@@ -103,24 +102,12 @@ pub struct Online {
     pub relay_url: String,
     /// B213: the host's last Public/Private choice (Host opens the lobby with it).
     pub private: bool,
-    pub record: Record,
     pub code_server: String,
 }
 
-/// M120: a player's online record: the finished online matches they won and lost (`online.txt`'s, sent in the Hello
-/// and shown on their lobby cards).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Record {
-    pub won: u32,
-    pub lost: u32,
-}
-
-/// M120: this machine's record as the app last read or wrote it: the Hello and a hosted lobby carry it.
-pub static RECORD: std::sync::Mutex<Record> = std::sync::Mutex::new(Record { won: 0, lost: 0 });
-
 impl Default for Online {
     fn default() -> Self {
-        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new(), private: false, record: Record::default(), code_server: String::new() }
+        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new(), private: false, code_server: String::new() }
     }
 }
 
@@ -145,8 +132,6 @@ impl Online {
                 "relay" => relay = v,
                 "relay_url" => o.relay_url = v,
                 "private" => o.private = v == "yes",
-                "won" => o.record.won = v.parse().unwrap_or(0),
-                "lost" => o.record.lost = v.parse().unwrap_or(0),
                 "code_server" => o.code_server = v,
                 _ => {}
             }
@@ -165,9 +150,8 @@ impl Online {
             Relay::Own(_) => "own",
             Relay::Off => "off",
         };
-        let r = self.record;
         let code = if self.code_server.is_empty() { String::new() } else { format!("code_server = {}\n", self.code_server) };
-        format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\nwon = {}\nlost = {}\n{code}", self.name, self.relay_url, if self.private { "yes" } else { "no" }, r.won, r.lost)
+        format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\n{code}", self.name, self.relay_url, if self.private { "yes" } else { "no" })
     }
 
     /// The next relay choice: n0, Off, then own only once a `relay_url` is set (the menu's Custom... comes after the
@@ -316,9 +300,6 @@ pub struct Room {
     /// M95: each peer's platform and input (its Hello's, then its `Msg::Device`), for the icons by its name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub devices: std::collections::BTreeMap<String, crate::device::Device>,
-    /// M120: each peer's online record (its Hello's), counted on by every peer at a finished match ([`Room::scored`]).
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub records: std::collections::BTreeMap<String, Record>,
 }
 
 /// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
@@ -535,9 +516,6 @@ impl Room {
         if let Some(d) = self.devices.remove(old) {
             self.devices.insert(new.into(), d);
         }
-        if let Some(r) = self.records.remove(old) {
-            self.records.insert(new.into(), r);
-        }
     }
 
     /// B196: the lobby after the match, for the players still in: the computer's seats and `away`'s open again,
@@ -551,7 +529,6 @@ impl Room {
         self.names.retain(|p, _| !away.contains(p));
         self.courts.retain(|p, _| !away.contains(p));
         self.devices.retain(|p, _| !away.contains(p));
-        self.records.retain(|p, _| !away.contains(p));
         self.picking.retain(|p| !away.contains(p));
         self.deciding.retain(|p| !away.contains(p));
         self.ready.clear();
@@ -564,37 +541,11 @@ impl Room {
         (self.rejoin, self.ver) = (false, self.ver + 1);
     }
 
-    /// M120: lobby seat `i`'s team: doubles' seats 0 and 1 against 2 and 3 (`netplay::flags` puts them in match
-    /// slots 0, 2, 1, 3, a slot's team its low bit), singles' seat itself.
-    pub fn team(&self, i: usize) -> usize {
-        if self.doubles { i / 2 } else { i & 1 }
-    }
-
-    /// M120: a finished match `team` won into every person's record: a win for each peer with a seat on that team,
-    /// else a loss (computers keep none). Every peer counts the same match the same way.
-    pub fn scored(&mut self, team: usize) {
-        let mut won: std::collections::BTreeMap<String, bool> = Default::default();
-        for (i, s) in self.seats.iter().enumerate() {
-            if let Some(s) = s.as_ref().filter(|s| s.human()) {
-                *won.entry(s.peer.clone()).or_default() |= self.team(i) == team;
-            }
-        }
-        for (peer, w) in won {
-            let r = self.records.entry(peer).or_default();
-            if w {
-                r.won += 1;
-            } else {
-                r.lost += 1;
-            }
-        }
-    }
-
     fn leave(&mut self, peer: &str) {
         self.ver += 1;
         self.names.remove(peer);
         self.courts.remove(peer);
         self.devices.remove(peer);
-        self.records.remove(peer);
         self.ready.remove(peer);
         self.picking.remove(peer);
         self.deciding.remove(peer);
@@ -710,9 +661,6 @@ pub enum Msg {
         /// M95: this machine's platform and input.
         #[serde(default)]
         device: crate::device::Device,
-        /// M120: this player's online record.
-        #[serde(default)]
-        record: Record,
     },
     Room(Room),
     Refused(String),
@@ -974,6 +922,10 @@ pub enum Event {
     Me(String),
     /// Hosting: the short code that also finds the lobby (B104).
     Short(String),
+    /// B519 (M120): hosting, friends can join now: the short code is on the DHT, or (its put still retried) the
+    /// lobby's link carries a relay; a browser's LAN lobby once its first offer is out. Until then the code is shown
+    /// but goes nowhere.
+    Joinable,
     Found(Vec<Listing>),
     /// The lobby as it is now (host and joiners alike).
     Room(Room),
@@ -1512,7 +1464,7 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
 
 /// A joiner's side, inside the host task.
 enum Guest {
-    In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device, record: Record },
+    In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device },
     Said(String, Msg),
     Gone(String),
     /// A datagram from the first peer for the second.
@@ -1593,13 +1545,13 @@ fn micros(t0: n0_future::time::Instant) -> u64 {
 
 /// A guest's arrivals into the host task: its Hello first (else it's dropped), then what it says and sends, then gone.
 async fn guest(gtx: amp::UnboundedSender<Guest>, peer: String, conn: Conn, link: Link, mut inbox: Inbox) {
-    let Some(Ok(Msg::Hello { build, picks, name, courts, device, record })) = inbox.msgs.recv().await else {
+    let Some(Ok(Msg::Hello { build, picks, name, courts, device })) = inbox.msgs.recv().await else {
         conn.close(b"no hello");
         return;
     };
     let g = gtx.clone();
     n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(g.send(Guest::Pack(h, b)))));
-    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts, device, record });
+    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts, device });
     loop {
         tokio::select! {
             m = inbox.msgs.recv() => match m {
@@ -1650,7 +1602,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
     room.names.insert("host".into(), cx.name.clone());
     room.courts.insert("host".into(), cx.courts.clone());
     room.devices.insert("host".into(), *cx.device.lock().unwrap());
-    room.records.insert("host".into(), *RECORD.lock().unwrap());
     cx.say(Event::Hosting);
     // the lobby first: the codes follow as they're ready (B151: the short code took ~30 s before the screen came up)
     cx.say(Event::Room(room.clone()));
@@ -1726,6 +1677,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     bevy::log::info!("lobby link {}", link(&ticket));
                     let _ = ev.send(Event::Short(String::new()));
                     let _ = ev.send(Event::Code(ticket));
+                    let _ = ev.send(Event::Joinable);
                     // B467: the reason too, so a host whose friend can't find the lobby sees what's wrong
                     let _ = ev.send(Event::Status(format!("No short code yet (retrying: {why}): share the lobby's link meanwhile.")));
                     n0_future::time::sleep(pause).await;
@@ -1752,6 +1704,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
         }
         None => {
             offer = new_offer(cx).await;
+            cx.say(Event::Joinable);
             cx.say(Event::Status("Players join with this lobby's link (Copy Link, send it: they open it or Paste it in Join by Code); then Paste the link they send back.".into()));
         }
     }
@@ -1929,7 +1882,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
             },
             Some(g) = guests.recv() => match g {
-                Guest::In { peer, name, picks, build, link, conn, courts, device, record } => {
+                Guest::In { peer, name, picks, build, link, conn, courts, device } => {
                     let why = if build != our_build() {
                         Some(version_differs(our_build(), &build))
                     } else if let Err(e) = picks_ok(&picks) {
@@ -1948,7 +1901,6 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     room.names.insert(peer.clone(), name);
                     room.courts.insert(peer.clone(), courts);
                     room.devices.insert(peer.clone(), device);
-                    room.records.insert(peer.clone(), record);
                     room.picking.insert(peer.clone());
                     link.send(&Msg::Ping(micros(t0)));
                     joined.push((peer, link, conn));
@@ -2103,6 +2055,9 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 room.short = code.clone().unwrap_or_default();
                 broadcast(&joined, &Msg::Room(room.clone()));
                 cx.say(Event::Room(room.clone()));
+                if code.is_some() {
+                    cx.say(Event::Joinable);
+                }
                 cx.say(Event::Status(if code.is_some() { "Waiting for players..." } else { "No short code (no internet?): players on this network find the lobby with Find." }.into()));
                 dirty = true;
             }
@@ -2571,7 +2526,7 @@ async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unb
         let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
     let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
-    link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap(), record: *RECORD.lock().unwrap() });
+    link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap() });
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
     let ev = cx.ev.clone();
@@ -3592,27 +3547,6 @@ mod tests {
         assert!(o.code_server == "https://codes.example.org" && Online::parse(&o.text()) == o);
         let o = Online::parse("private = yes\n");
         assert!(o.private && Online::parse(&o.text()) == o);
-    }
-
-    /// M120: the record in `online.txt`, and a finished match into every person's record by their seats' team.
-    #[test]
-    fn records_count_each_person_once() {
-        let o = Online::parse("won = 3\nlost = 1\n");
-        assert_eq!(o.record, Record { won: 3, lost: 1 });
-        assert_eq!(Online::parse(&o.text()), o);
-        let seat = |peer: &str| Some(Seat { peer: peer.into(), pick: Pick::disc(0, 0) });
-        // doubles: the host's two players on TEAM 1, a guest and the computer on TEAM 2
-        let mut r = Room { doubles: true, seats: vec![seat("host"), seat("host"), seat("g"), seat(CPU)], ..Default::default() };
-        r.records.insert("host".into(), Record { won: 2, lost: 0 });
-        r.scored(1);
-        assert_eq!((r.records["host"], r.records["g"]), (Record { won: 2, lost: 1 }, Record { won: 1, lost: 0 }));
-        assert!(!r.records.contains_key(CPU));
-        // singles: seat 1 won
-        let mut r = Room { seats: vec![seat("g"), seat("host")], ..Default::default() };
-        r.scored(1);
-        assert_eq!((r.records["host"], r.records["g"]), (Record { won: 1, lost: 0 }, Record { won: 0, lost: 1 }));
-        r.leave("g");
-        assert!(!r.records.contains_key("g"));
     }
 
     /// B323: the menu's relay cycle (n0, Off, own once set) and what a typed relay URL may be.

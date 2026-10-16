@@ -15,7 +15,7 @@
 use super::super::frame::{self, Cell, Chip, Plate, Spec, Thumb};
 use super::super::roster;
 use super::super::{Draw, Menu, WHITE, Who};
-use super::{Act, HOST_LAN, Item, OK, SETTINGS, shared, spinner, ticket_only};
+use super::{Act, HOST_LAN, Item, OK, Reach, SETTINGS, chip, lock, reach, reach_line, shared, spinner, ticket_only};
 use crate::net::Room;
 use bevy::prelude::default;
 
@@ -113,6 +113,18 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
             d.hit(rect, Act::Row(k, OK));
         }
     }
+    // B519: why friends can't join yet, wrapped across the top of the stage
+    // (the title only: the select's line says to pick a player, done by now)
+    if let Some((title, _)) = reach_line(&m.net) {
+        let size = g.y(14.0);
+        let w = g.stage[2] - 2.0 * g.x(24.0);
+        let cols = (w / (size * 0.55)).max(8.0) as usize;
+        let mut ty = g.stage[1] + g.y(4.0);
+        for l in super::super::wrap(title, cols) {
+            d.outlined(|d| d.label(&l, g.stage[0] + g.stage[2] / 2.0, ty, size, w, WHITE));
+            ty += size * 1.3;
+        }
+    }
     // the court and the plates
     // M120: no court drawn behind the Online screens (user 2026-10-16)
     frame::sides(d, &g, if rm.doubles { ["TEAM 1", "TEAM 2"] } else { ["", ""] });
@@ -183,12 +195,24 @@ fn code_pill(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, on: &dyn Fn(Item)
     super::super::left(d, label, cx, y + (h - ls) / 2.0, ls, g.x(46.0), frame::CAPTION);
     let vx = cx + g.x(46.0 + 8.0);
     let vw = g.copy[0] - g.x(8.0) - vx;
+    // B519: until friends can join, a lock and the code greyed (Copy link dims with it)
+    let up = reach(&m.net) == Reach::Up;
     if shared(&m.net).is_some() || !m.net.short.is_empty() {
         let code = if ticket_only(&m.net) { "Ready" } else if m.net.short.is_empty() { "...." } else { m.net.short.as_str() };
         let size = g.y(24.0);
-        super::super::left(d, code, vx, y + (h - size) / 2.0, size, vw, frame::GOLD);
+        let (vx, vw) = if up { (vx, vw) } else { (vx + g.y(18.0), vw - g.y(18.0)) };
+        if !up {
+            lock(d, vx - g.y(18.0), y + h / 2.0, g.y(16.0), roster::hex(0x6f6b85));
+        }
+        super::super::left(d, code, vx, y + (h - size) / 2.0, size, vw, if up { frame::GOLD } else { roster::hex(0x6f6b85) });
     } else {
         spinner(d, m.net.spin, vx + g.x(12.0), y + h / 2.0, g.y(9.0));
+    }
+    // the relay chip after the pill, if the bar has room for it
+    let cx = g.public[0] + g.public[2] + g.x(12.0);
+    let ch = g.y(28.0);
+    if cx + chip(d, &m.net, 0.0, 0.0, ch, true) <= g.mode[0] - g.x(12.0) {
+        chip(d, &m.net, cx, y + h / 2.0, ch, false);
     }
     let dim = shared(&m.net).is_none();
     let public = !r.private;

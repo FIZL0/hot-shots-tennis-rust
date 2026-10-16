@@ -39,13 +39,14 @@
 
 Shots: `context/m120/run3/` (chars-online at 16:9, 4:3 and portrait; chars-hosting; lobby; lobby-guest).
 
+Iteration 2 (`2-FINAL.md`) replaced the record, the compact card and the corner chip; see there.
+
 ## Not verified / not 1:1
-- I couldn't fetch the concept mockup (the artifact page is rendered client-side). The layout follows the task text
-  and the existing Local-play roster, not the mockup.
-- "Rating" isn't done. Only win/loss is shown: there's no rating system to draw one from, and inventing one would be
-  a guess.
-- I didn't play a real two-machine online match to watch the record count up. Only the unit test and the build cover
-  it. Matches that end by a disconnect or a leave aren't counted (only a finished match's result is).
-- Portrait: the compact cards are as wide as the full columns (the even share is under 300 px), which leaves empty
-  space inside them. Readable, not tuned.
-- Menus don't need to be 1:1 (PLAN), so there was nothing to check against the original.
+- The mockup (`context/m120/mockup/project/Main.dc.html`) puts the court/umpire/sets strip and Start under the
+  select on one screen. We keep two screens (the select, then the Lobby with the strip and Start), so the strip
+  stays as it was. The mockup's "Fill with COM" button on open cards isn't there.
+- No real two-machine run against a live relay: `Event::Joinable` timing is covered by the unit test and the code
+  reading only. The browser LAN host says Joinable once its first offer is out.
+- The open-seat and notice wording is ours (menus don't need to be 1:1, PLAN).
+- The glyph advance used to wrap the notice band and the open-seat line is an estimate (0.55 em); each line is
+  squeezed to fit, so nothing is cut, but a very long word could look narrow.
