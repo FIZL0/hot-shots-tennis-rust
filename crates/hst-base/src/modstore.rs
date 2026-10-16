@@ -513,15 +513,19 @@ pub fn pr_of(rev: &str) -> Option<u32> {
     rev.strip_prefix("refs/pr/")?.parse().ok()
 }
 
-/// M19: takes the player's own upload `e` off the store ([`Event::Removed`]): an open PR is closed (it leaves Browse
-/// at once); a mod on `main` gets a PR deleting `mods/<id>/` (a non-member can't commit to `main`), so it leaves
-/// when a maintainer merges that.
-// ponytail: closing a PR takes every mod on it; the game's uploads are one mod per PR
+/// M19: takes the player's own upload `e` off the store ([`Event::Removed`]): an open PR holding only it is closed
+/// (it leaves Browse at once), one holding more of their mods gets a commit deleting `mods/<id>/`; a mod on `main`
+/// gets a PR deleting `mods/<id>/` (a non-member can't commit to `main`), so it leaves when a maintainer merges that.
 pub fn remove(e: &Entry, token: String) {
     let (id, name, rev) = (e.meta.id.clone(), e.meta.name.clone(), e.rev.clone());
     spawn(async move {
         let got = async {
+            let shared = pr_of(&rev).is_some() && lists().await?.iter().flatten().any(|o| o.rev == rev && o.meta.id != id);
             let said = match pr_of(&rev) {
+                Some(n) if shared => {
+                    commit(&token, &format!("Remove mod {name} ({id})"), Vec::new(), &[format!("mods/{id}")], Some(n)).await?;
+                    format!("{name} is off the store: taken out of your pull request #{n}.")
+                }
                 Some(n) => {
                     let body = serde_json::json!({ "status": "closed", "comment": format!("Taken down by its uploader from the game ({id}).") });
                     call(client().post(format!("{HF}/api/datasets/{REPO}/discussions/{n}/status")).bearer_auth(&token).header("Content-Type", "application/json").body(body.to_string())).await?;
@@ -1082,20 +1086,63 @@ pub fn sign_out() {
 /// it (sent when the mod ships no `previews/*.png`).
 pub type Upload = (Mod, Option<(usize, [u8; 5])>, Option<Vec<u8>>);
 
-/// B250: uploads `mods` one after another in the background as account `name` ([`Event::Upload`] for each: Uploading,
-/// then Done / Skipped / Failed): each is packaged and committed to the store as its own pull request, or, if `name`
-/// uploaded that id before, over that upload ([`plan`]). `iso` is the disc a texture pack is checked against.
+/// B250: uploads `mods` in the background as account `name` ([`Event::Upload`] for each: Uploading, then Done /
+/// Skipped / Failed). Each is packaged and checked first; then all the new ones go up together, in one commit onto
+/// the uploader's newest open pull request (a new PR if they have none), and each re-upload in one commit onto the PR
+/// that already holds it ([`plan`]): the Hub caps commits per repo, so a batch of N mods is one commit, not N. `iso`
+/// is the disc a texture pack is checked against.
 pub fn publish(mods: Vec<Upload>, name: String, token: String, iso: String) {
     spawn(async move {
         let mut own = None;
+        let mut to: std::collections::BTreeMap<Option<u32>, Vec<Ready>> = Default::default();
         for (m, stats, card) in mods {
             send(Event::Upload(m.dir.clone(), Up::Uploading));
-            let got = upload(&m, stats, card, &name, &token, &iso, &mut own).await;
-            send(Event::Upload(m.dir.clone(), got.unwrap_or_else(Up::Failed)));
+            match ready(&m, stats, card, &name, &iso, &mut own).await {
+                Ok(Ok(r)) => to.entry(r.onto).or_default().push(r),
+                Ok(Err(up)) => send(Event::Upload(m.dir.clone(), up)),
+                Err(e) => send(Event::Upload(m.dir.clone(), Up::Failed(e))),
+            }
+        }
+        for (onto, rs) in to {
+            let summary = match &rs[..] {
+                [r] => format!("{} mod {} ({})", r.verb, r.name, r.id),
+                _ => format!("Upload {} mods: {}", rs.len(), rs.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", ")),
+            };
+            let files = rs.iter().flat_map(|r| r.files.iter().cloned()).collect();
+            let got = commit(&token, &summary, files, &[], onto).await;
+            for r in rs {
+                let up = match &got {
+                    Err(e) => Up::Failed(e.clone()),
+                    Ok(pr) => Up::Done(match onto {
+                        Some(_) => format!("{} {} ({} MB) on your pull request: {pr}", r.name, if r.verb == "Add" { "is up" } else { "updated" }, r.mb),
+                        None if r.verb == "Update" => format!("{} updated ({} MB): live now, and on main once {pr} is merged.", r.name, r.mb),
+                        None => format!("{} is up ({} MB): it's in everyone's Browse mods now. {pr}", r.name, r.mb),
+                    }),
+                };
+                send(Event::Upload(r.dir, up));
+            }
         }
         // the next Browse reads the store again, these uploads included
         stale(None);
     });
+}
+
+/// A mod packaged and planned, waiting for its batch's commit ([`publish`]).
+struct Ready {
+    dir: std::path::PathBuf,
+    id: String,
+    name: String,
+    /// "Add" or "Update".
+    verb: &'static str,
+    /// The pull request it goes onto; None: a new one.
+    onto: Option<u32>,
+    files: Vec<(String, Vec<u8>)>,
+    mb: u64,
+}
+
+/// The uploader's newest open pull request, where their new mods go (one PR per uploader, not one per mod).
+fn newest_pr(own: &[Entry]) -> Option<u32> {
+    own.iter().filter_map(|e| pr_of(&e.rev)).max()
 }
 
 /// What uploading a mod does, given the uploader's own copy of its id on the store (`old`, newest first).
@@ -1129,9 +1176,9 @@ fn plan(old: Option<&Entry>, new: &Meta) -> Plan {
     }
 }
 
-/// Mod `m` packaged and committed as `name`; `own` is `name`'s uploads, read once per batch.
-#[allow(clippy::too_many_arguments)]
-async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, name: &str, token: &str, iso: &str, own: &mut Option<Vec<Entry>>) -> Result<Up, String> {
+/// Mod `m` packaged and planned as `name`'s ([`Ready`]), or why it's left alone (`Err`, an [`Up::Skipped`]); `own` is
+/// `name`'s uploads, read once per batch.
+async fn ready(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, name: &str, iso: &str, own: &mut Option<Vec<Entry>>) -> Result<Result<Ready, Up>, String> {
     let mut p = package(m, stats, iso)?;
     // M19: the uploader's account, so My public mods finds it once merged (Browse shows a PR's author anyway)
     p.meta.author = plain_text(name, 40);
@@ -1140,9 +1187,9 @@ async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>,
     }
     let old = own.iter().flatten().find(|e| e.meta.id == m.id);
     let (onto, verb) = match plan(old, &p.meta) {
-        Plan::Skip(why) => return Ok(Up::Skipped(format!("{} not uploaded: {why}.", m.name))),
-        Plan::New if old.is_some() => (None, "Update"),
-        Plan::New => (None, "Add"),
+        Plan::Skip(why) => return Ok(Err(Up::Skipped(format!("{} not uploaded: {why}.", m.name)))),
+        Plan::New if old.is_some() => (newest_pr(own.as_deref().unwrap_or_default()), "Update"),
+        Plan::New => (newest_pr(own.as_deref().unwrap_or_default()), "Add"),
         Plan::Onto(n) => (Some(n), "Update"),
     };
     let dir = format!("mods/{}", m.id);
@@ -1156,13 +1203,8 @@ async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>,
         }
         files.push((format!("{dir}/preview.png"), png));
     }
-    let pr = commit(token, &format!("{verb} mod {} ({})", m.name, m.id), files, &[], onto).await?;
     let mb = p.meta.size.div_ceil(1 << 20);
-    Ok(Up::Done(match onto {
-        Some(_) => format!("{} updated ({mb} MB) on your pull request: {pr}", m.name),
-        None if verb == "Update" => format!("{} updated ({mb} MB): live now, and on main once {pr} is merged.", m.name),
-        None => format!("{} is up ({mb} MB): it's in everyone's Browse mods now. {pr}", m.name),
-    }))
+    Ok(Ok(Ready { dir: m.dir.clone(), id: m.id.clone(), name: m.name.clone(), verb, onto, files, mb }))
 }
 
 /// Backfill for uploads from before the card went up with them, or with a card baked before a drawing fix: sets `id`'s
@@ -1444,6 +1486,9 @@ mod tests {
         assert!(matches!(plan(Some(&old("refs/pr/4", "1.10", "1")), &new), Plan::Skip(w) if w.contains("already")));
         assert!(matches!(plan(Some(&old("main", "2", "2")), &new), Plan::Skip(w) if w.contains("newer")));
         assert!(matches!(plan(Some(&old("main", "", "2")), &Meta { version: "".into(), ..new.clone() }), Plan::New));
+        // a new mod goes onto the uploader's newest open PR (one PR per uploader), a new PR if they have none
+        assert_eq!(newest_pr(&[old("main", "1", "2"), old("refs/pr/4", "1", "2"), old("refs/pr/9", "1", "2")]), Some(9));
+        assert_eq!(newest_pr(&[old("main", "1", "2")]), None);
     }
 
     /// Upload → Install round trip: a real mod packaged, its zip checked against its meta (a flipped byte or a
@@ -1797,14 +1842,21 @@ mod tests {
         let (Ok(dirs), Ok(t)) = (std::env::var("HST_REUPLOAD"), std::env::var("HST_TOKEN")) else { return };
         let t = std::fs::read_to_string(t).unwrap();
         let (name, token) = t.trim().split_once('\n').unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let mut own = None;
+        // one batch, as the Upload page sends it: a commit per pull request, not per mod
+        let mods: Vec<Upload> = dirs.split_whitespace().map(|d| (crate::mods::read_any(std::path::Path::new(d)).unwrap(), None, None)).collect();
+        let mut left = mods.len();
+        publish(mods, name.into(), token.trim().into(), std::env::var("HST_ISO").unwrap_or_default());
         let mut failed = 0;
-        for d in dirs.split_whitespace() {
-            let m = crate::mods::read_any(std::path::Path::new(d)).unwrap();
-            let got = rt.block_on(super::upload(&m, None, None, name, token.trim(), &std::env::var("HST_ISO").unwrap_or_default(), &mut own));
-            failed += got.is_err() as usize;
-            eprintln!("{}: {got:?}", m.id);
+        while left > 0 {
+            for e in take() {
+                if let Event::Upload(d, up) = e {
+                    if up != Up::Uploading {
+                        (left, failed) = (left - 1, failed + matches!(up, Up::Failed(_)) as usize);
+                        eprintln!("{}: {up:?}", d.display());
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert_eq!(failed, 0);
     }
