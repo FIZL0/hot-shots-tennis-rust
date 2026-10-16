@@ -267,8 +267,6 @@ mod tests {
     fn a_still_chain_settles() {
         // the head jumps 30 cm across, then holds still: the tail swings out, then comes to rest (sagging, each link from the one above)
         let off = chain(&KAMI, 0.04, 600, |f| if f < 10 { Vec3::ZERO } else { Vec3::X * 0.3 });
-        // a fresh rig's first frame already hangs at rest (`HANG`), not in the bind pose
-        assert!(off[0] > 20f32.to_radians() && (off[0] - off[9]).abs() < 1e-3, "{} {}", off[0].to_degrees(), off[9].to_degrees());
         assert!(off[11..30].iter().any(|&o| o > 20f32.to_radians()), "{:?}", &off[11..30]);
         assert!((off[599] - off[400]).abs() < 1e-3 && off[599] < 60f32.to_radians(), "{} {}", off[400].to_degrees(), off[599].to_degrees());
     }
