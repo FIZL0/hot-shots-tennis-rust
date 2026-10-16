@@ -1167,22 +1167,46 @@ pub(super) fn roll_time(mut menu: ResMut<Menu>, time: Res<Time>) {
 }
 
 /// B471: the footer's status: the last action's outcome (a mod list's uploader while there's none), else "2
-/// downloading - 1 queued" (nothing waiting: how many are installed); whether downloads are running (a spinner).
-fn status(m: &Menu) -> (String, bool) {
+/// downloading · 1 queued" (nothing waiting: how many are installed); whether downloads are running (a spinner).
+/// M114: uploads under way (on every page) come before the last action's words: "Uploading A · 2 queued", after the
+/// downloads when both run ("2 downloading · 3 uploading"), then "Uploaded 3 mods · waiting for review" a few seconds.
+pub(super) fn status(m: &Menu) -> (String, bool) {
     let v = &m.add;
+    let (now, ups) = v.uploads();
+    let upped = v.upped.1 > 0.0;
     let said = !v.status.is_empty() && v.child.is_none() && !(v.page == Page::Upload && v.status == RULE);
-    if said {
+    if said && ups == 0 && !upped {
         return (v.status.clone(), false);
     }
-    if let Some(b) = v.by.as_ref().filter(|_| v.doing.is_empty() && v.queue.is_empty()) {
+    if let Some(b) = v.by.as_ref().filter(|_| v.doing.is_empty() && v.queue.is_empty() && ups == 0 && !upped) {
         return (format!("{} by {}", mods_kind::name(v.kind), super::who(&b.author)), false);
     }
-    let words = match (v.doing.len(), v.queue.len()) {
-        (0, 0) => format!("{} installed", v.installed_len()),
-        (n, 0) => format!("{n} downloading"),
-        (n, q) => format!("{n} downloading - {q} queued"),
+    let downs = match (v.doing.len(), v.queue.len()) {
+        (0, 0) => None,
+        (n, 0) => Some(format!("{n} downloading")),
+        (n, q) => Some(format!("{n} downloading · {q} queued")),
     };
-    (words, !v.doing.is_empty())
+    let words = match (downs, now, ups) {
+        (Some(d), _, 0) => d,
+        (Some(d), _, n) => format!("{d} · {n} uploading"),
+        (None, _, 0) if upped => format!("Uploaded {} · waiting for review", plural(v.upped.0, "mod")),
+        (None, _, 0) => format!("{} installed", v.installed_len()),
+        (None, Some(name), 1) => format!("Uploading {name}"),
+        (None, Some(name), n) => format!("Uploading {name} · {} queued", n - 1),
+        (None, None, n) => format!("{n} uploading"),
+    };
+    (words, !v.doing.is_empty() || ups > 0)
+}
+
+/// "1 mod", "3 mods".
+fn plural(n: usize, what: &str) -> String {
+    if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
+}
+
+/// The width of `s` as [`frame::dotted`] draws it (each "·" a dot half the size wide).
+fn dotted_width(d: &mut Draw, s: &str, size: f32) -> f32 {
+    let parts: Vec<&str> = s.split('·').collect();
+    parts.iter().map(|p| d.width(p, size)).sum::<f32>() + size * 0.5 * (parts.len() - 1) as f32
 }
 
 /// The downloads' spinner centred on `[cx, cy]`, its strokes in `a`.
@@ -1476,8 +1500,9 @@ fn footer(d: &mut Draw, m: &Menu, a: [f32; 3], l: &Lay) {
     let room = (nr - nx).max(0.0);
     let spin = if busy { 16.0 * PX } else { 0.0 };
     let said = ellipsis(d, &said, size, (room * 0.6 - spin).max(0.0));
-    let sw = d.width(&said, size);
-    d.text(&said, nr - sw, ty, size, look::c(look::INK));
+    // (M114: "·" drawn as a dot, the font has none)
+    let sw = dotted_width(d, &said, size);
+    super::super::frame::dotted(d, &said, nr - sw, ty, size, sw + 1.0, look::c(look::INK), false);
     if busy {
         spinner(d, v, [nr - sw - 10.0 * PX, ny + nh / 2.0], a);
     }
