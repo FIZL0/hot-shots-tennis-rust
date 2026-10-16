@@ -189,24 +189,7 @@ const SETS: [i32; 3] = [1, 3, 5];
 const GAMES: [i32; 3] = [2, 4, 6];
 /// Player colours: 1P pink, 2P orange, 3P blue, 4P green (`CharacterSelect2_03`'s cards, same order).
 const COLOURS: [[f32; 3]; 4] = [[128.0, 60.0, 90.0], [128.0, 80.0, 20.0], [40.0, 90.0, 128.0], [70.0, 115.0, 30.0]];
-/// `word.tm2`'s glyphs, 12 to a 32-px row from y 32.
-pub(super) const FONT: [&str; 15] = [
-    "aàáâãäåæbcçd",
-    "ðeèéêëfghiìí",
-    "îïjklmnñoòóô",
-    "õöøœpqrsštuù",
-    "úûũüvwxyýÿz°",
-    "AÀÁÂÃÄÅÆBCÇD",
-    "ÐEÈÉÊËFGHIÌÍ",
-    "ÎÏJKLMNÑOÒÓÔ",
-    "ÕÖØŒPQRSŠTUÙ",
-    "ÚÛŨÜVWXYÝŸZ°",
-    "1234567890-=",
-    "˜€?!\"#£%&`'^",
-    "_[]().®©™¿¡„",
-    ":;+*@{},<>/¥",
-    "«»$ß",
-];
+pub(super) use super::word_label::{FONT, glyphs};
 
 /// P53: the Auto preset's pick for this device (`graphics::pick`), logged.
 pub(super) fn auto_graphics() -> Graphics {
@@ -1813,22 +1796,6 @@ fn newest(mods: &[crate::mods::Mod]) -> Vec<usize> {
     let mut v: Vec<(usize, Option<std::time::SystemTime>)> = mods.iter().map(time).enumerate().collect();
     v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     v.into_iter().map(|(i, _)| i).collect()
-}
-
-/// `word.tm2`'s ink span per glyph (cell x + first inked column, cell y, width), from its alpha.
-fn glyphs(font: &[u8]) -> std::collections::HashMap<char, (f32, f32, f32)> {
-    let pic = hst_data::tim2::decode_alpha8(font).expect("TIM2").remove(0);
-    let mut glyphs = std::collections::HashMap::new();
-    for (row, chars) in FONT.iter().enumerate() {
-        for (col, ch) in chars.chars().enumerate() {
-            let (x0, y0) = (col * 32, 32 + row * 32);
-            let ink: Vec<usize> = (0..32).filter(|x| (0..32).any(|y| pic.rgba[((y0 + y) * pic.width as usize + x0 + x) * 4 + 3] > 0x20)).collect();
-            if let (Some(&a), Some(&b)) = (ink.first(), ink.last()) {
-                glyphs.entry(ch).or_insert(((x0 + a) as f32, y0 as f32, (b - a + 1) as f32));
-            }
-        }
-    }
-    glyphs
 }
 
 fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut images: ResMut<Assets<Image>>) {

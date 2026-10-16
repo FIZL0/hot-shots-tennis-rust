@@ -16,22 +16,26 @@
 //! ISO; see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures-src/` to edit or
 //! upscale into `mods/texture-replacements/`.
 
-// the lower layer (P60): assets and drawing, sound, mods, the lobby transport, platform glue, `Args`
-pub use hst_base::*;
+// the lower layers: hst-base (P60: assets and drawing, sound, mods, the lobby transport, platform glue, `Args`) under
+// hst-play (P61: the match, `mode`, `preload`), re-exported so `crate::audio`, `crate::play::…` resolve here
+pub use hst_play::*;
 
 mod loading;
 mod mash;
-mod mode;
-mod play;
-mod preload;
 mod sandbox;
 mod update;
 
-use bevy::asset::RenderAssetUsages;
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
-use bevy::mesh::{Indices, PrimitiveTopology};
+/// The match's modules (`hst_play::play`) with the front-end's beside them, as one `crate::play`.
+#[allow(hidden_glob_reexports)]
+mod play {
+    pub use hst_play::play::*;
+    pub mod main_menu;
+    pub mod menu;
+}
+
+use bevy::mesh::Indices;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::TextureFormat;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use hst_data::{iso::Iso, layout, mdl, mtl, xb::Archive};
@@ -415,11 +419,12 @@ fn start(argv: Vec<String>) {
                 use play::controls::Seat;
                 let devices: Vec<_> = (0..4).map(|j| Some(if j == 0 { Seat::Keys } else { Seat::Pad(j - 1) })).collect();
                 let flags = play::netplay::flags(&room, &me, &devices, &[]);
-                play::netplay::mode(&args.iso, &flags, mode::Mode::new(|app| {
+                let back = mode::Mode::new(|app| {
                     // no lobby screen to go back to from here (B279's hand-over): the connection ends
                     play::netplay::LOBBY.lock().unwrap().take();
                     menu_mode(app)
-                }), net, room, me)
+                });
+                play::netplay::mode(match_mode(&args.iso, &flags, back), net, room, me)
             }
             None => mode::Mode::new(menu_mode),
         };
@@ -466,7 +471,7 @@ fn lineup(args: &Args, slot_mods: &[(usize, String)], viewer_slot: Option<usize>
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
 /// player N (default 1st), its costume by `--outfits`; `umpire_mod` is heard in the chair (M8f3).
 fn add_match(app: &mut App, viewer_mod: Option<String>, mod_slot: usize, mut slot_mods: Vec<(usize, String)>, umpire_mod: Option<mods_umpire::Umpire>) {
-    app.add_plugins(play::plugin);
+    app.add_plugins(play::plugin).add_plugins(play::menu::plugin);
     if let Some(u) = umpire_mod {
         app.insert_resource(mods_umpire::MatchUmpire(u));
     }
@@ -505,18 +510,6 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     .back(back)
     .cover(cover)
     .early(move |world| preload::characters(world, &iso, &early))
-}
-
-/// Court `n`'s entry list and hole-01 placement records.
-fn court_layout(iso: &mut Iso, n: usize) -> Option<(Vec<layout::Entry>, Vec<layout::Placement>)> {
-    let find = |data: &[u8], suffix: &str| {
-        let arc = Archive::parse(data).ok()?;
-        let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(suffix))?;
-        arc.read(e).ok()
-    };
-    let (cmn, hol) = (iso.read(&format!("COURT/{n:02}/CMN.XB")).ok()?, iso.read(&format!("COURT/{n:02}/HOL01.XB")).ok()?);
-    let list = layout::entries(&String::from_utf8_lossy(&find(&cmn, &format!("entry_c{n:02}.txt"))?));
-    Some((list, layout::plants(&find(&hol, &format!("plant_c{n:02}_h01_0.dat"))?).ok()?))
 }
 
 /// How many clouds court `n` makes outside heavy rain (`layout::cloud_count`; singles' environment row 1, doubles' 0).
@@ -864,65 +857,6 @@ fn load(
     ));
 }
 
-/// Every model in an archive whose lower-cased name ends in `.mdl` and passes `keep`, keyed by its
-/// lower-case file stem, as one Bevy mesh + material per original material.
-fn models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image>) -> Vec<(String, Vec<(Mesh, StandardMaterial)>)> {
-    let mut out = Vec::new();
-    for_models(data, keep, |model_stem, model, mats| {
-        let _pre = textures::prefetch(&mats);
-        let tex: Vec<Handle<Image>> = mats.textures.iter().map(|t| textures::add_mtl(images, image(t), t)).collect();
-        let mut parts = Vec::new();
-        {
-            for (mi, packets) in model.materials.iter().enumerate() {
-                let Some(mesh) = mesh(packets.iter(), &model) else { continue };
-                let mat = mats.materials.get(mi);
-                let texture = mat.and_then(|m| m.texture).map(|t| tex[t].clone());
-                if let (Some(m), Some(t), Some(h)) = (mat, mat.and_then(|m| m.texture), &texture) {
-                    let mut raw = image(&mats.textures[t]);
-                    raw.texture_descriptor.format = TextureFormat::Rgba8Unorm;
-                    let mut draws = gs::GsMaterial::for_batch(m, packets.first().map_or(0x10, |p| p.prim), Some(textures::add_mtl(images, raw, &mats.textures[t])));
-                    draws.iter_mut().for_each(|g| g.uniform.lod_k = model.lod_k.get(mi).copied().unwrap_or(0.0));
-                    shade::BALL_GS.lock().unwrap().insert(h.id(), draws);
-                }
-                let [r, g, b, a] = mat.map_or([1.0; 4], |m| m.color);
-                parts.push((
-                    mesh,
-                    StandardMaterial {
-                        base_color: Color::linear_rgba(r, g, b, a),
-                        base_color_texture: texture,
-                        unlit: true,
-                        double_sided: true,
-                        cull_mode: None,
-                        alpha_mode: AlphaMode::Mask(0.5),
-                        ..default()
-                    },
-                ));
-            }
-        }
-        out.push((model_stem, parts));
-    });
-    out
-}
-
-/// Every model in an archive whose lower-cased name ends in `.mdl` and passes `keep`, with its lower-case file
-/// stem and parsed MTL.
-fn for_models(data: &[u8], keep: impl Fn(&str) -> bool, mut f: impl FnMut(String, mdl::Model, mtl::Mtl)) {
-    let arc = Archive::parse(data).expect("xb archive");
-    for e in arc.entries.iter().filter(|e| { let n = e.name.to_ascii_lowercase(); n.ends_with(".mdl") && keep(&n) }) {
-        let stem = &e.name[..e.name.len() - 4];
-        let sib = |ext: &str| arc.find(&format!("{stem}.{ext}")).and_then(|x| arc.read(x).ok());
-        let (Ok(model), Some(mtl_bytes)) = (mdl::parse(&arc.read(e).unwrap()), sib("MTL")) else {
-            warn!("skipping {}", e.name);
-            continue;
-        };
-        let mats = match mtl::parse(&mtl_bytes, sib("MTI").as_deref()) {
-            Ok(m) => m,
-            Err(err) => { warn!("{}: {err}", e.name); continue }
-        };
-        f(stem.rsplit(['\\', '/']).next().unwrap_or(stem).to_ascii_lowercase(), model, mats);
-    }
-}
-
 /// A sky's colour where the game reads it: the top-most vertex (smallest game y, the last of equals)
 /// colour × its material colour / 128, in 0..255.
 fn sky_top(model: &mdl::Model, mats: &mtl::Mtl) -> [f32; 3] {
@@ -936,46 +870,6 @@ fn sky_top(model: &mdl::Model, mats: &mtl::Mtl) -> [f32; 3] {
         }
     }
     top.1
-}
-
-/// One triangle-list mesh of these packets; vertex colours stay in PS2 units (0x80 = 1.0).
-/// B211: packets are stored in their nodes' spaces and drawn at the model's bind pose: a packet bound to one node by
-/// its bind matrix, a weighted one skinned as [`mdl::Model::skinned`] (Queen's ball machine's launcher wheels and
-/// balls sat under the grass at the origin; court 6's horses were torn apart).
-fn mesh<'a>(packets: impl Iterator<Item = &'a mdl::Packet>, model: &mdl::Model) -> Option<Mesh> {
-    let (mut pos, mut nrm, mut uv, mut col, mut idx) = (vec![], vec![], vec![], vec![], vec![]);
-    for pk in packets {
-        let base = pos.len() as u32;
-        if pk.palette.len() > 1 {
-            let (verts, tris, _) = model.skin_packet(pk);
-            for v in &verts {
-                pos.push(v.pos);
-                nrm.push((Vec3::from(v.normals[0]) + Vec3::from(v.normals[1])).to_array());
-                uv.push(v.uv);
-                col.push(v.color.map(|c| c as f32 / 128.0));
-            }
-            idx.extend(tris.iter().flatten().map(|i| i + base));
-            continue;
-        }
-        let m = pk.palette.first().and_then(|&n| model.node_bind.get(n)).map_or(Mat4::IDENTITY, Mat4::from_cols_array_2d);
-        for v in &pk.vertices {
-            pos.push(m.transform_point3(Vec3::from(v.pos)).to_array());
-            nrm.push(m.transform_vector3(Vec3::from(v.normal)).to_array());
-            uv.push(v.uv);
-            col.push(v.color.map(|c| c as f32 / 128.0)); // PS2 modulate: 0x80 = 1.0
-        }
-        idx.extend(pk.triangles.iter().flatten().map(|i| i + base));
-    }
-    if idx.is_empty() {
-        return None;
-    }
-    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
-        .with_inserted_indices(Indices::U32(idx));
-    Some(mesh)
 }
 
 /// Like [`models`], drawn as the GS draws them ([`gs`]): one mesh per material and batch PRIM, its texture raw and
@@ -1180,39 +1074,6 @@ fn pow2(t: &mtl::Texture) -> Option<mtl::Texture> {
     })
 }
 
-fn image(t: &mtl::Texture) -> Image {
-    let mut img = Image::new(
-        Extent3d { width: t.width.max(1), height: t.height.max(1), depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        if t.rgba.is_empty() { vec![255; 4 * (t.width.max(1) * t.height.max(1)) as usize] } else { t.rgba.clone() },
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    // PS2 UVs tile freely; Bevy's default sampler clamps
-    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        ..ImageSamplerDescriptor::linear()
-    });
-    img
-}
-
-fn orbit(
-    buttons: Res<ButtonInput<MouseButton>>,
-    motion: Res<AccumulatedMouseMotion>,
-    scroll: Res<AccumulatedMouseScroll>,
-    mut q: Query<(&mut Orbit, &mut Transform)>,
-) {
-    for (mut o, mut t) in &mut q {
-        if buttons.pressed(MouseButton::Left) {
-            o.yaw -= motion.delta.x * 0.005;
-            o.pitch = (o.pitch - motion.delta.y * 0.005).clamp(-1.5, 1.5);
-        }
-        o.radius *= 1.0 - scroll.delta.y * 0.1;
-        *t = o.transform();
-    }
-}
-
 /// The sky's clouds and the wind they drift on (`--stage` in singles).
 #[derive(Resource)]
 struct Clouds {
@@ -1226,41 +1087,6 @@ struct Clouds {
     root: Entity,
     /// The heavy-rain layout (`exe::Game::rain_clouds`).
     rain: [f32; 3],
-}
-
-/// The match's cloud spawner between the setup and the points: the schedule's weathers (`HST_WEATHER` fixes one),
-/// the weather the clouds were last made for, the court's count and the heavy-rain one, and the last layout's
-/// weather and `rand()` draws until `clouds` lays them out. None when the court has no in-season cloud models.
-pub struct Sky {
-    weathers: [u8; hst_sim::weather::GAMES],
-    fixed: Option<u8>,
-    made: u8,
-    count: usize,
-    rain: usize,
-    draws: Option<(u8, Vec<u32>)>,
-}
-
-impl Sky {
-    fn made_count(&self, weather: u8) -> usize {
-        if matches!(weather, 3 | 5) { self.rain } else { self.count }
-    }
-}
-
-static SKY: std::sync::Mutex<Option<Sky>> = std::sync::Mutex::new(None);
-
-/// A new point on game `game` of the schedule (`Rngs::new_point`): a weather change remakes the clouds
-/// (`weather::clouds_remade`), their draws between the shared and the court generator's seeds, in doubles too.
-pub fn point_clouds(rng: &mut hst_sim::rng::Rngs, game: usize) {
-    let mut sky = SKY.lock().unwrap();
-    let Some(s) = sky.as_mut().filter(|s| {
-        let w = s.fixed.unwrap_or(s.weathers[game % hst_sim::weather::GAMES]);
-        hst_sim::weather::clouds_remade(s.made, w)
-    }) else {
-        return rng.new_point();
-    };
-    let w = s.fixed.unwrap_or(s.weathers[game % hst_sim::weather::GAMES]);
-    s.made = w;
-    s.draws = Some((w, rng.new_point_clouds(s.made_count(w))));
 }
 
 #[derive(Component)]

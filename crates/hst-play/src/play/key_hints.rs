@@ -1,5 +1,5 @@
 //! B301 (ours, by the user's request): the match's keyboard hints. While the keyboard plays a seat and was the last
-//! device used, the menus' legend strip (`main_menu::legend`, bottom right under the 4:3 screen's description bar, in
+//! device used, the menus' legend strip (`legend.rs`, bottom right under the 4:3 screen's description bar, in
 //! keycaps) lists the match's keys from `controls.txt`: move, the three shots (which serve too), the emotes and pause. A pad or a
 //! touch hides it (switching live, as the legend does), and so does the Key Hints setting (Settings → Display,
 //! `key_hints` in settings.txt, on by default). Whatever else fills the legend (the pause menu, its Settings screens,
@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::controls::{Action, Bindings, PadSlots};
-use super::main_menu::legend::{self, Act, Item, Last, Legend};
+use super::legend::{self, Act, Item, Last, Legend};
 
 /// The Key Hints setting, as the main menu (and the pause menu's Settings) last had it.
 pub static ON: AtomicBool = AtomicBool::new(true);

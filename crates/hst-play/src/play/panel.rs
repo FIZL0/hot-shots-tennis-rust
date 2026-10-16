@@ -462,15 +462,15 @@ fn game_info(s: &Score, r: &Rules, human: [bool; 2]) -> Option<(usize, usize)> {
 
 /// The panel's textures: `TEXTURES` in order, then each player's face.
 #[derive(Resource)]
-pub(super) struct Art(pub(super) Vec<Handle<Image>>);
+pub struct Art(pub Vec<Handle<Image>>);
 /// Where the faces start in `Art`.
-pub(super) const FACES: usize = TEXTURES.len();
+pub const FACES: usize = TEXTURES.len();
 /// The pool of screen rectangles, drawn in order.
 #[derive(Component)]
 pub(super) struct Slot(usize);
 /// Per-player colours from the game program: pill/label tint and rank tint.
 #[derive(Resource)]
-pub(super) struct Colours(pub(super) [[u8; 3]; 4], pub(super) [[u8; 3]; 4]);
+pub struct Colours(pub [[u8; 3]; 4], pub [[u8; 3]; 4]);
 
 const POOL: usize = 48;
 
@@ -482,7 +482,7 @@ pub fn plugin(app: &mut App) {
 }
 
 /// An INPANE sheet (alpha authored 0–255: the board's 0x80 centre shows the court through it on the PS2).
-pub(super) fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
+pub fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
@@ -500,7 +500,7 @@ pub(super) fn image(images: &mut Assets<Image>, data: &[u8]) -> Handle<Image> {
     crate::textures::add_tim2(images, img, &pic)
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResMut<Assets<Image>>, mods: Option<Res<crate::mods::MatchMod>>) {
+fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResMut<Assets<Image>>, mods: Option<Res<crate::mods::MatchMod>>, front: Option<Res<super::front_end::FrontEnd>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso
         .read("AZUMA/INPANE/INPANE.XB0")
@@ -526,7 +526,7 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
     // B133: a mod's own face, cut from its select preview (the donor's until that's baked); B160: a disc one's too
     let own: Vec<_> = g.chars.iter().enumerate().map(|(i, &c)| {
         let o = args.outfits.get(i).copied().unwrap_or(0);
-        super::main_menu::face(&args.iso, mods.as_ref().and_then(|m| m.get(i)), c as usize, o)
+        front.as_ref().and_then(|f| (f.face)(&args.iso, mods.as_ref().and_then(|m| m.get(i)), c as usize, o))
     }).collect();
     let mut drawn = Vec::new();
     for (i, (&c, own)) in g.chars.iter().zip(own).enumerate() {

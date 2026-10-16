@@ -153,8 +153,8 @@ fn pressed(w: &mut World) -> Option<usize> {
         down |= g.just_pressed(GamepadButton::DPadDown);
     }
     let mut sel = 0;
-    if let Some(mut n) = w.get_resource_mut::<super::main_menu::pause::OnlineNotice>().filter(|n| n.ask) {
-        let k = super::main_menu::pause::CHOICES.len();
+    if let Some(mut n) = w.get_resource_mut::<super::netplay::OnlineNotice>().filter(|n| n.ask) {
+        let k = super::netplay::CHOICES.len();
         n.sel = (n.sel + usize::from(down) + (k - 1) * usize::from(up)) % k;
         yes |= std::mem::take(&mut n.tapped);
         sel = n.sel;
@@ -297,7 +297,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
 fn notice(who: &str, left: u32, ask: bool, answered: bool) -> String {
     match (ask, answered) {
         (false, _) => format!("Waiting for {who} to come back... {left} s"),
-        // the choices are the window's pills (`main_menu/pause.rs` `CHOICES`)
+        // the choices are the window's pills (`netplay.rs` `CHOICES`)
         (true, false) => format!("{who} didn't come back. ({left} s)"),
         (true, true) => format!("{who} didn't come back.\nWaiting for the others' choice... ({left} s)"),
     }

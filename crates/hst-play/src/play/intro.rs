@@ -230,7 +230,7 @@ fn start(
         super::panel::image(&mut images, &arc.read(e.unwrap_or_else(|| panic!("{name} in INPANE"))).expect("INPANE bytes"))
     });
     if let Some(c) = &court {
-        art[1] = super::main_menu::pause::label(&mut iso, &mut images, &c.0.name);
+        art[1] = super::word_label::label(&mut iso, &mut images, &c.0.name);
     }
     commands.insert_resource(PlateArt(art, row, court.is_some()));
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
@@ -254,7 +254,7 @@ fn hold(w: &mut World) {
             (s.shot, s.serve) = (None, false);
         }
     }
-    let paused = super::menu::paused(w);
+    let paused = super::front_end::paused(w);
     let keys = w.resource::<ButtonInput<KeyCode>>();
     let mut skip = keys.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyJ]);
     let mut q = w.query::<&Gamepad>();

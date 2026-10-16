@@ -3595,6 +3595,7 @@ dependencies = [
  "gltf",
  "hst-base",
  "hst-data",
+ "hst-play",
  "hst-sim",
  "image",
  "iroh",
@@ -3709,6 +3710,24 @@ dependencies = [
  "hst-data",
  "hst-sim",
  "ps2-oracle",
+]
+
+[[package]]
+name = "hst-play"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "bevy",
+ "bincode",
+ "ggrs",
+ "hst-base",
+ "hst-data",
+ "hst-sim",
+ "image",
+ "serde",
+ "serde_json",
+ "tiny-skia",
+ "web-time",
 ]
 
 [[package]]

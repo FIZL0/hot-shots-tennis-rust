@@ -103,7 +103,7 @@ struct Base {
 /// The loading screen: `up` frames shown before the switch, then `after` frames since it, `idle` of them in a row
 /// with no pipeline compiling and the render side settled ([`Unsettled`]).
 #[derive(Component, Default)]
-pub(crate) struct Loading {
+pub struct Loading {
     up: u32,
     built: bool,
     after: u32,
@@ -128,11 +128,11 @@ const ZOOM: f32 = 1.5;
 
 /// Render pipelines still compiling (the render world's count, a frame or two behind; compute ones aren't counted).
 #[derive(Resource, Clone, Default)]
-pub(crate) struct Compiling(Arc<AtomicUsize>);
+pub struct Compiling(Arc<AtomicUsize>);
 
 impl Compiling {
     /// Whether any render pipeline is still compiling.
-    pub(crate) fn busy(&self) -> bool {
+    pub fn busy(&self) -> bool {
         self.0.load(Ordering::Relaxed) > 0
     }
 }
@@ -263,7 +263,7 @@ pub fn covered(world: &mut World) -> bool {
 /// B200: no press reaches anything while a switch is pending (the old mode runs on behind the coming loading screen),
 /// the loading screen is up, or the mode asks ([`Hush`]): this frame's presses and releases are dropped, held buttons
 /// stay held, so one held through counts again only once released and pressed anew.
-pub(crate) fn hush(
+pub fn hush(
     next: Res<Next>,
     loading: Query<(), With<Loading>>,
     hushed: Option<Res<Hush>>,
@@ -637,7 +637,7 @@ fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warmin
 }
 
 /// The game's crates, by their types' names (P60): a mode's resources are theirs.
-const OURS: [&str; 2] = ["hst::", "hst_base::"];
+const OURS: [&str; 3] = ["hst::", "hst_base::", "hst_play::"];
 
 /// Drop the running mode: its entities (except windows, monitors and pads) and the resources of the game's crates it
 /// added.

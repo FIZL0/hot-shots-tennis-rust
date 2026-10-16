@@ -3,7 +3,7 @@
 //! a background leave left ends here as any leave does.
 
 use super::netplay::Netplay;
-use super::{Game, menu};
+use super::{Game, front_end};
 use bevy::prelude::*;
 
 /// A `Cmd::Leave` for this online match's connection while it's still on, to send from another thread once the app
@@ -25,7 +25,7 @@ pub fn back(w: &mut World, left: bool) {
         return;
     }
     if w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_none()) {
-        menu::set_paused(w, true);
+        front_end::set_paused(w, true);
     }
 }
 

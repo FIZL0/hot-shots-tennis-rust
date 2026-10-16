@@ -19,6 +19,7 @@ bincode = "1.3"
 hst-data = { path = "../hst-data" }
 hst-sim = { path = "../hst-sim" }
 hst-base = { path = "../hst-base" }
+hst-play = { path = "../hst-play" }
 # `debug`: type names, which `mode.rs` tells its resources by; `bevy_debug_stepping`: its executor's skip list, which
 # `mode.rs` runs a mode's start a slice a frame with (P50)
 bevy = { version = "0.19.1", features = ["debug", "bevy_debug_stepping"] }

@@ -492,10 +492,10 @@ pub(super) fn set_paused(w: &mut World, open: bool) {
     }
 }
 
+/// The pause screen, with the match (`main.rs` `add_match`).
 pub fn plugin(app: &mut App) {
     app.init_resource::<Menu>()
-        // every sound from here on is the match's until the mode is torn down (`mode.rs`), held while paused
-        .add_systems(PreStartup, |s: Option<Res<Sound>>| s.iter().for_each(|s| s.begin_match()))
+        .insert_resource(super::front_end::FrontEnd { paused, set_paused, face: super::main_menu::face })
         .add_systems(PostStartup, setup.after(super::setup))
         .add_systems(Update, (step.after(super::read_input), pool, draw).chain().before(super::main_menu::pause::Systems))
         // B179: the main menus' 3D hand (`cursor.ani`) points here and on the Settings screens over the match
@@ -844,6 +844,24 @@ mod tests {
         spent(&mut pads);
         let s = &pads.slots[1];
         assert_eq!((s.shot, s.serve, s.emote), (None, false, None));
+    }
+
+    /// P61: the match crate reaches this screen only through `front_end`; a bare world is never paused.
+    #[test]
+    fn the_match_pauses_through_the_front_end() {
+        use super::super::front_end;
+        let mut w = World::new();
+        front_end::set_paused(&mut w, true);
+        assert!(!front_end::paused(&w));
+        w.insert_resource(Menu::default());
+        w.insert_resource(Time::<Fixed>::from_hz(60.0));
+        w.insert_resource(front_end::FrontEnd { paused, set_paused, face: super::super::main_menu::face });
+        front_end::set_paused(&mut w, true);
+        assert!(front_end::paused(&w) && w.resource::<Menu>().open);
+        // the match's clock stops while it's up
+        assert_eq!(w.resource::<Time<Fixed>>().timestep(), Duration::from_secs(1 << 20));
+        front_end::set_paused(&mut w, false);
+        assert!(!front_end::paused(&w));
     }
 
     #[test]

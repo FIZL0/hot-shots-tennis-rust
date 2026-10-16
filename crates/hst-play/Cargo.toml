@@ -1,0 +1,34 @@
+[package]
+name = "hst-play"
+version.workspace = true
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# The match (P61, `src/lib.rs`): split out of `hst` so an edit in the menus rebuilds and relinks less, and the match's
+# tests build without the front-end.
+[dependencies]
+hst-data = { path = "../hst-data" }
+hst-sim = { path = "../hst-sim" }
+hst-base = { path = "../hst-base" }
+# `debug`: type names, which `mode.rs` tells its resources by; `bevy_debug_stepping`: its executor's skip list, which
+# `mode.rs` runs a mode's start a slice a frame with (P50)
+bevy = { version = "0.19.1", features = ["debug", "bevy_debug_stepping"] }
+# rollback (M2h, `play/rollback.rs`): ggrs core, its messages as bincode in iroh datagrams
+ggrs = { version = "0.13", features = ["sync-send"] }
+bincode = "1.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `SystemTime` that also works in the browser (std's panics on wasm32-unknown-unknown)
+web-time = "1"
+# the menus' remastered art (`play/menu_art.rs`): vector labels from an OFL font (both already in the lock via bevy);
+# `HST_MENU_ART`'s PNGs through bevy's own image crate
+tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
+ab_glyph = "0.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ggrs = { version = "0.13", features = ["wasm-bindgen"] }
+
+[dev-dependencies]
+# hst-base's test helpers for this crate's tests
+hst-base = { path = "../hst-base", features = ["testing"] }

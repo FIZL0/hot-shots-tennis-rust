@@ -112,13 +112,24 @@ there. It never names `hst`: hooks the top fills in go through statics/generics 
   `HST_UI_CENSUS=1` UI node counts/changes per root · `web.rs` `ios.rs` `android.rs` platform glue
 - test helpers `hst`'s tests use are `#[cfg(any(test, feature = "testing"))]` (hst's dev-dependency turns `testing` on)
 
-`crates/hst/src/` — the game on top: match, menus, modes
+`crates/hst-play/src/` — the match (P61: its own crate under the menus, so a menu edit rebuilds only `hst` and a
+match edit is checked with hst-play's own tests); `hst`'s `main.rs` re-exports it (`pub use hst_play::*`) and splices
+the front-end into its `play` module (`mod play { pub use hst_play::play::*; pub mod main_menu; pub mod menu; }`), so
+`crate::play::…` paths still resolve there. It never names the menus: the pause state and preview faces come through
+`play::front_end::FrontEnd`, a resource `play/menu.rs` fills in
 
-- `main.rs` startup, disc load, court models, auto_shot, wasm entry `run` · `play.rs` the match: setup, input,
-  strike/serve/locomote/advance_stroke, bot, simulate, react/next_point, camera, draw, motions, balloons, hud ·
-  `play/` match parts, netplay/rollback/snapshot, `main_menu/` the front-end · `mode.rs` mode switches/teardown ·
-  `loading.rs` `preload.rs` · `sandbox.rs` · `update.rs` self-updater
-- no `tests/` dir on purpose: any file there makes `cargo test -p hst` build the whole game a second time (as a binary for it); sim-only tests go in hst-sim
+- `lib.rs` · `play.rs` the match: setup, input, strike/serve/locomote/advance_stroke, bot, simulate, react/next_point,
+  camera, draw, motions, balloons, hud · `play/` match parts, netplay (+ `OnlineNotice`, `CHOICES`)/rollback/snapshot,
+  `word_label.rs` word.tm2 labels (`FONT`), `legend.rs` the key legend's types and drawing, `front_end.rs` the hooks
+  above · `mode.rs` mode switches/teardown · `preload.rs` · `stage.rs` court models/layout/sky (from main.rs)
+
+`crates/hst/src/` — the game on top: menus, modes, startup
+
+- `main.rs` startup, disc load, auto_shot, wasm entry `run` · `play/main_menu.rs` + `play/main_menu/` the front-end
+  (menu rows of the legend in `main_menu/legend.rs`) · `play/menu.rs` the in-match pause screen (embeds the options
+  pages) · `loading.rs` · `sandbox.rs` · `mash.rs` · `update.rs` self-updater
+- no `tests/` dir on purpose (in either crate): any file there makes `cargo test -p <crate>` build the whole game a
+  second time (as a binary for it); sim-only tests go in hst-sim
 
 `tools/` — `pcsx2-hst.sh` launch · `pine.py` RAM/states · `vpad.py` virtual pad · `screenshot.sh` ·
 `record_p2m2.py` `record_live.py` `record_camera.py` `record_cutaway.py` `trace_live.py` `trace_shots.py`

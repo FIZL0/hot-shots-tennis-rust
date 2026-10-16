@@ -2097,7 +2097,7 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
             crate::menu_mode(app);
         });
         let iso = w.resource::<crate::Args>().iso.clone();
-        let mode = crate::play::netplay::mode(&iso, &flags, back, net, room, me);
+        let mode = crate::play::netplay::mode(crate::match_mode(&iso, &flags, back), net, room, me);
         let mode = if mm.0.is_empty() { mode } else { mode.and(move |app| {
             app.insert_resource(mm);
         }) };

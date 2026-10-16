@@ -155,6 +155,29 @@ pub fn in_view(size: Vec2, p: Vec2) -> (Vec2, Vec2) {
     (v.size().max(Vec2::ONE), p - v.min)
 }
 
+/// The 640×448 point under a window position, on the centred 4:3 screen the menus' rows are drawn on (P61: from
+/// `main_menu/pause.rs`, as the result screen takes taps too).
+pub fn screen_point(win: &Window, p: Vec2) -> Vec2 {
+    #[allow(unused_mut)]
+    let mut size = Vec2::new(win.width().max(1.0), win.height().max(1.0));
+    // the browser measures in CSS px (`pointer.rs`)
+    #[cfg(target_arch = "wasm32")]
+    if let Some(css) = crate::web::page_size() {
+        size = css;
+    }
+    let (size, p) = in_view(size, p);
+    let (share, v) = (share(size.x / size.y), vshare(size.x / size.y));
+    let x = (p.x / size.x * 100.0 - 50.0 * (1.0 - share)) * 6.4 / share;
+    Vec2::new(x, (p.y / size.y * 100.0 - 50.0 * (1.0 - v)) * 4.48 / v)
+}
+
+/// This frame's left click or first tap (as a [`screen_point`]), and whether the right button was clicked.
+pub fn pointer_press(window: &Query<&Window, With<bevy::window::PrimaryWindow>>, mouse: &ButtonInput<MouseButton>, touches: &Touches) -> (Option<Vec2>, bool) {
+    let Ok(win) = window.single() else { return (None, false) };
+    let at = touches.iter_just_pressed().next().map(|t| t.position()).or_else(|| mouse.just_pressed(MouseButton::Left).then(|| win.cursor_position()).flatten());
+    (at.map(|p| screen_point(win, p)), mouse.just_pressed(MouseButton::Right))
+}
+
 /// A HUD root on the centred 4:3 screen.
 #[derive(Component)]
 pub struct Screen43;
@@ -401,4 +424,21 @@ fn legend_strip_under_the_description_bar() {
 pub fn put(node: &mut Mut<Node>, left: f32, top: f32, width: f32, height: f32) {
     let placed = Node { left: Val::Percent(left), top: Val::Percent(top), width: Val::Percent(width), height: Val::Percent(height), ..(**node).clone() };
     node.set_if_neq(placed);
+}
+
+#[cfg(test)]
+mod point_tests {
+    use super::*;
+
+    /// The window → 640×448 mapping undoes the centred 4:3 placement at any aspect.
+    #[test]
+    fn window_to_screen() {
+        let mut win = Window::default();
+        win.resolution.set(1920.0, 1080.0);
+        // 16:9: the 4:3 screen is the middle 1440 px
+        assert_eq!(screen_point(&win, Vec2::new(240.0, 540.0)), Vec2::new(0.0, 224.0));
+        assert_eq!(screen_point(&win, Vec2::new(1680.0, 1080.0)), Vec2::new(640.0, 448.0));
+        win.resolution.set(800.0, 600.0);
+        assert_eq!(screen_point(&win, Vec2::new(400.0, 300.0)), Vec2::new(320.0, 224.0));
+    }
 }
