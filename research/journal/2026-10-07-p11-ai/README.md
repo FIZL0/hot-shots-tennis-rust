@@ -120,3 +120,10 @@ See 15-P11L1-SINGLES-RECEIVE-FINAL.md. The work is done: `Rally::receive` with `
 See 22-P11-WRAPUP-FINAL.md: `ai_rally_singles_base.bin` (BASE smash taken) and `ai_rally_s05_weak.bin` bit-exact; the
 remaining branch lists (P11k4/k5, P11l4/l5) need a human-driven recording, the replay checks (P11k6/l6) the ball path
 port; P11 marked blocked.
+
+## P11k4 (receive branches from P1's serves)
+
+See 23-P11K4-VPAD-SERVES-FINAL.md. `record_ai_rally.py` drives P1's serve (`HST_SERVE`, wide short slices). The
+out-of-court aims (plans 10/11) are reached unpoked. The last-entry pick and the receive's smash find are reached
+on poked states (`HST_PATH_STOP`, `HST_CHAR`), because normal play can't get there. Test:
+`vpad_serves_receive_matches_the_game`.
