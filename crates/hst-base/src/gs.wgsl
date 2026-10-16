@@ -45,6 +45,10 @@ struct VertexOutput {
 #else
     @location(9) @interpolate(linear) fog: f32,
 #endif
+#ifdef GS_GUARD_DISCARD
+    // B485: 1 at a vertex outside the guard band, 0 inside: above 0 anywhere on a triangle that has one
+    @location(10) guard: f32,
+#endif
 }
 
 #ifdef MORPH_TARGETS
@@ -97,6 +101,9 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     // Ground (facing up, under 1 m) is exempt: the GPU clips it, so a low replay camera keeps the floor in front of it
     // (B169); the original's floor would lose its big near triangles there too.
     let p = out.position;
+#ifdef GS_GUARD_DISCARD
+    out.guard = 0.0;
+#endif
     let across = view_bindings::view.clip_from_view[1][1] * 0.75 / view_bindings::view.clip_from_view[0][0];
 #ifdef VERTEX_NORMALS
     let ground = out.world_position.y < 1.0 && normalize(mesh_functions::mesh_normal_local_to_world(vertex.normal, instance)).y > 0.7;
@@ -104,8 +111,15 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     let ground = false;
 #endif
     if !ground && (abs(p.x) * across > 1280.0 / 278.5 * abs(p.w) || abs(p.y) > 1280.0 / 112.0 * abs(p.w)) {
+#ifdef GS_GUARD_DISCARD
+        // B485: the browser's GL leaves a NaN position to the driver, and some (Firefox on Linux) drew the triangle
+        // as a huge flat fan from the middle of the screen: the vertex stays where it is and the fragment stage drops
+        // its triangles
+        out.guard = 1.0;
+#else
         let z = p.w * 0.0;
         out.position = vec4(z / z);
+#endif
     }
 #endif
 #ifdef VERTEX_UVS_A
@@ -181,6 +195,9 @@ fn sun_visibility(in: VertexOutput) -> f32 {
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+#ifdef GS_GUARD_DISCARD
+    if in.guard > 0.0 { discard; }
+#endif
     // the vertex's lit colour, Gouraud-shaded
     var rgb = in.color.rgb;
     var a = in.color.a;
