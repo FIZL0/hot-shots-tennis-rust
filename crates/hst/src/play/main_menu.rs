@@ -1140,6 +1140,11 @@ impl Menu {
                         self.sel = self.sel.saturating_sub(1);
                         out.push(Sound(1));
                     }
+                } else if k.back {
+                    // B533: back to the splash, which gives 1P up to the next press
+                    self.splash_back();
+                    out.push(Sound(1));
+                    return out;
                 }
                 if k.ok {
                     use home::Row;
@@ -2630,7 +2635,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
     }
     online::draw_ask_over(&mut d, m);
     // B221: the screens with no Back row show the title tab's Back (B449: the confirm screen has its own)
-    if matches!(m.screen, Screen::Mode | Screen::Assign | Screen::Chars) && m.picking.is_none() {
+    if matches!(m.screen, Screen::Main | Screen::Mode | Screen::Assign | Screen::Chars) && m.picking.is_none() && m.add.ask.is_none() {
         d.anchor = Anchor::Span;
         d.outlined(|d| d.text("<", 10.0, 5.0, 30.0, WHITE));
         d.anchor = Anchor::Centre;

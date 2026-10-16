@@ -88,6 +88,14 @@ impl Menu {
         true
     }
 
+    /// B533: Back on the main menu: the splash again, 1P free for the next press (its backdrop carries on).
+    pub(super) fn splash_back(&mut self) {
+        self.p1 = None;
+        self.splash.claimed = None;
+        self.screen = Screen::Press;
+        self.sel = 0;
+    }
+
     /// The courts the splash cycles: the disc's, then the court mods with a picture loaded.
     fn splash_courts(&self) -> Vec<usize> {
         (0..COURTS).chain(super::court_mods::values(self).filter(|&c| self.court_pic(c).is_some())).collect()
@@ -172,6 +180,28 @@ mod tests {
         assert!(m.splash_step(pad, true));
         assert!(!m.splash_step(Dev::Keys, true));
         assert_eq!(m.p1, Some(pad));
+    }
+
+    /// B533: Back on the main menu (○ / Esc, the title tab) is the splash again with 1P free; the keyboard can go
+    /// back while a pad has 1P, another pad can't.
+    #[test]
+    fn back_frees_1p() {
+        let [a, b] = [3, 9].map(|n| Dev::Pad(Entity::from_raw_u32(n).unwrap()));
+        let back = super::super::Press { back: true, ..default() };
+        let mut m = Menu { screen: Screen::Press, ..default() };
+        m.step(a, super::super::Press { ok: true, ..default() });
+        m.screen = Screen::Main;
+        m.step(b, back);
+        assert_eq!((m.screen, m.p1), (Screen::Main, Some(a)));
+        m.step(Dev::Keys, back);
+        assert_eq!((m.screen, m.p1, m.splash.claimed), (Screen::Press, None, None));
+        assert!(m.splash_step(b, true));
+        assert_eq!(m.p1, Some(b));
+        m.screen = Screen::Main;
+        let tab = super::super::pointer::press(|k| k.back = true);
+        assert!(super::super::pointer::tests::hits(&m).0.iter().any(|h| h.act == tab), "the title tab is drawn");
+        m.point(Dev::Keys, tab, true);
+        assert_eq!((m.screen, m.p1), (Screen::Press, None));
     }
 
     /// The keyboard choosing Local while a pad has 1P: the pad is 1P on the select, the keyboard not seated (it took
