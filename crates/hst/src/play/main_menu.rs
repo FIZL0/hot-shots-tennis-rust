@@ -3574,6 +3574,7 @@ mod tests {
             motions: None,
             costume_of: None,
             skeleton: None,
+            upscale: true,
         }
     }
 
@@ -4329,6 +4330,7 @@ mod tests {
             motions: None,
             costume_of: None,
             skeleton: None,
+            upscale: true,
         };
         let ok = press(|p| &mut p.ok);
         let mut m = Menu { mods: vec![fake("a", 5, 2), fake("b", 9, 1)], ..default() };
@@ -4397,6 +4399,7 @@ mod tests {
             motions: None,
             costume_of: Some(of),
             skeleton: None,
+            upscale: true,
         };
         // Ashley (grid 0, character 0) gets 2 + 1 more; Cody none
         let m = Menu { mods: vec![pack("x", 0, 2), pack("y", 1, 3), pack("z", 0, 1)], ..default() };

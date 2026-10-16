@@ -55,6 +55,9 @@ pub struct Mod {
     /// Online (M2i): the skeleton every peer simulates this mod on (its owner's costume's, from the lobby), in place
     /// of the one its looks load with. `None` offline.
     pub skeleton: Option<std::sync::Arc<Skeleton>>,
+    /// §3 `upscale` (B488): false when its textures are HD already (e.g. Hot Shots Golf Fore's), so its
+    /// `textures/upscaled/` is never read nor downloaded. Absent: true.
+    pub upscale: bool,
 }
 
 /// The mods playing in a match, by match slot (`--slot-mod N DIR` from the character select, or `--mod DIR
@@ -155,6 +158,11 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
         serde_json::Value::String(f) if crate::modfs::is_file(&dir.join(f)) => Some(f.clone()),
         v => return Err(err(format!("`motions` {v} must name a .glb in the mod folder"))),
     };
+    let upscale = match &j["upscale"] {
+        serde_json::Value::Null => true,
+        serde_json::Value::Bool(b) => *b,
+        v => return Err(err(format!("`upscale` {v} must be true or false"))),
+    };
     let ai_row = num(&j["ai_row"], "ai_row", 13)?;
     if !j["disc_racket"].is_null() {
         num(&j["disc_racket"], "disc_racket", 13)?;
@@ -166,6 +174,7 @@ pub fn read(dir: &Path) -> Result<Mod, String> {
     }
     Ok(Mod {
         skeleton: None,
+        upscale,
         costume_of,
         motions,
         dir: dir.to_path_buf(),
@@ -206,6 +215,7 @@ pub fn read_any(dir: &Path) -> Result<Mod, String> {
         motions: None,
         costume_of: None,
         skeleton: None,
+        upscale: true,
     };
     match Kind::of_dir(dir) {
         Kind::Character => read(dir),
@@ -648,9 +658,10 @@ fn image_file(im: &gltf::Image) -> String {
     format!("{}.png", im.name().map_or_else(|| format!("image{}", im.index()), str::to_string))
 }
 
-/// `textures/upscaled/<glb stem>/` of a mod's `.glb`, when the "upscaled textures" setting is on.
+/// `textures/upscaled/<glb stem>/` of a mod's `.glb`, when the "upscaled textures" setting is on and the mod
+/// wants upscaling (`upscale`).
 fn upscaled_dir(m: &Mod, glb: &Path) -> Option<PathBuf> {
-    upscaled_in(&m.dir, glb)
+    upscaled_in(&m.dir, glb).filter(|_| m.upscale)
 }
 
 /// `textures/upscaled/<glb stem>/` of mod folder `dir` (any kind: court, umpire), when the setting is on (M110).
@@ -1787,6 +1798,11 @@ mod tests {
         let pack = ok.replace("\"donor\"", "\"costume_of\":3,\"donor\"").replace(",\"override\":{\"Strk POW\":5}", "");
         assert_eq!(try_(&pack).unwrap().costume_of, Some(3));
         assert_eq!(try_(ok).unwrap().costume_of, None);
+        // B488: `upscale` false (HD textures already) never reads an upscaled set; absent is true; not a bool is refused
+        let hd = try_(&ok.replace("\"donor\"", "\"upscale\":false,\"donor\"")).unwrap();
+        assert!(m.upscale && !hd.upscale && upscaled_dir(&hd, Path::new("model/c00.glb")).is_none());
+        assert!(try_(&ok.replace("\"donor\"", "\"upscale\":true,\"donor\"")).unwrap().upscale);
+        assert!(try_(&ok.replace("\"donor\"", "\"upscale\":\"no\",\"donor\"")).is_err());
         for bad in [ok.replace("\"donor\"", "\"costume_of\":3,\"donor\""), pack.replace("\"ai_row\":3", "\"ai_row\":4"), pack.replace("\"costume_of\":3", "\"costume_of\":14")] {
             assert!(try_(&bad).is_err(), "accepted {bad}");
         }

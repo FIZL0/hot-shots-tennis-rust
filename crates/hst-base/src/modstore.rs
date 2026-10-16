@@ -65,6 +65,9 @@ pub struct Meta {
     /// B373 (M5a/M5c share it): what the mod is, the Mods pages' kind tab it shows on. Absent: a character.
     #[serde(default, skip_serializing_if = "Kind::is_character")]
     pub kind: Kind,
+    /// B488: the mod's `mod.json` has `upscale` false (HD textures already): Install never takes an upscaled set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_upscale: bool,
 }
 
 /// B373: a mod's kind (`meta.json` / `mod.json` `"kind"`): absent is a character, so every older entry still reads;
@@ -534,14 +537,15 @@ pub fn newer(a: &str, b: &str) -> bool {
 /// Downloads, checks and installs `e` into `root` ([`Event::Installed`]), saying how far it's got
 /// ([`Event::Progress`]). The zip streams to a file (B204: never whole in memory) and is hashed as it arrives; only
 /// a zip of the listed size and sha256 is unpacked, from that file, a file at a time. The zip goes afterwards.
-/// Without its `upscaled` set (Upscaled Downloads off, and always in the browser) the parts kept are read straight
+/// Without its `upscaled` set (Upscaled Downloads off, the mod's `upscale` false, and always in the browser) the parts kept are read straight
 /// from the store instead ([`ranged`]).
 pub fn install(e: &Entry, root: &Path, upscaled: bool) {
     let (e, root) = (e.clone(), root.to_path_buf());
     spawn(async move {
         let got = async {
             #[cfg(not(target_arch = "wasm32"))]
-            let m = if upscaled { whole(&e, &root).await? } else { ranged(&e, &root, true).await? };
+            // B488: a mod that doesn't want upscaling never takes its upscaled set
+            let m = if upscaled && !e.meta.no_upscale { whole(&e, &root).await? } else { ranged(&e, &root, true).await? };
             #[cfg(target_arch = "wasm32")]
             // the browser never takes the upscaled set (its setting is locked off there)
             let m = {
@@ -782,6 +786,7 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>) -> Result<Package, Stri
         costumes: player.then_some(m.costumes.len() as u32),
         like: player.then_some(m.donor as u8),
         kind,
+        no_upscale: !m.upscale,
     };
     let preview = preview_of(&files, kind);
     Ok(Package { zip, meta, preview })
@@ -1202,6 +1207,12 @@ mod tests {
         let p = package(&m, Some((2, [1, 2, 3, 4, 5]))).unwrap();
         eprintln!("packed {} ({} bytes, {} files)", m.id, p.meta.size, mod_files(&m.dir).unwrap().len());
         assert_eq!(p.meta.id, m.id);
+        // B488: a mod that skips upscaling says so in its meta (Install then never takes an upscaled set); a meta
+        // without it, as every upload before, wants it
+        let hd = package(&crate::mods::Mod { upscale: false, ..m.clone() }, None).unwrap().meta;
+        assert!(hd.no_upscale && p.meta.no_upscale == !m.upscale);
+        assert!(serde_json::from_slice::<Meta>(&serde_json::to_vec(&hd).unwrap()).unwrap().no_upscale);
+        assert!(!serde_json::from_str::<Meta>(r#"{"id":"x","name":"X","size":1,"sha256":"00"}"#).unwrap().no_upscale);
         matches(p.zip.len() as u64, &sha256(&p.zip), &p.meta).unwrap();
         let mut bad = p.zip.clone();
         bad[100] ^= 1;
