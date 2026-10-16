@@ -73,6 +73,10 @@ jni = "0.21"
 libc = "0.2"
 # B454: the root certificates the app's HTTPS checks against (`android.rs` tls; the version iroh-relay already builds)
 webpki-roots = "1"
+# B418: the phone's own certificate check for that HTTPS (`android.rs` init_tls, tls; the versions reqwest already builds;
+# its Java classes go into the APK in tools/apk.sh)
+rustls-platform-verifier = "0.7"
+jni22 = { package = "jni", version = "0.22", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
