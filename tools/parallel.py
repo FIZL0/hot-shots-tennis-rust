@@ -28,7 +28,7 @@ to the master, one long-lived session in window "master" (main checkout) that ev
 reports to; it merges task/<ID> into main, fixes conflicts, runs the tests and keeps context/notes/master.md for you.
 Reports queue in context/notes/master.outbox; each waits until the master is idle, then goes in after a /clear with
 the master's instructions, so the session lives on across runs without its context growing. Nothing ends the master:
-it outlives a done or stopped run, and the next run adopts it. Restarting the runner adopts the master and the sessions still running in panes s1..sN instead of resetting them. A run that only
+it outlives a done or stopped run, and the next run adopts it. Restarting the runner adopts the master and the sessions still running in any pane sN instead of resetting them (past N: watched and merged, never refilled). A run that only
 hit the usage limit is discarded and its slot sleeps until the reset; one that hit it partway waits in its pane (the stop
 hook spares it) and Claude Code continues it at the reset.
 
@@ -573,10 +573,11 @@ def enter(pane_id, text):
 
 
 def adopt():
-    """Sessions a previous runner left going in panes s1..sN: {n: ((pid, sid, since), task)}."""
+    """Sessions a previous runner left going in any pane sN, also past this run's slot count (a restart with fewer
+    slots watches and merges those, it just never refills them): {n: ((pid, sid, since), task)}."""
     out, known = {}, {t[0]: t for t in tasks()}
     for name, (_, pid) in panes().items():
-        if not re.fullmatch(r's\d+', name) or int(name[1:]) > SLOTS:
+        if not re.fullmatch(r's\d+', name):
             continue
         n, args = int(name[1:]), open(f'/proc/{pid}/cmdline').read().split('\0')
         tid = git('branch', '--show-current', cwd=slot(n)).stdout.strip().removeprefix('task/')
@@ -670,6 +671,7 @@ def main():
         master()  # reports a previous run left; otherwise the master starts only when a merge needs it
     for n, (proc, task) in adopt().items():
         procs[n], running[n] = proc, task
+        free_at.setdefault(n, datetime.min)  # a slot past SLOTS: watched until it ends, never started again
     for n in free_at:
         if n not in procs and os.path.isdir(slot(n)):
             tid = git('branch', '--show-current', cwd=slot(n)).stdout.strip().removeprefix('task/')
@@ -721,7 +723,7 @@ def main():
                     stall_logged.add(old[1])
                     log(f'slot {n}: an untracked session (pid {old[1]}, pane {old[0]}) still runs there; slot held')
                 continue
-            if not stopping and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
+            if not stopping and n <= SLOTS and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
                 if capped():
                     if not cap_logged:
                         log(f'weekly usage {weekly()}% >= {WEEKLY_MAX}%: waiting for the weekly reset (restart with f to go on now)')
