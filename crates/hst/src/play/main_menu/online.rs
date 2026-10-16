@@ -54,6 +54,10 @@ pub struct View {
     pub looks: HashMap<u64, Option<PathBuf>>,
     pub wanted: HashSet<u64>,
     pub ask: Option<u64>,
+    /// After a match, the mods it downloaded (folder, name) the lobby asks whether to keep (Keep Online Downloads),
+    /// and the ones already kept or turned down, not asked about again.
+    pub keep: Vec<(PathBuf, String)>,
+    pub kept: HashSet<PathBuf>,
     /// B484: the prompt's cursor when it's asked over the select or the confirm (the lobby's is `sel`).
     pub ask_row: usize,
     pub ready: Option<u32>,
@@ -161,7 +165,18 @@ const SETTINGS: usize = 5;
 const ASK_ROWS: [(&str, bool, Ask); 4] =
     [("Download, always", true, Ask::Always), ("Download this one", true, Ask::Each), ("Stand-in this time", false, Ask::Each), ("Never download", false, Ask::Never)];
 
+/// The prompt after a match for the mods it downloaded: add them to this machine's mods or not, and whether to ask again.
+const KEEP_ROWS: [(&str, bool, Ask); 4] =
+    [("Keep these", true, Ask::Each), ("Always keep", true, Ask::Always), ("Not this time", false, Ask::Each), ("Never keep", false, Ask::Never)];
+/// `KEEP_ROWS`' "Not this time" (○ on the prompt).
+const NOT_NOW: usize = 2;
+
 impl Menu {
+    /// A prompt is up over the lobby: a mod to download, or the downloads to keep.
+    pub(super) fn lobby_asking(&self) -> bool {
+        self.net.ask.is_some() || !self.net.keep.is_empty()
+    }
+
     pub(super) fn online(&self) -> bool {
         self.net.go.is_some()
     }
@@ -396,7 +411,7 @@ impl Menu {
     /// M14: the chosen lobby item is a computer player's seat (←→ and L1 / R1 change its pick).
     /// M14: on Online or the lobby, whether ↑↓ and ←→ reach another pill from the chosen one.
     pub(super) fn pill_axes(&self) -> (bool, bool) {
-        let lobby = self.screen == Screen::Lobby && self.net.ask.is_none();
+        let lobby = self.screen == Screen::Lobby && !self.lobby_asking();
         let rects = if self.screen == Screen::Lobby { self.lobby_rects() } else { row_rects(self.grid.extra) };
         let items = self.items();
         let to = |f: fn(&mut Press) -> &mut bool| {
@@ -409,7 +424,7 @@ impl Menu {
 
     /// B449: the host's □ switches singles / doubles from anywhere in the lobby (refused while it can't).
     pub(super) fn lobby_mode(&self) -> bool {
-        self.screen == Screen::Lobby && self.net.ask.is_none() && self.net.hosting && self.net.room.is_some() && self.can_switch()
+        self.screen == Screen::Lobby && !self.lobby_asking() && self.net.hosting && self.net.room.is_some() && self.can_switch()
     }
 
     /// Singles / doubles can switch: singles only while the taken seats fit in two.
@@ -883,6 +898,12 @@ impl Menu {
                     self.answer_ask(h, self.sel, out);
                 }
             }
+            Screen::Lobby if !self.net.keep.is_empty() => {
+                rows(KEEP_ROWS.len(), &mut self.sel, out);
+                if k.ok || k.back {
+                    self.answer_keep(if k.back { NOT_NOW } else { self.sel }, out);
+                }
+            }
             Screen::Lobby => {
                 let items = self.items();
                 let bot = match items.get(self.sel) {
@@ -1342,6 +1363,19 @@ impl Menu {
         out.extend([Effect::Sound(2), Effect::SaveSettings]);
     }
 
+    /// The keep prompt's row `i`: the match's downloads added to the mods or not, and the answer remembered.
+    fn answer_keep(&mut self, i: usize, out: &mut Vec<Effect>) {
+        let (_, keep, remember) = KEEP_ROWS[i];
+        let dirs: Vec<PathBuf> = std::mem::take(&mut self.net.keep).into_iter().map(|(d, _)| d).collect();
+        if keep && let Some(s) = keep_downloads(&dirs) {
+            self.net.status = s;
+        }
+        self.net.kept.extend(dirs);
+        self.sel = 0;
+        self.settings.10 = remember;
+        out.extend([Effect::Sound(2), Effect::SaveSettings]);
+    }
+
     /// B484: the prompt for the other side's mod is up over the select or the confirm (this side still picking).
     pub(super) fn mod_asking(&self) -> bool {
         self.online() && self.net.ask.is_some() && matches!(self.screen, Screen::Chars | Screen::Confirm)
@@ -1530,6 +1564,11 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ if !m.net.status.is_empty() => Some(m.net.status.clone()),
                 _ => None,
             };
+            if !m.net.keep.is_empty() {
+                lobby::draw(d, m, status.as_deref());
+                keep_popup(d, &m.net.keep, m.sel);
+                return;
+            }
             if let Some((name, court)) = m.net.ask.and_then(|h| asked(room?, h)) {
                 // a mod this machine doesn't have: its looks, or its donor as a stand-in, asked over the lobby; the gold
                 // pill is the cursor, and it has to be answered
@@ -1792,17 +1831,29 @@ fn ask_popup(d: &mut Draw, name: &str, court: bool, wait: u32, sel: usize, outsi
         0 => format!("Download its looks, or play it {instead}."),
         s => format!("The match is waiting: choose within {s} s, or it plays {instead}."),
     };
+    rows_popup(d, &format!("{name} is a mod you don't have."), &ASK_ROWS.map(|r| r.0), &help, sel, outside);
+}
+
+/// After a match: keep the mods it downloaded (`keep`, by name) or not, over the lobby (○: not this time).
+fn keep_popup(d: &mut Draw, keep: &[(PathBuf, String)], sel: usize) {
+    let names: Vec<&str> = keep.iter().map(|(_, n)| n.as_str()).collect();
+    let help = format!("Add {} to your mods?", names.join(", "));
+    rows_popup(d, "Keep the mods you downloaded?", &KEEP_ROWS.map(|r| r.0), &help, sel, Some(Act::Press(Press { back: true, ..Default::default() })));
+}
+
+/// A centred box: `title`, a pill per row (`sel` gold), two lines of `help` under them.
+fn rows_popup(d: &mut Draw, title: &str, rows: &[&str], help: &str, sel: usize, outside: Option<Act>) {
     d.popup(outside);
     let (sw, sh) = (260.0, 230.0);
     let (sx, sy) = (320.0 - sw / 2.0, 224.0 - sh / 2.0);
     d.box3([sx, sy, sw, sh], 14.0, [Some(super::INK), Some(WHITE), Some(super::CREAM)], 128.0);
-    d.label(&format!("{name} is a mod you don't have."), sx + sw / 2.0, sy + 14.0, 14.0, sw - 20.0, super::BROWN);
-    for (i, r) in ASK_ROWS.iter().enumerate() {
+    d.label(title, sx + sw / 2.0, sy + 14.0, 14.0, sw - 20.0, super::BROWN);
+    for (i, r) in rows.iter().enumerate() {
         let rect = [sx + 10.0, sy + 40.0 + 40.0 * i as f32, sw - 20.0, 32.0];
-        super::side_button(d, rect, r.0, sel == i, false);
+        super::side_button(d, rect, r, sel == i, false);
         d.hit(rect, Act::Row(i, OK));
     }
-    for (k, l) in super::wrap(&help, 44).iter().take(2).enumerate() {
+    for (k, l) in super::wrap(help, 44).iter().take(2).enumerate() {
         d.label(l, sx + sw / 2.0, sy + 202.0 + 12.0 * k as f32, 10.0, sw - 20.0, super::BROWN);
     }
 }
@@ -2112,11 +2163,15 @@ pub(super) fn sample(m: &mut Menu) {
     }
 }
 
-/// The mods this match's lobby downloaded (`mods_online::cache`) when Keep Online Downloads is on.
-fn fetched(menu: &Menu, iso: &str) -> Vec<PathBuf> {
+/// The mods this match's lobby downloaded (`mods_online::cache`) not kept or turned down yet, with their names; none
+/// with Keep Online Downloads on Never.
+// ponytail: asked about only back in the lobby; a match that ends out of it (the lobby closed) keeps them on Always only
+fn fetched(menu: &Menu, iso: &str) -> Vec<(PathBuf, String)> {
     let cache = mo::cache(iso);
-    let on = menu.settings.0[super::KEEP_DOWNLOADS];
-    menu.net.looks.values().flatten().filter(|d| on && d.starts_with(&cache)).cloned().collect()
+    let mut v: Vec<_> = menu.net.looks.values().flatten().filter(|d| menu.settings.10 != Ask::Never && d.starts_with(&cache) && !menu.net.kept.contains(*d)).filter_map(|d| Some((d.clone(), crate::mods::read_any(d).ok()?.name))).collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// `fetched` copied into the installed mods (`modfs::keep`); what came of it for the lobby's status line.
@@ -2160,13 +2215,13 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
     }
     info!("starting the online match: {}", flags.join(" "));
     let (base, kept) = (args.clone(), menu.clone());
-    let fetched = fetched(menu, &args.iso);
+    let (fetched, always) = (fetched(menu, &args.iso), menu.settings.10 == Ask::Always);
     commands.queue(move |w: &mut World| {
         let Some(net) = w.remove_resource::<Net>() else { return };
         let back = crate::mode::Mode::new(move |app| {
             app.insert_resource(base);
-            // the match is over: only now are the downloads kept, nothing is written during it
-            let saved = keep_downloads(&fetched);
+            // the match is over: only now are the downloads kept (or asked about), nothing is written during it
+            let saved = if always { keep_downloads(&fetched.iter().map(|(d, _)| d.clone()).collect::<Vec<_>>()) } else { None };
             // B196: the match ended for a player who didn't come back: this lobby again, with whoever is still in
             if let Some((net, room, wait)) = crate::play::netplay::LOBBY.lock().unwrap().take() {
                 let mut m = kept;
@@ -2176,6 +2231,11 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
                 m.net.status = if wait { "Waiting for the host to leave the results..." } else { "Back in the lobby." }.into();
                 if let Some(n) = saved {
                     m.net.status = n;
+                }
+                if always {
+                    m.net.kept.extend(fetched.into_iter().map(|(d, _)| d));
+                } else if !fetched.is_empty() {
+                    (m.net.keep, m.sel) = (fetched, 0);
                 }
                 app.insert_resource(net).insert_resource(super::Kept(m));
             }
@@ -2737,6 +2797,15 @@ mod tests {
         assert!(dir.starts_with(mo::cache(&iso)));
         b.settle(&iso, &net);
         assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, Cmd::Ready(_))), "ready once it's here");
+        // after the match: asked whether to keep it; "Not this time" isn't asked again this session, Never not at all
+        b.net.keep = fetched(&b, &iso);
+        assert_eq!(b.net.keep, [(dir.clone(), "Wonderland".to_string())]);
+        assert!(b.lobby_asking());
+        b.answer_keep(NOT_NOW, &mut Vec::new());
+        assert!(!b.lobby_asking() && b.net.kept.contains(&dir) && fetched(&b, &iso).is_empty() && b.settings.10 == Ask::Each);
+        b.net.kept.clear();
+        b.settings.10 = Ask::Never;
+        assert!(fetched(&b, &iso).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -207,6 +207,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         // B370: the QR big: any button puts it away
         Screen::Lobby if m.net.qr_big => v.extend([(Act::Ok, "Close"), (Act::Back, "Close")]),
+        Screen::Lobby if m.net.ask.is_none() && !m.net.keep.is_empty() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Not this time")]),
         Screen::Lobby if m.net.ask.is_some() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Leave")]),
         Screen::Lobby => {
             moves(&mut v, m.pill_axes());

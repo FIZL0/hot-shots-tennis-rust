@@ -84,7 +84,7 @@ fn input(
     let now = time.elapsed_secs();
     let mut flicks = Vec::new();
     // a picker over the cards (the court's or umpire's: its L1 / R1 page), the lobby's question or big QR: no flicks
-    let covered = menu.picking.is_some() || menu.net.ask.is_some() || menu.net.qr_big;
+    let covered = menu.picking.is_some() || menu.lobby_asking() || menu.net.qr_big;
     let select = menu.screen == Screen::Chars;
     for (e, mut g, name) in pads.iter_mut().filter(|_| !covered) {
         let touch = name.is_some_and(|n| emote::is_touch(n));
