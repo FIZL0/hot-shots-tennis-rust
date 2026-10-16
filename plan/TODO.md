@@ -8,7 +8,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B480** Rain: it looks wrong (compare tools/screenshot.sh vs --shot), may cost frame rate (bench it), and may last too long. User thinks the original's rain lasts about one game; find its real duration in the decomp and match it
+- [ ] **B480** Rain: it looks wrong (compare tools/screenshot.sh vs --shot), may cost frame rate (bench it), and may last too long. User thinks the original's rain lasts about one game; find its real duration in the decomp and match it — User 2026-10-16: it looks weird especially while the camera moves. Investigate first; the look doesn't have to match the original, it only has to work well with no issues (our own rain is fine). Keep its timing off the sim RNG.
 - [ ] **B479** Doubles: when one player dashes for the ball but won't reach it, can the teammate still hit it? Check the original's rule for who goes for the ball (PINE recording of that case) and match the port to it exactly
 - [ ] **B478** Mod characters: when a win/loss (celebration) motion is shorter than the post-point, game or set transition, hold its last frame until the transition ends, instead of looping it or snapping back to idle
 - [ ] **B477** Custom (mod) courts: check where NPCs stand (umpire, line judges, ball kids, crowd) on each mod court; they can end up inside walls and props. Place them clear of the court's own geometry (see B476 for the stock-court umpire)
