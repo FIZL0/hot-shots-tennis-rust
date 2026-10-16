@@ -746,6 +746,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M118** Check every getagrip court and umpire mod, and every modded character that doesn't set "upscale": false in mod.json, has its upscales (user 2026-10-16): for each mod, every image in its .glb files (costumes, racket.glb; courts: court/gimmick/sky.glb + npcs.json people; umpires: umpire.glb) needs a textures/upscaled/<glb stem>/<name>.png that is up to date with textures/upscaled/sources.json. List what's missing, run tools/upscale_mods.sh (chaiNNer, HDcube4) on those mods, run the check again until nothing is missing, and re-upload changed mods to the store if they're published there. Write the counts (before/after) in the journal → tools/upscale_mods.py · tools/upscale_mods.sh · mods/ · ../opentennis-mods/standard/HST-CHARACTER-STANDARD.md
 - [x] **B474** Sound settings: a toggle to mute emote voice lines (local only; the emote motion still plays) — crates/hst/src/play/main_menu.rs (sound settings), crates/hst-base/src/audio.rs, crates/hst-play/src/play/emote.rs (`voice`)
 - [x] **B500** Emotes use every take of their voice program (user 2026-10-16): gu 7 keys 0–2, di 8 0–4 (9/10 have only 0–1 on the disc banks), in turn; the lobby/select plate emotes too, and there a new emote line cuts the card's last one as in a match (B473) → play/emote.rs · main_menu/plate_emote.rs · hst-sim sound.rs
+- [x] **B493** Mod store: show Download all in every sort, not only when sorting by uploader
 
 
 ### Shots

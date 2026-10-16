@@ -272,15 +272,16 @@ fn tile_step(lines: &[Line], i: usize, k: Press) -> Option<usize> {
 }
 
 impl View {
-    /// B448: the footer's words: Refresh (an author's mods: Download all, All mods; Installed's Add mod, Reload and
-    /// Remove all; My uploads' Refresh and Remove all uploads), then Reload while mods changed since the start (B387:
-    /// the way back to the Reload a Later put off).
+    /// B448: the footer's words: Refresh and (B493: in every sort) Download all (an author's mods: Download all, All
+    /// mods; Installed's Add mod, Reload and Remove all; My uploads' Refresh and Remove all uploads), then Reload while
+    /// mods changed since the start (B387: the way back to the Reload a Later put off).
     pub(super) fn words(&self) -> Vec<&'static str> {
         let mut w: Vec<&'static str> = match (self.page, &self.by) {
             (Page::Installed, _) => vec!["Add mod", "Reload", "Remove all"],
             (_, Some(_)) => vec!["Download all", "All mods"],
             // B445
             (Page::Mine, _) => vec!["Refresh", "Remove all uploads"],
+            (Page::Browse, None) => vec!["Refresh", "Download all"],
             _ => vec!["Refresh"],
         };
         if self.changed && self.page != Page::Installed {
@@ -833,10 +834,14 @@ impl Menu {
                     }
                     out.push(Sound(2));
                 }
-                "Download all" => {
-                    let b = v.by.clone().expect("an author's list");
-                    self.download_all(&b.author, b.list, out);
-                }
+                "Download all" => match v.by.clone() {
+                    Some(b) => self.download_all(Some(&b.author), b.list, out),
+                    // B493: the whole store's: the mods on view (search, Show and filters), in any sort
+                    None => {
+                        let list = v.items().into_iter().cloned().collect();
+                        self.download_all(None, list, out);
+                    }
+                },
                 "All mods" => self.mods_back(out),
                 _ => {
                     out.push(Sound(2));
@@ -1985,7 +1990,10 @@ pub(super) fn info(m: &Menu) -> String {
             "Remove all" => "Remove every mod the game installed (ones added by hand stay).".into(),
             "Remove all uploads" => "Take every mod you shared off the store (asks first).".into(),
             "Reload" => super::reload_said(v).into(),
-            "Download all" => format!("Install every mod by {} you don't have yet.", v.by.as_ref().map_or("", |b| super::who(&b.author))),
+            "Download all" => match &v.by {
+                Some(b) => format!("Install every mod by {} you don't have yet.", super::who(&b.author)),
+                None => "Install every mod listed here you don't have yet (the search and filters choose which).".into(),
+            },
             _ => "Back to every mod in the store.".into(),
         },
         Slot::Pill(i) => match v.pills()[i] {
