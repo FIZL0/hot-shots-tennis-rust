@@ -527,8 +527,8 @@ pub fn touched() -> bool {
     page_fn("hstTouched").and_then(|f| f.call0(&JsValue::NULL).ok()).is_some_and(|v| v.is_truthy())
 }
 
-/// B329: what the Vibration setting can do in this browser (`web/touch.js`): `vibrate` (Android) or `none`
-/// (iOS Safari: no vibration API).
+/// B329: what the Vibration setting can do in this browser (`web/touch.js`): `vibrate` (Android), `firefox`
+/// (Firefox for Android: the API is there but never vibrates, B525) or `none` (iOS Safari: no vibration API).
 pub fn vibration() -> String {
     page_fn("hstVibration").and_then(|f| f.call0(&JsValue::NULL).ok()).and_then(|v| v.as_string()).unwrap_or_else(|| "none".into())
 }
