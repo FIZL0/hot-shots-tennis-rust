@@ -747,6 +747,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B474** Sound settings: a toggle to mute emote voice lines (local only; the emote motion still plays) — crates/hst/src/play/main_menu.rs (sound settings), crates/hst-base/src/audio.rs, crates/hst-play/src/play/emote.rs (`voice`)
 - [x] **B500** Emotes use every take of their voice program (user 2026-10-16): gu 7 keys 0–2, di 8 0–4 (9/10 have only 0–1 on the disc banks), in turn; the lobby/select plate emotes too, and there a new emote line cuts the card's last one as in a match (B473) → play/emote.rs · main_menu/plate_emote.rs · hst-sim sound.rs
 - [x] **B493** Mod store: show Download all in every sort, not only when sorting by uploader
+- [x] **B499** mods_screen::tests::upload_all is flaky under the full suite: a store listing's "N mods in the store." status overwrites "Not uploaded:" (seen in B475's done.sh run; passes alone) — crates/hst/src/play/main_menu/mods_screen.rs
 
 
 ### Shots
