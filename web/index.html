@@ -739,11 +739,12 @@ async function start() {
   // reload is a folder without its mod.json, dropped at the next start (the mod "didn't come in")
   const pending = new Set();
   const track = p => { pending.add(p); p.finally(() => pending.delete(p)).catch(() => {}); return p; };
-  window.hstReload = async () => {
+  // `site`: back to the launcher page (the game's Back to launcher) instead of the game again
+  window.hstReload = async site => {
     const until = Date.now() + 120000;
     if (pending.size) { boot.hidden = false; say('Saving mods before reloading…'); }
     while (pending.size && Date.now() < until) await Promise.race([Promise.allSettled([...pending]), new Promise(r => setTimeout(r, until - Date.now()))]);
-    location.reload();
+    if (site) { const q = new URLSearchParams(location.search); q.set('site', ''); location.search = q; } else location.reload();
   };
   window.hstModDrop = id => track(mods.removeEntry(id, { recursive: true }).catch(e => console.warn(`hst: removing mod ${id}: ${e}`)));
   pick.onchange = async () => {

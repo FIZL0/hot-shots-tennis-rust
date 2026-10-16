@@ -1080,6 +1080,9 @@ impl Menu {
                         Row::Settings => self.go(Screen::Display, &mut out),
                         Row::Mods => self.mods_open(&mut out),
                         Row::Update => crate::update::act(),
+                        #[cfg(target_arch = "wasm32")]
+                        Row::Quit => crate::web::launcher(),
+                        #[cfg(not(target_arch = "wasm32"))]
                         Row::Quit => out.push(Quit),
                     }
                 }

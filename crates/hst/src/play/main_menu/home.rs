@@ -24,7 +24,8 @@ pub(super) enum Row {
 
 impl Menu {
     /// The main screen's rows, top to bottom (`sel` indexes them). A web page can't close itself (an `AppExit` there
-    /// only freezes it), so the browser build has no Quit; nor have the phone apps (M106), which the phone closes.
+    /// only freezes it), so the browser build's Quit is Back to launcher (the site page); the phone apps (M106) have
+    /// none, the phone closes them.
     pub(super) fn main_rows(&self) -> Vec<Row> {
         let mut v = Vec::new();
         if self.rematch {
@@ -34,7 +35,7 @@ impl Menu {
         if crate::update::latest().is_some() {
             v.push(Row::Update);
         }
-        if cfg!(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))) {
+        if cfg!(not(any(target_os = "ios", target_os = "android"))) {
             v.push(Row::Quit);
         }
         v
@@ -166,9 +167,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
                 rect
             }
             Row::Quit => {
-                let rect = [x, FOOT - 32.0, 100.0, 30.0];
+                let rect = [x, FOOT - 32.0, if cfg!(target_arch = "wasm32") { 180.0 } else { 100.0 }, 30.0];
                 d.pill_at(rect, [INK, if on { ON } else { [80.0, 70.0, 90.0] }, if on { ON } else { [96.0, 84.0, 108.0] }], if on { 128.0 } else { 100.0 });
-                d.text("Quit", x + 18.0, rect[1] + 6.0, 18.0, if on { WHITE } else { INK });
+                d.text(name(r), x + 18.0, rect[1] + 6.0, 18.0, if on { WHITE } else { INK });
                 rect
             }
             _ => {
@@ -208,6 +209,7 @@ fn name(r: Row) -> &'static str {
         Row::Mods => "Mods",
         Row::Settings => "Settings",
         Row::Update => crate::update::button(),
+        Row::Quit if cfg!(target_arch = "wasm32") => "Back to launcher",
         Row::Quit => "Quit",
     }
 }
@@ -264,6 +266,7 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Update if cfg!(target_arch = "wasm32") => "A new version is out. Refresh loads this page again with it; your settings and mods stay.".into(),
         Row::Update if crate::update::installs() => "A new version is out. Update downloads it, checks its signature and restarts the game into it; your settings and mods stay.".into(),
         Row::Update => "A new version is out. Download opens its release page: replace this game with the new build and keep your settings and mods folders next to it.".into(),
+        Row::Quit if cfg!(target_arch = "wasm32") => "Leave the game for the launcher page: your disc, settings, mods and files. Play there comes back here.".into(),
         Row::Quit => "Close the game.".into(),
     };
     let top = if r == Row::Quit { y + 60.0 } else { y + PIC_H + 16.0 };

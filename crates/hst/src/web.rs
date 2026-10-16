@@ -626,6 +626,14 @@ pub fn reload() {
     }
 }
 
+/// Back to the site page (`?site`), once mod saves are done like [`reload`].
+pub fn launcher() {
+    match page_fn("hstReload") {
+        Some(f) => drop(f.call1(&JsValue::NULL, &true.into())),
+        None => drop(web_sys::window().unwrap().location().set_search("site")),
+    }
+}
+
 /// M17: a mod the store installed (in memory) written to OPFS by the page, which then reports it (`mod_status`).
 pub fn mod_save(id: &str, name: &str) {
     if let Some(f) = page_fn("hstModSave") {
