@@ -3,8 +3,9 @@
 //! it never enters the match's input, so the sim, its generators and the replays never see it.
 //!
 //! The box: T opens it on the keyboard (typed keys go to it, not to the menu or the match), Enter sends, Esc
-//! closes; a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
-//! themselves after a few seconds); the menus' legend strip shows T / R2 L2 as Chat (B320). On a touch screen a
+//! closes; in a match a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
+//! themselves after a few seconds). B512: not in the menus (R2/L2 are the select's there): the lobby's Chat button
+//! opens (and closes) the typed box on a pad or a touch screen too, and the menus' legend strip shows only T as Chat. On a touch screen a
 //! speech-bubble button on the on-screen pad opens the box (the phone's keyboard): beside Start in the browser
 //! (`web/touch.js`, B312), beside Select in the phone apps (`play/touch_pad.rs`, [`BUTTON`]). The chat itself takes no
 //! clicks or taps: nothing of it shows until a line is said, then the last few show at the bottom left, fading out,
@@ -41,6 +42,9 @@ pub static HIDDEN: AtomicBool = AtomicBool::new(false);
 
 /// B396: the lobby's Chat button asks for the box (1: the typed line) or the pads' phrases (2).
 pub static ASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// B512: the menus showed this frame (`main_menu::online::poll` sets it, [`input`] takes it): no quick-chat phrases.
+pub static MENUS: AtomicBool = AtomicBool::new(false);
 
 /// The on-screen pad's chat button is up (chat on, the box and phrases closed); a tap on it stores 1 in [`ASK`].
 pub static BUTTON: AtomicBool = AtomicBool::new(false);
@@ -197,6 +201,7 @@ fn input(
         }
     }
     let ask = ASK.swap(0, Ordering::Relaxed);
+    let menus = MENUS.swap(false, Ordering::Relaxed);
     #[cfg(target_arch = "wasm32")]
     let tapped = crate::web::chat_tapped() && !chat.open;
     #[cfg(not(target_arch = "wasm32"))]
@@ -205,6 +210,11 @@ fn input(
         chat.open = true;
         typed.clear();
         keys.reset_all();
+    } else if chat.open && ask == 1 {
+        // B512: the lobby's Chat button again (a pad or a tap can't press Esc)
+        chat.open = false;
+        chat.draft.clear();
+        typed.clear();
     } else if chat.open {
         let mut send = false;
         for e in typed.read().filter(|e| e.state.is_pressed()) {
@@ -237,12 +247,13 @@ fn input(
     }
     let open = chat.open;
     phone(&mut was, open);
-    // the pads: R2 shows / steps the phrases, L2 says the one shown
-    let pads: Vec<_> = pads.iter().filter(|g| crate::seats::readable(g)).collect();
+    // the pads: R2 shows / steps the phrases, L2 says the one shown (in a match only, B512)
+    let pads: Vec<_> = pads.iter().filter(|g| crate::seats::readable(g) && !menus).collect();
     let next = pads.iter().any(|g| g.just_pressed(GamepadButton::RightTrigger2)) || ask == 2;
     let say = pads.iter().any(|g| g.just_pressed(GamepadButton::LeftTrigger2));
     let n = chat.phrases().len();
     chat.phrase = match chat.phrase {
+        _ if menus => None,
         _ if next => Some((chat.phrase.map_or(0, |(i, _)| (i + 1) % n), PICK)),
         Some((i, _)) if say => {
             match chat.names.keys().nth(i.wrapping_sub(PHRASES.len())).cloned() {
@@ -423,6 +434,33 @@ mod tests {
         let sent: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).filter_map(|c| if let Cmd::Chat(t) = c { Some(t) } else { None }).collect();
         assert_eq!(sent, ["hi"]);
         assert!(!app.world().resource::<Chat>().open);
+    }
+
+    /// B512: in the menus a pad's R2 brings up no quick-chat phrase (in a match it does), and the lobby's Chat button
+    /// opens the typed box and, pressed again, closes it.
+    #[test]
+    fn no_quick_chat_in_the_menus() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_message::<KeyboardInput>().init_resource::<ButtonInput<KeyCode>>().add_plugins(plugin);
+        let (net, _rx) = Net::wired();
+        net.enter_room();
+        app.insert_resource(net);
+        // no InputPlugin: the press stays just pressed every frame
+        let mut g = Gamepad::default();
+        g.digital_mut().press(GamepadButton::RightTrigger2);
+        app.world_mut().spawn(g);
+        MENUS.store(true, Ordering::Relaxed);
+        app.update();
+        assert_eq!(app.world().resource::<Chat>().phrase, None, "the lobby: no phrase");
+        app.update();
+        assert!(app.world().resource::<Chat>().phrase.is_some(), "a match: R2 shows a phrase");
+        for want in [true, false] {
+            MENUS.store(true, Ordering::Relaxed);
+            ASK.store(1, Ordering::Relaxed);
+            app.update();
+            let chat = app.world().resource::<Chat>();
+            assert_eq!((chat.open, chat.phrase), (want, None), "the Chat button toggles the typed box");
+        }
     }
 
     #[test]
