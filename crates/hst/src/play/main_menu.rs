@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -560,6 +560,9 @@ struct Menu {
     names: names::Names,
     /// B450: the court picker's rows' places.
     court_pick: court_picker::Picker,
+    /// B437: the device that drives the controller assignment once it has moved or taken off a seat there: it keeps
+    /// driving it (its own seat change pending, shown on the screen) until it leaves, where the new 1P takes over.
+    assign_lead: Option<Dev>,
 }
 
 impl Default for Menu {
@@ -605,6 +608,7 @@ impl Default for Menu {
             favs: default(),
             names: default(),
             court_pick: default(),
+            assign_lead: None,
         }
     }
 }
@@ -923,6 +927,19 @@ impl Menu {
         dev(&self.seats[p]) && (!first || self.paused || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
     }
 
+    /// The device driving the menu's 1P screens: 1P's, except on the controller assignment after it moved its own
+    /// seat there (B437: still the one that came in, until it leaves).
+    fn lead(&self) -> Option<Dev> {
+        self.assign_lead.filter(|_| self.screen == Screen::Assign).or(self.seats[0])
+    }
+
+    /// B437: the assignment's driver has moved off 1P (or off every seat): where it sits now (`None`: taken off), once
+    /// it leaves the screen.
+    fn lead_pending(&self) -> Option<Option<usize>> {
+        let lead = self.lead()?;
+        (self.seats[0] != Some(lead)).then(|| self.seats[..self.players()].iter().position(|s| *s == Some(lead)))
+    }
+
     /// The seats 1P's ←/→ (`right`) trades on the assignment screen: the focused one and its neighbour that way,
     /// unless that would leave 1P empty or changes nothing.
     fn host_swap(&self, right: bool) -> Option<(usize, usize)> {
@@ -1049,6 +1066,10 @@ impl Menu {
     fn step(&mut self, dev: Dev, k: Press) -> Vec<Effect> {
         use Effect::*;
         let mut out = Vec::new();
+        // B437: left the assignment: its seats stand, 1P's device drives from here
+        if self.screen != Screen::Assign {
+            self.assign_lead = None;
+        }
         let rows = |n: usize, sel: &mut usize, out: &mut Vec<Effect>| {
             if k.up || k.down {
                 *sel = if k.down { (*sel + 1) % n } else { (*sel + n - 1) % n };
@@ -1062,7 +1083,7 @@ impl Menu {
             self.online_enter(&mut out);
             return out;
         }
-        let host = self.seats[0];
+        let host = self.lead();
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
             return out;
         }
@@ -1167,6 +1188,8 @@ impl Menu {
                     } else if k.left || k.right {
                         // the focused seat's device trades places with the next seat that way (1P is never left empty)
                         if let Some((p, q)) = self.host_swap(k.right) {
+                            // B437: the swap is shown at once, but this device drives the screen until it leaves
+                            self.assign_lead = host;
                             self.seats.swap(p, q);
                             if !self.paused {
                                 self.bots.swap(p, q);
@@ -1182,7 +1205,8 @@ impl Menu {
                         self.bots[p] = !self.bots[p];
                         out.push(Sound(if self.bots[p] { 2 } else { 1 }));
                     } else if k.back {
-                        self.seats[1..].fill(None);
+                        // B437: the driver goes back as 1P, whatever seat it had moved to
+                        self.seats = [host, None, None, None];
                         self.bots = [false; 4];
                         self.screen = match self.net.go {
                             Some(online::Go::Find) => Screen::Lobbies,
@@ -1197,7 +1221,7 @@ impl Menu {
                         self.seats[p] = Some(dev);
                         out.push(Sound(2));
                     }
-                } else if (k.left || k.right || k.up || k.down) && let Some(p) = seated {
+                } else if (k.left || k.right || k.up || k.down) && let Some(p) = seated.filter(|&p| p > 0) {
                     // the next free seat that way (1P stays the host's)
                     let d = if k.right || k.down { 1 } else { n - 2 };
                     let to = (1..n - 1).map(|j| 1 + (p - 1 + d * j) % (n - 1)).find(|&q| self.seats[q].is_none() && !self.bots[q] && !(self.online() && q >= self.local_max()));
@@ -1205,7 +1229,8 @@ impl Menu {
                         self.seats.swap(p, q);
                         out.push(Sound(0));
                     }
-                } else if k.back && let Some(p) = seated {
+                } else if k.back && let Some(p) = seated.filter(|&p| p > 0) {
+                    // B437: (the device the driver moved onto 1P stays there; the driver can take it off)
                     self.seats[p] = None;
                     out.push(Sound(1));
                 }
@@ -1912,7 +1937,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "mobile" => Screen::Mobile,
         "controls" => Screen::Controls,
         "mode" => Screen::Mode,
-        "assign" => Screen::Assign,
+        "assign" | "assign-moved" => Screen::Assign,
         "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" | "online-unread" => Screen::Online,
@@ -1961,6 +1986,12 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         // B371: 1P named, its name picker open on the list or typing (`names`, `names-type`)
         if screen.starts_with("names") {
             menu.names.demo(0, Dev::Keys, screen == "names-type");
+        }
+        // B437: doubles, the keyboard (1P) moved itself to 3P (pending until it leaves), a pad on 1P, 2P and 4P open
+        if fresh && screen == "assign-moved" {
+            menu.bots = [false; 4];
+            menu.seats = [Some(Dev::Pad(Entity::from_raw_u32(1).unwrap())), None, Some(Dev::Keys), None];
+            (menu.assign_lead, menu.sel) = (Some(Dev::Keys), 2);
         }
         // B264: 2P's computer readied on Random (`coms-random`, `confirm-random`)
         menu.players[1].random = matches!(screen.as_str(), "coms-random" | "confirm-random");
@@ -2435,10 +2466,21 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
                 }
             }
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [60.0 + hand_x, 102.0 + 70.0 * m.sel.min(m.players() - 1) as f32, 64.0, 32.0], WHITE, 128.0);
+            // B437: 1P's own seat change is pending until they leave: tagged on its new seat, spelled out in the help
+            let pending = m.lead_pending().map(|at| {
+                if let Some(p) = at {
+                    d.text("Yours when you leave", 240.0, 90.0 + 70.0 * p as f32 + 38.0, 16.0, [250.0, 210.0, 60.0]);
+                }
+                match at {
+                    Some(p) => format!("Pending: you move to {}P when you leave this screen; until then you keep 1P's controls here. ", p + 1),
+                    None => "Pending: you give up your seat when you leave this screen; until then you keep 1P's controls here. ".to_string(),
+                }
+            });
+            let pending = pending.unwrap_or_default();
             if m.paused {
-                d.info("1P: Up/Down picks a seat, Left/Right swaps its device with the next player's, Tab / Square takes a device off its seat, X or Enter keeps the change, O or Esc leaves it. Others: X or Enter takes a free seat, Left/Right changes seat, O or its red X leaves.");
+                d.info(&format!("{pending}1P: Up/Down picks a seat, Left/Right swaps its device with the next player's, Tab / Square takes a device off its seat, X or Enter keeps the change, O or Esc leaves it. Others: X or Enter takes a free seat, Left/Right changes seat, O or its red X leaves."));
             } else {
-            d.info(&format!("{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
+            d.info(&format!("{pending}{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves.", text.msg(193)));
             }
         }
         Screen::Chars => roster::chars(&mut d, m, text, bind, pads),
@@ -3973,19 +4015,21 @@ mod tests {
         assert_eq!(m.seats, [Some(pa), None, None, None]);
         m.step(Dev::Keys, press(|p| &mut p.ok)); // the keyboard rejoins as 2P
         assert_eq!(m.seats[..2], [Some(pa), Some(Dev::Keys)]);
-        // 1P focuses 2P and swaps it back up, then takes the pad off
+        // 1P (now the pad) focuses 2P and swaps it back up; B437: the pad drives on, its move pending, until it leaves
         m.step(pa, press(|p| &mut p.down));
         m.step(pa, press(|p| &mut p.left));
-        assert_eq!((&m.seats[..2], m.sel), (&[Some(Dev::Keys), Some(pa)][..], 0));
+        assert_eq!((&m.seats[..2], m.sel, m.lead(), m.lead_pending()), (&[Some(Dev::Keys), Some(pa)][..], 0, Some(pa), Some(Some(1))));
         m.step(Dev::Keys, press(|p| &mut p.down));
         m.step(Dev::Keys, press(|p| &mut p.page));
-        assert_eq!(m.seats[..2], [Some(Dev::Keys), None]);
-        m.step(Dev::Keys, press(|p| &mut p.right)); // an empty seat never goes to 1P
+        assert_eq!((&m.seats[..2], m.sel), (&[Some(Dev::Keys), Some(pa)][..], 0), "the keyboard doesn't drive yet");
+        // the pad takes itself off; an empty seat never goes to 1P
+        m.step(pa, press(|p| &mut p.down));
+        m.step(pa, press(|p| &mut p.page));
+        assert_eq!((&m.seats[..2], m.lead_pending()), (&[Some(Dev::Keys), None][..], Some(None)));
+        m.step(pa, press(|p| &mut p.right));
         assert_eq!(m.seats[0], Some(Dev::Keys));
         m.step(pa, press(|p| &mut p.ok));
-        m.step(pa, press(|p| &mut p.ok));
-        m.step(Dev::Keys, press(|p| &mut p.ok));
-        assert_eq!(m.screen, Screen::Chars);
+        assert_eq!((m.screen, m.lead()), (Screen::Chars, Some(Dev::Keys)));
         assert!(!m.droppable(0)); // the select's driver stays
     }
 

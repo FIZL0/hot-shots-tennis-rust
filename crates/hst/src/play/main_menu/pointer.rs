@@ -397,8 +397,9 @@ pub(in crate::play) fn pointer(
 }
 
 /// The pointer's device: player 1's while it's a connected pad, else the keyboard (which a touch-only phone also is).
+/// B437: on the controller assignment, the device driving it (`Menu::lead`) until it leaves.
 pub(super) fn device(m: &Menu, pads: &[Entity]) -> Dev {
-    match m.seats[0] {
+    match m.lead() {
         Some(Dev::Pad(e)) if pads.contains(&e) => Dev::Pad(e),
         _ => Dev::Keys,
     }

@@ -185,7 +185,7 @@ fn emote_keys(bind: &Bindings) -> Vec<String> {
 /// probes `step` for them).
 pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let mut v: Vec<(Act, &str)> = Vec::new();
-    let host = m.seats[0] == Some(dev);
+    let host = m.lead() == Some(dev);
     let s = m.sel;
     match m.screen {
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose")]),
@@ -230,7 +230,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             let room = |q: usize| m.seats[q].is_none() && !(m.online() && q >= m.local_max());
             match m.seats[..n].iter().position(|d| *d == Some(dev)) {
                 None if (0..if m.online() { m.local_max() } else { n }).any(|p| m.seats[p].is_none() && !m.bots[p]) => v.push((Act::Ok, "Join")),
-                None => {}
+                // B437: the device the driver moved onto 1P waits for it to leave
+                None | Some(0) => {}
                 Some(p) => {
                     if (1..n).any(|q| q != p && room(q)) {
                         v.push((Act::Move, "Seat"));
@@ -425,6 +426,10 @@ fn drivers(m: &Menu, last: Dev) -> Vec<(Dev, Option<usize>)> {
     match m.screen {
         Screen::Chars | Screen::Assign => {
             let mut v = seated(m);
+            // B437: the assignment's driver, taken off every seat until it leaves, still drives it
+            if let Some(d) = m.lead().filter(|d| m.screen == Screen::Assign && !v.iter().any(|x| x.0 == *d)) {
+                v.insert(0, (d, None));
+            }
             v.dedup_by_key(|x| x.0);
             if (m.screen == Screen::Assign || m.can_join()) && !v.iter().any(|x| x.0 == last) {
                 v.push((last, None));
