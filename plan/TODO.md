@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B468** iPhone 13 (4 GB) web app: first Local Play, picking a character crashed and the page reloaded (WebKit tab kill = likely memory spike loading character models/textures/voices on select; measure peak memory, stream or drop what isn't needed) — crates/hst/src/character.rs, crates/hst/src/play/main_menu.rs, web/worker.js
 - [~] **B453** iPhone Safari: frequent freezes in the menus and on loading screens (user 2026-10-15, build 54125cc; installs fine). Reproduce in the browser build with stall logging, find what blocks the frame → web/index.html BLOCKED: needs an iPhone Safari hst-log.txt from ?fps / Frame log box (plan/HUMAN.md)
 - [ ] **B424** Roster footer total (plan/B422.md): '8 of 16 in Hot Shots Tennis · 28 characters' so the cast's size is always stated → crates/hst/src/play/main_menu/roster.rs
 - [ ] **B435** Out of Bounds mods' hair/cloth physics still look wrong (bug, user 2026-10-15; after M1h, B410): the Hot Shots Golf: Out of Bounds characters' spring bones (hair pony*, earrings, cloth) still move oddly in a match. Play each OOB mod, record a --play clip of serve/run/idle, find what's off (stiffness/damping/gravity units, rest pose, bone axis, scale after M1l sizing, frame-rate dependence) against oob.md's dynamics records, and fix so they move like in Out of Bounds; stock and other mods unchanged → spring.rs · mods.rs · character.rs · ../opentennis-mods notes/oob.md

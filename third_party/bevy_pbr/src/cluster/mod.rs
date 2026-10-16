@@ -471,11 +471,12 @@ pub fn prepare_clusters_for_cpu_clustering(
     render_queue: Res<RenderQueue>,
     mesh_pipeline: Res<MeshPipeline>,
     global_clusterable_object_meta: Res<GlobalClusterableObjectMeta>,
-    views: Query<(
+    mut views: Query<(
         Entity,
         &ExtractedClusterableObjects,
         Option<&RenderViewLightProbes<EnvironmentMapLight>>,
         Option<&RenderViewLightProbes<IrradianceVolume>>,
+        Option<&mut ViewClusterBindings>,
     )>,
 ) {
     let render_device = render_device.into_inner();
@@ -483,9 +484,20 @@ pub fn prepare_clusters_for_cpu_clustering(
         mesh_pipeline.clustered_forward_buffer_binding_type,
         BufferBindingType::Storage { .. }
     );
-    for (entity, extracted_clusters, maybe_environment_maps, maybe_irradiance_volumes) in &views {
-        let mut view_clusters_bindings =
-            ViewClusterBindings::new(mesh_pipeline.clustered_forward_buffer_binding_type);
+    for (entity, extracted_clusters, maybe_environment_maps, maybe_irradiance_volumes, kept) in &mut views {
+        // HST (B468): the view's bindings from the last frame are filled again, their GPU buffers rewritten while
+        // they're big enough, instead of two new buffers per view every frame. WebGPU never destroys a dropped
+        // buffer (wgpu's web backend leaves it to the page's garbage collector), so those piled up in the browser.
+        let mut fresh = None;
+        let view_clusters_bindings = match kept {
+            Some(kept) if matches!(kept.buffers, ViewClusterBuffers::Storage { .. }) == supports_storage_buffers => {
+                let kept = kept.into_inner();
+                kept.n_indices = 0;
+                kept.n_offsets = 0;
+                kept
+            }
+            _ => fresh.insert(ViewClusterBindings::new(mesh_pipeline.clustered_forward_buffer_binding_type)),
+        };
         view_clusters_bindings.clear();
 
         for record in &extracted_clusters.data {
@@ -567,7 +579,9 @@ pub fn prepare_clusters_for_cpu_clustering(
 
         view_clusters_bindings.write_buffers(render_device, &render_queue);
 
-        commands.entity(entity).insert(view_clusters_bindings);
+        if let Some(fresh) = fresh {
+            commands.entity(entity).insert(fresh);
+        }
     }
 }
 

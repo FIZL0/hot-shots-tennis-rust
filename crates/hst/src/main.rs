@@ -418,7 +418,7 @@ fn start(argv: Vec<String>) {
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
     #[cfg(target_arch = "wasm32")]
-    app.add_systems(Last, (web::shown, web::frame_rate));
+    app.add_systems(Last, (web::shown, web::frame_rate, web::memory_log));
     if bg {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
