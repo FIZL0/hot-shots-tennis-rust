@@ -615,4 +615,20 @@ mod tests {
         assert!(near(seat(&d, false), [7.5, -1.728, -0.1]), "the kind's own first");
         assert_eq!(seat(&doc("chair"), true), None);
     }
+
+    /// B476: every court mod under `$HST_MODS` (the mods repo's `out/mods`) has a seat for both match kinds, up on a
+    /// stand beside the doubles sideline: one without falls back to the layout court's chair and floats beside its
+    /// own stand (Dubno Tower's umpire by the net post).
+    #[test]
+    fn every_court_mod_seats_the_umpire() {
+        let Ok(root) = std::env::var("HST_MODS") else { return eprintln!("no HST_MODS, skipped") };
+        let courts = crate::mods_court::list(std::path::Path::new(&root));
+        for c in &courts {
+            for singles in [true, false] {
+                let s = umpire_seat(c, singles).unwrap_or_else(|| panic!("{}: no umpire_seat", c.id));
+                assert!((-2.0..-1.5).contains(&s[1]) && s[0].abs() > 5.485, "{} (singles {singles}): seat {s:?}", c.id);
+            }
+        }
+        eprintln!("{} court mods seat the umpire", courts.len());
+    }
 }
