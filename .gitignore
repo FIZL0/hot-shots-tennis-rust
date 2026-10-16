@@ -27,6 +27,8 @@ research/tools/wasmtime-*/
 /web/pkg-webgpu/
 /web/version.txt
 /web/shots/
+/web/apple-touch-icon.png
+/web/apple-touch-icon-precomposed.png
 # M17 store listing cache and the player's Hugging Face token (written beside the game)
 mods-store.json
 hf-token.txt
