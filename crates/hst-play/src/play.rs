@@ -4212,6 +4212,7 @@ fn start_effects(
         dead,
         g.flight.ball.pos,
         g.flight.ball.vel,
+        g.prev_ball,
         &mut commands,
     );
     let f = &g.flight;

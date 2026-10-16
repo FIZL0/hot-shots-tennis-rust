@@ -596,9 +596,10 @@ pub struct BallFlight {
     #[serde(skip)]
     ribbon: Handle<Mesh>,
     disc: Entity,
-    /// The ball at the last frame.
+    /// The ball at the last frame, and where the ball's own draw interpolates it from (B504).
     pos: Vec3,
     vel: Vec3,
+    prev: Vec3,
     /// The glow textures for top … drop: the game's list has `impactef_slice` (the ✕) first and `impactef_top`
     /// (the ○) second, so topspin shows the ✕ and slice the ○, the buttons pressed.
     #[serde(skip)]
@@ -614,7 +615,7 @@ pub fn load_flight(iso: &mut Iso, commands: &mut Commands, parent: Entity, meshe
     }
     let disc = commands.spawn((Mesh3d(meshes.add(Rectangle::new(2.0 * GLOW_SIZE, 2.0 * GLOW_SIZE))), MeshMaterial3d(looks[0].clone()), Transform::default(), Visibility::Hidden)).id();
     commands.entity(parent).add_children(&[view, disc]);
-    Ok(BallFlight { flight: Flight::default(), glow: Glow::default(), ribbon, disc, pos: Vec3::ZERO, vel: Vec3::ZERO, looks: looks.try_into().unwrap() })
+    Ok(BallFlight { flight: Flight::default(), glow: Glow::default(), ribbon, disc, pos: Vec3::ZERO, vel: Vec3::ZERO, prev: Vec3::ZERO, looks: looks.try_into().unwrap() })
 }
 
 /// The glow's half-size and turn over its life.
@@ -627,8 +628,9 @@ impl BallFlight {
         self.flight.live
     }
 
-    /// One game frame: a hit restarts the ribbon (and, bar a smash, the glow); a dead ball ends both.
-    pub fn frame(&mut self, hit: Option<Hit>, dead: bool, pos: [f32; 3], vel: [f32; 3], commands: &mut Commands) {
+    /// One game frame: a hit restarts the ribbon (and, bar a smash, the glow); a dead ball ends both. `prev` is
+    /// where the drawn ball comes from this frame (the match's `prev_ball`).
+    pub fn frame(&mut self, hit: Option<Hit>, dead: bool, pos: [f32; 3], vel: [f32; 3], prev: [f32; 3], commands: &mut Commands) {
         if let Some(h) = hit {
             self.flight.start(h.kind, h.smash);
             if !h.smash {
@@ -641,24 +643,39 @@ impl BallFlight {
             self.glow.life = 0;
         }
         self.flight.tick([pos[0], pos[1], pos[2], 1.0], [vel[0], vel[1], vel[2], 0.0]);
-        (self.pos, self.vel) = (Vec3::from(pos), Vec3::from(vel));
+        (self.pos, self.vel, self.prev) = (Vec3::from(pos), Vec3::from(vel), Vec3::from(prev));
         self.glow.tick();
     }
 }
 
+/// The kept samples newest first, the newest moved to where the ball is drawn (`ball`). The game draws one picture
+/// per frame, with the ribbon's head on the ball (its newest sample is the ball's position, B504); the app draws the
+/// ball between the last two frames' positions, so a head left on this frame's position ran up to a frame's flight
+/// (0.6–0.9 m on a serve) ahead of the ball. The ball lies on the newest kept segment (the last frame's position is
+/// the second newest sample or within the collinear test of it), so the ribbon keeps to the ball's path.
+fn ribbon_points(f: &Flight, ball: Vec3) -> Vec<Vec3> {
+    let mut p: Vec<Vec3> = (0..f.count).map(|k| Vec3::from_slice(&f.points[(f.head + 2 * FLIGHT_POINTS - 1 - k) % FLIGHT_POINTS][..3])).collect();
+    if let Some(head) = p.first_mut() {
+        *head = ball;
+    }
+    p
+}
+
 /// The ribbon from the ball back along its samples, facing the camera, `speed`·20 long, fading to its end; the glow
-/// a disc at the ball facing the flight, spinning a quarter turn about it and fading over its last 15 frames.
+/// a disc at the ball facing the flight, spinning a quarter turn about it and fading over its last 15 frames. Both
+/// at the ball as drawn (`draw` interpolates it between frames by the fixed clock's overstep).
 // ponytail: the game's flag switch on the glow by flight facing (towards/away from the camera) and its halved ribbon
 // length under one of its mode counts are left out
-pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), With<crate::Orbit>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<Fx>), Without<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<Fx>>) {
+pub fn draw_flight(fx: Res<BallFlight>, time: Res<Time<Fixed>>, cam: Query<(&Transform, &Projection), With<crate::Orbit>>, mut disc: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<Fx>), Without<crate::Orbit>>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<Fx>>) {
     let Ok((cam, proj)) = cam.single() else { return };
     let fov = if let Projection::Perspective(p) = proj { p.fov } else { 0.8 };
     // world → game space: (x, −y, −z)
     let eye = Vec3::new(cam.translation.x, -cam.translation.y, -cam.translation.z);
+    let ball = fx.prev.lerp(fx.pos, time.overstep_fraction());
     if let Ok((mut t, mut v, look)) = disc.get_mut(fx.disc) {
         *v = if fx.glow.life > 0 { Visibility::Visible } else { Visibility::Hidden };
         let turn = GLOW_TURN * fx.glow.life as f32 / GLOW_FRAMES as f32;
-        *t = Transform::from_translation(fx.pos).with_rotation(glow_turn(fx.vel, turn));
+        *t = Transform::from_translation(ball).with_rotation(glow_turn(fx.vel, turn));
         // (written only when it changes: a written material is prepared and uploaded again, B328)
         let colour = Color::srgba(1.0, 1.0, 1.0, (fx.glow.life as f32 / 15.0).min(1.0));
         if materials.get(&look.0).is_some_and(|m| m.base.base_color != colour)
@@ -670,7 +687,7 @@ pub fn draw_flight(fx: Res<BallFlight>, cam: Query<(&Transform, &Projection), Wi
     let f = &fx.flight;
     let (mut pos, mut uv, mut colour, mut index) = (vec![], vec![], vec![], vec![]);
     if f.live && f.count >= 2 {
-        let p: Vec<Vec3> = (0..f.count).map(|k| Vec3::from_slice(&f.points[(f.head + 2 * FLIGHT_POINTS - 1 - k) % FLIGHT_POINTS][..3])).collect();
+        let p = ribbon_points(f, ball);
         let c = f.colour.to_be_bytes().map(|b| b as f32 / 128.0);
         let (len, tan) = (f.speed * 20.0, (fov / 2.0).tan());
         let mut run = 0.0;
@@ -989,5 +1006,26 @@ mod tests {
         world.run_system_once(morph_on_cpu).unwrap();
         let pos = world.resource::<Assets<Mesh>>().get(&h).unwrap().attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().to_vec();
         assert_eq!(pos, vec![[0.5, 0.0, 0.0], [1.0, 0.5, 0.0], [0.0, 1.0, 1.0]]);
+    }
+
+    /// B504: a curving serve's samples (Lola's slice serve, as the original keeps them); the drawn ball halfway
+    /// between two frames heads the ribbon, which then runs back along the kept samples.
+    #[test]
+    fn ribbon_starts_at_the_drawn_ball() {
+        let mut f = Flight::default();
+        f.start(1, false);
+        let path = [[2.95, -2.70, -11.93], [2.62, -2.66, -11.38], [2.31, -2.62, -10.84], [2.01, -2.58, -10.31], [1.71, -2.54, -9.79]];
+        for (i, p) in path.iter().enumerate() {
+            let v = if i > 0 { std::array::from_fn(|k| p[k] - path[i - 1][k]) } else { [0.0; 3] };
+            f.tick([p[0], p[1], p[2], 1.0], [v[0], v[1], v[2], 0.0]);
+        }
+        let (prev, now) = (Vec3::from(path[3]), Vec3::from(path[4]));
+        let ball = prev.lerp(now, 0.5);
+        let p = ribbon_points(&f, ball);
+        assert_eq!(p[0], ball);
+        assert_eq!(p.len(), f.count);
+        // the rest are the samples the game keeps, older than the last frame's ball
+        assert!(p[1..].iter().all(|q| path.iter().any(|s| Vec3::from(*s) == *q)));
+        assert!(p[1].distance(now) >= prev.distance(now) - 1e-6);
     }
 }
