@@ -522,7 +522,7 @@ fn legend(menu: Res<Menu>, settings: Res<PauseSettings>, last: Res<super::main_m
     out.one(*last, v);
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>, court_mod: Option<Res<crate::mods_court::MatchCourt>>) {
+fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>, court_mod: Option<Res<crate::mods_court::MatchCourt>>, umpire_mod: Option<Res<crate::mods_umpire::MatchUmpire>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let data = iso.read("AZUMA/INPANE/INPANE.XB0").expect("INPANE archive on disc");
     let arc = Archive::parse(&data).expect("xb archive");
@@ -541,10 +541,14 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
         art.push(super::main_menu::pause::label(&mut iso, &mut images, s));
     }
     art.push(super::menu_art::pill_layers(&mut images));
-    let (mut court, umpire) = super::main_menu::pause::venue(&mut iso, args.stage.map_or(args.court, |s| s as usize), args.umpire);
+    let (mut court, mut umpire) = super::main_menu::pause::venue(&mut iso, args.stage.map_or(args.court, |s| s as usize), args.umpire);
     // B401: a court mod by its own name
     if let Some(c) = &court_mod {
         court = c.0.name.clone();
+    }
+    // B430: an umpire mod by its own name, never the disc umpire it stands in for
+    if let Some(u) = &umpire_mod {
+        umpire = super::main_menu::pause::umpire_caption(&u.0.name);
     }
     art.push(super::main_menu::pause::label(&mut iso, &mut images, &court));
     art.push(super::main_menu::pause::label(&mut iso, &mut images, &umpire));

@@ -88,8 +88,14 @@ pub(in crate::play) fn venue(iso: &mut Iso, court: usize, umpire: u8) -> (String
     let msg = super::messages(&sheet(iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let at = |i: usize| msg.get(i).map_or("", String::as_str).trim();
     let court = if (1..=11).contains(&court) { format!("{} {}", at(276 + 2 * (court - 1)), at(277 + 2 * (court - 1))).trim().to_string() } else { String::new() };
-    let name = at(669 + 2 * umpire as usize).trim_start_matches("Umpire ");
-    (court, if name.is_empty() { String::new() } else { format!("Umpire {name}") })
+    (court, umpire_caption(at(669 + 2 * umpire as usize)))
+}
+
+/// "Umpire <name>" for the venue caption, from a disc name ("Umpire Anna") or a mod's own (B430: "Gloria", or one
+/// that already says "Umpire 00"); nothing for no name.
+pub(in crate::play) fn umpire_caption(name: &str) -> String {
+    let name = name.trim().trim_start_matches("Umpire ").trim();
+    if name.is_empty() { String::new() } else { format!("Umpire {name}") }
 }
 
 
@@ -428,6 +434,14 @@ mod tests {
     use super::*;
     use super::super::{Press, controls};
 
+    /// B430: the venue caption names an umpire mod by its own name (with or without "Umpire " in it), like a disc one.
+    #[test]
+    fn umpire_caption_names_a_mod_by_its_own_name() {
+        assert_eq!(umpire_caption("Umpire Anna"), "Umpire Anna");
+        assert_eq!(umpire_caption("Gloria"), "Umpire Gloria");
+        assert_eq!(umpire_caption("Umpire 00"), "Umpire 00");
+        assert_eq!(umpire_caption("  "), "");
+    }
 
     /// B254: doubles, 1P on the keyboard, 3P on pad a, 2P and 4P the computer's. 1P's → passes the computer's seat
     /// (its device to 3P, pad a now 1P), △ adds no computer player, the keyboard takes itself off, a new pad b's ✕
