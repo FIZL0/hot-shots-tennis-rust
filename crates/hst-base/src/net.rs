@@ -1622,7 +1622,16 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         if ctx_.is_closed() {
                             return;
                         }
-                        let _ = ev.send(Event::Status("Waiting for a relay to put the code online (no internet?)...".into()));
+                        // B515: why (iOS Safari reaches the relays, yet its host waited here for good): none picked
+                        // yet (the latency probes didn't finish) or the picked one's last error
+                        let st = iroh::Watcher::get(&mut ep.home_relay_status());
+                        bevy::log::warn!("no home relay yet: {st:?}");
+                        let why = match st.iter().find_map(|r| r.last_error()) {
+                            Some(e) => format!("relay error: {e}"),
+                            None if st.is_empty() => "no relay picked yet".into(),
+                            None => "relay not connected yet".into(),
+                        };
+                        let _ = ev.send(Event::Status(format!("Waiting for a relay to put the code online (no internet?): {why}...")));
                     }
                 }
                 // B114: relays off, right after bind the address can still be empty; a bare ID in the code fails
