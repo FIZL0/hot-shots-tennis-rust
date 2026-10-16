@@ -287,9 +287,10 @@ impl View {
     }
 
     /// B255: Browse narrowed to `author`'s mods from the store's list (None: the whole list again, on row `sel`).
+    /// B532: of every kind (the tiles keep the chosen one's), so each kind tab counts that author's.
     fn narrow(&mut self, author: Option<String>, from: usize) {
         self.by = author.map(|a| {
-            let list = self.store.iter().flatten().filter(|e| e.meta.author == a && e.meta.kind == self.kind).cloned().collect();
+            let list = self.store.iter().flatten().filter(|e| e.meta.author == a).cloned().collect();
             By { author: a, list, from }
         });
     }
@@ -597,7 +598,10 @@ impl Menu {
         }
         self.add.kind = k;
         self.add.child = None;
-        self.add.by = None;
+        // B532: one author's list stays theirs in another kind (back goes to the top of that kind's whole list)
+        if let Some(b) = &mut self.add.by {
+            b.from = 0;
+        }
         self.add.top = 0;
         // B383: the search box (not typing into it) after every switch; another kind's games are another list
         self.sel = 0;
@@ -2942,11 +2946,27 @@ mod tests {
             m.point(super::super::Dev::Keys, super::super::pointer::Act::Kind(0), true);
             assert_eq!(m.add.kind, Kind::Character);
         }
-        // Download all by an uploader leaves the other kinds out
+        // B532: More by an uploader shows the chosen kind's tiles, but every kind tab keeps counting the uploader's
+        // (not 0), and a switch of kind stays on their list; Download all by them leaves the other kinds out
         m.add.page = Page::Browse;
         m.add.kind = Kind::Character;
-        m.add.narrow(Some("ann".into()), 0);
-        assert_eq!(m.add.entries().iter().map(|e| e.meta.id.as_str()).collect::<Vec<_>>(), ["c1", "c2"]);
+        let all = m.add.kind_counts();
+        m.add.store.as_mut().unwrap().push(Entry { meta: Meta { id: "bob".into(), author: "bob".into(), kind: Kind::Court, ..Default::default() }, rev: "main".into(), verified: true });
+        m.add.narrow(Some("ann".into()), 3);
+        assert_eq!(ids(&m), ["c1", "c2"]);
+        assert_eq!(m.add.kind_counts(), all);
+        assert!(all.iter().filter(|&&n| n > 0).count() > 1, "{all:?}");
+        m.mods_kind(Kind::Court, &mut out);
+        assert_eq!(ids(&m), ["court"], "bob's court left out");
+        assert_eq!(m.add.by.as_ref().map(|b| (b.author.as_str(), b.from)), Some(("ann", 0)));
+        m.mods_kind(Kind::Character, &mut out);
+        // (something under way: Download all only queues)
+        (m.settings.8, m.add.doing) = (1, vec![m.add.store.as_ref().unwrap()[6].clone()]);
+        m.sel = word(&m, "Download all");
+        m.mods_step(ok(), &mut out);
+        assert_eq!(m.add.queue.iter().map(|e| e.meta.id.as_str()).collect::<Vec<_>>(), ["c1", "c2"]);
+        m.add.doing.clear();
+        m.add.queue.clear();
         let acts = super::super::legend::acts(&m, super::super::Dev::Keys);
         assert!(acts.iter().any(|(a, l)| *a == super::super::legend::Act::Kind && l == "Kind"));
         // ○ from Texture packs leaves for the main menu
