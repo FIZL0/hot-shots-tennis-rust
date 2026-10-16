@@ -29,7 +29,7 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::input::gamepad::{GamepadConnection, GamepadConnectionEvent, GamepadInput};
 use bevy::prelude::*;
@@ -47,15 +47,6 @@ pub static BUZZ: AtomicBool = AtomicBool::new(true);
 pub fn on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| cfg!(any(target_os = "ios", target_os = "android")) || std::env::var_os("HST_TOUCH").is_some_and(|v| v != "0"))
-}
-
-/// B419: the pad's top row's share of the window's height, f32 bits: from the top down to its buttons' foot and the
-/// same margin again (`Layout::top`); zero while the pad isn't shown. The main menu keeps below it (`widescreen`).
-static TOP_ROW: AtomicU32 = AtomicU32::new(0);
-
-/// `TOP_ROW`: the share of the window's height the pad's top row takes while it shows, else 0.
-pub fn top_row() -> f32 {
-    f32::from_bits(TOP_ROW.load(Ordering::Relaxed))
 }
 
 /// The buttons, in `KEYS` order: ✕ ○ □ △ (face) then L1 R1 Select Start (small).
@@ -110,12 +101,6 @@ impl Layout {
             corner: Vec2::new(l + u * 0.4 + u * 1.3, size.y - b - u * 0.4 - u * 1.3),
             chat: Rect::from_corners(Vec2::new(size.x / 2.0 - u * 3.2, t + u * 0.3), Vec2::new(size.x / 2.0 - u * 2.3, t + u * 1.0)),
         }
-    }
-
-    /// The top row's foot (L1, Select, Start, R1 and the chat bubble) plus the margin they keep above them: what the
-    /// main menu stays below (B419).
-    fn top(&self) -> f32 {
-        self.keys[FACE].max.y + self.u * 0.3
     }
 
     /// The stick base's radius: full tilt there.
@@ -306,7 +291,6 @@ fn drive(
         pad.fingers.reset();
     }
     if !shown {
-        TOP_ROW.store(0, Ordering::Relaxed);
         if pad.connected {
             // B247: gone before this frame's slots and seats see it beside the real pad
             commands.entity(entity).remove::<Gamepad>();
@@ -328,7 +312,6 @@ fn drive(
         }
     }
     let l = Layout::new(Vec2::new(win.width(), win.height()), pad.safe);
-    TOP_ROW.store((l.top() / win.height().max(1.0)).to_bits(), Ordering::Relaxed);
     let frame = pad.frame;
     let f = &mut pad.fingers;
     let mut buzz = false;
@@ -620,17 +603,6 @@ mod tests {
         // the shoulders sit above the stick's zone; the menus' stick circle inside the window
         assert!(l.keys[4].max.y < l.zone.min.y);
         assert!(l.corner.x - l.reach() >= 59.0 && l.corner.y + l.reach() <= SIZE.y - 21.0);
-    }
-
-    #[test]
-    fn the_menus_gap_clears_the_top_row() {
-        // B419: below every top-row button and the chat bubble (touch margins too), above the face buttons and stick
-        for (size, safe) in [(SIZE, [59.0, 0.0, 59.0, 21.0]), (Vec2::new(1280.0, 800.0), [0.0; 4]), (Vec2::new(393.0, 852.0), [0.0, 59.0, 0.0, 34.0])] {
-            let l = Layout::new(size, safe);
-            let top = l.top();
-            assert!(l.keys[FACE..].iter().chain([&l.chat]).all(|k| k.inflate(l.u * 0.2).max.y <= top + 1e-3), "{size}");
-            assert!(l.keys[..FACE].iter().all(|k| k.min.y > top) && l.corner.y - l.reach() > top, "{size}");
-        }
     }
 
     #[test]
