@@ -207,8 +207,9 @@ impl Loader {
             Who::Disc(c) => Some(self.dir.join(format!("d{c:02}-{k}.png"))),
             Who::Mod(i) => {
                 let m = menu.mods.get(i).or_else(|| self.extra.get(i.checked_sub(menu.mods.len())?))?;
-                // B259: a mod installed since the start (the Mods page's) can be updated again: never kept
-                let stamp = if i < menu.mods.len() { self.stamps.entry(i).or_insert_with(|| stamp(m)).clone() } else { stamp(m) };
+                // B259: a mod installed since the start (the Mods page's) can be updated again: never kept; B484: nor a
+                // lobby's borrowed one (after the roster), whose index changes with the lobby's line-up
+                let stamp = if i < menu.own_mods() { self.stamps.entry(i).or_insert_with(|| stamp(m)).clone() } else { stamp(m) };
                 Some(mod_png(&self.dir, m, k, &stamp))
             }
         }
@@ -791,7 +792,16 @@ fn bake(
     .into_iter()
     .map(|w| (w, 0))
     .collect();
-    if menu.screen != Screen::Chars && asked.is_none() && home.is_empty() && baker.job.is_none() && baker.warmed {
+    // B484: in the lobby and on the confirm, the other side's mods whose looks came here: their picked costume's
+    // drawing (its face close-up is the match HUD's), drawn before the match needs it
+    let lent: Vec<Key> = match menu.screen {
+        Screen::Lobby | Screen::Confirm if menu.online() => {
+            let own = menu.own_mods();
+            (0..menu.players()).map(|p| menu.pick(p)).filter(|&(w, _)| matches!(w, Who::Mod(i) if i >= own)).collect()
+        }
+        _ => Vec::new(),
+    };
+    if menu.screen != Screen::Chars && asked.is_none() && home.is_empty() && lent.is_empty() && baker.job.is_none() && baker.warmed {
         return;
     }
     // a hovered card without a PNG jumps the queue
@@ -799,6 +809,7 @@ fn bake(
         Screen::Chars => (0..menu.players()).map(|p| menu.pick(p)).collect(),
         Screen::Main => home.iter().rev().copied().collect(),
         Screen::Mods => home.iter().rev().copied().chain(asked).collect(),
+        Screen::Lobby | Screen::Confirm => lent.clone(),
         _ => asked.into_iter().collect(),
     };
     for k in &now {
@@ -888,7 +899,7 @@ fn bake(
     }
     // the next key without a PNG
     while let Some(&key) = baker.queue.last() {
-        if menu.screen != Screen::Chars && Some(key) != asked && !home.contains(&key) && baker.warmed {
+        if menu.screen != Screen::Chars && Some(key) != asked && !home.contains(&key) && !lent.contains(&key) && baker.warmed {
             return;
         }
         let path = loader.path(key, &menu);

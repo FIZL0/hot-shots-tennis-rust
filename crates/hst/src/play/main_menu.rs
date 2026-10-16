@@ -1085,6 +1085,10 @@ impl Menu {
         if self.screen == Screen::Main && self.ask_step(k, &mut out) {
             return out;
         }
+        // B484: the other side's mod asked about over the select / the confirm (drawn over everything)
+        if self.mod_ask_step(k, &mut out) {
+            return out;
+        }
         if self.switch_step(k, &mut out) {
             return out;
         }
@@ -2517,6 +2521,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
         Screen::Mods => mods_screen::layout(&mut d, m, hand_x),
     }
+    online::draw_ask_over(&mut d, m);
     // B221: the screens with no Back row show the title tab's Back (B449: the confirm screen has its own)
     if matches!(m.screen, Screen::Mode | Screen::Assign | Screen::Chars) && m.picking.is_none() {
         d.anchor = Anchor::Span;
