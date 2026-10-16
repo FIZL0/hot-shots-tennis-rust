@@ -215,6 +215,8 @@ pub fn plugin<Match: Resource>(app: &mut App) {
         .add_systems(Last, auto_tune.run_if(resource_exists::<Match>))
         .add_systems(PreStartup, cpu_clusters)
         .add_systems(PostUpdate, unclustered.before(bevy::light::SimulationLightSystems::AssignLightsToClusters));
+    // P55: the pipelines a match asks for recorded, and compiled ahead of the next run's match
+    app.add_plugins(crate::pipelines::plugin::<Match>);
     // Show FPS → Detailed: where the frame's time goes (`frame_start`)
     use bevy::app::RunFixedMainLoopSystems as F;
     app.init_resource::<Split>()

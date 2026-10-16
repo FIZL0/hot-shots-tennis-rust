@@ -109,7 +109,8 @@ there. It never names `hst`: hooks the top fills in go through statics/generics 
   characters, rig, animate · `net.rs`/`net/` iroh transport, lobbies, codes · `audio.rs` · `graphics.rs` settings,
   auto-tune · `gs.rs` `shade.rs` `shadow.rs` `textures.rs` `lod.rs` `cull.rs` rendering · `widescreen.rs` HUD
   pinning (B17) · `seats.rs` pads → seats · `ui_pool.rs` overlay quad pools only while shown (P39) · `ui_census.rs`
-  `HST_UI_CENSUS=1` UI node counts/changes per root · `web.rs` `ios.rs` `android.rs` platform glue
+  `HST_UI_CENSUS=1` UI node counts/changes per root · `pipelines.rs` render pipelines recorded to `pipelines.json`,
+  pre-warmed from the menu (P55; the dedup is in third_party/bevy_render's `pipeline_cache.rs`) · `web.rs` `ios.rs` `android.rs` platform glue
 - test helpers `hst`'s tests use are `#[cfg(any(test, feature = "testing"))]` (hst's dev-dependency turns `testing` on)
 
 `crates/hst-play/src/` — the match (P61: its own crate under the menus, so a menu edit rebuilds only `hst` and a

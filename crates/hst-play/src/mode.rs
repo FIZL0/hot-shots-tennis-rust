@@ -190,7 +190,8 @@ pub fn plugin(app: &mut App) {
                 // render pipelines only: on WebGL2 (no compute) Bevy's sparse buffer update compute pipeline stays
                 // queued for good, which held every loading screen to its cap (B101)
                 let render = |id| matches!(cache.pipelines().nth(id).map(|p| &p.descriptor), Some(bevy::render::render_resource::PipelineDescriptor::RenderPipelineDescriptor(_)));
-                c.0.store(cache.waiting_pipelines().filter(|&id| render(id)).count(), Ordering::Relaxed)
+                // P55: and asked for by the game, not only pre-warmed (`warm_up`)
+                c.0.store(cache.waiting_pipelines().filter(|&id| render(id) && cache.requested(id)).count(), Ordering::Relaxed)
             })
                 .in_set(bevy::render::RenderSystems::Cleanup),
         );
@@ -202,6 +203,7 @@ pub fn plugin(app: &mut App) {
         .insert_resource(settle)
         .add_systems(First, (crate::jobs::run, crate::play::menu_art::land, switch, |w: &mut World| run(w, First), loaded).chain())
         .add_systems(Update, zoom)
+        .add_systems(Last, warm_up)
         .add_systems(First, unwarm.before(switch))
         .add_systems(PostUpdate, warm.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(PreUpdate, hush.after(bevy::input::InputSystems))
@@ -609,6 +611,46 @@ fn warm(
             e.remove::<bevy::camera::visibility::RenderLayers>();
         }
         *v = Visibility::Visible;
+    }
+}
+
+/// P55: how long the controls sit untouched before the menu compiles a recorded pipeline, where that blocks the frame.
+const WARM_IDLE: f32 = 1.0;
+
+/// P55: the pipelines earlier runs' matches asked for (`pipelines.rs`) queued to compile while a mode other than the
+/// match runs (the menu) with no loading screen up: all at once where they compile off the render thread, else one a
+/// frame once nobody has touched the controls for [`WARM_IDLE`] (each one stalls its frame there: ~40–150 ms in a
+/// browser), so a match loaded from the menu finds them built.
+#[allow(clippy::too_many_arguments)]
+fn warm_up(
+    warm: Option<ResMut<crate::pipelines::Warmup>>,
+    server: Option<Res<AssetServer>>,
+    shaders: Option<ResMut<Assets<bevy::shader::Shader>>>,
+    running: Option<Res<Running>>,
+    game: Option<Res<crate::play::Game>>,
+    loading: Query<(), With<Loading>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    motion: Option<Res<bevy::input::mouse::AccumulatedMouseMotion>>,
+    touches: Option<Res<Touches>>,
+    pads: Query<&Gamepad>,
+    time: Res<Time<Real>>,
+    mut quiet: Local<f32>,
+) {
+    let (Some(mut warm), Some(server), Some(mut shaders)) = (warm, server, shaders) else { return };
+    let busy = keys.is_some_and(|k| k.get_pressed().next().is_some() || k.get_just_released().next().is_some())
+        || mouse.is_some_and(|m| m.get_pressed().next().is_some() || m.get_just_released().next().is_some())
+        || motion.is_some_and(|m| m.delta != Vec2::ZERO)
+        || touches.is_some_and(|t| t.iter().next().is_some() || t.iter_just_released().next().is_some())
+        || pads.iter().any(|p| p.get_pressed().next().is_some() || p.left_stick().length() > 0.2 || p.right_stick().length() > 0.2);
+    *quiet = if busy { 0.0 } else { *quiet + time.delta_secs() };
+    if warm.pending() == 0 || running.is_none_or(|r| r.leaving) || game.is_some() || !loading.is_empty() {
+        return;
+    }
+    if !crate::pipelines::IN_PLACE {
+        warm.feed(&server, &mut shaders, usize::MAX);
+    } else if *quiet >= WARM_IDLE {
+        warm.feed(&server, &mut shaders, 1);
     }
 }
 

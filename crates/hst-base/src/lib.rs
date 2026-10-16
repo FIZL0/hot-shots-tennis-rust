@@ -31,6 +31,7 @@ pub mod hud_gamma;
 pub mod inspect;
 pub mod lod;
 pub mod noise;
+pub mod pipelines;
 pub mod jobs;
 pub mod seats;
 pub mod shade;

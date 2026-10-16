@@ -20,6 +20,8 @@ serde_json = "1"
 # `SystemTime` that also works in the browser (std's panics on wasm32-unknown-unknown)
 web-time = "1"
 serde = { version = "1", features = ["derive"] }
+# P55: the recorded render pipelines' wgpu states as JSON (`pipelines.rs`; the version bevy already builds)
+wgpu-types = { version = "29", features = ["serde"] }
 # the select cards' PNG encode (`play/main_menu/previews.rs`; bevy's own image crate)
 image = { version = "0.25", default-features = false, features = ["png"] }
 # join codes as QR (`play/main_menu/online.rs`)

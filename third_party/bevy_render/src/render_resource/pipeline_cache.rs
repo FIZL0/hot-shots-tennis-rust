@@ -218,6 +218,32 @@ pub struct PipelineCache {
     /// a queue pass stops starting new ones once this much time went by; the rest stay queued for the next frame. At
     /// least one is started each pass. `None`: Bevy's own behaviour, the whole queue at once.
     compile_budget: Option<core::time::Duration>,
+    /// opentennis P55: render pipelines by a hash of their descriptor, so queueing one equal to a pipeline already in
+    /// the cache returns that one's id instead of compiling it again; and those queued only by
+    /// [`Self::prewarm_render_pipeline`] that nothing has asked for since.
+    dedup: Mutex<Dedup>,
+}
+
+/// opentennis P55: see [`PipelineCache::dedup`].
+#[derive(Default)]
+struct Dedup {
+    by_hash: HashMap<u64, Vec<usize>>,
+    unrequested: HashSet<usize>,
+}
+
+/// opentennis P55: the hash [`PipelineCache::dedup`] files a render pipeline under (the fields that tell most apart).
+fn descriptor_hash(d: &RenderPipelineDescriptor) -> u64 {
+    use core::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    d.label.hash(&mut h);
+    d.vertex.shader.id().hash(&mut h);
+    d.vertex.shader_defs.hash(&mut h);
+    d.vertex.buffers.hash(&mut h);
+    if let Some(f) = &d.fragment {
+        f.shader.id().hash(&mut h);
+        f.shader_defs.hash(&mut h);
+    }
+    h.finish()
 }
 
 impl PipelineCache {
@@ -271,6 +297,7 @@ impl PipelineCache {
             synchronous_pipeline_compilation,
             needs_shader_reload: true,
             compile_budget: None,
+            dedup: default(),
         }
     }
 
@@ -417,16 +444,65 @@ impl PipelineCache {
         &self,
         descriptor: RenderPipelineDescriptor,
     ) -> CachedRenderPipelineId {
+        self.queue_render_pipeline_deduped(descriptor, true)
+    }
+
+    /// opentennis P55: queues a render pipeline nothing asked for yet, to have it compiled before it's needed (one
+    /// recorded in an earlier run). It doesn't count as [`Self::requested`] until [`Self::queue_render_pipeline`] is
+    /// called with an equal descriptor, which then gets this one's id.
+    pub fn prewarm_render_pipeline(
+        &self,
+        descriptor: RenderPipelineDescriptor,
+    ) -> CachedRenderPipelineId {
+        self.queue_render_pipeline_deduped(descriptor, false)
+    }
+
+    /// opentennis P55: whether a pipeline was asked for by [`Self::queue_render_pipeline`] (or a compute one), not
+    /// only pre-warmed.
+    pub fn requested(&self, id: CachedPipelineId) -> bool {
+        !self
+            .dedup
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unrequested
+            .contains(&id)
+    }
+
+    /// opentennis P55: an equal render pipeline already in the cache, or a new one.
+    fn queue_render_pipeline_deduped(
+        &self,
+        descriptor: RenderPipelineDescriptor,
+        requested: bool,
+    ) -> CachedRenderPipelineId {
         let mut new_pipelines = self
             .new_pipelines
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let id = CachedRenderPipelineId::new(self.pipelines.len() + new_pipelines.len());
+        let mut dedup = self.dedup.lock().unwrap_or_else(PoisonError::into_inner);
+        let hash = descriptor_hash(&descriptor);
+        let len = self.pipelines.len();
+        let same = dedup.by_hash.get(&hash).and_then(|ids| {
+            ids.iter().copied().find(|&id| {
+                let cached = if id < len { &self.pipelines[id] } else { &new_pipelines[id - len] };
+                matches!(&cached.descriptor, PipelineDescriptor::RenderPipelineDescriptor(d) if **d == descriptor)
+            })
+        });
+        if let Some(id) = same {
+            if requested {
+                dedup.unrequested.remove(&id);
+            }
+            return CachedRenderPipelineId::new(id);
+        }
+        let id = len + new_pipelines.len();
+        dedup.by_hash.entry(hash).or_default().push(id);
+        if !requested {
+            dedup.unrequested.insert(id);
+        }
         new_pipelines.push(CachedPipeline {
             descriptor: PipelineDescriptor::RenderPipelineDescriptor(Box::new(descriptor)),
             state: CachedPipelineState::Queued,
         });
-        id
+        CachedRenderPipelineId::new(id)
     }
 
     /// Insert a compute pipeline into the cache, and queue its creation.
