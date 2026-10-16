@@ -1733,6 +1733,8 @@ fn page(
                 });
                 shelf.shots.insert(id, img.map(|i| images.add(i)));
             }
+            // M116: the store busy, the last listing kept up
+            Event::Note(s) => menu.add.status = s,
         }
     }
     let on = menu.screen == Screen::Mods;
