@@ -39,14 +39,12 @@ fn decode(png: &[u8]) -> Option<Image> {
     Image::from_buffer(png, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), RenderAssetUsages::RENDER_WORLD).ok()
 }
 
-/// The court mods' values on the picker, after the disc eleven (none in a vanilla lobby; B450: online, only those
-/// every peer in the lobby has installed, `Room::courts`).
+/// The court mods' values on the picker, after the disc eleven (none in a vanilla lobby; online, a peer without the
+/// host's fetches it as a pick's looks, `online.rs`).
 pub(super) fn values(m: &Menu) -> impl Iterator<Item = usize> + '_ {
-    let room = m.net.room.as_ref().filter(|_| m.online());
-    let vanilla = room.is_some_and(|r| r.vanilla);
+    let vanilla = m.net.room.as_ref().filter(|_| m.online()).is_some_and(|r| r.vanilla);
     let n = if vanilla { 0 } else { m.court_mods.len() };
-    let shared = move |x: &Court| room.is_none_or(|r| r.names.keys().all(|p| r.courts.get(p).is_some_and(|c| c.contains(&x.id))));
-    (COURTS + 1..COURTS + 1 + n).filter(move |&c| m.court_mod_of(c).is_some_and(shared))
+    COURTS + 1..COURTS + 1 + n
 }
 
 impl Menu {
@@ -120,8 +118,8 @@ impl Menu {
         if hosting {
             return if self.court == COURTS { "Random".into() } else { self.court_lines(text, self.court)[0].clone() };
         }
-        match r.court_mod.as_ref().filter(|_| !r.vanilla).and_then(|(id, _)| self.court_mods.iter().find(|x| x.id == *id)) {
-            Some(x) => x.name.clone(),
+        match r.court_mod.as_ref().filter(|_| self.room_court_dir(r).is_some()) {
+            Some(c) => c.name.clone(),
             None if r.court < COURTS => text.msg(276 + 2 * r.court).to_string(),
             None => "Random".into(),
         }
@@ -129,8 +127,14 @@ impl Menu {
 
     /// A guest's court value for online room `r`: the room's mod when it's installed here, else its disc court.
     pub(super) fn room_court_value(&self, r: &crate::net::Room) -> usize {
-        let installed = r.court_mod.as_ref().filter(|_| !r.vanilla).and_then(|(id, _)| self.court_mods.iter().position(|x| x.id == *id));
+        let installed = r.court_mod.as_ref().filter(|_| !r.vanilla).and_then(|c| self.court_mods.iter().position(|x| x.id == c.id));
         installed.map_or(r.court, |i| COURTS + 1 + i)
+    }
+
+    /// Where this machine has online room `r`'s court mod: installed (by id), or fetched from the host (its looks).
+    pub(super) fn room_court_dir(&self, r: &crate::net::Room) -> Option<PathBuf> {
+        let c = r.court_mod.as_ref().filter(|_| !r.vanilla)?;
+        self.court_mods.iter().find(|x| x.id == c.id).map(|x| x.dir.clone()).or_else(|| self.net.looks.get(&c.looks).cloned().flatten())
     }
 
     /// A pick past the installed mods (one taken away since): Random.
@@ -239,7 +243,7 @@ mod tests {
         let mut fx = Vec::new();
         m.online_host(&mut fx);
         assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Venue(9, ..))))), "{fx:?}");
-        assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::CourtMod(Some(("gag_c03".into(), "Court 03".into())))))), "{fx:?}");
+        assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::CourtMod(Some(c)))) if c.id == "gag_c03" && c.name == "Court 03")), "{fx:?}");
         m.court = 3;
         let mut fx = Vec::new();
         m.online_host(&mut fx);
@@ -247,24 +251,15 @@ mod tests {
         m.net.room.as_mut().unwrap().vanilla = true;
         m.sel = 1;
         assert!(court_picker::rows(&m)[1].is_empty(), "a vanilla lobby: none");
-        // B432: Random draws only the mods every peer has: the guest has gag_c01, not gag_c03 (roll 12 wraps to 0)
-        let r = m.net.room.as_mut().unwrap();
-        r.vanilla = false;
-        r.names = [("host".to_string(), "H".to_string()), ("g".to_string(), "G".to_string())].into();
-        r.courts = [("host".to_string(), vec!["gag_c01".to_string(), "gag_c03".to_string()]), ("g".to_string(), vec!["gag_c01".to_string()])].into();
-        m.court = COURTS;
-        m.roll = COURTS as u64;
-        assert_eq!(m.court_pick(), COURTS + 1);
-        m.roll = COURTS as u64 + 1;
-        assert_eq!(m.court_pick(), 0);
-        m.net.room.as_mut().unwrap().vanilla = true;
-        // a guest: the room's mod by name if it's installed here, else its layout's disc name
+        // a guest: the room's mod by name if it's installed or fetched here, else its layout's disc name
         let t = Text { msg: (0..300).map(|i| format!("msg{i}")).collect(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
-        let mut r = Room { court: 9, court_mod: Some(("gag_c03".into(), "Court 03".into())), ..default() };
+        let mut r = Room { court: 9, court_mod: Some(crate::mods_online::CourtWire { id: "gag_c03".into(), name: "Court 03".into(), looks: 3, dir: None }), ..default() };
         assert_eq!(m.room_court_name(&t, &r, false), "Court 03");
-        r.court_mod = Some(("gag_c99".into(), "Court 99".into()));
+        r.court_mod = Some(crate::mods_online::CourtWire { id: "gag_c99".into(), name: "Court 99".into(), looks: 99, dir: None });
         assert_eq!(m.room_court_name(&t, &r, false), "msg294", "not installed: the layout");
-        r.court_mod = Some(("gag_c03".into(), "Court 03".into()));
+        m.net.looks.insert(99, Some("mods-online/0063".into()));
+        assert_eq!(m.room_court_name(&t, &r, false), "Court 99", "fetched from the host");
+        r.court_mod = Some(crate::mods_online::CourtWire { id: "gag_c03".into(), name: "Court 03".into(), looks: 3, dir: None });
         r.vanilla = true;
         assert_eq!(m.room_court_name(&t, &r, false), "msg294", "vanilla: the layout");
         m.court = COURTS + 1;
@@ -284,12 +279,12 @@ mod tests {
         assert_eq!(m.court_tile_lines(&t, COURTS + 1), ["Mt. Sakura".to_string(), "C.C. Courts".to_string()]);
         assert_eq!(m.court_tile_lines(&t, COURTS + 2), ["Hill".to_string(), String::new()]);
         assert_eq!(m.court_tile_lines(&t, 3), m.court_lines(&t, 3));
-        let mut r = crate::net::Room { court: 4, court_mod: Some(("c1".into(), "Hill".into())), ..default() };
+        let mut r = crate::net::Room { court: 4, court_mod: Some(crate::mods_online::CourtWire { id: "c1".into(), name: "Hill".into(), looks: 1, dir: None }), ..default() };
         assert_eq!(m.room_court_value(&r), COURTS + 2);
         r.vanilla = true;
         assert_eq!(m.room_court_value(&r), 4, "vanilla: the layout");
         r.vanilla = false;
-        r.court_mod = Some(("c9".into(), "X".into()));
+        r.court_mod = Some(crate::mods_online::CourtWire { id: "c9".into(), name: "X".into(), looks: 9, dir: None });
         assert_eq!(m.room_court_value(&r), 4, "not installed: the layout");
     }
 

@@ -221,11 +221,11 @@ pub struct Room {
     /// vanilla lobby (`netplay::flags`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub umpire_mod: Option<(String, String)>,
-    /// M8f8: the host's court mod (id, name); `court` is its layout court, the one the match plays on every peer
-    /// (collision, judging, the chair). A peer with the mod installed draws and hears it (`--court-mod-id`), one
-    /// without plays the plain disc court. None in a vanilla lobby (`netplay::flags`).
+    /// M8f8: the host's court mod; `court` is its layout court, the one the match plays on every peer (collision,
+    /// judging, the chair). A peer with the mod installed draws and hears it (`--court-mod-id`), one without fetches
+    /// its looks from the host as a pick's (or plays the plain disc court). None in a vanilla lobby (`netplay::flags`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub court_mod: Option<(String, String)>,
+    pub court_mod: Option<crate::mods_online::CourtWire>,
     /// Set by the host at the start (M2g): the match's seed (the weather generator's, `main.rs`) and the input delay
     /// in ticks, from the slowest guest's measured round trip.
     #[serde(default)]
@@ -800,8 +800,8 @@ pub enum Cmd {
     Venue(usize, usize, i32, u8),
     /// M8f3: the host's umpire mod (id, name) alongside `Venue`'s umpire (its donor), or none.
     UmpireMod(Option<(String, String)>),
-    /// M8f8: the host's court mod (id, name) alongside `Venue`'s court (its layout), or none.
-    CourtMod(Option<(String, String)>),
+    /// M8f8: the host's court mod alongside `Venue`'s court (its layout), or none.
+    CourtMod(Option<crate::mods_online::CourtWire>),
     /// B201: this machine's players' places on the select; the host's computer player in a seat (`None` opens it);
     /// the host's singles (false) or doubles.
     Live(Vec<Live>),
@@ -1398,6 +1398,12 @@ type Packs = std::collections::HashMap<u64, std::sync::Arc<Vec<u8>>>;
 fn want(to: &str, h: u64, room: &Room, joined: &[(String, Link, Conn)], packs: &mut Packs, wants: &mut std::collections::HashMap<u64, Vec<String>>) -> Option<std::sync::Arc<Vec<u8>>> {
     if let Some(b) = packs.get(&h) {
         return Some(b.clone());
+    }
+    // the host's court mod
+    if let Some(d) = room.court_mod.as_ref().filter(|c| c.looks == h).and_then(|c| c.dir.as_deref()) {
+        let b = std::sync::Arc::new(crate::mods_online::pack(d).ok().filter(|b| crate::mods_online::hash(b) == h)?);
+        packs.insert(h, b.clone());
+        return Some(b);
     }
     let (seat, _) = room.mods().find(|(_, w)| w.looks == h)?;
     // B216: the host's computer players' mods are the host's own
@@ -3104,7 +3110,8 @@ mod tests {
             hcmd.send(Cmd::Bot(1, None)).unwrap();
             hcmd.send(Cmd::Venue(5, 1, 4, 2)).unwrap();
             // M8f8: the host's court mod rides along with its layout court
-            hcmd.send(Cmd::CourtMod(Some(("gag_c01_yamate".into(), "Yamate".into())))).unwrap();
+            let court = crate::mods_online::CourtWire { id: "gag_c01_yamate".into(), name: "Yamate".into(), looks: 5, dir: None };
+            hcmd.send(Cmd::CourtMod(Some(court.clone()))).unwrap();
             let Event::Room(seen) = next(&gev, |e| matches!(e, Event::Room(r) if r.court == 5 && r.court_mod.is_some())).await else { unreachable!() };
             assert_eq!(seen.seats[2].as_ref().map(|s| (s.human(), s.pick.char, s.pick.costume)), Some((false, 9, 4)));
             assert_eq!(seen.seats[1].as_ref().map(|s| s.peer.as_str()), Some(me.as_str()), "the guest's seat isn't the host's to clear");
@@ -3116,7 +3123,7 @@ mod tests {
             let Event::Start(r, _) = next(&gev, |e| matches!(e, Event::Start(..))).await else { unreachable!() };
             let seats: Vec<_> = r.seats.iter().flatten().map(|s| (s.pick.char, s.pick.costume)).collect();
             assert_eq!(seats[..3], [(0, 0), (6, 3), (9, 4)], "the match has the lobby's picks and the host's computer player");
-            assert_eq!((r.court, r.court_mod), (5, Some(("gag_c01_yamate".into(), "Yamate".into()))));
+            assert_eq!((r.court, r.court_mod), (5, Some(court)));
         });
     }
 
@@ -3527,8 +3534,8 @@ mod tests {
         });
     }
 
-    /// M2i on loopback: the host brings a mod; the guest sees its wire, asks for its looks and gets the folder's pack;
-    /// the match waits until both have said they're settled for this line-up.
+    /// M2i on loopback: the host brings a mod (and a court mod); the guest sees its wire, asks for its looks and gets
+    /// the folder's pack; the match waits until both have said they're settled for this line-up.
     #[test]
     fn mod_looks_peer_to_peer_and_the_ready_gate() {
         let dir = std::env::temp_dir().join(format!("hst-m2i-net-{}", std::process::id()));
@@ -3536,6 +3543,11 @@ mod tests {
         std::fs::write(dir.join("mod.json"), "{}").unwrap();
         let pack = crate::mods_online::pack(&dir).unwrap();
         let h = crate::mods_online::hash(&pack);
+        let court_dir = dir.with_extension("court");
+        std::fs::create_dir_all(&court_dir).unwrap();
+        std::fs::write(court_dir.join("mod.json"), r#"{"kind": "court"}"#).unwrap();
+        let court_pack = crate::mods_online::pack(&court_dir).unwrap();
+        let hc = crate::mods_online::hash(&court_pack);
         let wire = crate::mods_online::Wire {
             id: "x".into(), name: "X".into(), donor: 3, hand: 1.0, base: 3, overrides: vec![], ai_row: 3,
             names: vec!["a".into()], parent: vec![None], rest: vec![[0; 16]], looks: h, dir: Some(dir.clone()),
@@ -3553,6 +3565,7 @@ mod tests {
             let (gcmd, mut grx) = amp::unbounded_channel();
             let mut r = room(false);
             r.take("host", &[Pick { r#mod: Some(Box::new(wire.clone())), ..Pick::disc(3, 0) }]);
+            r.court_mod = Some(crate::mods_online::CourtWire { id: "c".into(), name: "C".into(), looks: hc, dir: Some(court_dir.clone()) });
             tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
             // the next event `want` matches (30 s at most: the DHT testnet is slow under parallel load)
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
@@ -3573,6 +3586,10 @@ mod tests {
             assert_eq!((w.looks, w.dir.is_none(), &w.names), (h, true, &wire.names));
             gcmd.send(Cmd::Want(h)).unwrap();
             assert_eq!(next(&gev, |e| matches!(e, Event::Pack(..))).await, Event::Pack(h, pack));
+            // the host's court mod, the same way
+            assert_eq!(seen.court_mod.as_ref().map(|c| (c.looks, c.dir.is_none())), Some((hc, true)));
+            gcmd.send(Cmd::Want(hc)).unwrap();
+            assert_eq!(next(&gev, |e| matches!(e, Event::Pack(..))).await, Event::Pack(hc, court_pack));
             // ready and started, but the mods aren't settled yet
             gcmd.send(Cmd::Prepared(true)).unwrap();
             hcmd.send(Cmd::Start).unwrap();
@@ -3585,6 +3602,7 @@ mod tests {
             assert_eq!(r.seats[0].as_ref().unwrap().pick.r#mod.as_ref().unwrap().looks, h);
         });
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&court_dir);
     }
 
     /// B281 on loopback: the guest hasn't chosen about the host's mod; Start shows them deciding with the wait

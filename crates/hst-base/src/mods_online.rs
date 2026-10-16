@@ -217,14 +217,44 @@ pub fn unpack(pack: &[u8], looks: u64, cache: &Path) -> Result<Mod, String> {
             }
             crate::modfs::write(&p, b.to_vec())?;
         }
-        let m = mods::read(&dir)?;
-        mods::check(&m)?;
-        Ok(m)
+        // any kind (a pick's character, the host's court), every file as hostile input
+        crate::modfs::check_all(&dir, &files.iter().map(|f| f.0.clone()).collect::<Vec<_>>())
     })();
     if got.is_err() {
         gone();
     }
     got
+}
+
+/// The host's court mod as a lobby carries it: a peer with the mod (by id) draws its own copy, one without may fetch
+/// the looks ([`pack`], hash `looks`) from the host as it would a pick's. `looks` is 0 until the host has hashed it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CourtWire {
+    pub id: String,
+    pub name: String,
+    pub looks: u64,
+    /// The host's folder (never sent).
+    #[serde(skip)]
+    pub dir: Option<PathBuf>,
+}
+
+impl CourtWire {
+    /// Court mod `c`; its looks once its files are in memory (the browser reads them in when asked: 0 until then).
+    pub fn of(c: &crate::mods_court::Court) -> CourtWire {
+        // ponytail: hashed once per folder per run (tens of MB); a mod reinstalled mid-run keeps its old hash
+        static SEEN: std::sync::Mutex<std::collections::BTreeMap<PathBuf, u64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+        let mut seen = SEEN.lock().unwrap();
+        let looks = match seen.get(&c.dir) {
+            Some(&h) => h,
+            None if crate::modfs::ready(&c.dir) => {
+                let h = pack(&c.dir).map_err(|e| warn!("court mod {}: {e}", c.id)).map_or(0, |b| hash(&b));
+                *seen.entry(c.dir.clone()).or_default() = h;
+                h
+            }
+            None => 0,
+        };
+        CourtWire { id: c.id.clone(), name: c.name.clone(), looks, dir: Some(c.dir.clone()) }
+    }
 }
 
 /// Where received mods and the choice live: `mods-online/` beside the disc (not under `mods/`, so they don't join

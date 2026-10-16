@@ -640,8 +640,8 @@ pub fn flags(room: &Room, me: &str, devices: &[Option<super::controls::Seat>], e
         a.extend(["--umpire-mod-id".into(), id.clone()]);
     }
     // M8f8: the host's court mod over the layout court (`--stage`/`--court` above), drawn by a peer that has it
-    if let Some((id, _)) = room.court_mod.as_ref().filter(|_| !room.vanilla) {
-        a.extend(["--court-mod-id".into(), id.clone()]);
+    if let Some(c) = room.court_mod.as_ref().filter(|_| !room.vanilla) {
+        a.extend(["--court-mod-id".into(), c.id.clone()]);
     }
     // B370: the select's hand toggles, by match slot
     if order.iter().any(|&s| pick(s).is_some_and(|p| p.swap)) {
@@ -767,7 +767,7 @@ mod tests {
     fn flags_carry_the_court_mod_id() {
         use crate::net::{Pick, Seat};
         let s = |peer: &str| Some(Seat { peer: peer.into(), pick: Pick::disc(0, 0) });
-        let mut room = Room { court: 4, court_mod: Some(("gag_c01_yamate".into(), "Yamate".into())), seats: vec![s("host"), s("g")], ..Default::default() };
+        let mut room = Room { court: 4, court_mod: Some(crate::mods_online::CourtWire { id: "gag_c01_yamate".into(), name: "Yamate".into(), looks: 1, dir: None }), seats: vec![s("host"), s("g")], ..Default::default() };
         let a = flags(&room, "g", &[None], &[]);
         let flag = |a: &[String], f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
         assert_eq!((flag(&a, "--stage"), flag(&a, "--court"), flag(&a, "--court-mod-id")), (Some("5".into()), Some("5".into()), Some("gag_c01_yamate".into())));

@@ -338,9 +338,23 @@ impl Menu {
         Effect::Online(Fx::Net(Cmd::UmpireMod(u)))
     }
 
-    /// M8f8: the host's court mod (id, name), or none.
-    fn court_mod_wire(&self) -> Option<(String, String)> {
-        self.court_mod_of(self.court_pick()).map(|x| (x.id.clone(), x.name.clone()))
+    /// M8f8: the host's court mod, or none.
+    fn court_mod_wire(&self) -> Option<mo::CourtWire> {
+        self.court_mod_of(self.court_pick()).map(mo::CourtWire::of)
+    }
+
+    /// Hosting: the room's court mod again once its looks are hashed (the browser reads a mod's files in first, so
+    /// the pick went out with none), for guests without it to fetch.
+    fn court_looks_out(&self, net: &Net) {
+        let Some(c) = self.net.room.as_ref().filter(|_| self.net.hosting && !self.net.started).and_then(|r| r.court_mod.as_ref()).filter(|c| c.looks == 0) else { return };
+        if let Some(w) = self.court_mod_wire().filter(|w| w.id == c.id && w.looks != 0) {
+            net.send(Cmd::CourtMod(Some(w)));
+        }
+    }
+
+    /// The host's court mod as one this guest may fetch (it has none of its own to draw yet, or a copy).
+    fn court_to_fetch<'r>(&self, room: &'r Room) -> Option<&'r mo::CourtWire> {
+        room.court_mod.as_ref().filter(|c| !room.vanilla && !self.net.hosting && c.looks != 0)
     }
 
     /// The host's court, sets, games and umpire (and their mods) to everyone.
@@ -1272,12 +1286,17 @@ impl Menu {
         {
             self.net.looks.insert(h, None);
         }
-        for (_, w) in room.mods() {
-            let h = w.looks;
+        let court = self.court_to_fetch(room);
+        for h in room.mods().map(|(_, w)| w.looks).chain(court.map(|c| c.looks)).collect::<Vec<_>>() {
             if self.net.looks.contains_key(&h) || self.net.wanted.contains(&h) || self.net.ask == Some(h) {
                 continue;
             }
-            if let Some(d) = mo::find(w, &self.mods, &cache) {
+            let found = match room.mods().find(|(_, w)| w.looks == h) {
+                Some((_, w)) => mo::find(w, &self.mods, &cache),
+                // the court: installed (by id), or fetched before
+                None => self.room_court_dir(room).or_else(|| Some(cache.join(format!("{h:016x}"))).filter(|d| crate::modfs::is_file(&d.join("mod.json")))),
+            };
+            if let Some(d) = found {
                 self.net.looks.insert(h, Some(d));
                 continue;
             }
@@ -1299,7 +1318,10 @@ impl Menu {
                 _ => {}
             }
         }
-        if self.net.ready != Some(room.ver) && room.mods().all(|(_, w)| self.net.looks.contains_key(&w.looks)) {
+        // the court mod drawn here read in first (the browser's; asked every frame, so it stays in memory)
+        let court_in = self.room_court_dir(room).is_none_or(|d| crate::modfs::ready(&d));
+        let court_known = court.is_none_or(|c| self.net.looks.contains_key(&c.looks));
+        if self.net.ready != Some(room.ver) && court_in && court_known && room.mods().all(|(_, w)| self.net.looks.contains_key(&w.looks)) {
             self.net.ready = Some(room.ver);
             net.send(Cmd::Ready(room.ver));
         }
@@ -1344,7 +1366,8 @@ impl Menu {
 
     /// B281: a mod in the lobby this machine hasn't chosen to download or not (asked, or not asked yet).
     fn undecided(&self) -> bool {
-        self.net.room.as_ref().filter(|_| !self.net.started).is_some_and(|r| r.mods().any(|(_, w)| !self.net.looks.contains_key(&w.looks) && !self.net.wanted.contains(&w.looks)))
+        let open = |h: &u64| !self.net.looks.contains_key(h) && !self.net.wanted.contains(h);
+        self.net.room.as_ref().filter(|_| !self.net.started).is_some_and(|r| r.mods().any(|(_, w)| open(&w.looks)) || self.court_to_fetch(r).is_some_and(|c| open(&c.looks)))
     }
 
     /// A mod's looks arrived: checked and kept, or refused (a stand-in plays it).
@@ -1507,11 +1530,11 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
                 _ if !m.net.status.is_empty() => Some(m.net.status.clone()),
                 _ => None,
             };
-            if let Some(w) = m.net.ask.and_then(|h| room?.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) {
+            if let Some((name, court)) = m.net.ask.and_then(|h| asked(room?, h)) {
                 // a mod this machine doesn't have: its looks, or its donor as a stand-in, asked over the lobby; the gold
                 // pill is the cursor, and it has to be answered
                 lobby::draw(d, m, status.as_deref());
-                ask_popup(d, &w.name, room.map_or(0, |r| r.wait), m.sel, None);
+                ask_popup(d, name, court, room.map_or(0, |r| r.wait), m.sel, None);
                 return;
             }
             if room.is_some() {
@@ -1755,12 +1778,19 @@ fn qr(code: &str) -> Option<Image> {
     Some(img)
 }
 
-/// A mod this machine doesn't have: its looks, or its donor as a stand-in, asked over the screen under it; the gold pill
-/// (row `sel`) is the cursor, and it has to be answered (`outside`: what a press off the box does).
-fn ask_popup(d: &mut Draw, name: &str, wait: u32, sel: usize, outside: Option<Act>) {
+/// Room `r`'s mod with looks `h`: its name, and whether it's the court (else a pick).
+fn asked(r: &Room, h: u64) -> Option<(&str, bool)> {
+    r.mods().find(|(_, w)| w.looks == h).map(|(_, w)| (w.name.as_str(), false)).or_else(|| r.court_mod.as_ref().filter(|c| c.looks == h).map(|c| (c.name.as_str(), true)))
+}
+
+/// A mod this machine doesn't have: its looks, or its donor (the court: its layout's disc court) as a stand-in, asked
+/// over the screen under it; the gold pill (row `sel`) is the cursor, and it has to be answered (`outside`: what a
+/// press off the box does).
+fn ask_popup(d: &mut Draw, name: &str, court: bool, wait: u32, sel: usize, outside: Option<Act>) {
+    let instead = if court { "on the plain court" } else { "as the character it's based on" };
     let help = match wait {
-        0 => "Download its looks, or play it as the character it's based on.".into(),
-        s => format!("The match is waiting: choose within {s} s, or it plays as the character it's based on."),
+        0 => format!("Download its looks, or play it {instead}."),
+        s => format!("The match is waiting: choose within {s} s, or it plays {instead}."),
     };
     d.popup(outside);
     let (sw, sh) = (260.0, 230.0);
@@ -1781,11 +1811,11 @@ fn ask_popup(d: &mut Draw, name: &str, wait: u32, sel: usize, outside: Option<Ac
 /// ○ (a stand-in this time).
 pub(super) fn draw_ask_over(d: &mut Draw, m: &Menu) {
     let Some(room) = m.net.room.as_ref().filter(|_| m.mod_asking()) else { return };
-    let Some(w) = m.net.ask.and_then(|h| room.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w)) else { return };
+    let Some((name, court)) = m.net.ask.and_then(|h| asked(room, h)) else { return };
     d.anchor = super::Anchor::Span;
     d.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 64.0);
     d.anchor = super::Anchor::Centre;
-    ask_popup(d, &w.name, room.wait, m.net.ask_row, Some(Act::Press(Press { back: true, ..Default::default() })));
+    ask_popup(d, name, court, room.wait, m.net.ask_row, Some(Act::Press(Press { back: true, ..Default::default() })));
 }
 
 /// The network's events into the menu, and the QR of the menu's code whenever the code changes.
@@ -1817,6 +1847,7 @@ pub(super) fn poll(
         if matches!(menu.screen, Screen::Lobby | Screen::Chars | Screen::Confirm) || menu.net.room.as_ref().is_some_and(|r| r.stand_in) {
             menu.settle(&args.iso, &net);
         }
+        menu.court_looks_out(&net);
         let d = menu.undecided();
         if d != menu.net.deciding {
             menu.net.deciding = d;
@@ -2096,6 +2127,10 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
     let mut flags = crate::play::netplay::flags(&room, &me, &devices, &menu.settings.flags());
     // B371: every player's own name over them (presentation only: not part of the match's state)
     flags.extend(menu.online_name_flags(&room, &me));
+    // the host's court mod as this machine has it (installed or fetched; `--court-mod-id` stays for the layout check)
+    if let Some(d) = menu.room_court_dir(&room) {
+        flags.extend(["--court-mod".into(), d.display().to_string()]);
+    }
     // the mods by match slot (as `netplay::flags` orders the seats): the wire's gameplay, the looks this machine has
     let order: &[usize] = if room.doubles { &[0, 2, 1, 3] } else { &[0, 1] };
     let mut mm = crate::mods::MatchMod::default();
@@ -2644,6 +2679,40 @@ mod tests {
         b.settle(iso, &net);
         assert_eq!((b.net.ask, b.net.wanted.contains(&7)), (None, true));
         assert_eq!(rx.try_recv().ok(), Some(Cmd::Want(7)));
+    }
+
+    /// The host's court mod this guest doesn't have: fetched as a pick's looks ("always"), the guest not ready until
+    /// it's here, then the match draws the fetched copy (`--court-mod`).
+    #[test]
+    fn a_missing_court_mod_is_fetched_from_the_host() {
+        let tmp = std::env::temp_dir().join(format!("hst-court-fetch-{}", std::process::id()));
+        let host = tmp.join("host/gag_c07");
+        std::fs::create_dir_all(&host).unwrap();
+        let json = br#"{"asset":{"version":"2.0"}}"#;
+        let glb = [&b"glTF"[..], &2u32.to_le_bytes(), &(20 + json.len() as u32).to_le_bytes(), &(json.len() as u32).to_le_bytes(), b"JSON", json].concat();
+        std::fs::write(host.join("court.glb"), glb).unwrap();
+        std::fs::write(host.join("mod.json"), r#"{"standard": 1, "kind": "court", "id": "gag_c07", "name": "Wonderland", "layout": 6}"#).unwrap();
+        let wire = mo::CourtWire::of(&crate::mods_court::read(&host).unwrap());
+        let pack = mo::pack(&host).unwrap();
+        assert_eq!(wire.looks, mo::hash(&pack));
+        let iso = tmp.join("guest/hst.iso").display().to_string();
+        let (net, mut rx) = Net::wired();
+        let mut b = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut b);
+        (b.net.me, b.net.go, b.net.hosting, b.settings.4) = ("g".into(), Some(Go::Code), false, Ask::Always);
+        let r = b.net.room.as_mut().unwrap();
+        r.seats.iter_mut().flatten().for_each(|s| s.pick.r#mod = None);
+        r.court_mod = Some(mo::CourtWire { dir: None, ..wire.clone() });
+        b.settle(&iso, &net);
+        let sent: Vec<Cmd> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(sent.contains(&Cmd::Want(wire.looks)) && !sent.iter().any(|c| matches!(c, Cmd::Ready(_))), "{sent:?}");
+        assert!(b.undecided() || b.net.wanted.contains(&wire.looks));
+        b.got_pack(&iso, wire.looks, &pack);
+        let dir = b.room_court_dir(b.net.room.as_ref().unwrap()).expect("fetched");
+        assert!(dir.starts_with(mo::cache(&iso)));
+        b.settle(&iso, &net);
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, Cmd::Ready(_))), "ready once it's here");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// B285: a mod pick shows as the mod for its owner (its pick carries it, its looks are its own folder) and, in the

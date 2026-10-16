@@ -328,20 +328,14 @@ mod tests {
         }
     }
 
-    /// Online, the mods row holds only the court mods every peer in the lobby has.
+    /// Online, the mods row holds every installed court mod, whoever else has it (a guest without fetches it).
     #[test]
-    fn online_only_shared_mods() {
+    fn online_every_installed_mod() {
         let mut m = picker(3, 4.0 / 3.0);
         m.net.room = Some(crate::net::Room::default());
         (m.net.go, m.net.hosting) = (Some(super::super::online::Go::Host), true);
-        let r = m.net.room.as_mut().unwrap();
-        r.names.insert("host".into(), "h".into());
-        r.names.insert("g".into(), "g".into());
-        r.courts.insert("host".into(), vec!["c0".into(), "c1".into(), "c2".into()]);
-        r.courts.insert("g".into(), vec!["c2".into(), "c0".into()]);
-        assert!(m.online());
-        assert_eq!(rows(&m)[1], [COURTS + 1, COURTS + 3]);
         m.net.room.as_mut().unwrap().courts.insert("g".into(), vec![]);
-        assert!(rows(&m)[1].is_empty(), "a peer with none: no mods row");
+        assert!(m.online());
+        assert_eq!(rows(&m)[1], [COURTS + 1, COURTS + 2, COURTS + 3]);
     }
 }
