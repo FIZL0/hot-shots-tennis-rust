@@ -396,6 +396,9 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Mods => {
             moves(&mut v, (true, m.add.sideways(m.sel)));
             v.push((Act::Ok, "Choose"));
+            if super::mods_screen::show_keys(m) {
+                v.push((Act::Costume, "Show"));
+            }
             v.extend(m.add.kind_switch().into_iter().chain([(Act::Back, "Back")]));
         }
         _ => {}
@@ -473,11 +476,13 @@ pub(super) fn groups(m: &Menu, last: Dev, bind: &Bindings) -> Vec<Group> {
 }
 
 /// B462: which half of the L2 / R2 hint (`act` [`Act::Kind`]) does nothing for player `p` on `m`'s screen: the
-/// select's first section's first tile (L2) and last section (R2), the Mods page's first and last kind tab.
+/// select's first section's first tile (L2) and last section (R2), the Mods page's first and last kind tab; B471:
+/// L1 / R1's on the Mods page's first and last Show tab.
 fn kind_ends(m: &Menu, act: Act, p: Option<usize>) -> [bool; 2] {
     match (act, m.screen, p) {
         (Act::Kind, Screen::Chars, Some(p)) => m.section_ends(p),
         (Act::Kind, Screen::Mods, _) => super::mods_kind::ends(m.add.kind, &m.add.kinds_shown()),
+        (Act::Costume, Screen::Mods, _) => super::mods_screen::show_ends(&m.add),
         _ => [false; 2],
     }
 }

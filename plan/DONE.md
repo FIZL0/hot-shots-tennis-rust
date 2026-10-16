@@ -701,6 +701,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B478** Mod characters: when a win/loss (celebration) motion is shorter than the post-point, game or set transition, hold its last frame until the transition ends, instead of looping it or snapping back to idle
 - [x] **B479** Doubles: when one player dashes for the ball but won't reach it, can the teammate still hit it? Check the original's rule for who goes for the ball (PINE recording of that case) and match the port to it exactly
 - [x] **B482** Menu: hide the Handicap button for now, since it doesn't work yet; bring it back when Set Handicap (B40g1) is working (user 2026-10-16) → crates/hst/src/play/main_menu/confirm.rs · crates/hst/src/play/main_menu.rs
+- [x] **B471** Menus on the wall (plan/B471.md): Mods/Settings/Roster/lobby/confirm in the main menu's look — light outlined panels, grey/yellow pills, kind colours as accents; Mods' Show tabs move to the top bar (L1/R1), kinds into the panel strip (L2/R2) → crates/hst/src/play/main_menu/{look,options,roster,frame}.rs crates/hst/src/play/main_menu/mods_screen/grid.rs
 
 
 ### Shots

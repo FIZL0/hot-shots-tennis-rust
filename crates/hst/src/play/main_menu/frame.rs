@@ -327,11 +327,9 @@ pub(super) fn dotted(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32,
     }
 }
 
-/// The navy ground over the whole window.
+/// The ground over the whole window: B471: the main menu's wall (`look::backdrop`), as every menu page.
 pub(super) fn ground(d: &mut Draw) {
-    d.anchor = super::super::widescreen::Anchor::Span;
-    d.q(Tex::Solid, [0.0; 4], [0.0, 0.0, 640.0, 448.0], NAVY, 128.0);
-    d.anchor = super::super::widescreen::Anchor::Centre;
+    super::look::backdrop(d);
 }
 
 /// The top bar's title, and the Singles / Doubles button with its □ (`page`: the host's □ / a tap switches).
@@ -339,7 +337,7 @@ pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, page: bool,
     let [tx, ty, tw, th] = g.title;
     let size = g.y(30.0);
     let _ = tw;
-    d.text(title, tx, ty + (th - size) / 2.0, size, WHITE);
+    d.outlined(|d| d.text(title, tx, ty + (th - size) / 2.0, size, WHITE));
     let [mx, my, mw, mh] = g.mode;
     let (words, fill) = if doubles { ("Doubles", GREEN) } else { ("Singles", BLUE) };
     ringed(d, g.mode, mh / 2.0, g.x(2.0), WHITE, Some(fill));

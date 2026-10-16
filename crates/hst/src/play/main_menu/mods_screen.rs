@@ -32,6 +32,11 @@ use crate::mods::Mod;
 
 mod grid;
 
+/// B471: which of L1 / R1 (the Show tabs) do nothing on `v`: the legend dims their hint.
+pub(super) fn show_ends(v: &View) -> [bool; 2] {
+    grid::show_ends(v)
+}
+
 /// The mods folder: `mods/` beside the disc, as the select's roster reads it (`main_menu.rs setup` sets it; a
 /// relative `mods` broke when the game was started from elsewhere, e.g. a desktop shortcut).
 static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -551,6 +556,25 @@ impl Menu {
         out.push(Effect::Sound(0));
     }
 
+    /// B471: the Show tab before (`back`) or after the current one, if there is one (Upload: the current one's).
+    pub(super) fn show_step(&mut self, back: bool, out: &mut Vec<Effect>) {
+        let [first, last] = grid::show_ends(&self.add);
+        if back && first || !back && last {
+            return;
+        }
+        let at = grid::SHOWS.iter().position(|s| *s == self.add.b.show).unwrap_or(0);
+        self.mods_show(grid::SHOWS[if back { at - 1 } else { at + 1 }], out);
+    }
+
+    /// B471: a tap on Show tab `i` (`grid::SHOWS`), from any page.
+    pub(super) fn show_tap(&mut self, i: usize, out: &mut Vec<Effect>) {
+        if let Some(s) = grid::SHOWS.get(i)
+            && (*s != self.add.b.show || !self.add.grid() || self.add.by.is_some())
+        {
+            self.mods_show(*s, out);
+        }
+    }
+
     /// M19: reads the player's uploads again.
     fn read_mine(&mut self) {
         if let Some(name) = self.add.account.clone() {
@@ -612,6 +636,11 @@ impl Menu {
         // B372: the on-screen keyboard takes every press while up; a press forgets the tile a tap chose
         if self.add.grid() && self.add.b.osk.is_some() {
             return self.osk_step(k, out);
+        }
+        // B471: L1 / R1 walk the Show tabs in the top bar from anywhere on the page (a tap's ✕ on the sort's left half
+        // carries `prev` too), stopping at the ends as the kinds do
+        if (k.prev || k.next) && !k.ok && self.add.child.is_none() {
+            return self.show_step(k.prev, out);
         }
         if k != Press::default() {
             self.add.b.tapped = None;
@@ -1078,6 +1107,11 @@ impl Menu {
 /// B372: the legend on Browse (None: another page, or a child or popup up).
 pub(super) fn browse_legend(m: &Menu) -> Option<Vec<(super::legend::Act, &'static str)>> {
     (m.add.grid() && !m.add.empty_kind() && m.add.child.is_none() && m.add.nophone.is_none() && m.add.wipe.is_none()).then(|| grid::legend(m))
+}
+
+/// B471: whether L1 / R1 walk the Show tabs now (Upload's legend says so too): no question or popup up.
+pub(super) fn show_keys(m: &Menu) -> bool {
+    m.add.child.is_none() && m.add.nophone.is_none() && m.add.wipe.is_none() && !m.add.empty_kind()
 }
 
 /// B420: the popup's question and its two pills: the phone apps can only close.
@@ -2000,7 +2034,7 @@ mod tests {
         let label = |o: &grid::Opt| format!("{o:?}");
         assert!(label(&games[1]).contains("Fore!") && label(&games[2]).contains("Get a Grip") && label(&games[3]).contains("Tekken"), "{games:?}");
         assert_eq!(games.len(), 4);
-        // the filter pill: Select to Hand, ✕ Left-handed; Select round to Game, ✕ Fore! (both apply); L1 back
+        // the filter pill: Select to Hand, ✕ Left-handed; Select round to Game, ✕ Fore! (both apply); a tap on its left half back
         let mut out = Vec::new();
         let p0 = 2 + m.add.words().len();
         m.sel = p0 + 6;
@@ -2012,7 +2046,7 @@ mod tests {
         m.mods_step(hand, &mut out);
         m.mods_step(ok(), &mut out);
         assert_eq!((names(&m), m.add.filter_words()), (vec!["Zed".to_string()], "Game: Fore! +1".to_string()));
-        m.mods_step(Press { prev: true, ..default() }, &mut out);
+        m.mods_step(Press { ok: true, prev: true, ..default() }, &mut out);
         assert_eq!(names(&m), ["Carol", "Zed"]);
         assert_eq!(m.sel, p0 + 6);
         m.add.b.left = false;
@@ -2028,7 +2062,8 @@ mod tests {
         let cols = grid::lay(&m.grid).cols;
         assert!(grid::lay(&super::super::Grid::fit(16.0 / 9.0)).cols > cols && cols >= 2, "{cols}");
         // moves, by Uploader (ann: Carol, Mia; bob: Kent; cal: Zed; Alma): ← → along, ↓ the next heading's row, off
-        // the foot the footer's words, ↑ back to the tile, ↑ off the top the pills, ↑ the search box
+        // the foot the footer's words, ↑ back to the tile, ↑ off the top the strip's sort and filter (B471), ↑ from
+        // the filter the search box
         let (l, r, u, d) = (Press { left: true, ..default() }, Press { right: true, ..default() }, Press { up: true, ..default() }, Press { down: true, ..default() });
         let mut go = |m: &mut Menu, k: Press| {
             m.mods_step(k, &mut Vec::new());
@@ -2038,23 +2073,26 @@ mod tests {
         assert_eq!([go(&mut m, l), go(&mut m, l), go(&mut m, r), go(&mut m, d), go(&mut m, d), go(&mut m, d)], [t0, t0, t0 + 1, t0 + 2, t0 + 3, t0 + 4]);
         assert_eq!([go(&mut m, d), go(&mut m, u)], [2, t0 + 4]);
         m.sel = t0 + 1;
-        assert_eq!([go(&mut m, u), go(&mut m, r), go(&mut m, u), go(&mut m, d), go(&mut m, d)], [p0, p0 + 1, 0, p0 + 1, t0 + 1]);
-        // B383: → from the search box to Upload, ↓ from it to the pills, ← back
+        assert_eq!([go(&mut m, u), go(&mut m, r), go(&mut m, u), go(&mut m, d), go(&mut m, d)], [p0 + 5, p0 + 6, 0, p0 + 6, t0 + 1]);
+        // B471: the search box at the top bar's right: ← the last Show tab, → stays; the Show tabs' ↓ the sort;
+        // Upload in the footer, ← the footer's last word
         m.sel = 0;
-        assert_eq!([go(&mut m, r), go(&mut m, d)], [1, p0 + 1]);
+        assert_eq!([go(&mut m, r), go(&mut m, l), go(&mut m, r), go(&mut m, d)], [0, p0 + 4, 0, p0 + 6]);
+        m.sel = p0 + 1;
+        assert_eq!(go(&mut m, d), p0 + 5);
         m.sel = 1;
-        assert_eq!(go(&mut m, l), 0);
-        // the sort pill: ✕ the next, L1 the one before
+        assert_eq!(go(&mut m, l), 2 + m.add.words().len() - 1);
+        // the sort pill: ✕ the next, a tap on its left half the one before
         m.add.b.sort = grid::Sort::Newest;
         m.sel = p0 + 5;
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.b.sort, names(&m)[0].as_str()), (grid::Sort::Az, "Alma"));
-        m.mods_step(Press { prev: true, ..default() }, &mut out);
+        m.mods_step(Press { ok: true, prev: true, ..default() }, &mut out);
         assert_eq!(m.add.b.sort, grid::Sort::Newest);
         // the legend says what a tile's buttons do; one kind of mod: no kind switch (B383)
         m.sel = t0 + names(&m).iter().position(|n| n == "Kent").unwrap();
         let l = grid::legend(&m).into_iter().map(|x| x.1).collect::<Vec<_>>();
-        assert_eq!(l, ["Move", "Update", "More by", "Save", "Back"]);
+        assert_eq!(l, ["Move", "Update", "More by", "Save", "Show", "Back"]);
         // Upload: Sign in and Upload all side by side, then the mods' tiles (two: one row)
         m.mods_page(Page::Upload, 0);
         m.add.list = vec![a_mod("a", "A"), a_mod("b", "B")];
