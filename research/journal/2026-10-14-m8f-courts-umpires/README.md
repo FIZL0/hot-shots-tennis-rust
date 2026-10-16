@@ -56,3 +56,6 @@ One README per task; iterations below, newest last.
 - `12-SLAB-SURFACES-FINAL.md` — M8f10a4 done: the Fore!/OOB laid court wears the hole's own textures (exporters in
   opentennis-mods): grass courts in the green's texture with a fairway run-off, hard courts (OOB c01/c06) in the
   paving tinted blue/green with the paving as drawn beyond. Open Tee 2's court is real and needed nothing.
+- `13-PARENT-DONE-WHEN-FINAL.md` — M8f done: the parent's done-when re-checked on the current build. Get a Grip
+  court + Get a Grip umpire in a `--play` match, Browse Courts 16 / Umpires 8. Court NPCs on Get a Grip courts
+  were dropped by the user (M112), so the layout court's people stand in.
