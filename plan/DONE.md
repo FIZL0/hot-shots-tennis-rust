@@ -726,6 +726,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P58** Long rAF gaps with an idle main thread (hst-log 10: 24 s, 5 s, 2.6 s in the menu; 4 s just before the match's loading screen drops; no 'blocked' line, no visibility change): find out whether that's Chrome throttling an occluded window or its GPU process stuck behind shader links; if ours, fix → web/index.html, crates/hst-base/src/stall.rs
 - [x] **P57** Menu start freezes on web (hst-log 9): main_menu::setup runs 410 ms in one frame (stage it like the rest of the staged start), the menu-art build adds ~36 ms a frame for 4 s (menu at 25 fps), first frame uploads 40 MB of images (958 ms freeze) → crates/hst-play/src/mode.rs, play/main_menu.rs, play/menu_art.rs
 - [x] **B431** Umpire select: hint that the new umpires have voice previews (user 2026-10-15): mod umpires play a voice preview in umpire select but nothing says so; add a button hint for the preview (shown only when the highlighted umpire has one), in the footer legend's style, any aspect ratio → play/main_menu/umpire_mods.rs · play/main_menu/confirm.rs · play/main_menu/legend.rs
+- [x] **B472** Emotes can still be triggered between points (post-point timeline); block them outside live play — crates/hst-play/src/play/tick_input.rs
 
 
 ### Shots
