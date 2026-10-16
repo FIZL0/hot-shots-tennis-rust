@@ -1662,6 +1662,8 @@ enum Tex {
     CourtMod(usize),
     /// B516: the splash's logo (`splash::Logo`), in its pixels.
     Logo,
+    /// B524: court value `c`'s baked backdrop (`splash::Backdrops`), in its pixels.
+    Backdrop(usize),
 }
 
 /// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
@@ -3276,7 +3278,7 @@ fn draw(
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
     images: Res<Assets<Image>>,
-    (buttons, umpire_pics, court_pics, logo): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>, Option<Res<splash::Logo>>),
+    (buttons, umpire_pics, court_pics, logo, backdrops): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>, Option<Res<splash::Logo>>, Option<Res<splash::Backdrops>>),
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| controls::readable(g)).map(|(e, _, _)| e).collect();
@@ -3381,6 +3383,13 @@ fn draw(
                 }
             },
             Tex::CourtMod(k) => match court_pics.as_ref().and_then(|p| p.handles.get(k).cloned().flatten()) {
+                Some(h) => h,
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
+            Tex::Backdrop(c) => match backdrops.as_ref().and_then(|b| b.handles.get(&c).cloned()) {
                 Some(h) => h,
                 None => {
                     *vis = Visibility::Hidden;
@@ -3507,6 +3516,7 @@ pub fn plugin(app: &mut App) {
     app.add_systems(Update, legend::fill.after(step));
     app.init_resource::<umpire_mods::Pics>().add_systems(Update, umpire_mods::load.before(draw));
     app.init_resource::<court_mods::Pics>().add_systems(Update, court_mods::load.before(draw));
+    app.init_resource::<splash::Backdrops>().add_systems(Update, splash::backdrops.after(court_mods::load).after(splash::tick).before(draw));
     app.add_systems(Update, trace::trace.after(online::poll).run_if(trace::on));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,

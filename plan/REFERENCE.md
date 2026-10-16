@@ -54,6 +54,9 @@ cargo run -p hst -- "Hot Shots Tennis (USA).iso" --stage 1 --play
 
 The menus (B516) open on a press-start splash: the device that presses ✕ / Start or Enter / Space (or taps) is 1P and
 alone drives 1P's player; the keyboard still pauses and works the menus. `HST_MENU=main` (scripts, `HST_KEYS`) skips it.
+Behind it the courts cycle: each court's sharp backdrop (B524), drawn once at a point's end in a fair-weather match on
+that court (`cache/backdrops/courtNN.png` / `mod-<id>.png` beside settings.txt; redrawn when the window changes a lot),
+else the disc's court photo, blurred. `HST_BACKDROP=off|on|now`, `HST_BACKDROP_VIEW` (`play/backdrop.rs`).
 
 Without the ISO (M13): `hst --import "Hot Shots Tennis (USA).iso"` once (or plain `hst`, which asks for the ISO in a
 file dialog on first start) copies the 171 MB the remaster reads into `~/.local/share/hst/disc.pack`
