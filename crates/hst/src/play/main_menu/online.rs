@@ -82,6 +82,8 @@ pub struct View {
     pub finding: u8,
     pub fail: Option<&'static str>,
     pub spin: f32,
+    /// B467: why the Online screen's own search came up empty (the lobby list couldn't be read); its card says it.
+    pub why: String,
     /// B370: the lobby's QR shown big (the code pill's OK or a tap; any press closes it).
     pub qr_big: bool,
     /// B396: the last press came from a pad (the lobby's Chat opens the phrases, not the typed line).
@@ -1163,7 +1165,7 @@ impl Menu {
             Event::Status(s) => v.status = s,
             // the lobby's gone (refused, taken out, the host left, or it couldn't open): only Leave is left
             // the Online screen's own search failing: its card says none found
-            Event::Failed(_) if self.screen == Screen::Online && v.finding > 0 => v.finding = 0,
+            Event::Failed(s) if self.screen == Screen::Online && v.finding > 0 => (v.finding, v.why) = (0, s),
             Event::Failed(s) => {
                 v.status = crate::update::refused(s);
                 v.fail = Some(match v.go {
@@ -1189,6 +1191,7 @@ impl Menu {
             Event::Short(c) => v.short = c,
             Event::Found(l) => {
                 v.finding = v.finding.saturating_sub(1);
+                v.why.clear();
                 // the Online screen's card shows them (the lobby count on its chip)
                 if self.screen != Screen::Online {
                     v.status = match l.len() {
@@ -1542,7 +1545,10 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
     d.q(Tex::Solid, [0.0; 4], [x, y + 3.0 + pic_h, w, 2.5], INK, 128.0);
     let lobbies = |d: &mut Draw| {
         d.outlined(|d| d.text("OPEN LOBBIES NOW", x + 18.0, y + 12.0, 13.0, WHITE));
-        if m.net.list.is_empty() {
+        if m.net.list.is_empty() && m.net.finding == 0 && !m.net.why.is_empty() {
+            // B467: not "none open" when the list couldn't be read: the reason, in the picture's three lines
+            d.outlined(|d| para(d, &m.net.why, x + 18.0, y + 36.0, w - 36.0, 15.0, 4, WHITE));
+        } else if m.net.list.is_empty() {
             let line = if m.net.finding > 0 { "Looking for lobbies..." } else { "None open right now" };
             d.outlined(|d| d.text(line, x + 18.0, y + 40.0, 18.0, WHITE));
         }
@@ -1590,6 +1596,7 @@ fn online_screen(d: &mut Draw, m: &Menu, hand_x: f32) {
     para(d, &words, x + 18.0, y + pic_h + 16.0, w - 36.0, 17.0, 4, INK);
     let open = match m.net.list.len() {
         0 if m.net.finding > 0 => "Searching...".to_string(),
+        0 if !m.net.why.is_empty() => "Couldn't check".into(),
         0 => "None open".into(),
         n => format!("{n} open"),
     };
@@ -1942,6 +1949,12 @@ pub(super) fn sample(m: &mut Menu) {
     match menu.as_str() {
         "lobbies-searching" | "lobbies-none" | "lobbies-failed" => m.net.list.clear(),
         "online" | "online-custom" => m.net.room = None,
+        // B467: the Online card when the lobby list couldn't be read (the pkarr relay refusing this network)
+        "online-unread" => {
+            (m.net.room, m.net.finding) = (None, 1);
+            m.net.list.clear();
+            m.heard(Event::Failed("Couldn't read the lobby list: the code server (relay.pkarr.org) is refusing this network for now (too many requests, maybe from other devices on the same Wi-Fi): wait a minute and try again.".into()));
+        }
         "lobby-hosting" | "lobby-joining" | "lobby-failed" => (m.net.room, m.net.short, m.net.go, m.net.pick_next) = (None, String::new(), Some(Go::Code), true),
         _ => {}
     }
@@ -2067,6 +2080,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
             // the Online screen's card lists the open lobbies: look for them at once
             if net.is_none() {
                 menu.net.list.clear();
+                menu.net.why.clear();
                 menu.net.finding = crate::net::FINDS;
                 return apply(Fx::Net(Cmd::Find), menu, commands, net, clipboard, iso);
             }
@@ -2817,6 +2831,21 @@ mod tests {
         (m.net.go, m.net.pick_next, m.screen) = (Some(Go::Code), true, Screen::Lobby);
         m.heard(Event::Failed("timed out".into()));
         assert_eq!((m.net.pick_next, m.net.fail), (false, Some("Couldn't join the lobby")));
+    }
+
+    /// B467: the Online screen's own search failing keeps its reason for the card (not "none open"), and the next
+    /// answer clears it; on the Find screen the reason is the status under "Couldn't search for lobbies".
+    #[test]
+    fn online_card_says_why_it_found_none() {
+        let mut m = Menu { screen: Screen::Online, net: View { cfg: Some(Online::default()), finding: 1, ..default() }, ..default() };
+        m.heard(Event::Failed("Couldn't read the lobby list: busy.".into()));
+        assert_eq!((m.net.finding, m.net.fail, m.net.why.as_str()), (0, None, "Couldn't read the lobby list: busy."));
+        assert!(m.net.status.is_empty());
+        m.heard(Event::Found(vec![]));
+        assert!(m.net.why.is_empty());
+        let mut m = Menu { screen: Screen::Lobbies, net: View { finding: 1, go: Some(Go::Find), ..default() }, ..default() };
+        m.heard(Event::Failed("Couldn't read the lobby list: busy.".into()));
+        assert_eq!((m.net.fail, m.net.status.as_str()), (Some("Couldn't search for lobbies"), "Couldn't read the lobby list: busy."));
     }
 
     /// B279: a guest back from the results ahead of its host has only Leave until the host's lobby comes.

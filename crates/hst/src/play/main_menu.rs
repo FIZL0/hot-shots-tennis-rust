@@ -1887,7 +1887,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
         "assign" => Screen::Assign,
         "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
-        "online" | "online-custom" => Screen::Online,
+        "online" | "online-custom" | "online-unread" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
         "lobby" | "lobby-bot" | "lobby-courts" | "lobby-ask" | "lobby-wait" | "lobby-guest" | "lobby-hosting" | "lobby-joining" | "lobby-failed" => Screen::Lobby,
         "code" | "name" | "relay-url" => Screen::Code,

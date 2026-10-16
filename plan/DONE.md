@@ -664,6 +664,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B461** Roster: an unjoined seat's dashed outline has no corners (the dashes stop short at each side and the 14px rounded corners aren't drawn; the joined card's yellow dashed rim has the same gap). Draw the corner arcs in dashed(). Files: crates/hst/src/play/main_menu/roster.rs
 - [x] **B452** Android Chrome: the WebGPU build won't start, 'The game stopped: instance dropped in popErrorScope' (user 2026-10-15, build 54125cc); WebGL2 runs fine there. Find the wgpu error-scope/instance lifetime bug, else fall back to WebGL2 when it fires → web/index.html
 - [x] **B456** Web build crashes in Zen browser (user 2026-10-15): "Caught rendering error: Validation Error … In Device::create_texture, label = 'main_texture_a' Downlevel flags DownlevelFlags(VIEW_FORMATS) are required but not supported on the device." Zen (Firefox-based) WebGPU lacks view_formats; Bevy's main_texture_a/b requests an sRGB view format. Check adapter downlevel_properties at startup and fall back (WebGL2 backend, or skip view formats / no sRGB view) so the game runs instead of stopping; verify in Zen/Firefox. Files: crates/hst/src/main.rs (render plugin setup), web build config.
+- [x] **B467** iOS web app ↔ iOS web app (same version): friend couldn't find the host's lobby or join by code — reproduce two Safari tabs/devices, check the web netplay path (signalling/relay, short-code lookup) and surface the actual failure in the UI — crates/hst/src/play/main_menu/online.rs, crates/hst/src/web.rs
 
 
 ### Shots
