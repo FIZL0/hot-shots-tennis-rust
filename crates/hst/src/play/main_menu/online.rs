@@ -3935,7 +3935,7 @@ mod tests {
             m.screen = Screen::Lobbies;
             m.sel = sel;
             let fx = m.step(dev, ok);
-            assert_eq!((m.screen, m.doubles, m.local_max()), (Screen::Lobby, doubles, fit), "B392: straight into it");
+            assert_eq!((m.screen, m.doubles, m.local_max()), (Screen::Chars, doubles, fit), "B392/M120: straight into its select");
             let Some(Effect::Online(Fx::Net(Cmd::Join(code, picks)))) = fx.into_iter().find(|e| matches!(e, Effect::Online(_))) else { panic!() };
             assert_eq!((code.as_str(), picks.len()), (id, 1));
             // seated: the lobby's character select; ready there: the picks into the held seat
