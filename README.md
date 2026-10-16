@@ -90,6 +90,11 @@ Main menu → Online.
 
 More (own relay, settings file): [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
+## License
+
+The code is licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+This covers the code only, not the game or its data.
+
 ## Legal
 
 This is an unofficial fan project, not affiliated with or endorsed by Sony Interactive Entertainment or Clap

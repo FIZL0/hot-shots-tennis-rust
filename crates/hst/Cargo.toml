@@ -2,6 +2,7 @@
 name = "hst"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
 # Android (`tools/apk.sh`): the game as a NativeActivity .so; only built when asked for, never by `cargo test`
 [[example]]

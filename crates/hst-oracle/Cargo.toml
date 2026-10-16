@@ -2,6 +2,7 @@
 name = "hst-oracle"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 publish = false
 
 # Test-only: runs the original's own functions (loaded from the user's disc at test time) so ports can be
