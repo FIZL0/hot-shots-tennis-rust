@@ -643,6 +643,18 @@ pub(crate) fn join_styles() -> Vec<Style> {
     }
 }
 
+/// B481: the button art of each connected pad not in `seated` (in pad order), for the COM cards' join bars; with
+/// `HST_LEGEND` naming a pad style and no pad plugged in, one pad of it (for `--shot`s). Not the keyboard, as
+/// [`join_styles`].
+pub(crate) fn unseated_styles(seated: &[Entity]) -> Vec<Style> {
+    let v: Vec<(Entity, Style)> = PAD_STYLES.lock().map(|p| p.clone()).unwrap_or_default();
+    let forced = forced().filter(|s| *s != Style::Keys);
+    if v.is_empty() {
+        return forced.into_iter().collect();
+    }
+    v.into_iter().filter(|(e, _)| !seated.contains(e)).map(|(_, s)| forced.unwrap_or(s)).collect()
+}
+
 /// A phone build (iOS / Android): no keyboard shortcuts anywhere in the menus.
 pub(crate) const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android"));
 

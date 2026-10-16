@@ -556,6 +556,11 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         d.centred("Ready!", px + area / 2.0, py + ph - rh - 6.0 * PY + 4.0 * PY, 16.0 * PY, hex(BG));
     }
 
+    // B481: a computer player a device here can take over: the join bar across its preview and stats
+    if let Some(style) = join_glyph(m, p) {
+        join_bar(d, style, [px, py, pw, ph]);
+    }
+
     // B382: the grid: the lines on view, a heading per section, the tiles this player's darker with a rim in the
     // seat's colour (the same character in its other section filled, without the rim)
     let v = m.view(p);
@@ -627,6 +632,50 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let line = if d.width(&long, fs) <= fw { long } else { short };
     let lw = d.width(&line, fs).min(fw);
     d.label(&line, fx + lw / 2.0, fy + (fh - fs) / 2.0, fs, lw, s.soft);
+}
+
+/// B481: the button art on computer player `p`'s join bar, if an unseated pad can take the seat: on a local roster
+/// each pad's ✕ takes the next computer seat [`Menu::join_seat`] picks (held-open seats first, then in seat order), so
+/// the first so many computer cards as there are unseated pads show one, in pad order.
+fn join_glyph(m: &Menu, p: usize) -> Option<legend::Style> {
+    if !m.local_roster() || m.seats[p].is_some() || !m.can_join() {
+        return None;
+    }
+    let n = m.players();
+    let order = (0..n).filter(|&q| m.seats[q] == Some(Dev::Open)).chain((0..n).filter(|&q| m.seats[q].is_none()));
+    let k = order.into_iter().position(|q| q == p)?;
+    let seated: Vec<Entity> = m.seats.iter().filter_map(|s| if let Some(Dev::Pad(e)) = s { Some(*e) } else { None }).collect();
+    legend::unseated_styles(&seated).get(k).copied()
+}
+
+/// B481: a translucent dark bar across `[x, y, w, h]` (a computer card's preview and stats) with thin gold edges,
+/// "<✕> to join" in `style`'s art in the middle, its opacity pulsing slowly.
+fn join_bar(d: &mut Draw, style: legend::Style, [x, y, w, h]: [f32; 4]) {
+    static START: std::sync::OnceLock<bevy::platform::time::Instant> = std::sync::OnceLock::new();
+    let t = START.get_or_init(bevy::platform::time::Instant::now).elapsed().as_secs_f32();
+    // 2.4 s a breath, between 70% and full
+    let k = 0.85 + 0.15 * (t * std::f32::consts::TAU / 2.4).cos();
+    let start = d.out.len();
+    let bh = (h * 0.24).max(40.0 * PY).min(h);
+    let by = y + (h - bh) / 2.0;
+    d.q(Tex::Solid, [0.0; 4], [x, by, w, bh], [0.0; 3], 100.0);
+    let edge = 1.5 * PY;
+    d.q(Tex::Solid, [0.0; 4], [x, by, w, edge], GOLD, 128.0);
+    d.q(Tex::Solid, [0.0; 4], [x, by + bh - edge, w, edge], GOLD, 128.0);
+    // the button, a little taller than the words, then " to join", the pair centred and shrunk to fit
+    let mut size = (bh * 0.42).min(26.0 * PY);
+    let tail = " to join";
+    let mut ih = size * 1.4;
+    let full = legend::ok_aspect(style) * ih + d.width(tail, size);
+    let fit = ((w - 16.0 * PX) / full.max(1.0)).min(1.0);
+    (size, ih) = (size * fit, ih * fit);
+    let iw = legend::ok_aspect(style) * ih;
+    let mut cx = x + (w - full * fit) / 2.0;
+    let cy = by + bh / 2.0;
+    d.q(Tex::Button(style), [0.0; 4], [cx, cy - ih / 2.0, iw, ih], WHITE, 128.0);
+    cx += iw;
+    d.outlined(|d| d.text(tail, cx, cy - size / 2.0, size, WHITE));
+    d.out[start..].iter_mut().for_each(|q| q.alpha *= k);
 }
 
 /// B423: what's off `v`'s view with `cols` tiles a row: above, the sections with lines over the top; below, the
