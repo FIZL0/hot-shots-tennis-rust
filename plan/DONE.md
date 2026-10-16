@@ -772,6 +772,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B514** Android browser couldn't join by code ('No open lobby has the code'): a native host's relay put waited for its DHT put, guests gave up after 20 s — crates/hst-base/src/net.rs
 - [x] **B518** Host saw 'Others may not find this lobby' as someone joined: each room change re-listed on the pkarr relay, past its per-network rate limit with the guest's lookups — crates/hst-base/src/net.rs host()
 - [x] **B508** Match stats screen: cut-off words and an oversized decimal point (bug, user 2026-10-16, screenshot context/stats-screen/user-2026-10-16.png): the unit after each value is clipped at the column edge ("%" loses its tail on Sweet Spot Hits / Net Play Rate / Forehand Shots in both columns, "pts" loses its "p" behind the number on Match Rating) and the "." in 42.8 / 18.5 etc. is a big square dot, far heavier than the original's. Lay out number + unit so both fit inside the cell, shrink the dot to the original's size (tools/screenshot.sh of the same screen in PCSX2 vs a --shot), any aspect ratio → crates/hst-play/src/play/match_stats.rs
+- [x] **P62** --shot / HST_MENU runs ignore every gamepad (the agents' virtual pads from tools/vpad.py join seats and move menus in screenshots); keyboard-free too unless HST_KEYS drives it (user 2026-10-16) — crates/hst-base/src/seats.rs, crates/hst/src/main.rs, tools/shot.sh
 
 
 ### Shots
