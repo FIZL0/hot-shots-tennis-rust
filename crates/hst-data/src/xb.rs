@@ -91,6 +91,7 @@ impl<'a> Archive<'a> {
         if out.len() != e.size as usize {
             return err(format!("{}: decoded {} bytes, expected {}", e.name, out.len(), e.size));
         }
+        crate::uselog::entry(self.data, &e.name, &out);
         Ok(out)
     }
 }

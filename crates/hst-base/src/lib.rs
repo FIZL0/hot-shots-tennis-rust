@@ -4,6 +4,7 @@
 
 #[cfg(any(target_os = "android", test))]
 pub mod android_pad;
+pub mod asset_use;
 pub mod audio;
 pub mod character;
 pub mod court_anim;

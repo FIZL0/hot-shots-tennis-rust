@@ -410,6 +410,7 @@ fn start(argv: Vec<String>) {
         app.insert_resource(GlobalVolume::new(bevy::audio::Volume::SILENT));
     }
     app.add_plugins((audio::plugin, gs::plugin, shadow::plugin, court_anim::plugin, effects::plugin, textures::plugin, hud_gamma::plugin, weather::plugin));
+    app.add_plugins(asset_use::plugin);
     app.add_plugins(shade::plugin);
     app.add_plugins(cull::plugin);
     // the match's effect material: render side, so here in the base app (`mode.rs`), not in `play::plugin` (B148)
@@ -602,18 +603,26 @@ fn load(
         let mut sky_colour = std::collections::HashMap::new();
         let (mut hole_box, mut raw_models) = (std::collections::HashMap::new(), std::collections::HashMap::new());
         let mut model_shapes = std::collections::HashMap::new();
-        for name in ["CMN.XB", "GRD01.XB", if args.singles { "SSN1/HOL01.XB" } else { "HOL01.XB" }] {
-            let data = iso.read(&format!("{dir}/{name}")).expect("court archive on disc");
-            for_models(&data, |n| n.contains("_sky"), |stem, model, mats| {
+        let archives: Vec<_> = ["CMN.XB", "GRD01.XB", if args.singles { "SSN1/HOL01.XB" } else { "HOL01.XB" }]
+            .map(|name| iso.read(&format!("{dir}/{name}")).expect("court archive on disc"))
+            .into();
+        for data in &archives {
+            for_models(data, |n| n.contains("_sky"), |stem, model, mats| {
                 sky_colour.insert(stem, sky_top(&model, &mats));
             });
+        }
+        // Z2: only the models the court below spawns are built (the archives hold every hole, season and sky variant)
+        let wanted = court_layout(&mut iso, n as usize).map(|(list, plants)| court_models(&list, &plants, season, args.singles, &sky_colour));
+        let keep = |n: &str| !skip(n) && wanted.as_ref().is_none_or(|w| w.contains(n.rsplit(['\\', '/']).next().unwrap_or(n).trim_end_matches(".mdl")));
+        for data in &archives {
+            let data = data.as_slice();
             // the sun-shade map: the hole model's box frames it, the casters' triangles shade it
-            for_models(&data, |n| !skip(n), |stem, model, mats| {
+            for_models(data, keep, |stem, model, mats| {
                 hole_box.insert(stem.clone(), shade::packet_box(&model));
                 model_shapes.insert(stem.clone(), hst_sim::shade::Shape::new(&model, &mats));
                 raw_models.insert(stem, (model, mats));
             });
-            for (stem, parts, anim) in gs_models_anim(&data, |n| !skip(n), &mut images) {
+            for (stem, parts, anim) in gs_models_anim(data, keep, &mut images) {
                 let tags: Vec<_> = parts.iter().flat_map(|(_, g, t)| std::iter::repeat_n(*t, g.len())).collect();
                 let parts = add(parts.into_iter().map(|(m, g, _)| (m, g)).collect(), &mut meshes, &mut gs_materials);
                 anims.insert(stem.clone(), (anim, tags));
@@ -910,6 +919,38 @@ fn gs_models(data: &[u8], keep: impl Fn(&str) -> bool, images: &mut Assets<Image
 
 /// [`gs_models`] with each model's `.UVA`/`.MTA` ([`court_anim`]): meshes are further split per UV track, and each
 /// part carries the (material, packet) its animation is read from.
+/// The model stems the court load spawns from `library` (the same picks as its loops): this hole's in-season ground and
+/// backdrops up to the first sky with a colour, the props the plant records resolve to, and in singles the in-season
+/// clouds.
+fn court_models(
+    list: &[layout::Entry],
+    plants: &[layout::Placement],
+    season: usize,
+    singles: bool,
+    sky_colour: &std::collections::HashMap<String, [f32; 3]>,
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let mut sky = false;
+    for e in list.iter().filter(|e| matches!(e.dir.as_str(), "hole" | "bg") && (e.dir != "hole" || e.stem.contains("_h01")) && layout::in_season(&e.stem, season)) {
+        if e.stem.contains("_sky") {
+            if sky {
+                continue;
+            }
+            sky = sky_colour.contains_key(&e.stem);
+        }
+        out.insert(e.stem.clone());
+    }
+    for p in plants {
+        if let Some(e) = layout::resolve(list, p, season).filter(|e| matches!(e.dir.as_str(), "tree" | "prop" | "structure" | "billboard")) {
+            out.insert(e.stem.clone());
+        }
+    }
+    if singles {
+        out.extend(list.iter().filter(|e| e.dir == "cloud" && layout::in_season(&e.stem, season)).map(|e| e.stem.clone()));
+    }
+    out
+}
+
 fn gs_models_anim(
     data: &[u8],
     keep: impl Fn(&str) -> bool,

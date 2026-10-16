@@ -73,14 +73,17 @@ fn setup(
     let tex = [Popup::Bang, Popup::Sweat, Popup::Dots, Popup::Swirl, Popup::Skull].map(|p| {
         let name = p.texture().to_ascii_lowercase();
         let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&name)).expect("pop-up texture");
-        let pic = tim2::decode(&arc.read(e).expect("pop-up bytes")).expect("TIM2").remove(0);
-        images.add(Image::new(
+        let bytes = arc.read(e).expect("pop-up bytes");
+        let pic = tim2::decode(&bytes).expect("TIM2").remove(0);
+        let h = images.add(Image::new(
             Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 },
             TextureDimension::D2,
             pic.rgba,
             TextureFormat::Rgba8UnormSrgb,
             RenderAssetUsages::RENDER_WORLD,
-        ))
+        ));
+        crate::asset_use::source(h.id(), &bytes, &name);
+        h
     });
     // the bottom edge is the anchor
     let quad = meshes.add(Rectangle::new(1.0, 1.0).mesh().build().translated_by(Vec3::Y * 0.5));

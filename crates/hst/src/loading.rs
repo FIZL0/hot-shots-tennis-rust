@@ -159,7 +159,12 @@ pub fn cover(iso: String, court: usize, picture: Option<std::path::PathBuf>) -> 
         let art = entry(&mut disc, "MENU/MENU00B.XB0", "/loading.tm2");
         let mut images = world.resource_mut::<Assets<Image>>();
         let own = own.map(|i| (covering(i.width() as f32, i.height() as f32), images.add(i)));
-        let [wall, back] = [wall.as_deref().and_then(sheet), back.as_deref().and_then(bmp)].map(|i| i.map(|i| images.add(i)));
+        let [wall, back] = [(wall.as_deref(), sheet as fn(&[u8]) -> Option<Image>), (back.as_deref(), bmp)].map(|(d, f)| {
+            let d = d?;
+            let h = images.add(f(d)?);
+            crate::asset_use::source(h.id(), d, "loading");
+            Some(h)
+        });
         let art = art.map(|d| crate::play::menu_art::image(&mut images, &d, "loading"));
         let abs = |[x, y, w, h]: [f32; 4]| Node {
             position_type: PositionType::Absolute,

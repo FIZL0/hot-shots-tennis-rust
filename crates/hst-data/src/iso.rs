@@ -182,7 +182,9 @@ impl Iso {
             .files
             .get(&key)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{path} not on disc")))?;
-        self.read_at(off, size as usize)
+        let data = self.read_at(off, size as usize)?;
+        crate::uselog::disc(&key, &data);
+        Ok(data)
     }
 }
 

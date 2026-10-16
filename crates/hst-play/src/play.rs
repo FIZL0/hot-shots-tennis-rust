@@ -965,10 +965,11 @@ fn balloon_art(iso: &mut Iso, images: &mut Assets<Image>) -> [Handle<Image>; 4] 
                     .ends_with(&b.texture().to_ascii_lowercase())
             })
             .expect("balloon texture");
-        let pic = tim2::decode(&arc.read(e).expect("balloon bytes"))
+        let bytes = arc.read(e).expect("balloon bytes");
+        let pic = tim2::decode(&bytes)
             .expect("TIM2")
             .remove(0);
-        images.add(Image::new(
+        let h = images.add(Image::new(
             Extent3d {
                 width: pic.width,
                 height: pic.height,
@@ -978,7 +979,9 @@ fn balloon_art(iso: &mut Iso, images: &mut Assets<Image>) -> [Handle<Image>; 4] 
             pic.rgba,
             TextureFormat::Rgba8UnormSrgb,
             RenderAssetUsages::RENDER_WORLD,
-        ))
+        ));
+        crate::asset_use::source(h.id(), &bytes, b.texture());
+        h
     })
 }
 

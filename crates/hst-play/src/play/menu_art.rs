@@ -431,6 +431,12 @@ const OPTION_00: &[Label<'static>] = &[
 
 /// `data` (a TIM2 sheet called `name`) as an image: rebuilt if it's one of ours, else the disc's.
 pub fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
+    let h = sheet_image(images, data, name);
+    crate::asset_use::source(h.id(), data, name);
+    h
+}
+
+fn sheet_image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
     // match_stats names `info` by its folder ("/2d/info.tm2")
     let name = name.trim_end_matches(".tm2").rsplit('/').next().unwrap_or_default().to_ascii_lowercase();
     let off = OFF.load(Ordering::Relaxed);

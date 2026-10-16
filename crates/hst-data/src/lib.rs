@@ -10,4 +10,5 @@ pub mod noi;
 pub mod snd;
 pub mod texhash;
 pub mod tim2;
+pub mod uselog;
 pub mod xb;
