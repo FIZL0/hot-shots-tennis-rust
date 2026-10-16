@@ -133,12 +133,13 @@ fn setup(
 ) {
     let Ok(root) = root.single() else { return };
     let c = &court.0;
-    let mut store = Store { meshes: &mut meshes, images: &mut images, materials: &mut materials, binds: &mut binds, kept: &mut kept };
+    let mut store = Store { meshes: &mut meshes, images: &mut images, materials: &mut materials, binds: &mut binds, kept: &mut kept, upscaled: None };
     for (file, sky) in [("court.glb", false), ("gimmick.glb", false), ("sky.glb", true)] {
         let path = c.dir.join(file);
         if !crate::modfs::is_file(&path) {
             continue;
         }
+        store.upscaled = crate::mods::upscaled_in(&c.dir, &path);
         let parent = if sky {
             // stands at the eye like the disc skies (`backdrops`)
             commands.spawn((crate::Backdrop { yaw: 0.0, lift: 0.0 }, Transform::default(), Visibility::default(), ChildOf(root))).id()
@@ -171,6 +172,8 @@ pub(crate) struct Store<'a> {
     pub(crate) materials: &'a mut Assets<GsMaterial>,
     pub(crate) binds: &'a mut Assets<SkinnedMeshInverseBindposes>,
     pub(crate) kept: &'a mut Kept,
+    /// M110: the `.glb`'s `textures/upscaled/<stem>/` (`mods::upscaled_in`), drawn in place of its images.
+    pub(crate) upscaled: Option<std::path::PathBuf>,
 }
 
 /// Spawns a court mod `.glb`'s scene under `parent` in the layout court's game space (the scene's `game_space` node
@@ -315,7 +318,12 @@ fn materials(doc: &gltf::Document, blob: &[u8], s: &mut Store, role: Role) -> Re
     for im in doc.images() {
         let gltf::image::Source::View { view, mime_type } = im.source() else { return Err("images must be embedded".into()) };
         let bytes = blob.get(view.offset()..view.offset() + view.length()).ok_or("image outside the buffer")?;
-        let mut img = Image::from_buffer(bytes, ImageType::MimeType(mime_type), CompressedImageFormats::NONE, true, sampler(), RenderAssetUsages::RENDER_WORLD).map_err(|e| format!("image {}: {e}", im.index()))?;
+        let up = crate::mods::upscaled_image(s.upscaled.as_deref(), &im);
+        let (bytes, ty) = match &up {
+            Some(b) => (&b[..], ImageType::Extension("png")),
+            None => (bytes, ImageType::MimeType(mime_type)),
+        };
+        let mut img = Image::from_buffer(bytes, ty, CompressedImageFormats::NONE, true, sampler(), RenderAssetUsages::RENDER_WORLD).map_err(|e| format!("image {}: {e}", im.index()))?;
         // the GS works on the stored values
         img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
         tex.push(s.images.add(img));

@@ -4,7 +4,7 @@
     python3 tools/upscale_mods.py MODEL.pth [MODS_DIR ...] [--chain tools/chainner/upscale.chn]
 
 For each `mod.json` under MODS_DIR (default `mods/`), every image embedded in its costume `.glb`s and
-`racket.glb` without a `textures/upscaled/<glb stem>/<name>.png` yet is upscaled with the chain (its folders and
+`racket.glb` (a court mod: `court`/`gimmick`/`sky.glb` and its `npcs.json` people; an umpire mod: `umpire.glb`) without a `textures/upscaled/<glb stem>/<name>.png` yet is upscaled with the chain (its folders and
 model filled in here, run headless with `chainner run`) and written there. The game draws those when the
 "upscaled textures" setting is on. Mods with `"upscale": false` in mod.json are skipped. Already-upscaled images are skipped unless their source changed
 (`textures/upscaled/sources.json`); delete a PNG to redo it. Rerun after adding or rebuilding mods.
@@ -31,6 +31,19 @@ def glb_images(path):
         yield f"{im.get('name', f'image{i}')}.png", blob[o:o + v['byteLength']]
 
 
+# the fixed `.glb`s a court or umpire mod draws (court_mod.rs, mods/umpire.rs)
+KIND_GLBS = {'court': ['court.glb', 'gimmick.glb', 'sky.glb'], 'umpire': ['umpire.glb']}
+
+
+def npc_glbs(d):
+    """A court mod's people models (`npcs.json` `models`: a path, or `{"glb": path}`), in its folder."""
+    f = d / 'npcs.json'
+    if not f.exists():
+        return []
+    models = json.loads(f.read_text()).get('models', {}).values()
+    return [d / (v if isinstance(v, str) else v['glb']) for v in models]
+
+
 def sources(d):
     """`textures/upscaled/sources.json` of mod folder `d`: upscaled path -> SHA-1 of the image it was made from."""
     f = d / 'textures/upscaled/sources.json'
@@ -39,15 +52,22 @@ def sources(d):
 
 def todo(roots):
     """(mod folder, source PNG bytes, upscaled path) for every image not upscaled yet or changed since."""
+    seen = set()
     for root in roots:
         # glob, not rglob: mods/ is often a symlink to a build folder
         for mj in sorted(glob.glob(f'{root}/**/mod.json', recursive=True)):
             d = Path(mj).parent
+            # each mod once, however many symlinked paths reach it (a link back up loops ~40 deep)
+            if d.resolve() in seen:
+                continue
+            seen.add(d.resolve())
             done = sources(d)
             m = json.loads(Path(mj).read_text())
             if m.get('upscale', True) is False:
                 continue
-            glbs = [d / c for c in m.get('costumes', [])] + [d / 'racket.glb']
+            glbs = [d / c for c in m.get('costumes', [])] + [d / 'racket.glb'] + [d / f for f in KIND_GLBS.get(m.get('kind'), [])]
+            if m.get('kind') == 'court':
+                glbs += npc_glbs(d)
             for g in filter(Path.is_file, glbs):
                 for name, png in glb_images(g):
                     out = d / 'textures/upscaled' / g.stem / name
