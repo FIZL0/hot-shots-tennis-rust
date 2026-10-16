@@ -68,6 +68,8 @@ Main menu → Mods adds characters, courts and umpires from the store
 - **Browse mods**: pick one to install it.
 - **Upload my mod**: sign in with a Hugging Face *Write* token, then pick a mod to upload. It shows as
   *Not reviewed* until merged.
+- **Made your own?** Put its folder (`mod.json` + `.glb` files) in `mods/<id>/` beside the ISO; it shows in the
+  game and in Upload my mod. How to make one: [opentennis-mods](https://github.com/FIZL0/opentennis-mods).
 
 Upscaled textures: a PCSX2 texture pack made for the original game works as is, and mods can carry upscaled
 textures of their own (the "upscaled textures" setting). How to make either: [docs/DEVELOPING.md](docs/DEVELOPING.md).
