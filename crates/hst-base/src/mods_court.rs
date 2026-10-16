@@ -224,6 +224,17 @@ pub fn read(dir: &Path) -> Result<Court, String> {
     })
 }
 
+impl Court {
+    /// M117: the loading screen's picture before a match on it (`previews/loading.png`, any size, drawn to cover the
+    /// window); `None`: the layout court's.
+    pub fn loading_picture(&self) -> Option<PathBuf> {
+        Some(self.dir.join(LOADING)).filter(|p| crate::modfs::is_file(p))
+    }
+}
+
+/// M117: a court mod's own loading screen picture, inside the mod.
+pub const LOADING: &str = "previews/loading.png";
+
 /// The `source` (up to its first " (") of the mods repo's Get a Grip courts.
 const GET_A_GRIP: &str = "Hot Shots Tennis: Get a Grip";
 
@@ -243,7 +254,7 @@ mod tests {
 
     /// A court mod reads (layout, light, fog, sounds and their loops); a broken one (layout out of range, no
     /// court.glb, fog ending before it starts, another kind) is refused with the reason; `list` keeps only court
-    /// mods, packs one level down.
+    /// mods, packs one level down; M117: the loading picture is the mod's own when it ships one.
     #[test]
     fn reads_and_lists_court_mods() {
         let root = std::env::temp_dir().join(format!("hst-court-mod-{}", std::process::id()));
@@ -265,6 +276,8 @@ mod tests {
         );
         // M112: an older Get a Grip pack's people are left out
         std::fs::write(ok.join("npcs.json"), r#"{"models":{"fan":"fan.glb"},"people":[{"model":"fan","pos":[0,0,20]}]}"#).unwrap();
+        std::fs::create_dir_all(ok.join("previews")).unwrap();
+        std::fs::write(ok.join(LOADING), b"x").unwrap();
         put("pack/plain", r#"{"standard":1,"kind":"court","id":"plain","name":"Plain","layout":0}"#, &["court.glb"]);
         put("bad_layout", r#"{"standard":1,"kind":"court","id":"x","name":"X","layout":11}"#, &["court.glb"]);
         put("no_glb", r#"{"standard":1,"kind":"court","id":"y","name":"Y","layout":2}"#, &[]);
@@ -279,6 +292,8 @@ mod tests {
         assert_eq!(c.ambience.iter().map(|a| a.at).collect::<Vec<_>>(), [[5, 50], [0, 0]]);
         assert_eq!(c.people, None);
         let plain = read(&root.join("pack/plain")).unwrap();
+        // M117: its own loading picture, else none (the layout court's)
+        assert_eq!((c.loading_picture(), plain.loading_picture()), (Some(ok.join(LOADING)), None));
         assert_eq!((plain.light, plain.bgm, plain.ambience.len()), (None, None, 0));
         assert!(read(&root.join("bad_layout")).unwrap_err().contains("`layout`"));
         assert!(read(&root.join("no_glb")).unwrap_err().contains("court.glb"));

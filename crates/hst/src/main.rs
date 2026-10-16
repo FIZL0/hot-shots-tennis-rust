@@ -522,7 +522,7 @@ pub fn menu_mode(app: &mut App) {
 pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     let Cli { mut args, gfx, upscale, viewer_mod, mod_slot, slot_mods, swap_hands, names, umpire_mod, court_mod, .. } = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned()));
     textures::set(iso, upscale);
-    let cover = loading::cover(args.iso.clone(), args.court);
+    let cover = loading::cover(args.iso.clone(), args.court, court_mod.as_ref().and_then(|c| c.loading_picture()));
     let (iso, early) = (args.iso.clone(), lineup(&args, &slot_mods, viewer_mod.is_some().then_some(mod_slot)));
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     mode::Mode::new(move |app| {
