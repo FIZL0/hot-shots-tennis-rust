@@ -78,7 +78,7 @@ pub(super) enum Show {
 }
 
 /// B383: Show's options, in the pills' order.
-pub(super) const SHOWS: [Show; 5] = [Show::All, Show::Installed, Show::Updates, Show::Mine, Show::Wish];
+pub(super) const SHOWS: [Show; 5] = [Show::All, Show::Installed, Show::Updates, Show::Wish, Show::Mine];
 
 /// B383: the footer's Add mod word as last drawn (the browser's file input follows it; `mods_screen::add_rect`).
 #[cfg(not(test))]
@@ -231,6 +231,8 @@ pub(super) enum Slot {
     /// B448: the footer's words.
     Word(usize),
     Pill(usize),
+    /// The kind tabs in the panel's strip (by `kinds_shown`): touch has no L2 / R2.
+    Kind(usize),
     Tile(usize),
 }
 
@@ -525,19 +527,20 @@ impl View {
         out
     }
 
-    /// The search box, Upload, the footer's words and the pills: the slots before the tiles.
+    /// The search box, Upload, the footer's words, the pills and the kind tabs: the slots before the tiles.
     pub(super) fn browse_acts(&self) -> usize {
-        2 + self.words().len() + self.pills().len()
+        2 + self.words().len() + self.pills().len() + self.kinds_shown().len()
     }
 
     pub(super) fn slot(&self, sel: usize) -> Slot {
-        let (w, p) = (self.words().len(), self.pills().len());
+        let (w, p, k) = (self.words().len(), self.pills().len(), self.kinds_shown().len());
         match sel {
             0 => Slot::Search,
             1 => Slot::Upload,
             s if s < 2 + w => Slot::Word(s - 2),
             s if s < 2 + w + p => Slot::Pill(s - 2 - w),
-            s => Slot::Tile(s - 2 - w - p),
+            s if s < 2 + w + p + k => Slot::Kind(s - 2 - w - p),
+            s => Slot::Tile(s - 2 - w - p - k),
         }
     }
 
@@ -785,27 +788,42 @@ impl Menu {
     /// Returns whether it moved.
     pub(super) fn browse_move(&mut self, k: Press) -> bool {
         let v = &self.add;
-        let (nw, np, n) = (v.words().len(), v.pills().len(), v.tiles().len());
+        let kinds = v.kinds_shown();
+        let (nw, np, nk, n) = (v.words().len(), v.pills().len(), kinds.len(), v.tiles().len());
         let lines = lines(&v.secs(), lay_of(self).cols);
-        let (w0, p0, t0) = (2, 2 + nw, 2 + nw + np);
+        let (w0, p0, k0) = (2, 2 + nw, 2 + nw + np);
+        let t0 = k0 + nk;
         let tile = (n > 0).then(|| t0 + v.b.tile_at.min(n - 1));
         let ns = SHOWS.len();
         let shown = p0 + SHOWS.iter().position(|s| *s == v.b.show).unwrap_or(0);
-        let strip = if np > ns { p0 + v.b.pill_at.clamp(ns, np - 1) } else { shown };
+        // the panel's strip: the kind tabs, then the sort and filter; `pill_at` np.. is a kind tab
+        let kind = k0 + kinds.iter().position(|k| *k == v.kind).unwrap_or(0);
+        let strip = match v.b.pill_at {
+            i if i >= np && nk > 0 => k0 + (i - np).min(nk - 1),
+            i if np > ns => p0 + i.clamp(ns, np - 1),
+            _ if nk > 0 => kind,
+            _ => shown,
+        };
         let under = if nw > 0 { w0 } else { 1 };
         let to = match v.slot(self.sel) {
             // B471: the top bar: the Show tabs, then the search box on their right; ↓ to the sort and filter in the
             // panel's strip, ↓ again to the tiles
             Slot::Pill(i) if i < ns && k.left && i > 0 => self.sel - 1,
             Slot::Pill(i) if i < ns && k.right => if i + 1 < ns { self.sel + 1 } else { 0 },
-            Slot::Pill(i) if i < ns && k.down => p0 + ns,
+            Slot::Pill(i) if i < ns && k.down => if np > ns { p0 + ns } else { strip },
             Slot::Search if k.left => p0 + ns - 1,
             Slot::Search if k.down => if np > ns { p0 + np - 1 } else { tile.unwrap_or(under) },
+            Slot::Pill(i) if k.left && i == ns && nk > 0 => k0 + nk - 1,
             Slot::Pill(i) if k.left && i > ns => self.sel - 1,
             Slot::Pill(i) if k.right && i >= ns && i + 1 < np => self.sel + 1,
             Slot::Pill(i) if k.up && i >= ns && i + 1 == np => 0,
             Slot::Pill(_) if k.up => shown,
             Slot::Pill(i) if k.down && i >= ns => tile.unwrap_or(under),
+            Slot::Kind(j) if k.left && j > 0 => self.sel - 1,
+            Slot::Kind(j) if k.right && j + 1 < nk => self.sel + 1,
+            Slot::Kind(_) if k.right && np > ns => p0 + ns,
+            Slot::Kind(_) if k.up => shown,
+            Slot::Kind(_) if k.down => tile.unwrap_or(under),
             Slot::Tile(i) => match tile_step(&lines, i, k) {
                 Some(j) => t0 + j,
                 None if k.up => strip,
@@ -822,7 +840,8 @@ impl Menu {
         // the grid and the pills remember where the cursor left them
         match v.slot(self.sel) {
             Slot::Tile(i) if !matches!(v.slot(to), Slot::Tile(_)) => self.add.b.tile_at = i,
-            Slot::Pill(i) if i >= SHOWS.len() && !matches!(v.slot(to), Slot::Pill(_)) => self.add.b.pill_at = i,
+            Slot::Pill(i) if i >= SHOWS.len() && !matches!(v.slot(to), Slot::Pill(_) | Slot::Kind(_)) => self.add.b.pill_at = i,
+            Slot::Kind(j) if !matches!(v.slot(to), Slot::Pill(_) | Slot::Kind(_)) => self.add.b.pill_at = np + j,
             _ => {}
         }
         let moved = to != self.sel;
@@ -921,6 +940,14 @@ impl Menu {
                 (self.add.top, self.add.b.tile_at) = (0, 0);
                 out.push(Sound(0));
             }
+            Slot::Kind(j) if k.ok => {
+                let to = v.kinds_shown()[j];
+                self.mods_kind(to, out);
+                // the cursor stays on the tab (the strip's slots move with the kind: Texture packs has no sort)
+                let v = &self.add;
+                self.sel = 2 + v.words().len() + v.pills().len() + v.kinds_shown().iter().position(|k| *k == to).unwrap_or(0);
+            }
+            Slot::Kind(_) => {}
             Slot::Tile(_) if v.packs_page() => self.pack_press(k, out),
             Slot::Tile(_) => {
                 let Some(e) = v.hovered(self.sel).cloned() else { return };
@@ -1591,7 +1618,11 @@ fn strip(d: &mut Draw, m: &Menu, l: &Lay) {
         rx -= gap;
     }
     let room = if l.stack { w } else { rx - x - gap };
-    mods_kind::row(d, [x, y, room], v.kind, v.kind_counts(), &v.kinds_shown());
+    let cursor = match v.slot(m.sel) {
+        Slot::Kind(j) if v.child.is_none() => Some(j),
+        _ => None,
+    };
+    mods_kind::row(d, [x, y, room], v.kind, v.kind_counts(), &v.kinds_shown(), cursor);
 }
 
 /// The tiles on view under their headings, the scroll bar, or what's missing when there are none.
@@ -2117,6 +2148,7 @@ fn slot_text(m: &Menu) -> (String, String) {
                 Pill::Sort => "Sort".into(),
                 Pill::Filter => "Filter".into(),
             },
+            Slot::Kind(j) => mods_kind::name(v.kinds_shown()[j]).into(),
             Slot::Tile(_) => String::new(),
         },
     };
@@ -2144,6 +2176,7 @@ pub(super) fn info(m: &Menu) -> String {
             },
             _ => "Back to every mod in the store.".into(),
         },
+        Slot::Kind(j) => format!("Show only {}. {}", mods_kind::name(v.kinds_shown()[j]).to_lowercase(), mods_kind::online(v.kinds_shown()[j])),
         Slot::Pill(i) => match v.pills()[i] {
             Pill::Show(Show::All) => "Every mod on the store.".into(),
             Pill::Show(Show::Installed) => format!("The mods on this device ({}): remove them, or add one from a .zip.", v.locals().len()),
@@ -2200,6 +2233,7 @@ pub(super) fn legend(m: &Menu) -> Vec<(super::super::legend::Act, &'static str)>
         Slot::Search if !v.pad && !v.phone => l.push((L::Ok, "Type")),
         Slot::Search => l.push((L::Ok, "Keyboard")),
         Slot::Upload => l.push((L::Ok, "Upload")),
+        Slot::Kind(_) => l.push((L::Ok, "Show")),
         Slot::Pill(i) => match v.pills()[i] {
             Pill::Show(_) => l.push((L::Ok, "Show")),
             Pill::Sort => l.push((L::Ok, "Sort")),
