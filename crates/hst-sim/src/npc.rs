@@ -1,19 +1,34 @@
-//! Background figures: which of a court's creature records (layout category 23) come to life at court load, as
-//! what, and where they stand. A creature linked to an anchor record (category 14) stands at the anchor's position
+//! Background figures: which of a court's creature records (`layout::category::CREATURE`) come to life at court
+//! load, as what, and where they stand. A creature linked to an anchor record (a path marker) stands at the anchor's position
 //! minus its own (FPU subtractions); every figure's matrix is a turn by its yaw at that position.
 #![deny(clippy::float_arithmetic)]
 
 use crate::ps2::{self, F};
+use crate::rng::{TWO_POW_M32, coin, r15};
 use crate::vu0::V4;
 use crate::{contact, libm, mesh, sound};
 use crate::world::{self, M4};
 use hst_data::exe::{EmitterRow, NpcEntry, TriggerRow};
+use hst_data::layout::category::{CREATURE, PATH_MARKER};
 use hst_data::layout::{self, Entry, Placement};
+
+/// Court 5, the stadium court: its own stand crowds and cheer marks, the umpire's "deuce again".
+pub const STADIUM: u8 = 5;
+
+/// The roster's creature kinds (`NpcEntry::kind`): trigger types, then the walkers, the umpire's chair and
+/// court 5's crowds.
+mod roster {
+    pub const LAST_TRIGGER: u8 = 53;
+    pub const FIRST_WALKER: u8 = 54;
+    pub const LAST_WALKER: u8 = 59;
+    pub const UMPIRE: u8 = 60;
+    pub const FIRST_CROWD: u8 = 61;
+}
 
 /// What a creature record becomes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// A trigger creature of this type (0..53); only made with an anchor.
+    /// A trigger creature of this type (0..=`LAST_TRIGGER`, `ty`); only made with an anchor.
     Trigger(u8),
     /// Walking spectator 0..5 (npc00..npc05).
     Walker(u8),
@@ -25,7 +40,7 @@ pub enum Kind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Npc {
-    /// Index among the court's category-23 records, in file order.
+    /// Index among the court's creature records, in file order.
     pub record: usize,
     pub kind: Kind,
     pub world: M4,
@@ -36,22 +51,22 @@ pub struct Npc {
     pub start: i16,
 }
 
-/// The path a creature's link (`(category, index)`) names: the linked category-14 marker's `sub` is the path's id,
+/// The path a creature's link (`(category, index)`) names: the linked path marker's `sub` is the path's id,
 /// its nodes every marker with that id in file order; and the linked marker's place among them.
 pub fn path(plants: &[Placement], link: Option<(u8, u16)>) -> (Vec<[f32; 4]>, Vec<f32>, i16) {
-    let markers: Vec<&Placement> = plants.iter().filter(|p| p.category == 14).collect();
-    let Some(at) = link.filter(|l| l.0 == 14).and_then(|(_, i)| markers.get(i as usize)) else { return (Vec::new(), Vec::new(), 0) };
+    let markers: Vec<&Placement> = plants.iter().filter(|p| p.category == PATH_MARKER).collect();
+    let Some(at) = link.filter(|l| l.0 == PATH_MARKER).and_then(|(_, i)| markers.get(i as usize)) else { return (Vec::new(), Vec::new(), 0) };
     let nodes: Vec<&&Placement> = markers.iter().filter(|p| p.sub == at.sub).collect();
     let start = nodes.iter().position(|p| std::ptr::eq(**p, *at)).unwrap_or(0) as i16;
     (nodes.iter().map(|p| [p.pos[0], p.pos[1], p.pos[2], 1.0]).collect(), nodes.iter().map(|p| p.radius).collect(), start)
 }
 
-/// Where each category-23 record stands, in file order (links resolved against the anchors' positions).
+/// Where each creature record stands, in file order (links resolved against the anchors' positions).
 pub fn positions(plants: &[Placement]) -> Vec<[f32; 3]> {
     let of = |cat: u8, i: u16| plants.iter().filter(|p| p.category == cat).nth(i as usize).map(|p| p.pos);
     plants
         .iter()
-        .filter(|p| p.category == 23)
+        .filter(|p| p.category == CREATURE)
         .map(|p| match p.link.and_then(|(c, i)| of(c, i)) {
             Some(a) => std::array::from_fn(|k| (F(a[k]) - p.pos[k]).0),
             None => p.pos,
@@ -65,16 +80,19 @@ pub fn spawn(entries: &[Entry], plants: &[Placement], roster: &[NpcEntry], walke
     let pos = positions(plants);
     plants
         .iter()
-        .filter(|p| p.category == 23)
+        .filter(|p| p.category == CREATURE)
         .enumerate()
         .filter_map(|(record, p)| {
             let stem = &layout::resolve(entries, p, 0)?.stem;
             let kind = match roster.iter().find(|e| e.name.eq_ignore_ascii_case(stem))?.kind {
-                // ponytail: the anchor object exists for every category-14 link in the courts checked
-                t @ 0..=53 => (p.link?.0 == 14).then_some(Kind::Trigger(t))?,
-                t @ 54..=59 => (players < 3 || walkers[t as usize - 54][2] != 0).then_some(Kind::Walker(t - 54))?,
-                60 => (players >= 2).then_some(Kind::Umpire)?,
-                t => Kind::Court5(t - 61),
+                // ponytail: the anchor object exists for every path-marker link in the courts checked
+                t @ 0..=roster::LAST_TRIGGER => (p.link?.0 == PATH_MARKER).then_some(Kind::Trigger(t))?,
+                t @ roster::FIRST_WALKER..=roster::LAST_WALKER => {
+                    let w = t - roster::FIRST_WALKER;
+                    (players < 3 || walkers[w as usize][2] != 0).then_some(Kind::Walker(w))?
+                }
+                roster::UMPIRE => (players >= 2).then_some(Kind::Umpire)?,
+                t => Kind::Court5(t - roster::FIRST_CROWD),
             };
             let mut world = world::mat_mul(&world::IDENTITY, &world::rot_y(p.yaw));
             world[3] = [pos[record][0], pos[record][1], pos[record][2], 1.0];
@@ -86,13 +104,12 @@ pub fn spawn(entries: &[Entry], plants: &[Placement], roster: &[NpcEntry], walke
 
 /// A walking spectator standing in place: its animation (the game's controller: `frame` shown, `next` the one
 /// after, advancing by `speed`), whether it is reacting to a point, and the stagger that restarts the idle loop
-/// one walker per tick after a new point. Animations: 0 idle, 1 its variant, 2 (a quiet reaction), 3/5 loop
-/// (5 the cheer), 4 shown frozen.
+/// one walker per tick after a new point. Animations: `anim`.
 /// Its moves (dodging, turning back, collisions) are [`Wander`], stepped by [`Walker::step_around`].
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Walker {
     pub slot: u32,
-    /// 0 idle, 1 a point to react to (taken on the next tick), 2 reacted.
+    /// `mode`: idle, a point to react to (taken on the next tick), reacted.
     pub mode: u8,
     /// Ticks since a new point while restarting (−1 when done): the idle loop restarts when it reaches `slot`.
     pub counter: i32,
@@ -100,13 +117,35 @@ pub struct Walker {
     pub frame: f32,
     pub next: f32,
     pub speed: f32,
-    /// Advances every tick (cleared by animation 4).
+    /// Advances every tick (cleared by the frozen animation).
     pub advancing: bool,
     /// Length of each animation, in frames.
     pub lens: [f32; 7],
-    /// The animation loops (3 and 5 when set; a dodge's end stops animation 3 looping).
+    /// The animation loops (the dodge and the cheer when set; a dodge's end stops the dodge's looping).
     pub looping: bool,
     pub wander: Wander,
+}
+
+/// A walker's animations.
+pub mod anim {
+    pub const IDLE: u32 = 0;
+    /// The idle's variant (one end of the idle in five).
+    pub const IDLE_ALT: u32 = 1;
+    /// The quiet reaction to a point.
+    pub const QUIET: u32 = 2;
+    /// Stepping aside (loops).
+    pub const DODGE: u32 = 3;
+    /// Stopped: shown frozen on its first frame.
+    pub const FROZEN: u32 = 4;
+    /// The cheer (loops).
+    pub const CHEER: u32 = 5;
+}
+
+/// A walker's reaction state.
+pub mod mode {
+    pub const IDLE: u8 = 0;
+    pub const REACT: u8 = 1;
+    pub const REACTED: u8 = 2;
 }
 
 impl Walker {
@@ -135,12 +174,12 @@ impl Walker {
 
     fn set_anim(&mut self, anim: u32, players: u32) {
         self.anim = anim;
-        self.looping = matches!(anim, 3 | 5);
+        self.looping = matches!(anim, anim::DODGE | anim::CHEER);
         self.set_frame(0.0);
         // the idle loops play at double speed on alternate ticks with four players
-        self.speed = if players >= 3 && anim < 2 { 2.0 } else { 1.0 };
-        self.advancing = anim != 4;
-        if anim == 4 {
+        self.speed = if players >= 3 && anim < anim::QUIET { 2.0 } else { 1.0 };
+        self.advancing = anim != anim::FROZEN;
+        if anim == anim::FROZEN {
             self.advance();
         }
     }
@@ -148,30 +187,30 @@ impl Walker {
     /// A random frame in the `k`th of `n` equal parts of `[0, span)`.
     fn random_frame(&mut self, part: f32, roll: &mut impl FnMut() -> u32) {
         let k = self.slot as f32;
-        let r = (F(2.3283064e-10) * ps2::utof(roll())).0;
+        let r = (F(TWO_POW_M32) * ps2::utof(roll())).0;
         self.set_frame((F(k) * part).lerp((F(k) + 1.0) * part, r).0);
     }
 
-    /// The match's start: with more than one player the cheer (animation 5) from a random frame in this walker's
+    /// The match's start: with more than one player the cheer from a random frame in this walker's
     /// sixth of it, until the first point restarts the idle loops; else nothing until then.
     pub fn start(&mut self, players: u32, roll: &mut impl FnMut() -> u32) {
         self.counter = 0;
         if players > 1 {
-            self.set_anim(5, players);
-            self.random_frame((F(self.lens[5]) / 6.0).0, roll);
+            self.set_anim(anim::CHEER, players);
+            self.random_frame((F(self.lens[anim::CHEER as usize]) / 6.0).0, roll);
             self.counter = -1;
         }
     }
 
     /// A point was decided (the game skips faults and lets).
     pub fn react(&mut self) {
-        self.mode = 1;
+        self.mode = mode::REACT;
     }
 
     /// A new point: stop reacting; with `stagger` (any point after a decided one, or the match's first with more
     /// than one player) restart the idle loops one walker per tick.
     pub fn new_point(&mut self, stagger: bool) {
-        self.mode = 0;
+        self.mode = mode::IDLE;
         if stagger {
             self.counter = 0;
         }
@@ -197,8 +236,8 @@ impl Walker {
     fn stagger(&mut self, players: u32, roll: &mut impl FnMut() -> u32) {
         if self.counter >= 0 {
             if self.counter == self.slot as i32 {
-                self.set_anim(0, players);
-                self.random_frame((F(self.lens[0]) / 6.0).0, roll);
+                self.set_anim(anim::IDLE, players);
+                self.random_frame((F(self.lens[anim::IDLE as usize]) / 6.0).0, roll);
             }
             self.counter += 1;
             if (self.slot as i32) < self.counter {
@@ -208,28 +247,28 @@ impl Walker {
     }
 
     fn animate(&mut self, players: u32, cheer: bool, tick: i32, roll: &mut impl FnMut() -> u32) {
-        if self.mode == 1 {
+        if self.mode == mode::REACT {
             if players == 1 {
-                self.set_anim(5, players);
+                self.set_anim(anim::CHEER, players);
             } else {
-                self.set_anim(if cheer { 5 } else { 2 }, players);
+                self.set_anim(if cheer { anim::CHEER } else { anim::QUIET }, players);
                 self.random_frame(5.0, roll);
             }
-            self.mode = 2;
+            self.mode = mode::REACTED;
         }
         let ended = self.lens[self.anim as usize] <= self.frame;
         match self.anim {
-            1..=4 if ended => self.set_anim(0, players),
-            0 if ended => {
-                if (roll() >> 16 & 0x7fff) % 100 + 1 < 21 {
-                    self.set_anim(1, players);
+            anim::IDLE_ALT..=anim::FROZEN if ended => self.set_anim(anim::IDLE, players),
+            anim::IDLE if ended => {
+                if r15(roll()) % 100 + 1 < 21 {
+                    self.set_anim(anim::IDLE_ALT, players);
                 } else {
                     self.set_frame(0.0);
                 }
             }
             _ => {}
         }
-        let go = if players >= 3 && self.anim < 2 { tick % 2 == (self.slot >= 2) as i32 } else { self.advancing };
+        let go = if players >= 3 && self.anim < anim::QUIET { tick % 2 == (self.slot >= 2) as i32 } else { self.advancing };
         if go {
             self.advance();
         }
@@ -238,7 +277,7 @@ impl Walker {
 
 /// A walker's drawn matrix: standing at `home`, turned toward (0, 0, `z`). Every serve placement (and the
 /// walkers' reset) turns them to the court centre (`z` 0); a point they react to turns them to the middle of the
-/// winners' half, `z` = 6.4 when the winning team's first player stands at z ≥ 0, else −6.4. Rows (up × forward,
+/// winners' half, `z` = 6.4 (the service line) when the winning team's first player stands at z ≥ 0, else −6.4. Rows (up × forward,
 /// up, forward, home); the layout's yaw only lasts until the first serve.
 pub fn walker_facing(home: [f32; 4], z: f32) -> M4 {
     let (dx, dz) = ((F::ZERO - home[0]).0, (F(z) - home[2]).0);
@@ -264,7 +303,7 @@ pub struct Around<'a> {
 /// A walker's moves: it steps away (a tenth of a metre a tick, for up to 30 ticks) from a player, another walker
 /// or the ball coming at it, sliding along the court's edges and whatever it walks into, and turns back to the
 /// court centre over 10 ticks once nothing is near; something near on 3 ticks of a 5-tick window stops it
-/// (animation 4) until nothing is.
+/// (`anim::FROZEN`) until nothing is.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Wander {
     pub home: V4,
@@ -290,12 +329,28 @@ pub struct Wander {
 }
 
 /// Walker radius.
-const WALKER_R: f32 = f32::from_bits(0x3e99_999a);
-const PI: f32 = f32::from_bits(0x4049_0fdb);
+const WALKER_R: f32 = 0.3;
+const PI: f32 = std::f32::consts::PI;
 const NEG_PI: f32 = -PI;
-/// The court rectangle the walkers keep out of: its sides' planes (normal, point) and corners (normal, point).
-const HALF_W: f32 = f32::from_bits(0x40af_851f); // 5.485
-const HALF_L: f32 = f32::from_bits(0x413e_28f6); // 11.885
+/// The court rectangle the walkers keep out of (the doubles court): its sides' planes (normal, point) and corners
+/// (normal, point).
+const HALF_W: f32 = crate::lines::DOUBLES_SIDELINE;
+const HALF_L: f32 = crate::lines::BASELINE;
+/// A walker's dodge: a tenth of a metre a tick, for up to this many ticks; something near on `FREEZE_HITS` ticks
+/// of a `FREEZE_WINDOW`-tick window freezes it.
+const DODGE_STEP: f32 = 0.1;
+const DODGE_TICKS: i32 = 30;
+const FREEZE_HITS: i32 = 3;
+const FREEZE_WINDOW: i32 = 5;
+/// The turn back to the court centre takes this many ticks.
+const TURN_TICKS: i32 = 10;
+/// A slide's sweeps: each hit's time is at least `MIN_HIT_T`; it stops at `SLIDE_HITS` hits or a tenth of the
+/// step left.
+const MIN_HIT_T: f32 = 0.01;
+const SLIDE_HITS: i32 = 30;
+const SLIDE_REST: f32 = 0.1;
+/// Degrees to radians, as the game's literal.
+const DEG: f32 = 0.017453292;
 const SIDES: [(V4, V4); 4] = [
     ([0.0, 0.0, 1.0, 0.0], [-HALF_W, 0.0, HALF_L, 0.0]),
     ([0.0, 0.0, -1.0, 0.0], [-HALF_W, 0.0, -HALF_L, 0.0]),
@@ -358,21 +413,21 @@ impl Wander {
             self.angle = (F(yaw) + PI).0;
             let target = (F(libm::atan2f((F::ZERO - m[3][0]).0, (F::ZERO - m[3][2]).0)) + PI).0;
             let mut diff = if self.angle <= target { (F(target) - self.angle).0 } else { (F(self.angle) - target).0 };
-            let mut alt = (F(f32::from_bits(0x40c9_0fdb)) + if diff <= 0.0 { F(diff) } else { -F(diff) }).0;
+            let mut alt = (F(world::TWO_PI) + if diff <= 0.0 { F(diff) } else { -F(diff) }).0;
             if !(diff <= 0.0) {
                 alt = (-F(alt)).0;
             }
             if alt.abs() <= diff.abs() {
                 diff = alt;
             }
-            self.turn_step = (F(diff) / 10.0).0;
+            self.turn_step = (F(diff) / TURN_TICKS as f32).0;
             if !((F(self.angle) + self.turn_step).0 < target) {
                 self.turn_step = (-F(self.turn_step)).0;
             }
             self.angle = (F(self.angle) - PI).0;
         }
         let mut rows = None;
-        if self.turn_count < 10 {
+        if self.turn_count < TURN_TICKS {
             let mut a = (F(self.angle) + self.turn_step).0;
             self.angle = a;
             if !(a < PI) || a <= NEG_PI {
@@ -455,12 +510,12 @@ impl Wander {
             };
             hits += 1;
             start = contact::contact_point(Some(&hit), start, end, r);
-            let t = if hit.t <= f32::from_bits(0x3c23_d70a) { f32::from_bits(0x3c23_d70a) } else { hit.t };
+            let t = if hit.t <= MIN_HIT_T { MIN_HIT_T } else { hit.t };
             k = (F(k) * (F(1.0) - t)).0;
             let m = hit.normal;
             let dot = (F(v[1]) * m[1]).madd(v[0], m[0]).madd(v[2], m[2]).0;
             v = std::array::from_fn(|i| (F(v[i]) - F(m[i]) * dot).0);
-            if k <= f32::from_bits(0x3dcc_cccd) || hits >= 30 {
+            if k <= SLIDE_REST || hits >= SLIDE_HITS {
                 break;
             }
         }
@@ -502,9 +557,9 @@ impl Walker {
             w.ticks = 0;
             let t = (F(thr) - d).0;
             // step aside, to whichever side (90° or 270° from its way) takes it further from it
-            // ponytail: the walkers' "step straight away" setting (+0xc4) is never set, so its branch isn't ported
+            // ponytail: the walkers' "step straight away" setting is never set, so its branch isn't ported
             for i in 0..2 {
-                let a = (F(f32::from_bits(0x3c8e_fa35)) * (90 + 180 * i) as f32).0;
+                let a = (F(DEG) * (90 + 180 * i) as f32).0;
                 let s = turn_xz(a, n).map(|c| (F(c) * t).0);
                 let q = [(F(pos[0]) + s[0]).0, (F(pos[1]) + s[1]).0, (F(pos[2]) + s[2]).0];
                 if d < dist(p, q) {
@@ -546,11 +601,11 @@ impl Walker {
         let mut vel = [0.0; 4];
         let mut seen = self.wander.world[3];
         seen[1] = 0.0;
-        if self.mode == 0 {
+        if self.mode == mode::IDLE {
             let near = self.detect(at, seen);
             let w = &mut self.wander;
             if !w.dodging {
-                if self.anim == 3 {
+                if self.anim == anim::DODGE {
                     self.looping = false;
                 }
                 if !w.frozen {
@@ -560,14 +615,14 @@ impl Walker {
                         if let Some(r) = w.turn_back(&m) {
                             rows = r;
                         }
-                        if w.turn_count >= 10 {
+                        if w.turn_count >= TURN_TICKS {
                             w.turning = false;
                         }
                     }
                 } else {
                     if near {
                         (w.dodging, w.ticks) = (false, 0);
-                    } else if self.anim == 4 {
+                    } else if self.anim == anim::FROZEN {
                         (self.advancing, w.frozen) = (true, false);
                     } else {
                         w.frozen = false;
@@ -575,8 +630,8 @@ impl Walker {
                     w.turn_count = 0;
                 }
             } else {
-                if self.anim != 3 {
-                    self.set_anim(3, players);
+                if self.anim != anim::DODGE {
+                    self.set_anim(anim::DODGE, players);
                 }
                 let w = &mut self.wander;
                 if near {
@@ -590,24 +645,24 @@ impl Walker {
             let w = &mut self.wander;
             if w.dodging {
                 w.ticks += 1;
-                vel = w.dir.map(|c| (F(c) * f32::from_bits(0x3dcc_cccd)).0);
-                if w.ticks >= 30 {
+                vel = w.dir.map(|c| (F(c) * DODGE_STEP).0);
+                if w.ticks >= DODGE_TICKS {
                     (w.window, w.ticks, w.dodging, w.hits) = (0, 0, false, 0);
-                    self.set_anim(0, players);
+                    self.set_anim(anim::IDLE, players);
                 }
                 let w = &mut self.wander;
-                if w.window % 5 == 0 {
-                    if w.hits < 3 {
+                if w.window % FREEZE_WINDOW == 0 {
+                    if w.hits < FREEZE_HITS {
                         w.hits = 0;
                     } else {
                         (w.ticks, w.dodging) = (0, false);
-                        self.set_anim(4, players);
+                        self.set_anim(anim::FROZEN, players);
                         (self.wander.frozen, self.wander.hits) = (true, 0);
                     }
                 }
                 self.wander.window += 1;
             }
-        } else if self.mode == 1 {
+        } else if self.mode == mode::REACT {
             rows = walker_facing(self.wander.home, at.side);
         }
         let w = &mut self.wander;
@@ -642,7 +697,7 @@ pub fn cheerers(count: usize, roll: &mut impl FnMut() -> u32) -> [bool; 6] {
     let mut picks = [usize::MAX; 3];
     let mut k = 0;
     while k < 3 {
-        let p = (roll() >> 16 & 0x7fff) as usize % count;
+        let p = r15(roll()) as usize % count;
         if !picks[..k].contains(&p) {
             picks[k] = p;
             k += 1;
@@ -692,7 +747,7 @@ impl Default for Cheers {
 impl Cheers {
     /// The marks of a match on `court`.
     pub fn new(court: u8) -> Cheers {
-        Cheers { court5: court == 5, ..Cheers::default() }
+        Cheers { court5: court == STADIUM, ..Cheers::default() }
     }
 
     /// Walker `slot` at `pos` (its neck) cheers (written at the count even when the count is full); returns the mark
@@ -751,7 +806,7 @@ impl Cheers {
         for c in &mut self.slots[at..at + self.count] {
             if c.delay < 1 {
                 if c.n % 5 == 0 && c.n != 0 {
-                    c.pos = std::array::from_fn(|i| (F(c.base[i]) + CHEER_JUMP[(roll() >> 16 & 0x7fff) as usize % 6]).0);
+                    c.pos = std::array::from_fn(|i| (F(c.base[i]) + CHEER_JUMP[r15(roll()) as usize % 6]).0);
                 }
                 c.n += 1;
             }
@@ -798,7 +853,7 @@ impl Crowd {
     /// One draw for the starting level; the tick count and direction carry on.
     pub fn cheer(&mut self, roll: &mut impl FnMut() -> u32) {
         self.on = true;
-        self.level = (roll() >> 16 & 0x7fff) as i32 % 3 + 1;
+        self.level = r15(roll()) as i32 % 3 + 1;
     }
 
     pub fn step(&mut self) {
@@ -828,6 +883,21 @@ pub fn crowd_cheers_point(replay: bool, event: bool, call: u8) -> bool {
 pub const EMITTERS: [u8; 19] = [4, 7, 11, 12, 13, 16, 17, 23, 24, 25, 26, 35, 36, 41, 42, 45, 46, 50, 51];
 /// The emitter type whose sound sweeps across the stereo field after it starts.
 const SWEEPER: u8 = 36;
+
+/// The trigger types' own messages ([`Trigger::message`] and those the creature sends itself).
+pub mod call {
+    pub const TICK: u8 = 2;
+    pub const RESET: u8 = 4;
+    pub const POINT: u8 = 6;
+    pub const PAUSE_OVER: u8 = 7;
+    pub const GAME_END: u8 = 8;
+}
+
+/// The match's messages a trigger creature acts on ([`Trigger::hear`]): entering the change of ends, the serve
+/// set-up, and a reset without the serve set-up's keeping.
+const CHANGE_ENDS: u32 = crate::rally::msg::CHANGE_ENDS as u32;
+const SERVE: u32 = crate::rally::msg::SERVE as u32;
+const RESET: u32 = 0x1a;
 
 /// An ambient sound emitter: counts down to its next play, then draws a new gap.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -860,7 +930,7 @@ impl Emitter {
     }
 
     fn arm(&mut self, roll: &mut impl FnMut() -> u32) {
-        let r = (F(2.3283064e-10) * ps2::utof(roll())).0;
+        let r = (F(TWO_POW_M32) * ps2::utof(roll())).0;
         self.timer = (F(self.row.base as f32) * F(1.0).msub(self.row.jitter, r)).0 as i32;
     }
 
@@ -871,7 +941,7 @@ impl Emitter {
             self.timer -= 1;
             if self.timer == 0 && self.row.sound != -1 {
                 (self.pan, self.sweep, play) = (sound::place(self.pos).0 as f32, 240, true);
-                self.down = roll() >> 16 & 1 != 0;
+                self.down = coin(roll());
             }
         }
         if self.timer < 1 {
@@ -1059,7 +1129,7 @@ fn jitter((n, j): (i16, f32), roll: &mut impl FnMut() -> u32) -> i16 {
     if j == 0.0 {
         return n;
     }
-    (F(n as f32) * F(1.0).msub(j, F(2.3283064e-10) * ps2::utof(roll()))).0 as i32 as i16
+    (F(n as f32) * F(1.0).msub(j, F(TWO_POW_M32) * ps2::utof(roll()))).0 as i32 as i16
 }
 
 fn dist2([x, y, z, _]: [f32; 4]) -> f32 {
@@ -1241,7 +1311,7 @@ impl Trigger {
         };
         self.stage = row.stage;
         (self.active, self.on, self.moving) = (true, true, !self.path.is_empty());
-        if self.moving && row.reverse_roll && roll() >> 16 & 1 != 0 {
+        if self.moving && row.reverse_roll && coin(roll()) {
             self.reverse = true;
         }
         self.world[3] = match row.start {
@@ -1256,7 +1326,7 @@ impl Trigger {
             self.wait = if self.msg == 6 { 0 } else { self.pause };
         }
         self.speed = 1.0;
-        self.callback(row, 4, near, roll)
+        self.callback(row, call::RESET, near, roll)
     }
 
     /// Type 44 made with `voice` (`Game::deciding_voices`, the first four made; the rest silent): its call's
@@ -1264,7 +1334,7 @@ impl Trigger {
     pub fn give_voice(&mut self, row: &TriggerRow, voice: (i32, i32), roll: &mut impl FnMut() -> u32) {
         self.voice = voice;
         if voice.1 != 0 {
-            let u = (F(2.3283064e-10) * ps2::utof(roll())).0;
+            let u = (F(TWO_POW_M32) * ps2::utof(roll())).0;
             self.gap = (F(voice.1 as f32) * F(1.0).msub(row.idle.1, u)).0 as i32;
         }
     }
@@ -1275,7 +1345,7 @@ impl Trigger {
         if row.exact {
             return p;
         }
-        let u = (F(2.3283064e-10) * ps2::utof(roll())).0;
+        let u = (F(TWO_POW_M32) * ps2::utof(roll())).0;
         let a = (F::ZERO + NEG_PI).madd(world::TWO_PI, u).0;
         let (f, r) = (world::mat_mul(&world::IDENTITY, &world::rot_y(a))[2], self.radii.get(i).copied().unwrap_or(0.0));
         [(F(p[0]) + F(f[0]) * r).0, (F::ZERO + p[1]).madd(f[1], r).0, (F::ZERO + p[2]).madd(f[2], r).0, (F::ZERO + p[3]).madd(f[3], r).0]
@@ -1291,7 +1361,7 @@ impl Trigger {
             self.from = self.pos();
         }
         let target = match row.mode {
-            0 => self.path[((roll() >> 16 & 0x7fff) % n as u32) as usize], // ponytail: area points (rows without `exact`)
+            0 => self.path[(r15(roll()) % n as u32) as usize], // ponytail: area points (rows without `exact`)
             1..=3 | 5 => {
                 self.prev = self.node;
                 self.node += 1;
@@ -1494,10 +1564,10 @@ impl Trigger {
             if self.timer == 0 && row.sound != -1 {
                 sounds.push(row.sound);
                 (self.pan, self.sweep) = (sound::place([self.world[3][0], self.world[3][1], self.world[3][2]]).0 as f32, 240);
-                self.down = roll() >> 16 & 1 != 0;
+                self.down = coin(roll());
             }
         }
-        sounds.extend(self.callback(row, 2, near, roll));
+        sounds.extend(self.callback(row, call::TICK, near, roll));
         // the draw after the tick counts `stage` down (set to 1 at a one-shot path's end): at 0 it is gone and its
         // type's startled flag clears
         // ponytail: rows with byte +0x71 (of the moving ones only type 32) count only while in view; not ported
@@ -1511,8 +1581,8 @@ impl Trigger {
         sounds
     }
 
-    /// The match's messages, sent whether it is active or not: 6 the point decided, 7 the scoreboard's pause over,
-    /// 8 a game's end (just before its reset); the sounds started.
+    /// The match's messages (`call`), sent whether it is active or not: the point decided, the scoreboard's pause
+    /// over, a game's end (just before its reset); the sounds started.
     pub fn message(&mut self, row: &TriggerRow, msg: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         self.callback(row, msg, near, roll)
     }
@@ -1523,13 +1593,13 @@ impl Trigger {
     pub fn hear(&mut self, row: &TriggerRow, msg: u32, replaying: bool, phase: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         self.msg = msg;
         match msg {
-            0xc => {
-                let mut sounds = self.callback(row, 8, near, roll);
+            CHANGE_ENDS => {
+                let mut sounds = self.callback(row, call::GAME_END, near, roll);
                 sounds.extend(self.reset_near(row, near, roll));
                 sounds
             }
-            0xe => self.serve_setup(row, replaying, phase, near, roll),
-            0x1a if self.ty != 37 && (phase > 1 || self.ty == 15) => self.reset_near(row, near, roll),
+            SERVE => self.serve_setup(row, replaying, phase, near, roll),
+            RESET if self.ty != 37 && (phase > 1 || self.ty == 15) => self.reset_near(row, near, roll),
             _ => Vec::new(),
         }
     }
@@ -1539,7 +1609,7 @@ impl Trigger {
     /// phase (`phase`, read when the message comes: 0 the match's start, 1 a change of ends) is 0 or 1, all but
     /// type 15. The restored matrix and place only last when no reset follows.
     pub fn serve_setup(&mut self, row: &TriggerRow, replaying: bool, phase: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
-        self.msg = 0xe;
+        self.msg = SERVE;
         if replaying {
             (self.done, (self.world, self.node, self.prev, self.left, self.wait)) = (self.kept_done, self.kept);
         } else {
@@ -1558,11 +1628,11 @@ impl Trigger {
         [[cross(1, 2), cross(2, 0), cross(0, 1), 0.0], u, f, [l[0], l[1], l[2], 1.0]]
     }
 
-    /// The type's own behaviour on message `msg` (2 each tick, 4 at a reset; 6–8 as [`Trigger::message`]); the
-    /// sounds started.
+    /// The type's own behaviour on message `msg` (`call`: each tick, at a reset, and those of [`Trigger::message`]);
+    /// the sounds started.
     fn callback(&mut self, row: &TriggerRow, msg: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         let mut sounds = Vec::new();
-        let u = |r: u32| (F(2.3283064e-10) * ps2::utof(r)).0;
+        let u = |r: u32| (F(TWO_POW_M32) * ps2::utof(r)).0;
         let pos = self.pos();
         let within = |r: f32| near.pos.iter().map(|&p| F(dist2(minus(p, pos))).sqrt().0 < r).collect::<Vec<_>>();
         let ty = self.ty as usize;
@@ -1582,7 +1652,7 @@ impl Trigger {
                     }
                 }
             }
-            (0 | 1 | 5 | 31 | 32 | 39, 2) => {
+            (0 | 1 | 5 | 31 | 32 | 39, call::TICK) => {
                 // 31 sets off at frame 35; the animation's end holds on a type's frame
                 if ty == 31 && self.frame == 35.0 {
                     self.moving = true;
@@ -1595,14 +1665,14 @@ impl Trigger {
                     }, row);
                 }
             }
-            (0 | 1 | 5 | 31 | 32 | 39, 0 | 4) => {
+            (0 | 1 | 5 | 31 | 32 | 39, 0 | call::RESET) => {
                 (self.on, self.weight, self.animating, self.moving, self.world) = (ty == 32, (ty == 32) as u8 as f32, false, false, self.home);
                 (self.pitch, self.yaw) = heading(self.home[2]);
                 self.set_frame(0.0, row);
                 near.flags[ty] = false;
             }
             // within 4.0: the animation once; the ball's box (±0.2) on its own tells the match (message 0x14)
-            (27..=29, 2) => {
+            (27..=29, call::TICK) => {
                 self.struck = false;
                 if self.startled {
                     return sounds;
@@ -1620,13 +1690,13 @@ impl Trigger {
                     }
                 }
             }
-            (27..=29, 4) => {
+            (27..=29, call::RESET) => {
                 (self.on, self.moving, self.world, self.animating) = (true, false, self.home, false);
                 (self.pitch, self.yaw) = heading(self.home[2]);
             }
             // ball-hit obstacles: a player's box (14, 21) starts the animation and sound; the ball's does at its
             // speed, and tells the match (message 0x14); once until the reset
-            (14 | 21, 2) => {
+            (14 | 21, call::TICK) => {
                 self.struck = false;
                 if self.startled {
                     return sounds;
@@ -1642,7 +1712,7 @@ impl Trigger {
                 (self.startled, self.struck) = (true, ball);
             }
             // turns to face a ball of 20 km/h or more (its other animation above the row's speed)
-            (38 | 43, 2) => {
+            (38 | 43, call::TICK) => {
                 self.struck = false;
                 let Some(&[.., ball]) = near.boxes.last() else { return sounds };
                 let e = if ty == 38 { [0.18, 0.8, 0.18] } else { [0.15, 1.3, 0.15] };
@@ -1665,14 +1735,14 @@ impl Trigger {
                 }
                 (self.startled, self.struck) = (true, true);
             }
-            (14 | 21 | 38 | 43, 0 | 4) => {
+            (14 | 21 | 38 | 43, 0 | call::RESET) => {
                 // (the frame back to 0 on the clip it last played)
                 (self.on, self.moving, self.world, self.startled, self.animating) = (true, false, self.home, false, false);
                 (self.pitch, self.yaw) = heading(self.home[2]);
                 self.set_frame(0.0, row);
             }
             // scrubs forward while someone is within 1.0, to the end; then back to 0 the next time
-            (48, 2) => {
+            (48, call::TICK) => {
                 let (mut s, mut f) = self.scrub;
                 let far = || within(1.0).iter().all(|&n| !n);
                 match s {
@@ -1697,7 +1767,7 @@ impl Trigger {
                 }
                 self.scrub = (s, f);
             }
-            (48, 4) => {
+            (48, call::RESET) => {
                 (self.on, self.moving, self.world, self.startled, self.animating) = (true, false, self.home, false, false);
                 self.restart_anim();
                 self.scrub = (0, self.frame as i32);
@@ -1714,16 +1784,16 @@ impl Trigger {
                 self.counter = F(300.0).madd(300.0, u(roll())).0 as i32;
                 self.animating = false;
             }
-            (34, 4) => {
+            (34, call::RESET) => {
                 (self.world, self.on, self.moving, self.animating) = (self.home, true, false, false);
                 (self.pitch, self.yaw) = heading(self.home[2]);
                 self.counter = F(300.0).madd(300.0, u(roll())).0 as i32;
             }
             (37, 2) if self.speed == 0.0 => self.counter = 0,
-            (37, 2) => {
+            (37, call::TICK) => {
                 let r = roll();
                 // ponytail: with a game flag clear the first call always plays (not found set otherwise)
-                if self.counter == 0 && (r >> 16 & 0x7fff) % 100 + 1 < 41 {
+                if self.counter == 0 && r15(r) % 100 + 1 < 41 {
                     sounds.push(0x28);
                 }
                 if self.counter % 25 == 0 {
@@ -1731,11 +1801,11 @@ impl Trigger {
                 }
                 self.counter = self.counter.wrapping_add(1);
             }
-            (37, 4) => self.counter = 0,
+            (37, call::RESET) => self.counter = 0,
             // the change of ends' resets: once a match, one in two rolls it off along a route (its animation
             // carries it); it plays on through the next reset
-            (15, 4) => {
-                if near.ends && 2 <= near.players && !self.done && roll() >> 16 & 1 == 0 {
+            (15, call::RESET) => {
+                if near.ends && 2 <= near.players && !self.done && !coin(roll()) {
                     self.route = roll() >> 16 & 3;
                     if self.route == 0 {
                         self.world = self.home;
@@ -1771,7 +1841,7 @@ impl Trigger {
             // the reset: in the deciding set its idle countdown, turned to the court centre where it stands, and the
             // gallery's manager paused (`Near::paused`); else the manager resumed and its call's countdown (a voiced
             // one only)
-            (44, 4) => {
+            (44, call::RESET) => {
                 (self.on, self.animating) = (near.deciding, false);
                 near.paused = near.deciding;
                 if self.on {
@@ -1801,7 +1871,7 @@ impl Trigger {
             }
             // court 1: where the point's first bounce landed (in the court, no body hit), shown facing the camera
             // after a game or set won on a plain call with a named point
-            (2, 2) => {
+            (2, call::TICK) => {
                 if near.bounces == 1 && self.counter != 1 {
                     self.landing = near.in_court.then_some(near.landing);
                     self.counter = 1;
@@ -1817,7 +1887,7 @@ impl Trigger {
                 (self.animating, self.on, near.flags[ty]) = (true, true, true);
                 self.world = self.facing_eye(near);
             }
-            (2, 4) => {
+            (2, call::RESET) => {
                 (self.counter, self.landing, self.on, self.moving, self.world, self.animating) = (0, None, false, false, self.home, false);
                 self.restart_anim();
                 near.flags[ty] = false;
@@ -1838,18 +1908,18 @@ impl Trigger {
                 self.world[3] = [(F(pos[0]) + self.vel[0]).0, -60.0, (F(pos[2]) + self.vel[2]).0, (F(pos[3]) + self.vel[3]).0];
                 self.volume = flyover_volume(self.world[3][2]);
             }
-            (6, 4) => {
+            (6, call::RESET) => {
                 (self.on, self.moving, self.world, self.animating, self.volume) = (false, false, self.home, false, -1);
                 near.flags[ty] = false;
             }
             // court 5's and court 8's: a game's end rolls one in two to arm a sound for its reset, once a match;
             // 33 plays its sound there, 19 sweeps its own round the stereo field over 6 s
-            (19 | 33, 8) => {
-                if roll() >> 16 & 1 == 0 && !self.done {
+            (19 | 33, call::GAME_END) => {
+                if !coin(roll()) && !self.done {
                     self.armed = true;
                 }
             }
-            (19 | 33, 4) => {
+            (19 | 33, call::RESET) => {
                 (self.on, self.animating, self.playing) = (false, false, false);
                 if std::mem::take(&mut self.armed) {
                     if ty == 33 {
@@ -1886,17 +1956,17 @@ impl Trigger {
             }
             // court 6's: in the deciding set it stands (its head following the ball) and the gallery's manager pauses
             // ponytail: the head's look-at is not drawn
-            (22, 4) => {
+            (22, call::RESET) => {
                 (self.world, self.moving, self.animating, self.on) = (self.home, false, false, near.deciding);
                 near.paused = self.on;
                 if self.on {
                     (self.pitch, self.yaw) = heading(self.home[2]);
                 }
             }
-            (22, 8) => near.paused = self.on,
-            (44, 8) => near.paused = near.deciding,
+            (22, call::GAME_END) => near.paused = self.on,
+            (44, call::GAME_END) => near.paused = near.deciding,
             // court 9's: cheers when a team with no human wins a game or set in three shots or fewer
-            (40, 4) => {
+            (40, call::RESET) => {
                 self.on = false;
                 self.armed = near.humans[0] != near.humans[1];
                 self.team = !near.humans[0] as i32;

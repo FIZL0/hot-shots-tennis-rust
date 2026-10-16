@@ -3,6 +3,61 @@
 #![deny(clippy::float_arithmetic)]
 
 use crate::ps2::{F, f32s, fs};
+use crate::player::character;
+use crate::shot::{branch, kind};
+
+/// Motion numbers: a motion's index in the game's animation table (`hst_data::ani::MOTIONS`), as the motion
+/// setter takes it. The team reactions (`TEAM` + set) are the setter's own numbers past the table's.
+pub mod id {
+    use std::ops::Range;
+
+    /// The ready stance (`ad00`) and the stances turned to the forehand / backhand side (`tb_f`, `tb_b`).
+    pub const STAND: i32 = 0;
+    pub const TURN_FORE: i32 = 1;
+    pub const TURN_BACK: i32 = 2;
+    /// Runs by direction relative to the player's forward, and the dash.
+    pub const RUN_FORWARD: i32 = 3;
+    pub const RUN_BACK: i32 = 4;
+    pub const RUN_LEFT: i32 = 5;
+    pub const RUN_RIGHT: i32 = 6;
+    pub const DASH: i32 = 7;
+    /// Added to a stance or run (below `TIRED`) for its tired variant.
+    pub const TIRED: i32 = 8;
+    /// The swings, forehand on even numbers, backhand on odd: ground strokes (topspin, slice, lob; `0x10..0x16`),
+    /// volleys (`0x16..0x1a`), body shots (`0x1a`, `0x1b`).
+    pub const FORE_TOPSPIN: i32 = 0x10;
+    pub const GROUND_STROKES: Range<i32> = 0x10..0x16;
+    /// Ground strokes and volleys: the swings with a whiff and a stored arm pose.
+    pub const STROKES: Range<i32> = 0x10..0x1a;
+    /// The soft follow-throughs after a slow ground stroke (`f_w`, `b_w`).
+    pub const SOFT_FORE: i32 = 0x1c;
+    pub const SOFT_BACK: i32 = 0x1d;
+    /// The dive (`receive_f`).
+    pub const RECEIVE: i32 = 0x1e;
+    pub const SMASH: i32 = 0x1f;
+    /// The serve: stance, walking the baseline to the left / right, the toss (overhand, underhand) and the swing.
+    pub const SERVE_STANCE: i32 = 0x20;
+    pub const SERVE_LEFT: i32 = 0x21;
+    pub const SERVE_RIGHT: i32 = 0x22;
+    pub const TOSS: i32 = 0x23;
+    pub const TOSS_UNDER: i32 = 0x24;
+    pub const SERVE: i32 = 0x25;
+    pub const SERVE_UNDER: i32 = 0x26;
+    /// The misses: forehand, backhand, smash or overhand serve, underhand serve (`*_k01`).
+    pub const WHIFF_FORE: i32 = 0x27;
+    pub const WHIFF_BACK: i32 = 0x28;
+    pub const WHIFF_SMASH: i32 = 0x29;
+    pub const WHIFF_UNDER: i32 = 0x2a;
+    /// The point's reactions: hit by the ball (`re_ball`), won and lost (`gu`, `di`), won and lost a game
+    /// (`gu_set`, `di_set`).
+    pub const HIT_BY_BALL: i32 = 0x2b;
+    pub const WON: i32 = 0x2c;
+    pub const LOST: i32 = 0x2d;
+    pub const WON_GAME: i32 = 0x2e;
+    pub const LOST_GAME: i32 = 0x2f;
+    /// The doubles team reactions `re_pc00_co01_f` … `co05`: this + the set's index (0..5).
+    pub const TEAM: i32 = 0x30;
+}
 
 /// A player's motion clock (its motion player's time). The motion setter restarts it at 0 with the speed; each
 /// frame, after the player's update, the player samples at the time wrapped into the clip (looping) or clamped
@@ -46,7 +101,7 @@ impl Clock {
 }
 
 /// The motion player's crossfade from the outgoing motion. The motion setter starts it with a length in frames
-/// (8 for looping motions and the whiffs 0x27/0x28, the soft follow-through's own count with `hold`, a cut below
+/// (8 for looping motions and the forehand / backhand whiffs, the soft follow-through's own count with `hold`, a cut below
 /// 2). Each frame, without `hold`, the outgoing motion keeps playing on its own clock and is mixed over the new pose
 /// with `weight`, from (n−1)/n down to 0; with `hold`, its pose stays frozen at the last sampled time while the new
 /// motion, held at frame 0, is mixed in with `weight` rising to 1 (the new clock's `hold` counts the same frames).
@@ -155,15 +210,15 @@ pub fn mix(cur: ([f32; 4], [f32; 3]), other: ([f32; 4], [f32; 3]), w: f32) -> ([
     (crate::quat::slerp(cur.0, other.0, w), std::array::from_fn(|i| (F::ZERO + cur.1[i]).madd(F(other.1[i]) - cur.1[i], w).0))
 }
 
-/// A stroke starting with `frames` to contact (+0x3ec4) on contact-search branch `branch` (+0x3ec1: 1 ground,
-/// 2 volley, 3 dive, 4 smash) with swing motion `anim`. Returns the motion to play now, its speed, and the swing
+/// A stroke starting with `frames` to contact on contact-search branch `branch` (`shot::branch`: ground, volley,
+/// dive, smash) with swing motion `anim`. Returns the motion to play now, its speed, and the swing
 /// still to come (played at speed 1 from 8 frames before contact) when the body first turns: a ground stroke or
 /// volley more than 8 frames out turns sideways (`tb_f` 1 for forehand-side swings, `tb_b` 2 otherwise).
 pub fn stroke_start(branch: u8, frames: i32, anim: i32) -> (i32, f32, Option<i32>) {
-    if (1..=2).contains(&branch) && 8 < frames {
-        return (if anim & 1 == 0 { 1 } else { 2 }, 1.0, Some(anim));
+    if (branch::GROUND..=branch::VOLLEY).contains(&branch) && SWING_LEAD < frames {
+        return (if anim & 1 == 0 { id::TURN_FORE } else { id::TURN_BACK }, 1.0, Some(anim));
     }
-    let speed = if branch == 3 || frames < 1 { 1.0 } else { (F(8.0) / frames as f32).0 };
+    let speed = if branch == branch::DIVE || frames < 1 { 1.0 } else { (F(SWING_LEAD as f32) / frames as f32).0 };
     (anim, speed, None)
 }
 
@@ -173,10 +228,9 @@ pub const SWING_LEAD: i32 = 8;
 /// The miss motion for a swing that met nothing (`None`: the swing has none).
 pub fn whiff(anim: i32) -> Option<i32> {
     match anim {
-        0x10 | 0x12 | 0x14 | 0x16 | 0x18 => Some(0x27),
-        0x11 | 0x13 | 0x15 | 0x17 | 0x19 => Some(0x28),
-        0x1f | 0x25 => Some(0x29),
-        0x26 => Some(0x2a),
+        a if id::STROKES.contains(&a) => Some(if a & 1 == 0 { id::WHIFF_FORE } else { id::WHIFF_BACK }),
+        id::SMASH | id::SERVE => Some(id::WHIFF_SMASH),
+        id::SERVE_UNDER => Some(id::WHIFF_UNDER),
         _ => None,
     }
 }
@@ -185,10 +239,13 @@ pub fn whiff(anim: i32) -> Option<i32> {
 pub const WHIFF_POSE: u32 = 9;
 /// Frames after the pose before a stick, a press or the motion's end frees the player.
 pub const WHIFF_RECOVERY: u32 = 30;
+/// The re-press lock after a miss motion: a smash's, anything else's.
+const SMASH_LOCK: u32 = 30;
+const LOCK: u32 = 2;
 
 /// A swing at nothing, counted from the press. `miss`: there was a ball to hit, so at the pose the swing turns
 /// into its miss motion (with a shout unless `quiet`) and a new press is taken from a short lock after it (2
-/// frames, 30 after a smash 0x1f); with no ball for the player (`!miss`) the swing just plays on until its
+/// frames, 30 after a smash); with no ball for the player (`!miss`) the swing just plays on until its
 /// recovery is over.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Whiff {
@@ -217,7 +274,7 @@ impl Whiff {
 
     /// The re-press lock after the miss motion (`None`: no miss motion, so none).
     pub fn lock(&self) -> Option<u32> {
-        (self.miss && whiff(self.anim).is_some()).then_some(if self.anim == 0x1f { 30 } else { 2 })
+        (self.miss && whiff(self.anim).is_some()).then_some(if self.anim == id::SMASH { SMASH_LOCK } else { LOCK })
     }
 
     /// Whether a press this frame swings again, and if so whether quietly: through the re-press lock (no shout),
@@ -238,26 +295,34 @@ impl Whiff {
     }
 }
 
-/// After a ground stroke's contact (branch 1, swings 0x10..0x15) a slow ball (|v|² < 0.2143347) switches the
-/// next frame to the soft follow-through, `f_w` 0x1c or `b_w` 0x1d (crossfaded in, `SOFT_FOLLOW_HOLD`). `side` is the contact's
-/// side bits (+0x3f50; bit 1 the left side), mirrored for left-handers.
+/// After a ground stroke's contact (`id::GROUND_STROKES`) a slow ball (|v|² < `SOFT_SPEED2`) switches the next
+/// frame to the soft follow-through, `f_w` or `b_w` (crossfaded in, `SOFT_FOLLOW_HOLD`). `side` is the contact's
+/// side bits (`LEFT_SIDE` the left side), mirrored for left-handers.
 pub fn soft_follow(branch: u8, anim: i32, ball_vel: [f32; 3], side: u32, hand: f32) -> Option<i32> {
     let v = fs(ball_vel);
     let v2 = v[2] * v[2] + v[0] * v[0] + v[1] * v[1];
-    if !(v2 < 0.2143347 && (0x10..0x16).contains(&anim) && branch == 1) {
+    if !(v2 < SOFT_SPEED2 && id::GROUND_STROKES.contains(&anim) && branch == branch::GROUND) {
         return None;
     }
-    let fore = (side & 2 == 0) != (hand < 0.0);
-    Some(if fore { 0x1c } else { 0x1d })
+    let fore = (side & LEFT_SIDE == 0) != (hand < 0.0);
+    Some(if fore { id::SOFT_FORE } else { id::SOFT_BACK })
 }
+
+/// The ball's speed² (m/frame) below which a ground stroke follows through softly.
+const SOFT_SPEED2: f32 = 0.2143347;
+/// The contact's side bit for the left side.
+const LEFT_SIDE: u32 = 2;
+/// The follow-through's recovery frames: after a slice (or a weak, slice or underhand serve), else.
+const QUICK_RECOVERY: u32 = 15;
+const RECOVERY: u32 = 30;
 
 /// The soft follow-through comes in over an 8-frame crossfade: its clock holds at 0 for this countdown.
 pub const SOFT_FOLLOW_HOLD: i32 = 7;
 
-/// Frames after contact before a stick or a shot press may break off the follow-through: 15 after a slice (kind 1)
-/// off a ground stroke or volley (`branch` 1/2), else 30.
+/// Frames after contact before a stick or a shot press may break off the follow-through: 15 after a slice off a
+/// ground stroke or volley, else 30.
 pub fn recovery(branch: u8, kind: i32) -> u32 {
-    if kind == 1 && (branch == 1 || branch == 2) { 15 } else { 30 }
+    if kind == kind::SLICE && (branch == branch::GROUND || branch == branch::VOLLEY) { QUICK_RECOVERY } else { RECOVERY }
 }
 
 /// Whether a stroke's follow-through, `after` frames past contact (1 the frame after), hands off this frame to
@@ -268,9 +333,9 @@ pub fn follow_over(after: u32, recover: u32, played: bool, input: bool) -> bool 
 }
 
 /// Frames after a serve's contact before the stick may break off its follow-through: 15 after a weak or underhand
-/// toss (`strong` false) or a slice (`kind` 1, kinds 0..3 topspin, slice, flat, underhand), else 30.
+/// toss (`strong` false) or a slice or underhand serve (`shot::kind`), else 30.
 pub fn serve_recovery(strong: bool, kind: i32) -> u32 {
-    if !strong || kind == 1 || kind == 3 { 15 } else { 30 }
+    if !strong || kind == kind::SLICE || kind == kind::UNDERHAND { QUICK_RECOVERY } else { RECOVERY }
 }
 
 /// Whether the server's follow-through, `after` frames past contact (1 the frame after), hands off this frame to
@@ -296,46 +361,46 @@ pub fn ai_serve_stick(after: u32, recover: u32, shots: i32, fresh: bool, hold: &
     true
 }
 
-/// Serve: stance 0x20, walking the baseline (`serve_r` 0x22 when the stick points along the player's forward ×
-/// x, `serve_l` 0x21 otherwise, swapped for left-handers), the toss (0x24 underhand, else 0x23) and the swing
-/// (0x26 underhand, else 0x25, at speed 8 / frames to contact).
+/// Serve: the stance, walking the baseline (`serve_r` when the stick points along the player's forward × x,
+/// `serve_l` otherwise, swapped for left-handers), the toss (overhand or underhand) and the swing (at speed
+/// 8 / frames to contact).
 pub fn serve_walk(stick_x: f32, forward: f32, hand: f32) -> i32 {
     let right = 0.0 < F(stick_x) * forward;
-    if right != (hand < 0.0) { 0x22 } else { 0x21 }
+    if right != (hand < 0.0) { id::SERVE_RIGHT } else { id::SERVE_LEFT }
 }
 
 pub fn serve_toss(under: bool) -> i32 {
-    if under { 0x24 } else { 0x23 }
+    if under { id::TOSS_UNDER } else { id::TOSS }
 }
 
 pub fn serve_swing(under: bool, frames: i32) -> (i32, f32) {
-    (if under { 0x26 } else { 0x25 }, if frames < 1 { 1.0 } else { (F(8.0) / frames as f32).0 })
+    (if under { id::SERVE_UNDER } else { id::SERVE }, if frames < 1 { 1.0 } else { (F(SWING_LEAD as f32) / frames as f32).0 })
 }
 
-/// The point's reaction for a player: hit by the ball (`re_ball` 0x2b); one-player modes `di_set` 0x2f /
-/// `gu_set` 0x2e; otherwise the winners `gu` 0x2c and the losers `di` 0x2d, or `gu_set` / `di_set` when the point
-/// ends a game (`game`, 0x4230b8).
+/// The point's reaction for a player: hit by the ball (`re_ball`); one-player modes `di_set` / `gu_set`
+/// (`practice_short`: the former); otherwise the winners `gu` and the losers `di`, or `gu_set` / `di_set` when the
+/// point ends a game (`game`).
 pub fn reaction(body_hit: bool, players: i32, won: bool, game: bool, practice_short: bool) -> i32 {
     if body_hit {
-        0x2b
+        id::HIT_BY_BALL
     } else if players < 2 {
-        if practice_short { 0x2f } else { 0x2e }
+        if practice_short { id::LOST_GAME } else { id::WON_GAME }
     } else {
         match (won, game) {
-            (true, false) => 0x2c,
-            (true, true) => 0x2e,
-            (false, false) => 0x2d,
-            (false, true) => 0x2f,
+            (true, false) => id::WON,
+            (true, true) => id::WON_GAME,
+            (false, false) => id::LOST,
+            (false, true) => id::LOST_GAME,
         }
     }
 }
 
-/// Doubles team reactions (`re_pc00_co01_f` … `co05`, motions 0x30..0x34) a character may play instead of
-/// `gu`/`di` (the game's per-character set table): characters 5, 7 and 11 have their own sets, the rest by parity.
+/// Doubles team reactions (`re_pc00_co01_f` … `co05`, motions `id::TEAM` + 0..5) a character may play instead of
+/// `gu`/`di` (the game's per-character set table): JJ, Big Chief and Will have their own sets, the rest by parity.
 pub fn team_reactions(character: i32) -> &'static [i32] {
     match character {
-        5 => &[0, 1, 3, 4],
-        7 | 11 => &[3, 4],
+        character::JJ => &[0, 1, 3, 4],
+        character::BIG_CHIEF | character::WILL => &[3, 4],
         c if c & 1 == 0 => &[0, 1, 2, 3, 4],
         _ => &[2, 3, 4],
     }
@@ -345,24 +410,24 @@ pub fn team_reactions(character: i32) -> &'static [i32] {
 /// earlier this point; `draw` (the game's `(rand >> 16 & 0x7fff) % (n + 1)`) picks one, or keeps `base` when it
 /// lands past the set.
 pub fn team_reaction(base: i32, character: i32, taken: &[i32], draw: impl FnOnce(u32) -> u32) -> i32 {
-    if !(0x2c..=0x2d).contains(&base) {
+    if !(id::WON..=id::LOST).contains(&base) {
         return base;
     }
     let free: Vec<i32> = team_reactions(character).iter().copied().filter(|c| !taken.contains(c)).collect();
     let k = draw(free.len() as u32 + 1) as usize;
-    free.get(k).map_or(base, |c| c + 0x30)
+    free.get(k).map_or(base, |c| c + id::TEAM)
 }
 
 /// One frame of a post-point reaction's root motion: the reaction's path point `p` (its `*_dummy` motion at the
 /// motion's time; zero without one) turned by the player's rows (right × hand, up, forward) and added to the
-/// spot where the reaction started (`base`, +0x3d90). Returns the new accumulated spot (+0x3da0, from `acc`);
-/// the player moves by the change. Team reactions (`team`, motions 0x30..) only go forward (path x, y dropped),
-/// 0.55 as far for character 5; `gu_set` follows the whole path.
+/// spot where the reaction started (`base`). Returns the new accumulated spot (from `acc`);
+/// the player moves by the change. Team reactions (`team`, motions from `id::TEAM`) only go forward (path x, y dropped),
+/// 0.55 as far for JJ; `gu_set` follows the whole path.
 pub fn reaction_root(p: [f32; 4], team: bool, character: i32, rows: [[f32; 4]; 3], base: [f32; 4], acc: [f32; 4]) -> [f32; 4] {
     let m = [rows[0], rows[1], rows[2], [0.0, 0.0, 0.0, 1.0]];
     let to = if team {
         let v = fs(crate::vu0::transform(&m, [0.0, 0.0, p[2], p[3]]));
-        let s = if character == 5 { 0.55 } else { 1.0 };
+        let s = if character == character::JJ { 0.55 } else { 1.0 };
         [F(base[0]) + v[0] * s, (F::ZERO + base[1]).madd(v[1], s), (F::ZERO + base[2]).madd(v[2], s), (F::ZERO + base[3]).madd(v[3], s)]
     } else {
         let v = crate::vu0::transform(&m, p);

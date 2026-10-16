@@ -14,7 +14,20 @@
 //! - each game won: each team's share of the game's points, scaled so the leader's is 100, summed for the rating.
 #![deny(clippy::float_arithmetic)]
 
+use crate::judge::verdict;
 use crate::ps2::F;
+use crate::shot::branch;
+
+/// The match time's cap: 99:59:59 in frames.
+const MAX_FRAMES: u32 = (99 * 3600 + 59 * 60 + 59) * 60;
+/// Every count shows at most this.
+const MAX_COUNT: u32 = 999;
+/// The serve's speed is read the frame after it is struck and scaled by this.
+const SERVE_SCALE: f32 = 0.9;
+/// Net play: a shot struck within the service line.
+const NET_ZONE: f32 = crate::lines::SERVICE_LINE;
+/// km/h to mph, as the game's literal.
+const MPH: f32 = 0.62137;
 
 /// One player's counts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -85,7 +98,7 @@ impl Stats {
 
     /// A frame of play.
     pub fn tick(&mut self) {
-        self.frames = (self.frames + 1).min(21599940);
+        self.frames = (self.frames + 1).min(MAX_FRAMES);
     }
 
     pub fn serve(&mut self) {
@@ -97,23 +110,23 @@ impl Stats {
     /// The ball's speed (km/h) the frame after the serve was struck.
     pub fn serve_speed(&mut self, kmh: f32) {
         if self.serve_kmh <= 0.0 {
-            self.serve_kmh = (F(kmh) * 0.9).0;
+            self.serve_kmh = (F(kmh) * SERVE_SCALE).0;
         }
     }
 
-    /// Shot `shot` (1 = the serve) struck by `who` on contact branch `branch` (0 serve, 1 ground, 2 volley,
-    /// 3 dive, 4 smash), `net_z` its distance from the net.
+    /// Shot `shot` (1 = the serve) struck by `who` on contact branch `branch` (`shot::branch`), `net_z` its
+    /// distance from the net.
     pub fn hit(&mut self, who: usize, shot: i32, server: usize, branch: u8, forehand: bool, sweet: bool, net_z: f32) {
         let p = &mut self.players[who];
         p.hits += 1;
         p.serves_struck += (shot == 1 && who == server) as u32;
-        p.dives += (branch == 3) as u32;
-        p.smashes += (branch == 4) as u32;
-        p.forehands += ((branch == 1 || branch == 2) && forehand) as u32;
+        p.dives += (branch == branch::DIVE) as u32;
+        p.smashes += (branch == branch::SMASH) as u32;
+        p.forehands += ((branch == branch::GROUND || branch == branch::VOLLEY) && forehand) as u32;
         p.sweet += sweet as u32;
         if shot > 2 {
             p.late += 1;
-            p.net += (net_z.abs() <= 6.4) as u32;
+            p.net += (net_z.abs() <= NET_ZONE) as u32;
         }
         if shot > 1 && self.hitter >= 0 && self.hitter & 1 != server as i32 & 1 {
             self.rally += 1;
@@ -126,32 +139,32 @@ impl Stats {
     pub fn point(&mut self, call: u8, winner: Option<usize>, shots: i32, server: usize, faults: i32) {
         let (hitter, other) = (self.hitter.max(0) as usize, self.prev.max(0) as usize);
         match call {
-            1 | 5 => {
+            verdict::OUT | verdict::NET_OUT => {
                 let p = &mut self.players[hitter];
-                *(if call == 1 { &mut p.outs } else { &mut p.net_outs }) += 1;
+                *(if call == verdict::OUT { &mut p.outs } else { &mut p.net_outs }) += 1;
                 // ponytail: the original credits its own "other" hitter; the opposing team's last hitter stands in
                 let to = if other & 1 != hitter & 1 { other } else { hitter ^ 1 };
                 self.players[to].points_won += 1;
             }
-            0 if shots == 1 && winner == Some(server & 1) => {
+            verdict::POINT if shots == 1 && winner == Some(server & 1) => {
                 self.players[server].aces += 1;
                 self.players[server].points_won += 1;
             }
-            0 => self.players[hitter].points_won += 1,
-            6 => self.players[hitter ^ 1].points_won += 1,
+            verdict::POINT => self.players[hitter].points_won += 1,
+            verdict::ILLEGAL_HIT => self.players[hitter ^ 1].points_won += 1,
             _ => {}
         }
-        if call == 4 {
+        if call == verdict::LET {
             return;
         }
-        if !matches!(call, 2 | 3) {
+        if !matches!(call, verdict::FAULT | verdict::DOUBLE_FAULT) {
             let p = &mut self.players[server];
             p.fastest_kmh = p.fastest_kmh.max(self.serve_kmh);
         }
         if faults == 2 {
             self.players[server].double_faults += 1;
         }
-        self.longest_rally = self.longest_rally.max(self.rally).min(999);
+        self.longest_rally = self.longest_rally.max(self.rally).min(MAX_COUNT);
         self.rally = 0;
     }
 
@@ -181,11 +194,11 @@ impl Stats {
             let p = &self.players[i];
             let strokes = p.hits.saturating_sub(p.serves_struck + p.dives + p.smashes);
             [
-                (F(p.fastest_kmh.clamp(0.0, 999.0) as i32 as f32) * 0.62137).0,
-                p.points_won.min(999) as f32,
-                p.missed().min(999) as f32,
-                p.double_faults.min(999) as f32,
-                p.aces.min(999) as f32,
+                (F(p.fastest_kmh.clamp(0.0, MAX_COUNT as f32) as i32 as f32) * MPH).0,
+                p.points_won.min(MAX_COUNT) as f32,
+                p.missed().min(MAX_COUNT) as f32,
+                p.double_faults.min(MAX_COUNT) as f32,
+                p.aces.min(MAX_COUNT) as f32,
                 rate(p.sweet, p.hits),
                 rate(p.net, p.late),
                 rate(p.forehands, strokes),

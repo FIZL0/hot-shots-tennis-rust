@@ -12,6 +12,8 @@
 //! at the latest after the first word's countdown.
 #![deny(clippy::float_arithmetic)]
 
+use crate::judge::verdict;
+use crate::npc::STADIUM;
 use crate::ps2::{F, f32s};
 use crate::score::{Event, Score};
 
@@ -26,6 +28,56 @@ pub const VOICE_LAG: u32 = 5;
 
 /// Motions: idle, turned to her right, turned to her left (anims `_h`, `_r`, `_l`).
 pub const IDLE: u8 = 0;
+pub const RIGHT: u8 = 1;
+pub const LEFT: u8 = 2;
+
+/// Her voice bank's programs.
+pub mod program {
+    /// The score in words (`word`).
+    pub const SCORE: u8 = 0;
+    /// The line calls: key = the judge's verdict − 1.
+    pub const CALL: u8 = 1;
+    /// The announcements (`announce`).
+    pub const ANNOUNCE: u8 = 2;
+}
+
+/// The score program's keys.
+pub mod word {
+    /// The server's points love..40 are keys 0..4; the receiver's are `RECEIVER_POINTS` + the points.
+    pub const RECEIVER_POINTS: i32 = 4;
+    pub const ALL: i32 = 8;
+    pub const DEUCE: i32 = 9;
+    pub const ADVANTAGE: i32 = 10;
+    /// "server" / "receiver" after a game, set or advantage.
+    pub const SERVER: i32 = 11;
+    pub const RECEIVER: i32 = 12;
+    /// Deuce again (silent: no disc umpire has a take).
+    pub const DEUCE_AGAIN: i32 = 13;
+}
+
+/// The announcement program's keys.
+pub mod announce {
+    pub const TIEBREAK: i32 = 0;
+    pub const GAME: i32 = 1;
+    pub const SET: i32 = 2;
+    pub const CHANGE_ENDS: i32 = 3;
+    pub const MATCH: i32 = 4;
+}
+
+/// A queued call's part: none, the first word, the second, the single-word deuce.
+mod part {
+    pub const NONE: i32 = -1;
+    pub const FIRST: i32 = 0;
+    pub const SECOND: i32 = 1;
+    pub const DEUCE: i32 = 3;
+}
+
+/// The ball is watched within the service line, and the head looks no lower than 2 m up.
+const NET_ZONE: f32 = crate::lines::SERVICE_LINE;
+const HEAD_LOW: f32 = -2.0;
+/// Ticks the eye takes to ease back to the centre.
+const BACK_TICKS: i32 = 10;
+const BACK_STEP: f32 = 0.1;
 
 /// What the head looks at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -65,7 +117,7 @@ pub struct Umpire {
     pub rally: bool,
     /// The ball has come within 6.4 m of the net this rally.
     pub seen: bool,
-    /// A queued call is playing: the part being played (−1 none, 3 single-word deuce), its keys and programs.
+    /// A queued call is playing: the part being played (`part`), its keys and programs.
     pub calling: bool,
     pub part: i32,
     pub keys: [i32; 2],
@@ -98,7 +150,7 @@ impl Umpire {
             rally: false,
             seen: false,
             calling: false,
-            part: -1,
+            part: part::NONE,
             keys: [0; 2],
             programs: [0; 2],
             voiced: false,
@@ -115,7 +167,7 @@ impl Umpire {
         let n = F::ONE / (x * x + z * z).sqrt();
         self.forward = f32s([x * n, z * n]);
         (self.look, self.look_ticks, self.look_step) = (Look::Centre, 0, [0.0; 3]);
-        (self.rally, self.seen, self.calling, self.part, self.keys, self.programs) = (false, false, false, -1, [0; 2], [0; 2]);
+        (self.rally, self.seen, self.calling, self.part, self.keys, self.programs) = (false, false, false, part::NONE, [0; 2], [0; 2]);
         (self.over, self.motion, self.eye) = (false, IDLE, ball);
     }
 
@@ -124,13 +176,13 @@ impl Umpire {
         self.voiced = true;
         self.countdown = 0;
         let next = match (program, key) {
-            (2, 1 | 2) => Some(self.words.1[key as usize]),
-            (0, _) => Some(self.words.0[key as usize]),
+            (program::ANNOUNCE, announce::GAME | announce::SET) => Some(self.words.1[key as usize]),
+            (program::SCORE, _) => Some(self.words.0[key as usize]),
             _ => None,
         };
         if let Some(c) = next {
-            if self.part == 0 {
-                self.part = 1;
+            if self.part == part::FIRST {
+                self.part = part::SECOND;
             } else {
                 self.calling = false;
             }
@@ -142,7 +194,7 @@ impl Umpire {
     pub fn start(&mut self, change_ends: bool, ball: [f32; 3]) {
         self.reset(ball);
         if change_ends {
-            self.play(2, 3);
+            self.play(program::ANNOUNCE, announce::CHANGE_ENDS);
         }
     }
 
@@ -159,7 +211,7 @@ impl Umpire {
             self.tiebreak[1] = self.tiebreak[0];
         }
         if self.tiebreak[0] {
-            self.play(2, 0);
+            self.play(program::ANNOUNCE, announce::TIEBREAK);
             self.tiebreak = [false; 2];
         }
     }
@@ -170,14 +222,14 @@ impl Umpire {
     }
 
     /// The point is over: `event` what it did to the score (`None` for no point: a fault or let), `winner` the
-    /// team that won it, `swapped` the teams' ends have changed, `call` the judge's call (0 none).
+    /// team that won it, `swapped` the teams' ends have changed, `call` the judge's verdict (`judge::verdict`).
     pub fn point_over(&mut self, event: Option<Event>, winner: i32, swapped: bool, call: u8) {
         if event.is_some() {
             // she turns toward the winner's end
-            self.motion = if (winner == 0) ^ swapped ^ self.side { 1 } else { 2 };
+            self.motion = if (winner == 0) ^ swapped ^ self.side { RIGHT } else { LEFT };
         }
-        if call != 0 && call != 6 {
-            self.play(1, call as i32 - 1);
+        if call != verdict::POINT && call != verdict::ILLEGAL_HIT {
+            self.play(program::CALL, call as i32 - 1);
         }
         (self.look, self.look_ticks) = (Look::Back, 0);
     }
@@ -190,17 +242,17 @@ impl Umpire {
         (self.voiced, self.countdown) = (false, 0);
         match event {
             Some(Event::Point | Event::TiebreakPoint) => {
-                (self.part, self.programs[0], self.programs[1]) = (0, 0, 0);
+                (self.part, self.programs[0], self.programs[1]) = (part::FIRST, program::SCORE, program::SCORE);
                 if s.deuce {
-                    self.part = 3;
-                    self.keys[0] = if s.deuce_count == 2 && self.court != 5 { 13 } else { 9 };
+                    self.part = part::DEUCE;
+                    self.keys[0] = if s.deuce_count == 2 && self.court != STADIUM { word::DEUCE_AGAIN } else { word::DEUCE };
                 } else if s.advantage {
-                    self.keys = [10, if receiver as i32 == winner { 11 } else { 12 }];
+                    self.keys = [word::ADVANTAGE, if receiver as i32 == winner { word::SERVER } else { word::RECEIVER }];
                 } else if s.tiebreak {
                     self.calling = false;
                 } else {
                     let (a, b) = (s.points[receiver], s.points[1 - receiver]);
-                    self.keys = if a == b { [a, 8] } else { [a, b + 4] };
+                    self.keys = if a == b { [a, word::ALL] } else { [a, b + word::RECEIVER_POINTS] };
                 }
             }
             Some(_) => {
@@ -215,17 +267,17 @@ impl Umpire {
     pub fn announce(&mut self, s: &Score, event: Event, winner: i32) {
         let receiver = (s.server != 0 && s.server != 2) as i32;
         let key = match event {
-            Event::Game => 1,
-            Event::Set => 2,
+            Event::Game => announce::GAME,
+            Event::Set => announce::SET,
             _ => return,
         };
-        (self.calling, self.part, self.programs[0], self.programs[1]) = (true, 0, 2, 0);
-        self.keys = [key, if receiver == winner { 11 } else { 12 }];
+        (self.calling, self.part, self.programs[0], self.programs[1]) = (true, part::FIRST, program::ANNOUNCE, program::SCORE);
+        self.keys = [key, if receiver == winner { word::SERVER } else { word::RECEIVER }];
     }
 
     /// The match is decided: she announces it (the match then waits for the voice to end).
     pub fn call_match(&mut self) {
-        self.play(2, 4);
+        self.play(program::ANNOUNCE, announce::MATCH);
     }
 
     /// The match-over phase begins.
@@ -241,17 +293,17 @@ impl Umpire {
             self.countdown -= 1;
             if !playing || !self.voiced || self.countdown <= 0 {
                 let i = self.part;
-                // the deuce word (part 3) reads a program byte that is never set: 0
-                let program = self.programs.get(i as usize).copied().unwrap_or(0);
-                self.play(program, self.keys[if i == 0 || i == 1 { i as usize } else { 0 }]);
+                // the deuce word reads a program byte that is never set: the score's
+                let program = self.programs.get(i as usize).copied().unwrap_or(program::SCORE);
+                self.play(program, self.keys[if i == part::FIRST || i == part::SECOND { i as usize } else { 0 }]);
             }
         }
-        if self.rally && ball[2].abs() < 6.4 {
+        if self.rally && ball[2].abs() < NET_ZONE {
             self.seen = true;
         }
         if self.look == Look::Ball {
-            let at = [ball[0], ball[1].min(-2.0), ball[2]];
-            if ball[2].abs() < 6.4 || !self.seen {
+            let at = [ball[0], ball[1].min(HEAD_LOW), ball[2]];
+            if ball[2].abs() < NET_ZONE || !self.seen {
                 (self.head, self.eye) = (at, at);
             }
             return;
@@ -259,11 +311,11 @@ impl Umpire {
         if self.look == Look::Centre {
             self.head = CENTRE;
         }
-        // both ease the eye back to the centre over 10 ticks
+        // both ease the eye back to the centre
         if self.look_ticks == 0 {
-            self.look_step = std::array::from_fn(|k| ((F(CENTRE[k]) - self.eye[k]) * 0.1).0);
+            self.look_step = std::array::from_fn(|k| ((F(CENTRE[k]) - self.eye[k]) * BACK_STEP).0);
         }
-        if self.look_ticks < 10 {
+        if self.look_ticks < BACK_TICKS {
             self.eye = std::array::from_fn(|k| (F(self.eye[k]) + self.look_step[k]).0);
             self.head = self.eye;
             self.look_ticks += 1;
