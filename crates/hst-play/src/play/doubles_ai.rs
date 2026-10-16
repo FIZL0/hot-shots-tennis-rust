@@ -3,8 +3,8 @@
 //! stand-in intercept; doubles and singles have their own routines. The routines think y-up; the app is y-down.
 
 use super::*;
-use hst_sim::ai::{Guess, Phase as Ai, Play};
-use hst_sim::rally::{Ball as PathBall, Body, Human, Out, PATH_MAX, PathCopy, PathFrom, Rally, SEEN, Shot, World};
+use hst_sim::ai::{style, Guess, Phase as Ai, Play};
+use hst_sim::rally::{guess, msg, phase, record, step, Ball as PathBall, Body, Human, Out, CPU, PATH_MAX, PathCopy, PathFrom, Rally, SEEN, Shot, World};
 
 /// The doubles AI state the players share (the path copy and the shot records) and each one's own.
 #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -163,7 +163,7 @@ struct Mine {
     shots: i32,
     /// The re-entry's return-to-centre draw, made in the hit message (`heard_hit`).
     early: Option<u32>,
-    /// A creature struck the ball or a new path began (message 0x14 or 0x16) since its last step: back to the start of
+    /// A creature struck the ball or a new path began (`msg::STRIKE`, `msg::NEW_PATH`) since its last step: back to the start of
     /// its state.
     struck: bool,
     /// Singles: the point set-up ran (cleared by the serve message).
@@ -184,9 +184,9 @@ fn up(v: V3) -> [f32; 4] {
 /// One frame of computer player `i` in the receive or rally: false (nothing done) outside them and between ends.
 pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     let phase = match g.phase {
-        Phase::Serve => 2,
-        Phase::Rally => 3,
-        Phase::Post => 4,
+        Phase::Serve => phase::SERVE,
+        Phase::Rally => phase::RALLY,
+        Phase::Post => phase::POINT_OVER,
         Phase::ChangeEnds(_) => return false,
     };
     let singles = g.players.len() == 2;
@@ -228,7 +228,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         // from the skeleton (P11k6)
         depth: r.ahead,
         smash_off: [-0.067, r.smash_ahead],
-        control: 0x21,
+        control: CPU,
         formation: p.formation,
         swing: p.contact.map_or(-1, |c| c.frames as i32),
         stroke: busy as u8,
@@ -242,7 +242,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
             smash: [r.smash_top, g.smash_heights[i][1], r.smash_bottom],
             ..Default::default()
         },
-        strong: if g.strong_hand[i] >= 0.0 { 1 } else { 2 },
+        strong: if g.strong_hand[i] >= 0.0 { hst_sim::ai::strong::MINUS } else { hst_sim::ai::strong::PLUS },
         mate: up(g.players[mate].pos),
         opp: opp.map(|j| up(g.players[j].pos)),
         mate_voice: 0,
@@ -279,7 +279,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     if singles && !std::mem::replace(&mut me.set_up, true) {
         // B15: the singles AI's point set-up: the spot it walks back to (the middle, 10 back for the NET style, else
         // 11), no dash, no short ball (hold and held clear on the serve message, `heard`)
-        let z = if row.style == 1 { -10.0 } else { -11.0 };
+        let z = if row.style == style::NET { -10.0 } else { -11.0 };
         (me.rally.spot[0], me.rally.spot[2]) = (0.0, hst_sim::ps2::mul(p.end, z));
         (me.rally.dash, me.rally.short) = (false, false);
     }
@@ -307,9 +307,9 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         // the hit message's timing draw: the reaction (or the guess walk) and the guess
         x.wait = p.ai_hold;
         (x.guess, x.from) = match p.ai_guess {
-            Some((Guess::Wide, at)) => (1, at),
-            Some((Guess::Other, at)) => (2, at),
-            None => (0, x.from),
+            Some((Guess::Wide, at)) => (guess::WIDE, at),
+            Some((Guess::Other, at)) => (guess::OTHER, at),
+            None => (guess::NONE, x.from),
         };
         // the singles hit message on an opponent's shot: its kind and spot (ponytail: the hitter's position for the
         // shot's own spot, P11l6), and the dash after a dive
@@ -328,9 +328,9 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     // state (the app already drew the net repick those messages make, so theirs is dropped)
     let kept = x.mind;
     match mind.phase {
-        Ai::Receive if entered || ((new_shot || struck) && x.state != 3) => x.enter_receive(&mut roll),
+        Ai::Receive if entered || ((new_shot || struck) && x.state != step::SWING) => x.enter_receive(&mut roll),
         // singles re-enters on the new path, not on the hit
-        Ai::Rally if entered || (((new_shot && (singles || g.shots > 1)) || struck) && x.sub != 3) => {
+        Ai::Rally if entered || (((new_shot && (singles || g.shots > 1)) || struck) && x.sub != step::SWING) => {
             x.enter_rally(&b, &mut w, &mut roll);
             x.mind = kept;
         }
@@ -386,21 +386,21 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     true
 }
 
-/// The hit message to a computer player `i` that rallies: its state re-enters substate 0 (as `step` does on the new
+/// The hit message to a computer player `i` that rallies: its state re-enters its wait substate (as `step` does on the new
 /// shot), which rolls the return to the centre first, ahead of the net repick and the timing draw. The roll is drawn
 /// here and kept for `step`'s re-entry. Whether it re-enters.
 pub(super) fn heard_hit(g: &mut Game, i: usize) -> bool {
     let singles = g.players.len() == 2;
     let rally = g.players[i].ai_mind.is_some_and(|m| m.phase == Ai::Rally);
     let me = &mut g.doubles_ai.me[i];
-    if !(matches!(g.players.len(), 2 | 4) && rally && (singles || g.shots > 1) && me.rally.sub != 3) {
+    if !(matches!(g.players.len(), 2 | 4) && rally && (singles || g.shots > 1) && me.rally.sub != step::SWING) {
         return false;
     }
     me.early = Some(g.rng.ai.next());
     true
 }
 
-/// The ball's next landing on the app's flight (y-up), for the singles routines' shot target (the player's +0x3e90).
+/// The ball's next landing on the app's flight (y-up), for the singles routines' shot target (`Body::target`).
 // ponytail: where its shot lands, not the target it aimed at (scatter and timing errors included); P11l6
 fn landing(g: &Game) -> [f32; 4] {
     let mut f = g.flight;
@@ -415,41 +415,41 @@ fn landing(g: &Game) -> [f32; 4] {
     up(f.ball.pos)
 }
 
-/// A match message to the AI side (`msg`: 0x14 strike, 0x15 hit, 0x16 new path, 0xe serve, 0xc change ends, 0x19
-/// reaction), sent where the original sends it, in its order within the tick.
+/// A match message to the AI side (`msg`: `rally::msg::*`), sent where the original sends it, in its order within
+/// the tick.
 pub(super) fn heard(g: &mut Game, msg: u8) {
     g.doubles_ai.hear(&g.players, msg);
     for m in &mut g.doubles_ai.me {
         let x = &mut m.rally;
         match msg {
             // a serve that touched the net: the AI stands still for the rest of it
-            0x16 if g.shots == 1 => x.hold = true,
+            msg::NEW_PATH if g.shots == 1 => x.hold = true,
             // ponytail: the original clears both as it sets the point up; the serve message comes there
-            0xe => (x.hold, x.held, m.set_up) = (false, false, false),
+            msg::SERVE => (x.hold, x.held, m.set_up) = (false, false, false),
             _ => {}
         }
-        if msg == 0x15 || msg == 0x16 && g.phase == Phase::Rally {
+        if msg == msg::HIT || msg == msg::NEW_PATH && g.phase == Phase::Rally {
             x.held = false;
         }
     }
 }
 
 impl Shared {
-    /// `heard`: the path object drops its claim (not on 0x19) and every shot record (n = −1); on the strike, hit, new
+    /// `heard`: the path object drops its claim (not on the reaction) and every shot record (`record::CLEARED`); on the strike, hit, new
     /// path and serve each AI object's base handler sends its human search back to the path's start (by `players`'
     /// z) and marks the shared path copy stale.
     pub(super) fn hear(&mut self, players: &[Player], msg: u8) {
-        if msg != 0x19 {
+        if msg != msg::REACTION {
             self.claim.0 = -1;
         }
-        self.records.iter_mut().for_each(|r| r.n = -1);
-        if matches!(msg, 0x14 | 0x16) {
+        self.records.iter_mut().for_each(|r| r.n = record::CLEARED);
+        if matches!(msg, msg::STRIKE | msg::NEW_PATH) {
             // only an AI in its receive or rally hears it
             for (m, p) in self.me.iter_mut().zip(players) {
                 m.struck = p.ai_mind.is_some_and(|x| matches!(x.phase, Ai::Receive | Ai::Rally));
             }
         }
-        if matches!(msg, 0x14 | 0x15 | 0x16 | 0xe) {
+        if matches!(msg, msg::STRIKE | msg::HIT | msg::NEW_PATH | msg::SERVE) {
             self.path = PathCopy { stamp: -1, balls: Vec::new() };
             for (h, p) in self.humans.iter_mut().zip(players) {
                 h.reset(p.pos[2]);
@@ -471,9 +471,9 @@ pub(super) fn claim(g: &mut Game, i: usize) {
 /// a computer partner gives way to it or follows it.
 pub(super) fn human(g: &mut Game, i: usize) {
     let phase = match g.phase {
-        Phase::Serve => 2,
-        Phase::Rally => 3,
-        Phase::Post => 4,
+        Phase::Serve => phase::SERVE,
+        Phase::Rally => phase::RALLY,
+        Phase::Post => phase::POINT_OVER,
         Phase::ChangeEnds(_) => return,
     };
     // not while it serves (to its serve's end) or reacts to the point
@@ -503,7 +503,7 @@ pub(super) fn human(g: &mut Game, i: usize) {
         moving: p.body.running as u8,
         depth: r.ahead,
         smash_off: [-0.067, r.smash_ahead],
-        control: 0x21,
+        control: CPU,
         reach: loco::ReachStats {
             base: r.base,
             reach: r.reach,
@@ -512,7 +512,7 @@ pub(super) fn human(g: &mut Game, i: usize) {
             smash: [r.smash_top, g.smash_heights[i][1], r.smash_bottom],
             ..Default::default()
         },
-        strong: if g.strong_hand[i] >= 0.0 { 1 } else { 2 },
+        strong: if g.strong_hand[i] >= 0.0 { hst_sim::ai::strong::MINUS } else { hst_sim::ai::strong::PLUS },
         mate: up(g.players[i ^ 2].pos),
         ..Default::default()
     };
@@ -538,7 +538,7 @@ pub(super) fn human(g: &mut Game, i: usize) {
     let d = &mut g.doubles_ai;
     d.seen.resize(SEEN, false);
     let x = &mut d.me[i].rally;
-    // its AI object beside a human: level 3, +0x28 = 2
+    // its AI object beside a human: level 3, `mate` 2
     (x.level, x.mate, x.first, x.window, x.singles) = (3, 2, 2, PATH_MAX as i32, false);
     let rng = &mut g.rng.ai;
     let claimed = d.claim.0 == i as i32;
@@ -675,7 +675,7 @@ mod tests {
                 let me = &g.doubles_ai.me[i];
                 if me.set_up {
                     stepped += 1;
-                    let z = if p.ai.style == 1 { -10.0 } else { -11.0 };
+                    let z = if p.ai.style == style::NET { -10.0 } else { -11.0 };
                     assert_eq!((me.rally.spot[0], me.rally.spot[2]), (0.0, p.end * z), "p{i}");
                     assert_eq!(me.rally.reach, 3.2, "p{i}");
                 }

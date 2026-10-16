@@ -18,6 +18,8 @@ pub mod plan {
     pub const TOPSPIN: u8 = 7;
     pub const SLICE: u8 = 8;
     pub const LOB: u8 = 10;
+    /// A short ground stroke (○): the return's drop from out past the doubles sideline (`rally`).
+    pub const DROP: u8 = 11;
     /// Volleys: ✕, ○, △, and the drop volley (○).
     pub const VOLLEY: u8 = 0xc;
     pub const VOLLEY_SLICE: u8 = 0xd;

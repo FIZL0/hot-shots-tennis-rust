@@ -45,9 +45,9 @@ pub mod grade {
 /// The search only takes a ball on the player's own half, at least this far from the net.
 const NET_CLEAR: f32 = 0.5;
 /// The reach and the volley height stretched by this.
-const STRETCH: f32 = 1.3;
+pub const STRETCH: f32 = 1.3;
 /// A dive only goes for a ball within 22.5° of the facing (cos), and a blocked dive ends past 25° off its line.
-const DIVE_CONE: f32 = f32::from_bits(0x3f6c_835e);
+pub const DIVE_CONE: f32 = f32::from_bits(0x3f6c_835e);
 const DIVE_STRAY: f32 = f32::from_bits(0x3f68_03ca);
 /// Timing errors are held to ±1 m, in tenths.
 const MAX_ERROR: i32 = 10;
