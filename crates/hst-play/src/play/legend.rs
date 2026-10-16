@@ -198,8 +198,14 @@ fn style_of(dev: Option<Entity>, pads: &Query<&Gamepad>) -> Style {
     if let Some(s) = forced() {
         return s;
     }
-    let Some(e) = dev else { return Style::Keys };
+    let Some(e) = dev else { return keys_style() };
     pad_style(pads.get(e).ok().and_then(|g| g.vendor_id()).unwrap_or(0), LAYOUT.load(Ordering::Relaxed), std::env::var("SteamDeck").as_deref() == Ok("1"))
+}
+
+/// The art for no pad (the keyboard, or a touch): with touch controls on, the touch pad's (✕ ○ □ △ on Auto, else
+/// the Button Icons setting's), not keycaps.
+fn keys_style() -> Style {
+    if super::touch_pad::on() { pad_style(super::touch_pad::SONY, LAYOUT.load(Ordering::Relaxed), false) } else { Style::Keys }
 }
 
 /// A pad's style: the Button Icons setting's (`layout`, a [`LAYOUTS`] index) when it picks one, else by the pad's
@@ -227,7 +233,7 @@ pub fn dev_style(dev: Option<Entity>) -> Style {
     if let Some(s) = forced() {
         return s;
     }
-    let Some(e) = dev else { return Style::Keys };
+    let Some(e) = dev else { return keys_style() };
     let known = PAD_STYLES.lock().ok().and_then(|v| v.iter().find(|(p, _)| *p == e).map(|(_, s)| *s));
     known.unwrap_or_else(|| pad_style(0, LAYOUT.load(Ordering::Relaxed), std::env::var("SteamDeck").as_deref() == Ok("1")))
 }
