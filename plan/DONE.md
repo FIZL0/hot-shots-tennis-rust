@@ -709,6 +709,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B483** Online screens' background isn't the graph-paper wall the settings and mods screens use (user 2026-10-16): give the online lobby/join/host screens the same paper background — crates/hst/src/play/main_menu/online.rs, crates/hst/src/play/main_menu/online/, crates/hst/src/play/menu_art.rs, crates/hst/src/play/main_menu/mods_screen.rs (reference)
 - [x] **B495** Find and Join by Code screens show the 'Main Menu' title band (frame(0, 5)); title them 'Online' (frame(8, 5)) like the Online screen (seen in B483) — crates/hst/src/play/main_menu/online.rs
 - [x] **B494** netplay test rollback_desync_is_saved_and_play_goes_on resyncs twice (expects 1) when the machine is loaded: ggrs and rollback.rs RESEND run on wall-clock time inside the round-based test harness; make the harness's outcome independent of how long a round takes (P60 journal). Files: crates/hst/src/play/netplay.rs, crates/hst/src/play/rollback.rs
+- [x] **B486** Online: on a change of ends the players snap back to the other side (user 2026-10-16) — probably the keep-my-camera-on-my-side view flip fighting the sim's end swap; make the change of ends play out and stay put on both clients — crates/hst/src/play/change_ends.rs, crates/hst/src/play/own_camera.rs, crates/hst/src/play/netplay.rs
 
 
 ### Shots

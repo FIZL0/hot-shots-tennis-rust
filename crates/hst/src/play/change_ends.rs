@@ -34,31 +34,43 @@ pub(super) fn step(mut g: ResMut<Game>, mut s: ResMut<Swing>, d: Option<Res<supe
         let mut cam = g.cam;
         let players: Vec<[f32; 3]> = g.players.iter().map(|p| p.pos).collect();
         cam.step(&Scene { players: &players, ball: g.flight.ball.pos });
-        // the pivot: the game's court spot 0x76, the player at the match camera's end, on the ground facing the net
-        // (both recorded glides fit it to 0.1 m: slot 5 and the Grand Palais with the camera on the human's side).
-        // ponytail: the first player at that end; which of two (doubles) the spot follows wasn't recorded
-        let near = g.players.iter().find(|p| p.pos[2] * cam.view.eye[2] > 0.0).unwrap_or(&g.players[g.score.server as usize]).pos;
-        let pivot = [near[0], 0.0, near[2]];
-        // the start: not the cut-away on screen but the first view of scripted shot 2, which orbits that spot from
-        // behind it (frame 0x77 is the same spot at the other end), so the move stays behind the new end's baseline
-        // instead of swinging round the court (out through the indoor court's walls)
-        let b = if pivot[2] > 0.0 { -1.0 } else { 1.0 };
-        let spot = |b: f32, p: [f32; 3]| [[b, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, b, 0.0], [p[0], 0.0, p[2], 1.0]];
-        let (here, there) = (spot(b, pivot), spot(-b, [-pivot[0], 0.0, -pivot[2]]));
-        let from = d.map_or(s.last.unwrap_or(cam.view), |d| {
-            let mut shot = Shot::new(&d.shots, 2, false);
-            shot.build(&|i| match i { 0x76 => here, 0x77 => there, _ => IDENTITY });
-            shot.view()
-        });
+        let (from, pivot) = start(&g, &cam.view, d.as_deref(), s.last.unwrap_or(cam.view));
         s.run = Some((from, cam.view, pivot));
         g.prev_view = from;
         // the placement's cut doesn't reach the picture: the move is shown instead
         g.cam_cut = false;
     }
     let Some((from, to, pivot)) = s.run else { return };
-    // the game counts its 80 down before use (79 on the first tick) and shows the match camera at 0
-    g.cam.view = if n >= 2 { swing(&from, &to, swing_weight(n - 1), pivot) } else { to };
+    g.cam.view = at(&from, &to, pivot, n);
     s.last = Some(g.cam.view);
+}
+
+/// The move's start view and pivot, gliding to the match camera's view `to` of the new set-up (`fallback`: the
+/// start without the cut-away director).
+pub(super) fn start(g: &Game, to: &View, d: Option<&super::cutaway::Director>, fallback: View) -> (View, [f32; 3]) {
+    // the pivot: the game's court spot 0x76, the player at the match camera's end, on the ground facing the net
+    // (both recorded glides fit it to 0.1 m: slot 5 and the Grand Palais with the camera on the human's side).
+    // ponytail: the first player at that end; which of two (doubles) the spot follows wasn't recorded
+    let near = g.players.iter().find(|p| p.pos[2] * to.eye[2] > 0.0).unwrap_or(&g.players[g.score.server as usize]).pos;
+    let pivot = [near[0], 0.0, near[2]];
+    // the start: not the cut-away on screen but the first view of scripted shot 2, which orbits that spot from
+    // behind it (frame 0x77 is the same spot at the other end), so the move stays behind the new end's baseline
+    // instead of swinging round the court (out through the indoor court's walls)
+    let b = if pivot[2] > 0.0 { -1.0 } else { 1.0 };
+    let spot = |b: f32, p: [f32; 3]| [[b, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, b, 0.0], [p[0], 0.0, p[2], 1.0]];
+    let (here, there) = (spot(b, pivot), spot(-b, [-pivot[0], 0.0, -pivot[2]]));
+    let from = d.map_or(fallback, |d| {
+        let mut shot = Shot::new(&d.shots, 2, false);
+        shot.build(&|i| match i { 0x76 => here, 0x77 => there, _ => IDENTITY });
+        shot.view()
+    });
+    (from, pivot)
+}
+
+/// The move's view at phase tick `n`: the game counts its 80 down before use (79 on the first tick) and shows the
+/// match camera at 0.
+pub(super) fn at(from: &View, to: &View, pivot: [f32; 3], n: u32) -> View {
+    if n >= 2 { swing(from, to, swing_weight(n - 1), pivot) } else { *to }
 }
 
 /// The player who serves next, through the change of ends (B262): the placement put everyone where the next point

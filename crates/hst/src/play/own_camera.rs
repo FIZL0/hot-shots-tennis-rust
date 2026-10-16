@@ -8,6 +8,11 @@
 //! scene each tick, and shows that instead whenever the shared camera shows the plain match view (not while a
 //! cut-away, replay or the change-ends glide has it). Each human's stick turns with the camera of the machine
 //! driving it (`Game::cam_of`, the same on every machine), so the controls stay screen-relative to its own picture.
+//!
+//! B486: the change-ends glide is this machine's own too. The shared camera's glides to the shared camera's end, behind
+//! the player there: shown on the machine whose player had moved to the other end, it put that player at the far end
+//! and the picture snapped round to the own camera when it ended. Each machine glides to its own camera's view of the
+//! new set-up, round the player at its end, the same move as a solo game's.
 
 use bevy::prelude::*;
 use hst_sim::camera::{Camera, Scene, View};
@@ -33,6 +38,8 @@ pub(super) struct OwnCam {
     /// leaves the shared camera on corrected scenes this one hasn't stepped, and the picture flipped to it.
     plain: bool,
     fresh: bool,
+    /// B486: through a change of ends, the views of this machine's own glide the picture blends between this tick.
+    glide: Option<(View, View)>,
 }
 
 pub fn plugin(app: &mut App) {
@@ -81,7 +88,7 @@ fn own_cam(g: &Game, owner: usize) -> OwnCam {
     let mut cam = Camera::from_view(view);
     cam.turned = g.players[owner].end < 0.0;
     cam.cut();
-    OwnCam { cam, prev: view, expect: view, owner, tick: 0, cut: false, plain: true, fresh: false }
+    OwnCam { cam, prev: view, expect: view, owner, tick: 0, cut: false, plain: true, fresh: false, glide: None }
 }
 
 /// Whether player `i`'s stick is turned round: online, its machine's camera looks from the +z end; else the
@@ -125,11 +132,30 @@ fn step(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>, np: Option<Res<Netpla
 }
 
 /// After the tick `step` stepped: does the shared camera still show the plain match view?
-fn plain(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>) {
+/// B486: and through a change of ends, this machine's glide at the tick it ends on.
+fn plain(g: Option<Res<Game>>, own: Option<ResMut<OwnCam>>, d: Option<Res<super::cutaway::Director>>) {
     let (Some(g), Some(mut o)) = (g, own) else { return };
     if std::mem::take(&mut o.fresh) {
         o.plain = g.cam.view == o.expect;
     }
+    o.glide = glide(&g, o.owner, d.as_deref());
+}
+
+/// The own camera's change-ends glide at the tick `g` ends on (previous and current view): a function of the phase's
+/// count and the new set-up only, so a rollback's re-run ticks come out the same as the first run.
+fn glide(g: &Game, owner: usize, d: Option<&super::cutaway::Director>) -> Option<(View, View)> {
+    use super::change_ends::{at, start};
+    let super::Phase::ChangeEnds(n) = g.phase else { return None };
+    // the end view: this machine's match camera cut to the new set-up at its player's end
+    let mut cam = Camera::new();
+    cam.turned = g.players[owner].end < 0.0;
+    cam.cut();
+    let players: Vec<_> = g.players.iter().map(|p| p.pos).collect();
+    cam.step(&Scene { players: &players, ball: g.flight.ball.pos });
+    let to = cam.view;
+    let (from, pivot) = start(g, &to, d, to);
+    let prev = if n >= hst_sim::flow::CHANGE_ENDS { from } else { at(&from, &to, pivot, n + 1) };
+    Some((prev, at(&from, &to, pivot, n)))
 }
 
 /// The views the picture blends between this frame: this machine's own camera's while the shared one shows the
@@ -145,6 +171,7 @@ pub(super) fn shown(g: &Game, own: Option<&OwnCam>) -> (View, View) {
         return (c.view, c.view);
     }
     match own {
+        Some(OwnCam { glide: Some(v), .. }) => *v,
         Some(o) if o.plain => (o.prev, o.cam.view),
         _ => (g.prev_view, g.cam.view),
     }
@@ -209,6 +236,59 @@ mod tests {
         }
         assert!(shots >= 2, "only {shots} cut-aways");
         assert!(differs, "the own camera never showed its own view");
+    }
+
+    /// B486: following the player the shared camera's change-ends glide isn't behind, the picture glides round that
+    /// player to its own camera's view at its new end and the serve's set-up carries on from there, with no cut
+    /// (it showed the shared glide, the player at the far end, and snapped round when it ended; skipped without the ISO).
+    #[test]
+    fn the_change_of_ends_glides_behind_the_own_player() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        crate::play::AUTOPLAY.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_plugins((cutaway::plugin, change_ends::plugin, super::plugin));
+        app.add_systems(Startup, setup);
+        let time = |mut g: ResMut<Game>| g.match_stats.tick();
+        app.add_systems(FixedUpdate, (remember, control, simulate, time, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        // no pad drives a player, so the shared camera keeps its end (as online): after the change player 1 is at it and
+        // its glide is behind player 1; this machine follows player 0
+        let own = super::own_cam(app.world().resource::<Game>(), 0);
+        app.insert_resource(own);
+        let (mut views, mut after, mut differs) = (Vec::<(u32, hst_sim::camera::View, hst_sim::camera::View)>::new(), None, false);
+        for _ in 0..60 * 600 {
+            app.world_mut().run_schedule(FixedUpdate);
+            let w = app.world();
+            let (g, own) = (w.resource::<Game>(), w.resource::<super::OwnCam>());
+            let (prev, now) = super::shown(g, Some(own));
+            if let Phase::ChangeEnds(n) = g.phase {
+                let z = g.players[0].pos[2];
+                if n < hst_sim::flow::CHANGE_ENDS {
+                    assert!(now.eye[2] * z > 0.0 && now.eye[2].abs() > 11.885, "tick {n}: eye {:?} not behind player 0 at {z}", now.eye);
+                }
+                differs |= (prev, now) != super::shown(g, None);
+                views.push((n, prev, now));
+            } else if !views.is_empty() {
+                after = Some((prev, now));
+                break;
+            }
+        }
+        assert_eq!(views.len() as u32, hst_sim::flow::CHANGE_ENDS + 1, "a whole change-ends phase");
+        assert!(differs, "player 0 wasn't at the other end from the shared camera's glide");
+        for w in views.windows(2) {
+            assert_eq!(w[1].1, w[0].2, "tick {} starts where {} ended", w[1].0, w[0].0);
+        }
+        let last = views.last().unwrap().2;
+        let (prev, now) = after.expect("the serve's first tick");
+        let d = |a: &hst_sim::camera::View, b: &hst_sim::camera::View| Vec3::from(a.eye).distance(Vec3::from(b.eye));
+        assert!(d(&prev, &last) < 0.05 && d(&now, &last) < 0.05, "the serve's set-up cut from {last:?} to {prev:?} → {now:?}");
     }
 
     /// B376: deciding whether the picture shows this machine's camera waits for every system that moves the shared
