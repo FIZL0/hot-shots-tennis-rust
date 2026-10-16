@@ -13,6 +13,17 @@ use bevy::render::{Render, RenderApp, RenderSystems as R};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+/// `eprintln!` for the `HST_FPS` log: on the web (no stderr there) the browser's console (B453: `?fps` in the URL).
+macro_rules! diag {
+    ($($t:tt)*) => {{
+        #[cfg(target_arch = "wasm32")]
+        bevy::log::info!($($t)*);
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!($($t)*);
+    }};
+}
+pub(crate) use diag;
+
 /// A frame or a stage of one this long counts as a stall (ms).
 const STALL: f32 = 50.0;
 
@@ -78,10 +89,10 @@ fn render_end(images: Res<RenderAssets<bevy::render::texture::GpuImage>>, meshes
     // when each pipeline lands: one that lands after the loading screen is down was compiled mid-match
     let watched = watched(1);
     if now.ready > last.ready && ms(t0, end) <= STALL && !watched {
-        eprintln!("pipelines ready +{} ({} in all, compiling {creating}) at {:.2} s", now.ready - last.ready, now.ready, since_start());
+        diag!("pipelines ready +{} ({} in all, compiling {creating}) at {:.2} s", now.ready - last.ready, now.ready, since_start());
     }
     if ms(t0, end) > STALL || watched {
-        eprintln!(
+        diag!(
             "render{} {:.1} ms: assets {:.1} (images +{} {:.1} MB, meshes +{}) specialize {:.1} acquire {:.1} queue+prepare {:.1} pipeline queue {:.1} (ready +{}, compiling {creating}) graph+submit {:.1} at {:.2} s",
             if watched { "" } else { " stall" },
             ms(t0, end),
@@ -141,7 +152,7 @@ fn game_start(world: &mut World) {
         let (game, gap) = (ms(start, end), ms(end, now));
         let watched = watched(0);
         if game > STALL || gap > STALL || watched {
-            eprintln!("game{}: update {game:.1} ms, then {gap:.1} ms to the next frame (extract, events, present); disc +{:.1} MB, entities {entities} ({:+}) at {:.2} s", if watched { "" } else { " stall" }, (read - g.2) as f32 / 1e6, entities as i64 - g.3 as i64, since_start());
+            diag!("game{}: update {game:.1} ms, then {gap:.1} ms to the next frame (extract, events, present); disc +{:.1} MB, entities {entities} ({:+}) at {:.2} s", if watched { "" } else { " stall" }, (read - g.2) as f32 / 1e6, entities as i64 - g.3 as i64, since_start());
         }
     }
     *g = (Some(now), None, read, entities);

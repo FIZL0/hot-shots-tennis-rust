@@ -1471,12 +1471,12 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>, mut dts:
     }
     // a stutter: any frame over two 60 Hz frames, with when it happened
     if dt > 1.0 / 30.0 {
-        eprintln!("slow frame {:.1} ms at {:.2} s", dt * 1e3, time.elapsed_secs());
+        stall::diag!("slow frame {:.1} ms at {:.2} s", dt * 1e3, time.elapsed_secs());
     }
     *acc = (acc.0 + 1, acc.1 + dt, acc.2.max(dt), acc.3);
     if acc.1 >= 5.0 {
-        eprintln!("fps {:.1} (slowest frame {:.1} ms) at {:.0} s", acc.0 as f32 / acc.1, acc.2 * 1e3, time.elapsed_secs());
-        eprintln!("{}", frame_spread(&mut dts));
+        stall::diag!("fps {:.1} (slowest frame {:.1} ms) at {:.0} s", acc.0 as f32 / acc.1, acc.2 * 1e3, time.elapsed_secs());
+        stall::diag!("{}", frame_spread(&mut dts));
         dts.clear();
         // the process's CPU time (all threads) per frame: steadier than fps on a busy machine
         let cpu = std::fs::read_to_string("/proc/self/stat").ok().and_then(|s| {
@@ -1486,9 +1486,9 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>, mut dts:
         #[cfg(target_os = "ios")]
         let cpu = Some(ios::cpu_ms());
         #[cfg(target_os = "ios")]
-        eprintln!("thermal {}", ios::thermal());
+        stall::diag!("thermal {}", ios::thermal());
         if let Some(cpu) = cpu {
-            eprintln!("cpu {:.2} ms/frame", (cpu - acc.3) / acc.0 as f32);
+            stall::diag!("cpu {:.2} ms/frame", (cpu - acc.3) / acc.0 as f32);
             acc.3 = cpu;
         }
         *acc = (0, 0.0, 0.0, acc.3);
@@ -1538,7 +1538,7 @@ fn log_assets(w: &World, mut next: Local<f32>) {
     let images = w.get_resource::<Assets<Image>>();
     let bytes: usize = images.iter().flat_map(|a| a.iter()).map(|(_, i)| i.data.as_ref().map_or(0, Vec::len)).sum();
     let n = |k: Option<usize>| k.unwrap_or(0);
-    eprintln!(
+    stall::diag!(
         "assets at {now:.0} s: {} images ({} kB on CPU), {} meshes, {} std materials, {} fx materials, {} entities",
         n(images.map(|a| a.len())),
         bytes / 1024,
@@ -1549,7 +1549,7 @@ fn log_assets(w: &World, mut next: Local<f32>) {
     );
     // the GPU's own allocations (Vulkan/DX12)
     if let Some(r) = w.get_resource::<bevy::render::renderer::RenderDevice>().and_then(|d| d.wgpu_device().generate_allocator_report()) {
-        eprintln!("gpu at {now:.0} s: {} kB in {} allocations, {} kB reserved", r.total_allocated_bytes / 1024, r.allocations.len(), r.total_reserved_bytes / 1024);
+        stall::diag!("gpu at {now:.0} s: {} kB in {} allocations, {} kB reserved", r.total_allocated_bytes / 1024, r.allocations.len(), r.total_reserved_bytes / 1024);
     }
 }
 

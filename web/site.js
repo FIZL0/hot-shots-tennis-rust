@@ -75,6 +75,10 @@ export async function landing(dir, hasPack) {
     const auto = $('#autoplay');
     auto.checked = get('hst-autoplay') === '1';
     auto.onchange = () => put('hst-autoplay', auto.checked ? '1' : '0');
+    // B453: index.html's frame log and the game's (web.rs), from the next start
+    const fps = $('#fpslog');
+    fps.checked = get('hst-fps') === '1';
+    fps.onchange = () => put('hst-fps', fps.checked ? '1' : '0');
     for (const a of root.querySelectorAll('.band [data-have]')) a.onclick = e => { e.preventDefault(); go(); };
     importer(go, dir);
   });
