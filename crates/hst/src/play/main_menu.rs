@@ -1801,7 +1801,22 @@ fn newest(mods: &[crate::mods::Mod]) -> Vec<usize> {
     v.into_iter().map(|(i, _)| i).collect()
 }
 
-fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut images: ResMut<Assets<Image>>) {
+/// P57: the menu's start in three systems, each its own slice of the staged start (`mode.rs`), where one `setup`
+/// took 410 ms of one frame in the browser: the sheets ([`read_sheets`]), the text tables, sounds and mod roster
+/// ([`read_text`]), then the menu itself ([`setup`]).
+#[derive(Resource)]
+struct Sheets {
+    art: Vec<Handle<Image>>,
+    /// `word.tm2`, for its glyphs.
+    font: Vec<u8>,
+}
+
+/// [`read_text`]'s mod roster and its folder, for [`setup`].
+#[derive(Resource)]
+struct Roster(Vec<crate::mods::Mod>, std::path::PathBuf);
+
+/// The menu's sheets read from the disc (P57: drawn and decoded on the jobs, `menu_art::image`).
+fn read_sheets(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Image>>) {
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let mut archives = std::collections::HashMap::new();
     let mut read = |iso: &mut Iso, xb: &str, name: &str| -> Vec<u8> {
@@ -1857,7 +1872,21 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     }
     let _pre = crate::textures::prefetch_tim2(sheets.iter().map(|s| s.1.as_slice()));
     art.extend(sheets.iter().map(|(name, d)| super::menu_art::image(&mut images, d, name)));
-    let glyphs = glyphs(&font);
+    commands.insert_resource(Sheets { art, font });
+}
+
+/// The menu's text tables, its sounds and the custom roster.
+fn read_text(mut commands: Commands, args: Res<Args>, mut sheets: ResMut<Sheets>, mut images: ResMut<Assets<Image>>) {
+    commands.remove_resource::<Sheets>();
+    let mut iso = Iso::open(&args.iso).expect("open iso");
+    let read = |iso: &mut Iso, xb: &str, name: &str| -> Vec<u8> {
+        let arc = iso.read(xb).expect("menu archive on disc");
+        let arc = Archive::parse(&arc).expect("xb archive");
+        let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(name)).unwrap_or_else(|| panic!("{name} in {xb}"));
+        arc.read(e).expect("archive bytes")
+    };
+    let mut art = std::mem::take(&mut sheets.art);
+    let glyphs = glyphs(&sheets.font);
     let msg = messages(&read(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
     let (cnf, bin) = (iso.read("SYSTEM.CNF").expect("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN").expect("MENU.BIN"));
     let grades = hst_data::exe::Menu::new(&cnf, &bin).expect("supported disc").grades();
@@ -1885,7 +1914,13 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut i
     let (mod_text, mods) = roster.into_iter().unzip();
     art.push(super::menu_art::pill_layers(&mut images));
     commands.insert_resource(Art(art, bank, Text { msg, glyphs, grades, style, hands: hands(&csv), ranks, mods: mod_text }));
+    commands.insert_resource(Roster(mods, mods_dir));
+}
 
+/// The menu: its settings, the screen it opens on, its quads.
+fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut roster: ResMut<Roster>) {
+    commands.remove_resource::<Roster>();
+    let (mods, mods_dir) = (std::mem::take(&mut roster.0), std::mem::take(&mut roster.1));
     let fresh = kept.is_none();
     // first run (no settings.txt): the Auto preset's pick for this device (P53; B351: a phone's is Phone or below it,
     // the browser on a touch screen too; a Steam Deck's its own)
@@ -3370,7 +3405,7 @@ fn bgm(menu: Res<Menu>, tracks: Option<Res<MenuBgm>>, sound: Option<Res<Sound>>,
 
 pub fn plugin(app: &mut App) {
     app.add_plugins((controls::plugin, super::widescreen::plugin))
-        .add_systems(Startup, (setup, load_bgm, cursor::setup))
+        .add_systems(Startup, ((read_sheets, read_text, setup).chain(), load_bgm, cursor::setup))
         .add_systems(PreUpdate, pointer::mouse_idle.after(bevy::input::InputSystems))
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()

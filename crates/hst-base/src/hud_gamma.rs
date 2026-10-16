@@ -56,7 +56,11 @@ pub struct Persist;
 const LAYER: usize = 31;
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let target = |f| Image::new_target_texture(1, 1, f, None);
+    // P57: no pixels on the CPU side: with Bevy's zero fill each window-sized target was uploaded at the first frame
+    // and again on every change (four screens' worth, ~33 MB of a 958 ms first frame in the browser at 4K); the GPU
+    // starts them cleared anyway. No copy on resize either (it needs COPY_SRC, and the zero-filled data came back
+    // blank after a resize before too)
+    let target = |f| Image { data: None, copy_on_resize: false, ..Image::new_target_texture(1, 1, f, None) };
     let (scene, hud) = (images.add(target(TextureFormat::Rgba8Unorm)), images.add(target(TextureFormat::Rgba8UnormSrgb)));
     commands.spawn((
         Camera2d,
