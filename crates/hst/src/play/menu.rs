@@ -846,6 +846,24 @@ mod tests {
         assert_eq!((s.shot, s.serve, s.emote), (None, false, None));
     }
 
+    /// P61: the match crate reaches this screen only through `front_end`; a bare world is never paused.
+    #[test]
+    fn the_match_pauses_through_the_front_end() {
+        use super::super::front_end;
+        let mut w = World::new();
+        front_end::set_paused(&mut w, true);
+        assert!(!front_end::paused(&w));
+        w.insert_resource(Menu::default());
+        w.insert_resource(Time::<Fixed>::from_hz(60.0));
+        w.insert_resource(front_end::FrontEnd { paused, set_paused, face: super::super::main_menu::face });
+        front_end::set_paused(&mut w, true);
+        assert!(front_end::paused(&w) && w.resource::<Menu>().open);
+        // the match's clock stops while it's up
+        assert_eq!(w.resource::<Time<Fixed>>().timestep(), Duration::from_secs(1 << 20));
+        front_end::set_paused(&mut w, false);
+        assert!(!front_end::paused(&w));
+    }
+
     #[test]
     fn slot3_pause() {
         let qs = layout(&view());
