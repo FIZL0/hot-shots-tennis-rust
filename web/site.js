@@ -39,6 +39,10 @@ const withValue = (text, key, v) => {
   return lines.join('\n');
 };
 
+// B457: what a browser without OPFS (private browsing) gets
+const MEMORY_NOTE = 'This browser isn\'t letting the page keep files (a private window?), so the game runs from memory: '
+  + 'pick the ISO again on each visit, and settings and mods last only until the window closes.';
+
 export async function landing(dir, hasPack) {
   const root = document.getElementById('disc');
   root.hidden = false;
@@ -48,6 +52,8 @@ export async function landing(dir, hasPack) {
     for (const e of root.querySelectorAll('[data-have]')) e.hidden = !on;
   };
   have(hasPack);
+  // B457: storage refused (a private window): said once, beside the ISO
+  if (dir.memory && !document.getElementById('nostore')) $('#status').before(el('p', { id: 'nostore', className: 'note', textContent: MEMORY_NOTE }));
   const parts = { dir, have, hasPack };
   username();
   account();
@@ -70,13 +76,13 @@ export async function landing(dir, hasPack) {
     auto.checked = get('hst-autoplay') === '1';
     auto.onchange = () => put('hst-autoplay', auto.checked ? '1' : '0');
     for (const a of root.querySelectorAll('.band [data-have]')) a.onclick = e => { e.preventDefault(); go(); };
-    importer(go);
+    importer(go, dir);
   });
 }
 
 // ---------------------------------------------------------------- the ISO
 
-function importer(done) {
+function importer(done, dir) {
   const input = $('#iso'), status = $('#status'), bar = $('.progress'), fill = bar.firstElementChild;
   input.onchange = () => {
     const file = input.files[0];
@@ -99,13 +105,15 @@ function importer(done) {
         status.textContent = `Couldn't import ${file.name}: ${data.error}`;
       } else if (data.hash) {
         w.terminate();
+        // B457: no OPFS, the pack in memory for this visit (index.html's memory folder)
+        if (data.pack) dir.put('disc.pack', data.pack);
         fill.style.width = '100%';
         status.textContent = 'Imported. The ISO is no longer needed; you can delete it. Starting…';
         done();
       }
     };
     w.onerror = e => { bar.hidden = true; status.className = 'err'; status.textContent = `Couldn't import ${file.name}: ${e.message ?? e}`; };
-    w.postMessage(file);
+    w.postMessage(dir.memory ? { file, memory: true } : file);
   };
 }
 
@@ -332,7 +340,7 @@ async function mods(parts) {
 // usage the browser reports, and clear / forget / erase
 async function storage(parts) {
   const box = $('#storage'), dir = parts.dir;
-  const est = await navigator.storage.estimate?.().catch(() => null) ?? null;
+  const est = await navigator.storage?.estimate?.().catch(() => null) ?? null;
   const pack = await fileSize(dir, 'disc.pack') + await fileSize(dir, 'disc.part');
   const modBytes = await bytes(await sub(dir, 'mods'));
   const cards = await bytes(await sub(dir, 'previews'));
@@ -344,12 +352,14 @@ async function storage(parts) {
   const cached = est?.usageDetails?.caches ?? Math.max(0, used - known);
   const segs = [['Disc data', pack, '#2fae4a'], ['Mods', modBytes, '#5fb9e6'], ['Cards', cards, '#f5b81c'], ['Offline copy', cached, '#9b8cff'], ['Reports & settings', reports + local, '#c9ccd3']];
   const total = Math.max(used, segs.reduce((n, s) => n + s[1], 0), 1);
-  const persisted = await navigator.storage.persisted?.().catch(() => false);
+  const persisted = await navigator.storage?.persisted?.().catch(() => false);
   const busy = async (what, f) => { const r = await f(); if (r !== true && r !== undefined) alert(`Couldn't ${what}: ${r.message ?? r}. Close the game's tab and try again.`); storage(parts); };
   const row = (label, n, note, ...buttons) => el('div', { className: 'r' },
     el('span', {}, label, ' ', el('span', { className: 'v', textContent: n == null ? '' : size(n) })),
     el('span', { className: 'end' }, note ? el('span', { className: 'note', textContent: note }) : null, ...buttons));
-  box.replaceChildren(
+  // (nulls left out: replaceChildren would show them as text)
+  box.replaceChildren(...[
+    dir.memory ? el('p', { className: 'note', textContent: MEMORY_NOTE }) : null,
     el('p', {}, el('b', { textContent: size(used || known + local) }), est?.quota ? ` used of ${size(est.quota)} this browser allows.` : ' used.'),
     el('div', { className: 'bar' }, ...segs.filter(s => s[1] > 0).map(([l, n, c]) => el('i', { title: `${l}: ${size(n)}`, style: `width:${100 * n / total}%;background:${c}` }))),
     el('p', { className: 'note legend' }, ...segs.map(([l, , c]) => el('span', {}, el('span', { className: 'key', style: `background:${c}` }), l))),
@@ -365,7 +375,7 @@ async function storage(parts) {
       return true;
     }))),
     row('Desync reports', reports, null, reports ? pill('Clear', () => busy('clear the reports', () => drop(dir, 'reports'))) : null),
-    persisted === false && navigator.storage.persist ? row('Keep it', null, 'the browser may clear all this when space runs low', pill('Keep my data', () => navigator.storage.persist().then(ok => { if (!ok) alert('The browser said no (Chrome agrees once the site is installed or bookmarked).'); storage(parts); }))) : null,
+    !dir.memory && persisted === false && navigator.storage?.persist ? row('Keep it', null, 'the browser may clear all this when space runs low', pill('Keep my data', () => navigator.storage.persist().then(ok => { if (!ok) alert('The browser said no (Chrome agrees once the site is installed or bookmarked).'); storage(parts); }))) : null,
     row('Everything', null, 'disc data, mods, settings, login', pill('Erase everything', () => {
       if (!confirm('Erase everything OpenTennis keeps in this browser: the disc data, mods, cards, settings, your name and your Hugging Face login?')) return;
       busy('erase everything', async () => {
@@ -380,7 +390,7 @@ async function storage(parts) {
         return res;
       });
     }, 'red')),
-  );
+  ].filter(Boolean));
 }
 
 // ---------------------------------------------------------------- donate

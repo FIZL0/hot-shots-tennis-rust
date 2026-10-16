@@ -345,8 +345,28 @@ function fail(e) {
     const gpu = gl ? gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : 'no WebGL2';
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
     const report = `${step.textContent}\n\n${lastError || msg}\n\n${navigator.userAgent}\nWebGL2: ${gpu}\n${location.href}`;
-    navigator.clipboard?.writeText(report).then(() => e.target.textContent = 'Copied', () => e.target.textContent = 'Couldn\'t copy');
+    copyText(report).then(ok => e.target.textContent = ok ? 'Copied' : 'Couldn\'t copy: select the text below and copy it');
   };
+}
+// B457: `text` onto the clipboard, from a click: a selected textarea and execCommand('copy') first (Gecko allows it
+// only inside the click's own handler, so before any await), else navigator.clipboard (refused in a Firefox private
+// window); where both fail the textarea stays on the error screen, selected, to copy by hand. Resolves to whether it
+// was copied
+function copyText(text) {
+  let t = document.getElementById('report');
+  if (!t) {
+    t = Object.assign(document.createElement('textarea'), { id: 'report', readOnly: true, rows: 8 });
+    t.style.cssText = 'display:block;width:min(40em,90vw);margin:1em auto 0;font:12px monospace';
+    document.getElementById('help').after(t);
+  }
+  t.value = text;
+  t.focus();
+  t.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  const done = ok => { if (ok) t.remove(); return ok; };
+  if (ok) return Promise.resolve(done(true));
+  try { return navigator.clipboard.writeText(text).then(() => done(true), () => false); } catch { return Promise.resolve(false); }
 }
 // B378: Chromium with its GPU blocklisted, crashed or graphics acceleration off has no WebGL2 for the page (it no
 // longer falls back to software WebGL by itself), and the renderer panicked deep inside ("Failed to create wgpu
@@ -449,7 +469,45 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && check());
 }
 say('Opening this browser\'s storage…');
-const dir = await navigator.storage.getDirectory();
+// B457: a folder in memory with OPFS's calls the page and site.js use, for a browser that refuses OPFS (a Firefox
+// private window: "Security error when calling GetDirectory"): the ISO is picked again each visit (worker.js
+// imports it into a Blob, `put`), and what the game writes lasts until the page closes
+const memoryDir = (name = '') => {
+  const kids = new Map();
+  const missing = n => new DOMException(`${n} not found`, 'NotFoundError');
+  const file = (n, blob = new Blob()) => ({
+    kind: 'file', name: n,
+    getFile: async () => new File([blob], n),
+    createWritable: async () => {
+      const parts = [];
+      return { write: async d => { parts.push(d); }, close: async () => { blob = new Blob(parts); } };
+    },
+  });
+  const get = (n, kind, create, make) => {
+    let h = kids.get(n);
+    if (!h && create) kids.set(n, h = make());
+    if (!h) throw missing(n);
+    if (h.kind !== kind) throw new DOMException(`${n} is a ${h.kind}`, 'TypeMismatchError');
+    return h;
+  };
+  return {
+    kind: 'directory', name, memory: true,
+    put: (n, blob) => kids.set(n, file(n, blob)),
+    getFileHandle: async (n, o) => get(n, 'file', o?.create, () => file(n)),
+    getDirectoryHandle: async (n, o) => get(n, 'directory', o?.create, () => memoryDir(n)),
+    removeEntry: async n => { if (!kids.delete(n)) throw missing(n); },
+    entries: async function* () { yield* [...kids]; },
+    keys: async function* () { yield* [...kids.keys()]; },
+    values: async function* () { yield* [...kids.values()]; },
+  };
+};
+let dir;
+try {
+  dir = await navigator.storage.getDirectory();
+} catch (e) {
+  console.warn(`hst: no OPFS (${e?.message ?? e}), keeping files in memory`);
+  dir = memoryDir();
+}
 const q = new URLSearchParams(location.search);
 if (q.has('forget')) {
   await dir.removeEntry('disc.pack').catch(() => {});
@@ -569,7 +627,7 @@ let writeId = 0;
 const writeFile = async (path, data) => {
   if (data === undefined) throw new Error(`nothing to write for ${path}`);
   const parts = path.split('/');
-  if ('createWritable' in FileSystemFileHandle.prototype) {
+  if (dir.memory || 'createWritable' in FileSystemFileHandle.prototype) {
     let d = dir;
     for (const s of parts.slice(0, -1)) d = await d.getDirectoryHandle(s, { create: true });
     const w = await (await d.getFileHandle(parts.at(-1), { create: true })).createWritable();
@@ -604,6 +662,8 @@ async function start() {
   boot.hidden = false;
   say('Reading the disc pack…');
   const bytes = new Uint8Array(await (await pack.getFile()).arrayBuffer());
+  // B457: in memory, the Blob let go once read (any reload goes back to the site to pick the ISO anyway)
+  if (dir.memory) await dir.removeEntry('disc.pack');
   // (a phone's first run picks its graphics preset in the game: main_menu.rs `first`, graphics.rs PHONE)
   await init({ module_or_path: wasm() });
   say('Starting…');
@@ -686,6 +746,12 @@ async function start() {
   dir.removeEntry('mod-download.zip').catch(() => {});
   // an installed mod (a picked zip, or one the mod store downloaded, M17) from the game into OPFS mods/<id>/
   const save = async (id, name) => {
+    // B457: nowhere to keep it, and a mod needs a reload to play, which would lose it
+    if (dir.memory) {
+      drop_mod(id);
+      mod_status(`Couldn't keep ${name}: this browser isn't letting the page store files (a private window?)`);
+      return;
+    }
     mod_status(`Saving ${name}...`);
     try {
       await mods.removeEntry(id, { recursive: true }).catch(() => {});
