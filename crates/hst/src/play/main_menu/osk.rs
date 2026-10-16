@@ -207,6 +207,7 @@ fn up(m: &Menu) -> bool {
 /// the box open) puts it down for a frame and up again. Also notes a real controller (`mobile`).
 fn system_keyboard(menu: Res<Menu>, pads: Query<(&Gamepad, Option<&Name>)>, mut window: Query<&mut Window, With<bevy::window::PrimaryWindow>>) {
     PAD.store(pads.iter().any(|(_, n)| !n.is_some_and(|n| super::super::emote::is_touch(n))), Relaxed);
+    crate::chat::TOUCH.store(mobile(), Relaxed);
     let raise = RAISE.swap(false, Relaxed) | crate::chat::RAISE.swap(false, Relaxed);
     if !cfg!(any(target_os = "ios", target_os = "android")) {
         return;

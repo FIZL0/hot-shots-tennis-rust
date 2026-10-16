@@ -60,6 +60,10 @@ pub static OPEN: AtomicBool = AtomicBool::new(false);
 /// away meanwhile); `main_menu::osk` takes it.
 pub static RAISE: AtomicBool = AtomicBool::new(false);
 
+/// B517: played by touch with no controller (`osk::mobile`): while the box is open it sits at the top of the screen,
+/// over the device's keyboard.
+pub static TOUCH: AtomicBool = AtomicBool::new(false);
+
 /// B449: the last two lines heard (who, words; a note's who is empty), kept after they fade, for the lobby's chat box.
 pub static RECENT: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
@@ -196,7 +200,9 @@ fn input(
     chat.lines.iter_mut().for_each(|l| l.age += dt);
     chat.lines.retain(|l| l.age < LIFE);
     let on = !HIDDEN.load(Ordering::Relaxed) && net.as_ref().is_some_and(|n| n.in_room());
-    let Some(net) = net else { return phone(&mut was, false) };
+    let Some(net) = net else {
+        return phone(&mut was, false);
+    };
     if !on {
         (chat.open, chat.phrase) = (false, None);
         chat.draft.clear();
@@ -303,7 +309,7 @@ fn draw(
     net: Option<Res<Net>>,
     chat: Res<Chat>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    root: Query<(Entity, &mut Visibility), With<Root>>,
+    root: Query<(Entity, &mut Visibility, &mut Node), (With<Root>, Without<Row>)>,
     mut rows: Query<(&Row, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut Node, &mut BackgroundColor)>,
 ) {
     let on = !HIDDEN.load(Ordering::Relaxed) && (net.is_some_and(|n| n.in_room()) || sampled());
@@ -323,7 +329,7 @@ fn draw(
         }
     }
     let mut root = root;
-    let Ok((_, mut vis)) = root.single_mut() else {
+    let Ok((_, mut vis, mut place)) = root.single_mut() else {
         if on {
             spawn(&mut commands);
         }
@@ -341,6 +347,11 @@ fn draw(
     crate::web::touch_chat(button);
     if !on {
         return;
+    }
+    // B517: typing by touch, the box at the top (under the on-screen pad's top row), clear of the device's keyboard
+    let (top, bottom) = if chat.open && TOUCH.load(Ordering::Relaxed) { (Val::Percent(16.0), Val::Auto) } else { (Val::Auto, Val::Percent(18.0)) };
+    if place.top != top || place.bottom != bottom {
+        (place.top, place.bottom) = (top, bottom);
     }
     let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
     let px = |n: f32| if tall { bevy::text::FontSize::Vw(n / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(n / 448.0 * 100.0) };
@@ -430,6 +441,9 @@ mod tests {
         assert_eq!(clean(" \u{1b} "), None);
         assert_eq!(clean(&"x".repeat(200)).map(|s| s.len()), Some(MAX));
     }
+
+    /// The statics (`ASK`, `BUTTON`, …) are shared: one chat app at a time.
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// In a lobby, T opens the box, typed keys go into it (not to the menus' keys), Enter sends the line.
     #[test]
