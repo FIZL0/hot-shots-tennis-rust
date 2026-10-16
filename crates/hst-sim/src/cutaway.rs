@@ -356,12 +356,15 @@ impl Shot {
         }
         self.cam = cam;
         self.fov = self.ch(14);
-        // keep the eye above the ground, looking at the subject
+        // keep the eye above the ground, looking at the subject: the subject frame's own spot (the frame it's moved
+        // to, before the channel 8–10 offset), not the basis. A shot whose offset puts the eye on the basis (0x64,
+        // from the ground in front of the player) would otherwise take the asin of a zero-length look (B367)
         let clear = self.float(0xac);
         if clear != 0.0 && 0.0 < F(self.cam[3][1]) + clear {
             let up = F(self.cam[3][1]) + clear;
             self.cam[3][1] = (F(self.cam[3][1]) - up).0;
-            let l = fs(local(&self.cam, [basis[3][0], basis[3][1], basis[3][2]]));
+            let s = frame(if self.byte(2) != 0 { self.byte(2) } else { self.byte(0) })[3];
+            let l = fs(local(&self.cam, [s[0], s[1], s[2]]));
             let a = musl::asinf((up / (l[2] * l[2] + l[1] * l[1]).sqrt()).0);
             self.cam = mul(&self.cam, &rot_x((-F(a)).0));
         }
