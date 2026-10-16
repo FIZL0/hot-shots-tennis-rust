@@ -126,7 +126,7 @@ pub fn load(
     if !motions.contains_key(&0) {
         return Err(ctx("no `idle` animation".into()));
     }
-    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
+    let binds = crate::character::part_skins(&joints, &parts, meshes, bindposes);
     Ok(Some(CharacterData {
         joints,
         parts,
