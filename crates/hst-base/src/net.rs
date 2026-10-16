@@ -2735,10 +2735,11 @@ fn relay_trouble(status: Option<u16>, err: &str) -> String {
     }
 }
 
-/// B467: a refused request's wait before asking the pkarr relay again: 1-3 s, spread out so the requests turned away
-/// together don't all come back in the same second.
-fn relay_pause() -> Duration {
-    Duration::from_millis(1000 + SecretKey::generate().to_bytes()[0] as u64 * 8)
+/// B467: a refused request's wait before asking the pkarr relay again, spread out by up to 2 s so the requests turned
+/// away together don't all come back in the same second. B524: 2, 4, then 8 s after the `k`th refusal: a guest asking
+/// every second or two while refused spent the network's whole allowance itself, and the host's code never went out
+fn relay_pause(k: u32) -> Duration {
+    Duration::from_millis((2000 << k.min(2)) + SecretKey::generate().to_bytes()[0] as u64 * 8)
 }
 
 /// The record under `code` on the pkarr relay (the browser's [`lookup`]): Ok(None) if it has none.
@@ -2750,7 +2751,8 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
     // phones on one Wi-Fi (a host's slot reads and puts, a guest's Find) share that, so a refusal waits and asks again
     // (the callers' timeouts end it sooner). In the browser a refusal is a failed fetch (`relay_trouble`): those too.
     let mut why = relay_trouble(Some(429), "");
-    for _ in 0..8 {
+    // B524: four tries (2 + 4 + 8 s of pauses) end inside `resolve`'s lookups, so it hears why
+    for k in 0..4 {
         // B275: the relay answers with max-age=300, so a browser's second lookup (a rejoin) got its cached copy, by
         // then older than STALE: "No open lobby has the code"; the query makes each lookup a fresh request
         let url = format!("{PKARR}/{}?t={}", code_key(code).public().to_z32(), unix_micros());
@@ -2758,7 +2760,7 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
             Ok(r) => r,
             Err(e) => {
                 why = relay_trouble(None, &e.to_string());
-                n0_future::time::sleep(relay_pause()).await;
+                n0_future::time::sleep(relay_pause(k)).await;
                 continue;
             }
         };
@@ -2766,7 +2768,7 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
             404 => return Ok(None),
             429 => {
                 why = relay_trouble(Some(429), "");
-                n0_future::time::sleep(relay_pause()).await;
+                n0_future::time::sleep(relay_pause(k)).await;
             }
             s if !(200..300).contains(&s) => return Err(relay_trouble(Some(s), "")),
             _ => {
@@ -2817,7 +2819,7 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
     let body = [sig.to_bytes().to_vec(), seq.to_be_bytes().to_vec(), v].concat();
     // B467: a refusal for too many requests (`relay_get`) waits and tries again
     let mut why = String::new();
-    for _ in 0..5 {
+    for k in 0..5 {
         let r = crate::modstore::client().put(format!("{PKARR}/{}", key.public().to_z32())).body(body.clone()).send().await;
         match r.map(|r| r.status().as_u16()) {
             Ok(s) if (200..300).contains(&s) => return Ok(()),
@@ -2830,7 +2832,7 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
         if !why.contains("too many") && !cfg!(target_arch = "wasm32") {
             break;
         }
-        n0_future::time::sleep(relay_pause()).await;
+        n0_future::time::sleep(relay_pause(k)).await;
     }
     Err(why)
 }
@@ -2931,7 +2933,7 @@ async fn list_in_slot(dht: &Dht, slot: &std::sync::atomic::AtomicUsize, l: &List
 /// The ticket the short code `code` stands for, if its lobby is open; else (B467) what the lookup found instead.
 async fn resolve(dht: &Dht, code: &str) -> Result<String, String> {
     // B114: asked again until 40 s are up, as a code just rolled can take a while to reach the relay or DHT nodes
-    // this machine asks (B513: the relay's put alone takes up to 20 s)
+    // this machine asks (B514: the relay's put alone takes up to 20 s)
     let until = n0_future::time::Instant::now() + Duration::from_secs(40);
     loop {
         let left = until.saturating_duration_since(n0_future::time::Instant::now()).as_secs().max(1);
@@ -2941,7 +2943,9 @@ async fn resolve(dht: &Dht, code: &str) -> Result<String, String> {
         {
             return Ok(t.clone());
         }
-        if n0_future::time::Instant::now() + Duration::from_secs(3) >= until {
+        // B524: no lookup starts with under 20 s left, so the last one ends by itself and its reason (the relay
+        // refusing this network…) is what the player reads, not "didn't answer in 2 s"
+        if n0_future::time::Instant::now() + Duration::from_secs(20) >= until {
             return Err(missed(code, r.map(|r| r.map(|(_, seq)| seq))));
         }
         n0_future::time::sleep(Duration::from_secs(3)).await;
