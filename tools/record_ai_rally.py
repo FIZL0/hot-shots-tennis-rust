@@ -223,9 +223,17 @@ time.sleep(1)  # the load lands late: a patch written before it is overwritten b
 v0 = p.read32(VSYNC)
 while p.read32(VSYNC) - v0 < 5: time.sleep(0.05)
 gm0 = p.read32(GM_PTR)
+LINE0 = p.read32(0x403bec)
 if "HST_LINE" in os.environ:  # B57: the line-call margin (m past each line; the game's is the ball radius); a
     # negative one pulls every line in, so ordinary landings are called out and the CPUs' let-go check runs
     p.write32(0x403bec, struct.unpack("<I", struct.pack("<f", float(os.environ["HST_LINE"])))[0])
+# HST_LINE_FROM=<n> (P11l5): the HST_LINE margin holds only from the point's nth shot on (the game's own before), so
+# serves and the first returns land in and a rally starts; the line-call margin isn't an input of the AI routines
+LINE_FROM = int(os.environ.get("HST_LINE_FROM", "0"))
+def line():
+    v = struct.unpack("<I", struct.pack("<f", float(os.environ["HST_LINE"])))[0] if p.read32(0x423060) >= LINE_FROM else LINE0
+    if p.read32(0x403bec) != v: p.write32(0x403bec, v)
+if LINE_FROM: line()
 installed = []
 
 
@@ -284,10 +292,20 @@ if "HST_MARGIN" in os.environ:
 # HST_CHAR=k:off:value[,...] (P11k4): player k's character record (*(ai+8), the record's 0x300 region is +0xd0..)
 # float at +off takes value, e.g. 1:0xe0:0.01 shrinks the stroke height (+0xe0) so the tier searches miss a serve
 # still in the smash window; tests replaying such a fixture read the poked record from it
+# HST_CHAR_RALLY=1 (P11l5): the HST_CHAR values hold only in rallies (shot count >= 2) and the record's own values
+# come back for serves and returns, so a CPU whose heights miss every ball still returns the serve; it then finds no
+# contact in the rally and its chase walk runs on to the after-bounce spot (the arrival)
+CHARS = []
 for spec in filter(None, os.environ.get("HST_CHAR", "").split(",")):
     k, off, v = spec.split(":")
     rec = p.read32(p.read32(p.read32(gm0 + 0xa8 + 4 * int(k)) + 0x80) + 8)
-    p.write32(rec + int(off, 0), struct.unpack("<I", struct.pack("<f", float(v)))[0])
+    CHARS.append((rec + int(off, 0), p.read32(rec + int(off, 0)), struct.unpack("<I", struct.pack("<f", float(v)))[0]))
+CHAR_RALLY = os.environ.get("HST_CHAR_RALLY") == "1"
+def chars():
+    rally = not CHAR_RALLY or p.read32(0x423060) >= 2
+    for at, orig, v in CHARS:
+        if p.read32(at) != (v if rally else orig): p.write32(at, v if rally else orig)
+chars()
 # HST_WINDOW=<n> (P11k5): in rallies (shot count >= 2; serves and returns keep the game's 180, or nobody returns
 # one) every CPU's path window (ai +0x34) takes n, so its copy ends before the second bounce (NET/BASE's not-found
 # short-landing walk) and, once the ball has bounced, the walk's later fallbacks run: the after-bounce descent, entry
@@ -299,6 +317,15 @@ def window():
         pl = p.read32(gm0 + 0xa8 + 4 * k)
         ai = pl and p.read32(pl + 0x80)
         if ai and p.read32(ai + 0x34) != n: p.write32(ai + 0x34, n)
+# HST_RATE=<pct> (P11l5): every CPU's walk-back rate (ai +0x18, the row's centre rate, read as each walk back is
+# drawn) takes pct on every poll. Every singles row has 100, so the drawn walk always goes and its 60-frame redraw
+# never runs; with a lower rate a failed draw waits 60 frames and draws again. Tests read the rate from the AI region
+RATE = os.environ.get("HST_RATE")
+def rate():
+    for k in range(4):
+        pl = p.read32(gm0 + 0xa8 + 4 * k)
+        ai = pl and p.read32(pl + 0x80)
+        if ai and p.read32(ai + 0x18) != int(RATE): p.write32(ai + 0x18, int(RATE))
 # HST_PATH_STOP=<z> (P11k4): once per serve, when the served ball is past |z| = z on the receiver's half, the path
 # object stops growing (+0x5c = 0, as at its 600-entry cap), so the AI's copy runs down below 12 entries
 PATH_STOP = float(os.environ.get("HST_PATH_STOP", "0"))
@@ -327,9 +354,10 @@ if DRIVE:
     me, ball = p.read32(gm0 + 0xa8), p.read32(gm0 + 0x88)
     held, pressed_for, idle = None, None, 0
 # HST_WIDE=1 (B57): at each return press P1 holds the stick to a far corner (alternating sides) for a few polls,
-# aiming wide and long so some balls land out; HST_REACH=<m> presses that far from the ball instead of 2.5 m
-# (early, mistimed swings)
-WIDE = os.environ.get("HST_WIDE") == "1"
+# aiming wide and long so some balls land out; HST_WIDE=x:y (P11l5) holds (±x, y) instead of (±1, -1), e.g. 0:-1
+# straight and long; HST_REACH=<m> presses that far from the ball instead of 2.5 m (early, mistimed swings)
+WIDE = os.environ.get("HST_WIDE", "0") != "0"
+WIDE_XY = tuple(map(float, os.environ["HST_WIDE"].split(":"))) if ":" in os.environ.get("HST_WIDE", "") else (1, -1)
 REACH = float(os.environ.get("HST_REACH", "2.5"))
 BTN = os.environ.get("HST_BTN", "circle")  # the shot button P1 presses (triangle = lob)
 # HST_SERVE=<buttons> (P11k4): serving, P1 holds the stick toward the receiver's sideline (it walks out along the
@@ -410,7 +438,7 @@ def drive():
         pressed_for, idle = hit, 0
         if WIDE:
             wide_side, aiming, held = -wide_side, 15, None
-            send(f"stick l {wide_side} -1")
+            send(f"stick l {wide_side * WIDE_XY[0]} {WIDE_XY[1]}")
         send(f"press {BTN} 60")
     elif idle > (25 if serving else 60):
         idle = 0
@@ -442,6 +470,7 @@ if os.environ.get("HST_PROBE") == "1":
         end = p.read32(PPTR)
         probes.append(p.read_block(PROBE, end - PROBE) if end > PROBE else b"")
         p.write32(PPTR, PROBE)
+if RATE is not None: rate()
 p.resume()
 v0 = p.read32(VSYNC)
 chunks = []
@@ -451,6 +480,9 @@ try:
         if DRIVE: drive()
         if PATH_STOP: path_stop()
         if WINDOW: window()
+        if RATE is not None: rate()
+        if CHAR_RALLY: chars()
+        if LINE_FROM: line()
         if p.read32(PTR) > BUF + (END - BUF) // 3:
             p.pause()
             chunks.append(drain())
