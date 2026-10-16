@@ -516,11 +516,12 @@ pub fn pr_of(rev: &str) -> Option<u32> {
 /// M19: takes the player's own upload `e` off the store ([`Event::Removed`]): an open PR holding only it is closed
 /// (it leaves Browse at once), one holding more of their mods gets a commit deleting `mods/<id>/`; a mod on `main`
 /// gets a PR deleting `mods/<id>/` (a non-member can't commit to `main`), so it leaves when a maintainer merges that.
-pub fn remove(e: &Entry, token: String) {
+/// `shared`: the PR holds more of their mods that stay (the caller knows from [`mine`]'s list; re-listing the store
+/// here cost a crawl of every PR the index hadn't caught up with, and a Remove all ran HF's rate limit dry).
+pub fn remove(e: &Entry, shared: bool, token: String) {
     let (id, name, rev) = (e.meta.id.clone(), e.meta.name.clone(), e.rev.clone());
     spawn(async move {
         let got = async {
-            let shared = pr_of(&rev).is_some() && lists().await?.iter().flatten().any(|o| o.rev == rev && o.meta.id != id);
             let said = match pr_of(&rev) {
                 Some(n) if shared => {
                     commit(&token, &format!("Remove mod {name} ({id})"), Vec::new(), &[format!("mods/{id}")], Some(n)).await?;

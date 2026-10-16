@@ -172,7 +172,9 @@ impl View {
             (Some(e), Some(token)) => {
                 self.busy = true;
                 self.status = format!("Removing your uploads: {} ({}/{all})...", e.meta.name, done + failed + 1);
-                modstore::remove(&e, token);
+                // the PR is closed with the last of its mods in the queue
+                let shared = self.wiping.iter().any(|o| o.rev == e.rev);
+                modstore::remove(&e, shared, token);
             }
             (left, _) => {
                 let missed = failed + left.as_ref().map_or(0, |_| 1 + self.wiping.len());
@@ -805,7 +807,8 @@ impl Menu {
                     Some((_, token)) => {
                         self.add.busy = true;
                         self.add.status = format!("Taking {} off the store...", e.meta.name);
-                        modstore::remove(&e, token);
+                        let shared = self.add.mine.iter().flatten().any(|o| o.rev == e.rev && o.meta.id != e.meta.id);
+                        modstore::remove(&e, shared, token);
                         out.push(Sound(2));
                     }
                     None => {
