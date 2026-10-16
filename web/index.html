@@ -878,7 +878,7 @@ async function start() {
   let opened = 0;
   const fresh = () => performance.now() - opened < 400;
   const closeSheet = () => { copytext.blur(); getSelection()?.removeAllRanges(); sheet.hidden = true; };
-  const pick = () => { copytext.focus(); copytext.setSelectionRange(0, copytext.value.length); };
+  const selectLink = () => { copytext.focus(); copytext.setSelectionRange(0, copytext.value.length); };
   window.hstCopySheet = text => {
     if (!(window.hstTouched?.() ?? matchMedia('(pointer: coarse)').matches)) return false;
     const link = /^https?:/.test(text);
@@ -894,11 +894,11 @@ async function start() {
   copybtn.onclick = () => {
     if (fresh()) return;
     const text = copytext.value, copied = () => { copybtn.textContent = 'Copied'; setTimeout(closeSheet, 700); };
-    pick();
+    selectLink();
     let ok = false;
     try { ok = document.execCommand('copy'); } catch {}
     if (ok) return copied();
-    const failed = () => { copybtn.textContent = 'Select and copy it'; pick(); };
+    const failed = () => { copybtn.textContent = 'Select and copy it'; selectLink(); };
     try { navigator.clipboard.writeText(text).then(copied, failed); } catch { failed(); }
   };
   sharebtn.onclick = () => {
