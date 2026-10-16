@@ -3506,7 +3506,8 @@ mod tests {
         let csv = pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).and_then(|e| pc.read(e).ok()).unwrap();
         let style = styles(&csv);
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let mut failed = 0;
+        // one commit per pull request, not per mod: the Hub caps commits per repo
+        let mut by_pr: std::collections::BTreeMap<u32, Vec<_>> = Default::default();
         for item in list.split_whitespace() {
             let (dir, pr) = item.rsplit_once('@').unwrap();
             let m = crate::mods::read_any(std::path::Path::new(dir)).unwrap();
@@ -3516,9 +3517,14 @@ mod tests {
                 let name = super::previews::dir_stamp(&m.dir);
                 std::fs::read(std::path::Path::new(&b).join(format!("m-{name}-0.png"))).unwrap_or_else(|e| panic!("{}: no bake: {e}", m.id))
             });
-            let got = rt.block_on(crate::modstore::put_card(token, &m.id, pr.parse().unwrap(), st as u8, g, baked));
+            eprintln!("{} style {st} grades {g:?}", m.id);
+            by_pr.entry(pr.parse().unwrap()).or_default().push((m.id.clone(), st as u8, g, baked));
+        }
+        let mut failed = 0;
+        for (pr, cards) in by_pr {
+            let got = rt.block_on(crate::modstore::put_cards(token, pr, cards));
             failed += got.is_err() as usize;
-            eprintln!("{} style {st} grades {g:?}: {got:?}", m.id);
+            eprintln!("PR #{pr}: {got:?}");
         }
         assert_eq!(failed, 0);
     }

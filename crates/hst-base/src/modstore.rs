@@ -1208,20 +1208,25 @@ async fn ready(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>, 
     Ok(Ok(Ready { dir: m.dir.clone(), id: m.id.clone(), name: m.name.clone(), verb, onto, files, mb }))
 }
 
-/// Backfill for uploads from before the card went up with them, or with a card baked before a drawing fix: sets `id`'s
-/// play style and grades in its `meta.json` on open PR `pr`, and its `preview.png`/`thumb.png` to `preview` if given,
-/// and commits those files alone (the zip stays). Run by `main_menu`'s `store_cards`.
+/// Backfill for uploads from before the card went up with them, or with a card baked before a drawing fix: for each
+/// `(id, style, grades, preview)` on open PR `pr`, sets its play style and grades in its `meta.json`, and its
+/// `preview.png`/`thumb.png` to `preview` if given; all of them in one commit (the Hub caps commits per repo), the zips
+/// left alone. Run by `main_menu`'s `store_cards`.
 #[cfg(any(test, feature = "testing"))]
-pub async fn put_card(token: &str, id: &str, pr: u32, style: u8, grades: [u8; 5], preview: Option<Vec<u8>>) -> Result<String, String> {
-    let path = format!("mods/{id}/meta.json");
-    let mut meta: Meta = serde_json::from_slice(&get(&file_url(&format!("refs/pr/{pr}"), &path), 1 << 20).await?).map_err(|e| e.to_string())?;
-    (meta.style, meta.grades) = (Some(style), Some(grades));
-    let mut files = vec![(path, serde_json::to_vec_pretty(&meta).unwrap())];
-    if let Some(png) = preview {
-        files.push((format!("mods/{id}/thumb.png"), shrink(&png, THUMB).ok_or("preview isn't a PNG")?));
-        files.push((format!("mods/{id}/preview.png"), png));
+pub async fn put_cards(token: &str, pr: u32, cards: Vec<(String, u8, [u8; 5], Option<Vec<u8>>)>) -> Result<String, String> {
+    let mut files = Vec::new();
+    let n = cards.len();
+    for (id, style, grades, preview) in cards {
+        let path = format!("mods/{id}/meta.json");
+        let mut meta: Meta = serde_json::from_slice(&get(&file_url(&format!("refs/pr/{pr}"), &path), 1 << 20).await?).map_err(|e| e.to_string())?;
+        (meta.style, meta.grades) = (Some(style), Some(grades));
+        files.push((path, serde_json::to_vec_pretty(&meta).unwrap()));
+        if let Some(png) = preview {
+            files.push((format!("mods/{id}/thumb.png"), shrink(&png, THUMB).ok_or_else(|| format!("{id}: preview isn't a PNG"))?));
+            files.push((format!("mods/{id}/preview.png"), png));
+        }
     }
-    commit(token, &format!("Card for mod {} ({id})", meta.name), files, &[], Some(pr)).await
+    commit(token, &format!("Cards for {n} mods"), files, &[], Some(pr)).await
 }
 
 /// An HTTP client; natively the TLS provider goes in first (building one without it panics), and on Android its own
