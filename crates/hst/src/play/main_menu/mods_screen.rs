@@ -1467,6 +1467,9 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
                     kind,
                     // M5c: a pack's count
                     textures: (kind == Kind::Textures).then(|| crate::mods_textures::read(&md.dir).map_or(0, |p| p.textures.len() as u32)),
+                    // M5d: a pack's Covers and Kind
+                    covers: (kind == Kind::Textures).then_some((i % 5) as u8),
+                    look: (kind == Kind::Textures).then_some((i % 3) as u8),
                     ..Default::default()
                 };
                 Entry { meta, rev: if i % 3 == 0 { "main".into() } else { format!("refs/pr/{}", 100 - i) }, verified: i % 3 == 0 }
@@ -1701,6 +1704,8 @@ fn page(
     }
     let (up, at_once) = (menu.settings.0[super::UPSCALED_DOWNLOADS], menu.settings.downloads_at_once());
     let mut sel = menu.sel;
+    // (M5d: what a pack's install saves, the pack order with it)
+    let menu_settings = menu.settings;
     for e in modstore::take() {
         let v = &mut menu.add;
         match e {
@@ -1722,14 +1727,21 @@ fn page(
                 v.refreshing = false;
             }
             Event::Installed(key, r) => {
+                // M5d: a texture pack's folder if it was in before (an update keeps its place)
+                let pack = v.store.iter().flatten().any(|e| e.key() == key && e.meta.kind == Kind::Textures);
+                let had = v.have.get(&key).map(|h| h.1.clone());
                 v.finish(&key, &r);
                 v.refresh();
-                if r.is_ok() {
+                let placed = r.is_ok().then(|| v.have.get(&key).map(|h| h.1.clone())).flatten().filter(|_| pack);
+                if let Some(dir) = &placed {
+                    pack_installed(v, dir, had.is_none(), args.as_deref(), &menu_settings, &mut images);
+                } else if r.is_ok() {
                     v.changed();
                     // B259: an update's new picture, not the old one read before it
                     shelf.shots.retain(|k, _| !k.starts_with("local/"));
                 }
                 v.status = match r {
+                    Ok(name) if placed.is_some() => format!("{}{}", v.count(), pack_words(&name, had.is_none())),
                     // the browser's page says when it's saved
                     Ok(_) if cfg!(target_arch = "wasm32") => v.status.clone(),
                     Ok(name) => format!("{}Installed {name}. Reload to play it.", v.count()),
@@ -1884,6 +1896,32 @@ impl Shelf {
 }
 
 /// M8f9: an installed court's or umpire's own picture (the standard's `previews/court.png` / `previews/umpire.png`).
+/// M5d: texture pack `dir` installed from the store: a new one goes to the top of the pack order, switched on, and
+/// the order is saved; the menu's textures it replaces change at once (`textures::repack`), the rest as they're next
+/// made (the next match's court and players). Nothing to reload.
+fn pack_installed(v: &mut View, dir: &Path, new: bool, args: Option<&crate::Args>, settings: &super::Settings, images: &mut Assets<Image>) {
+    if new {
+        crate::mods_textures::on_top(root(), dir);
+        if let Some(a) = args {
+            let path = super::Settings::path(&a.iso);
+            if let Err(e) = crate::store::write(&path, settings.text()) {
+                warn!("{}: {e}", path.display());
+            }
+        }
+        v.packs = packs::read(root());
+    }
+    let n = crate::textures::repack(images, Some(dir));
+    info!("mods: texture pack {} installed{}, {n} textures swapped in the menu", dir.display(), if new { " on top" } else { "" });
+}
+
+/// M5d: the status line after a texture pack's install (`new`: not an update).
+fn pack_words(name: &str, new: bool) -> String {
+    let at = if new { "on, at the top of your texture packs" } else { "updated in its place" };
+    // (the browser never has the setting off for packs: B227's lock covers only texture-replacements/)
+    let off = if crate::textures::packs_in_use().is_empty() { " Texture Replacements is off in Settings: turn it on to see it." } else { " No reload needed." };
+    format!("Installed {name}: {at}.{off}")
+}
+
 fn own_picture(dir: &Path, kind: Kind) -> Option<Vec<u8>> {
     let f = match kind {
         Kind::Court => "previews/court.png",
@@ -1929,7 +1967,8 @@ fn browse_pictures(menu: &mut Menu, shelf: &mut Shelf, images: &mut Assets<Image
         let go = grid::want(&mut menu.add, &l, cap);
         let mut read = false;
         for e in go {
-            let cached = if menu.add.b.offline { Some(None) } else { modstore::cached_thumb(&dir, &e.meta.sha256) };
+            // a sample screen (offline) reads the cache only: a planted picture shows, nothing is fetched
+            let cached = if menu.add.b.offline { Some(modstore::cached_thumb(&dir, &e.meta.sha256).flatten()) } else { modstore::cached_thumb(&dir, &e.meta.sha256) };
             match cached {
                 Some(png) => {
                     let png = png.or_else(|| installed_card(menu, &e.meta.sha256));
@@ -3033,5 +3072,57 @@ mod tests {
         // □ on the box clears it
         m.mods_step(p(|k| k.page = true), &mut out);
         assert!(m.add.b.search.is_empty());
+    }
+
+    /// M5d: Browse's Texture packs tab: the store's packs filtered by Covers, Kind and Size (a pack that doesn't say
+    /// passes only Any), each tile with its count and split picture, the chosen one's before / after with a divider
+    /// the pointer moves.
+    #[test]
+    fn store_texture_packs() {
+        let _one = DRAWN.lock().unwrap_or_else(|e| e.into_inner());
+        use super::super::pointer::{Act, tests::hits};
+        let pack = |id: &str, covers: Option<u8>, look: Option<u8>, size: u64| Entry {
+            meta: Meta { id: id.into(), name: id.into(), author: "ann".into(), sha256: format!("{id:0>64}"), size, kind: Kind::Textures, textures: Some(98), covers, look, ..Default::default() },
+            rev: "main".into(),
+            verified: true,
+        };
+        let mut m = Menu { screen: Screen::Mods, ..default() };
+        m.add.store = Some(vec![pack("courts", Some(1), Some(0), 50 << 20), pack("blue", Some(1), Some(1), 200 << 20), pack("menus", Some(3), None, 2 << 30), pack("old", None, None, 10)]);
+        m.mods_page(Page::Browse, 0);
+        m.add.kind = Kind::Textures;
+        let ids = |m: &Menu| m.add.tiles().iter().map(|e| e.meta.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&m), ["courts", "blue", "menus", "old"]);
+        assert_eq!((m.add.groups(), m.add.group_name(0), m.add.group_name(1), m.add.group_name(2)), (3, "Covers", "Kind", "Size"));
+        // the filter pill: ✕ steps Covers through Any, Everything, Courts; Select to Kind, ✕ to Upscale
+        let filter = m.add.pills().iter().position(|p| *p == grid::Pill::Filter).unwrap();
+        m.sel = 2 + m.add.words().len() + filter;
+        let mut out = Vec::new();
+        m.mods_step(ok(), &mut out);
+        assert!(ids(&m).is_empty(), "nobody says Everything");
+        m.mods_step(ok(), &mut out);
+        assert_eq!((ids(&m), m.add.filter_words()), (vec!["courts".to_string(), "blue".into()], "Covers: Courts".to_string()));
+        m.mods_step(Press { hand: true, ..default() }, &mut out);
+        m.mods_step(ok(), &mut out);
+        assert_eq!((ids(&m), m.add.filter_words()), (vec!["courts".to_string()], "Kind: Upscale +1".to_string()));
+        (m.add.b.covers, m.add.b.look) = (None, None);
+        for (band, want) in [(0, &["courts", "old"][..]), (1, &["blue"]), (2, &["menus"])] {
+            m.add.b.size = Some(band);
+            assert_eq!(ids(&m), want, "size band {band}");
+        }
+        m.add.b.size = None;
+        // the chosen pack's panel: its before / after (the store's picture: two halves and a gap) under strips the
+        // pointer puts the divider at; it sweeps until then
+        m.add.b.pics.insert(format!("{:0>64}", "courts"), grid::Pic::Shown(0, 2.0 + 1.0 / 32.0));
+        m.sel = m.add.browse_acts();
+        assert_eq!(m.add.hovered(m.sel).unwrap().meta.id, "courts");
+        let (h, _) = hits(&m);
+        let wipes: Vec<u8> = h.iter().filter_map(|h| if let Act::Wipe(i) = h.act { Some(i) } else { None }).collect();
+        assert_eq!(wipes, (0..=grid::WIPES).collect::<Vec<_>>());
+        assert_eq!(m.add.b.wipe, None);
+        m.point(super::super::Dev::Keys, Act::Wipe(6), false);
+        assert_eq!(m.add.b.wipe, Some(0.25));
+        // off a tile (the search box) the panel has no picture to wipe
+        m.sel = 0;
+        assert!(!hits(&m).0.iter().any(|h| matches!(h.act, Act::Wipe(_))));
     }
 }

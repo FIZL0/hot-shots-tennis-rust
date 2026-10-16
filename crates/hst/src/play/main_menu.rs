@@ -3340,6 +3340,12 @@ fn draw(
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);
             img.rect = Some(Rect::new(u * k, v * k, (u + w) * k, (v + h) * k));
         }
+        // M5d: a tile picture's source is a share of it (0..1): a part of it (a pack's before/after halves)
+        if matches!(quad.tex, Tex::Thumb(_)) && [u, v, w, h] != [0.0, 0.0, 1.0, 1.0]
+            && let Some(s) = images.get(&img.image).map(|i| i.size().as_vec2())
+        {
+            img.rect = Some(Rect::new(u * s.x, v * s.y, (u + w) * s.x, (v + h) * s.y));
+        }
         // an icon with its own image ignores `src`, but a tile cut at the grid's foot (roster `cut`) keeps its top part,
         // not the whole face squeezed
         // ponytail: icons are square, so the cut is src's height over its width; a real src mapping if one isn't

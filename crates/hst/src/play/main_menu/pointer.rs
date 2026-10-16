@@ -51,6 +51,9 @@ pub(super) enum Act {
     Tile(usize),
     /// B471: the Mods pages' Show tab `i` (`grid::SHOWS`) in the top bar: a tap opens it.
     Show(usize),
+    /// M5d: a strip across a texture pack's before / after picture: the pointer over it (or a tap) puts the divider
+    /// there (`i` of `grid::WIPES`).
+    Wipe(u8),
 }
 
 /// ✕.
@@ -243,6 +246,7 @@ impl Menu {
                     out.push(Effect::Sound(0));
                 }
             }
+            Act::Wipe(i) => self.add.wipe_to(i),
         }
         out
     }
@@ -315,9 +319,9 @@ pub(in crate::play) fn pointer(
     let at = |p: Vec2, slop: f32| hit_at(&hits.0, (p - off) / size, aspect, widescreen::menu_scale(), slop);
     let mut out = |a: Option<Act>, tap: bool| pending.0.extend(a.map(|a| (a, tap)));
     let now = time.elapsed_secs();
-    let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..)));
+    let hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..) | Act::Wipe(_)));
     // the mouse also hovers Browse's tiles (a finger doesn't: it scrolls them)
-    let mouse_hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..) | Act::Tile(_)));
+    let mouse_hover = |a: Option<Act>| a.filter(|a| matches!(a, Act::Row(..) | Act::Cell(..) | Act::Tile(_) | Act::Wipe(_)));
     // B368: the select column under a point (its tiles or the grid round them): the wheel and drags scroll it
     let column = |a: Option<Act>| match a {
         Some(Act::Cell(p, _) | Act::Grid(p) | Act::Section(p, _) | Act::Page(p, _)) => Some(p),

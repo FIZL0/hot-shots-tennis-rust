@@ -97,6 +97,39 @@ pub fn set(iso: &str, on: bool) {
     }
 }
 
+/// M5d: the texture packs read again (one was installed or its order changed) and every texture already made whose
+/// pack file changed, or comes from the pack in `fresh` (an update's files keep their names), swapped for it at once:
+/// the menu's sheets show a new pack without a restart. A texture a pack no longer covers keeps its picture until the
+/// next start (the disc's pixels aren't kept). How many images it swapped; none while the setting is off.
+pub fn repack(images: &mut Assets<Image>, fresh: Option<&Path>) -> usize {
+    // (decoded under the lock: it's a menu's handful of sheets, once per install)
+    STATE.lock().unwrap().as_mut().map_or(0, |s| s.repack(images, fresh, &crate::mods_textures::order()))
+}
+
+impl State {
+    fn repack(&mut self, images: &mut Assets<Image>, fresh: Option<&Path>, order: &crate::mods_textures::Order) -> usize {
+        let (packs, dirs) = packs_in(&self.o.root, order);
+        let new_from = |f: &PathBuf| fresh.is_some_and(|d| f.starts_with(d));
+        let keys: Vec<String> = self.used.keys().filter(|k| packs.get(*k).is_some_and(|f| self.packs.get(*k) != Some(f) || new_from(f))).cloned().collect();
+        (self.packs, self.pack_dirs) = (packs, dirs);
+        let want: Vec<Files> = keys.iter().map(|k| self.files(k, &self.used[k].0)).collect();
+        let got = parallel(&want, Files::load);
+        let mut n = 0;
+        for (k, r) in keys.iter().zip(got) {
+            let Some(r) = r else { continue };
+            for &id in &self.used[k].1 {
+                if let Some(mut img) = images.get_mut(id) {
+                    let disc = img.size_f32() / self.scale.get(&id).copied().unwrap_or(Vec2::ONE);
+                    apply(&mut img, r.clone());
+                    self.scale.insert(id, img.size_f32() / disc);
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+}
+
 /// Whether the "texture replacements" setting is on outside the browser (mods read their `textures/upscaled/` then;
 /// the browser never has those, B227).
 pub fn on() -> bool {
@@ -401,6 +434,21 @@ mod tests {
         assert_eq!(px(&s, "0000000000000001"), Some(20), "the higher pack wins");
         let s = state(&Order { order: vec![], off: vec!["lo".into()] });
         assert_eq!([1, 2].map(|k| px(&s, &format!("{k:016x}"))), [Some(10), Some(30)]);
+        // M5d: a pack put on top swaps the textures already made at once; an update's (`fresh`) files too
+        let mut s = state(&Order { order: vec![], off: vec!["hi".into()] });
+        let mut images = Assets::<Image>::default();
+        let blank = || Image::new_fill(Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, bevy::render::render_resource::TextureDimension::D2, &[0; 4], bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, bevy::asset::RenderAssetUsages::all());
+        let (a, b) = (images.add(blank()).id(), images.add(blank()).id());
+        s.used.insert("0000000000000001".into(), (vec![], vec![a]));
+        s.used.insert("0000000000000002".into(), (vec![], vec![b]));
+        let top = Order { order: vec!["hi".into(), "lo".into()], off: vec![] };
+        assert_eq!(s.repack(&mut images, None, &top), 1, "only the texture whose pack changed");
+        let img = images.get(a).unwrap();
+        assert_eq!((img.width(), img.data.as_ref().unwrap()[0], s.scale[&a]), (2, 10, Vec2::new(2.0, 1.0)));
+        assert_eq!(images.get(b).unwrap().width(), 1);
+        assert_eq!(s.repack(&mut images, None, &top), 0, "nothing new");
+        assert_eq!(s.repack(&mut images, Some(&root.join("mods/lo")), &top), 1, "an updated pack's own");
+        assert_eq!(images.get(b).unwrap().data.as_ref().unwrap()[0], 20);
         // a browser pack: its files only in memory
         let mem = Path::new("t_texlayers/mods/web");
         crate::modfs::add(&mem.join("mod.json"), br#"{"standard": 1, "kind": "textures", "id": "web", "name": "Web"}"#.to_vec().into());
