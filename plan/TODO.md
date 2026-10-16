@@ -8,6 +8,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
+- [ ] **B476** Dubno Tower: the umpire floats in mid-air in her sitting pose beside the chair, by the stair cart, over the court near the net post, instead of sitting in the chair (user screenshot 2026-10-16). Check the umpire's placement or seat height on this court against the original (tools/screenshot.sh vs --shot)
 - [ ] **B471** Menus on the wall (plan/B471.md): Mods/Settings/Roster/lobby/confirm in the main menu's look — light outlined panels, grey/yellow pills, kind colours as accents; Mods' Show tabs move to the top bar (L1/R1), kinds into the panel strip (L2/R2) → crates/hst/src/play/main_menu/{look,options,roster,frame}.rs crates/hst/src/play/main_menu/mods_screen/grid.rs
 - [~] **B453** iPhone Safari: frequent freezes in the menus and on loading screens (user 2026-10-15, build 54125cc; installs fine). Reproduce in the browser build with stall logging, find what blocks the frame → web/index.html BLOCKED: needs an iPhone Safari hst-log.txt from ?fps / Frame log box (plan/HUMAN.md)
 - [ ] **B424** Roster footer total (plan/B422.md): '8 of 16 in Hot Shots Tennis · 28 characters' so the cast's size is always stated → crates/hst/src/play/main_menu/roster.rs
