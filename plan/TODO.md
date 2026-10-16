@@ -60,7 +60,7 @@ index out of bounds: the len is 0 but the index is 0"
 
 ### Match
 
-- [~] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs — BLOCKED: no recorded tiebreak (fixtures cover deuce/adv, side changes, sets, doubles only); needs the human's tiebreak recording, see plan/HUMAN.md
+- [~] **P12** Rules and scoring details → `hst-sim/src/score.rs` | t: score.rs — BLOCKED: no recorded tiebreak (fixtures cover deuce/adv, side changes, sets, doubles only); needs the human's tiebreak recording, see plan/HUMAN.md — Tiebreak recorded 2026-10-16 (slot 5 poked 4-3, team 1 40-0, scratch 9, copy 6): context/fixtures/sound_tiebreak.bin (record_sound ring, 9000 frames, ends at 4-3 in the tiebreak) + sound_tiebreak.wav (same run's audio, 150 s); umpire_tiebreak.bin from B71. User: tiebreak logic works, only the sound was needed.
 - [ ] **P14** Background NPCs → `hst-data/src/layout.rs` · `main.rs` load
 - [ ] **P14c** (split into P14c1–5) Trigger creatures (types, triggers, paths) → `hst-sim/src/npc.rs` · `hst-data/src/exe.rs` | t: npc.rs
 
