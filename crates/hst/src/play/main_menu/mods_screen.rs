@@ -2253,13 +2253,15 @@ mod tests {
         assert_eq!([go(&mut m, l), go(&mut m, l), go(&mut m, r), go(&mut m, d), go(&mut m, d), go(&mut m, d)], [t0, t0, t0 + 1, t0 + 2, t0 + 3, t0 + 4]);
         assert_eq!([go(&mut m, d), go(&mut m, u)], [2, t0 + 4]);
         m.sel = t0 + 1;
-        assert_eq!([go(&mut m, u), go(&mut m, r), go(&mut m, u), go(&mut m, d), go(&mut m, d)], [p0 + 5, p0 + 6, 0, p0 + 6, t0 + 1]);
-        // B471: the search box at the top bar's right: ← the last Show tab, → stays; the Show tabs' ↓ the sort;
+        // (stacked strip: ↑ from the filter the kind tab, ↓ from it the sort)
+        assert_eq!([go(&mut m, u), go(&mut m, r), go(&mut m, u), go(&mut m, d), go(&mut m, d)], [p0 + 5, p0 + 6, p0 + 7, p0 + 5, t0 + 1]);
+        // B471: the search box at the top bar's right: ← the last Show tab, → stays; the Show tabs' ↓ the strip;
         // Upload in the footer, ← the footer's last word
         m.sel = 0;
-        assert_eq!([go(&mut m, r), go(&mut m, l), go(&mut m, r), go(&mut m, d)], [0, p0 + 4, 0, p0 + 6]);
+        // (stacked strip: ↓ from the search box and the Show tabs is the kind tab's row)
+        assert_eq!([go(&mut m, r), go(&mut m, l), go(&mut m, r), go(&mut m, d)], [0, p0 + 4, 0, p0 + 7]);
         m.sel = p0 + 1;
-        assert_eq!(go(&mut m, d), p0 + 5);
+        assert_eq!(go(&mut m, d), p0 + 7);
         m.sel = 1;
         assert_eq!(go(&mut m, l), 2 + m.add.words().len() - 1);
         // the sort pill: ✕ the next, a tap on its left half the one before
@@ -2826,10 +2828,15 @@ mod tests {
         m.mods_step(ok(), &mut out);
         assert_eq!((m.add.kind, m.add.slot(m.sel)), (Kind::Court, grid::Slot::Kind(1)));
         assert_eq!(m.add.items().iter().map(|e| e.meta.id.as_str()).collect::<Vec<_>>(), ["court"]);
+        // (this view's strip is stacked: the kind tabs' row, then the sort and filter's, then the tiles)
+        go(&mut m, Press { down: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(sort));
         go(&mut m, Press { down: true, ..default() });
         assert_eq!(m.add.slot(m.sel), grid::Slot::Tile(0));
         go(&mut m, Press { up: true, ..default() });
-        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(1), "the strip remembers the tab");
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(sort), "the strip remembers the sort");
+        go(&mut m, Press { up: true, ..default() });
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(1), "↑ the open tab");
         go(&mut m, Press { right: true, ..default() });
         go(&mut m, Press { right: true, ..default() });
         assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(sort));
@@ -3208,5 +3215,39 @@ mod tests {
         // off a tile (the search box) the panel has no picture to wipe
         m.sel = 0;
         assert!(!hits(&m).0.iter().any(|h| matches!(h.act, Act::Wipe(_))));
+    }
+}
+
+#[cfg(test)]
+mod kind_tabs_nav {
+    use super::*;
+    use crate::modstore::{Kind as K, Meta};
+
+    /// A narrow panel (a phone, either way up) stacks the kind tabs over the sort and filter: ↓ from the Show tabs
+    /// reaches the kind tabs, ↓ again the sort, ↑ back the same way (the stick used to skip the kind tabs).
+    #[test]
+    fn stick_reaches_the_stacked_kind_tabs() {
+        let mut stacked = 0;
+        for aspect in [16.0 / 9.0, 19.5 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 9.0 / 19.5] {
+            let mut m = Menu { screen: Screen::Mods, grid: super::super::Grid::fit(aspect), ..Default::default() };
+            let e = |i: usize, k: K| Entry { meta: Meta { id: format!("m{i:03}"), name: format!("M{i:03}"), kind: k, sha256: format!("{i:064x}"), size: 1, ..Default::default() }, rev: "main".into(), verified: true };
+            m.add.store = Some((0..20).map(|i| e(i, [K::Character, K::Court, K::Umpire, K::Textures][i % 4])).collect());
+            m.mods_page(Page::Browse, 0);
+            if !grid::lay_of(&m).stack {
+                continue;
+            }
+            stacked += 1;
+            let p0 = 2 + m.add.words().len();
+            let (up, down) = (Press { up: true, ..Default::default() }, Press { down: true, ..Default::default() });
+            m.sel = p0;
+            let mut walk = vec![];
+            for k in [down, down, up, up] {
+                m.mods_step(k, &mut Vec::new());
+                walk.push(m.add.slot(m.sel));
+            }
+            let ns = grid::SHOWS.len();
+            assert_eq!(walk, [grid::Slot::Kind(0), grid::Slot::Pill(ns), grid::Slot::Kind(0), grid::Slot::Pill(0)], "{aspect}");
+        }
+        assert!(stacked > 0, "no aspect stacks the strip");
     }
 }

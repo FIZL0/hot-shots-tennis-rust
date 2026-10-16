@@ -805,7 +805,13 @@ impl Menu {
             _ => shown,
         };
         let under = if nw > 0 { w0 } else { 1 };
+        // a narrow panel stacks the strip: the kind tabs' row over the sort and filter's, so ↑ / ↓ pass through both
+        let stacked = nk > 0 && np > ns && lay_of(self).stack;
         let to = match v.slot(self.sel) {
+            Slot::Pill(i) if stacked && i < ns && k.down => kind,
+            Slot::Search if stacked && k.down => kind,
+            Slot::Kind(_) if stacked && k.down => p0 + ns,
+            Slot::Pill(i) if stacked && i >= ns && k.up => kind,
             // B471: the top bar: the Show tabs, then the search box on their right; ↓ to the sort and filter in the
             // panel's strip, ↓ again to the tiles
             Slot::Pill(i) if i < ns && k.left && i > 0 => self.sel - 1,
