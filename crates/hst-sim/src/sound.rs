@@ -325,6 +325,14 @@ impl Voice {
         Some(key)
     }
 
+    /// The remaster's: the key after the last one `slot` remembers in `lo..=hi`, back to `lo` past `hi` (which then
+    /// keeps it), so every take comes round in turn, none twice running. No draw.
+    pub fn cycle(&mut self, lo: i32, hi: i32, slot: usize) -> i32 {
+        let k = self.0[slot];
+        self.0[slot] = if (lo..hi).contains(&k) { k + 1 } else { lo };
+        self.0[slot]
+    }
+
     /// Player `player`'s reaction voice (`reaction_voice`), on bank slot 1 + player at 0x80.
     pub fn react(&mut self, player: usize, (program, lo, hi, slot): ReactionVoice, draw: impl FnOnce() -> u32) -> Option<Play> {
         let key = self.key(lo, hi, slot, draw)?;

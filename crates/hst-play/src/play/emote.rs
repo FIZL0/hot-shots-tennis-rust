@@ -128,18 +128,28 @@ fn idle(g: &Game, i: usize) -> bool {
         && !super::bodyhit::standing(g, i)
 }
 
-/// The reaction's voice line for the emote's motion (`sound::reaction_voice`, as a winner, never the losers' group
-/// groan), from the singles keys whatever the player count (the character's bank has them all; doubles' reactions
-/// ask for one key only). B300: the key never repeats the player's last emote's — its own key memory, slot 2, which
-/// neither the shouts (0, 1) nor the reactions (3–5) use, so the real reactions pick as before. The memory is match
-/// state (snapshots carry it), so every peer picks alike; nothing draws from the match's generators.
+/// The reaction's voice line for the emote's motion (`voice_keys`), its key the next of the player's emote takes:
+/// B300 and B500, the key memory is its own, slot 2, which neither the shouts (0, 1) nor the reactions (3–5) use, so
+/// the real reactions pick as before. The memory is match state (snapshots carry it), so every peer picks alike;
+/// nothing draws from the match's generators.
 fn voice(g: &mut Game, i: usize, motion: usize) {
-    // ponytail: every emote has two keys, so avoiding the last one alternates them; the draw only matters past two
-    let draw = g.players[i].pos[0].to_bits() ^ g.players[i].pos[2].to_bits();
     // B474: muted here only after the pick, so the key memory (match state) moves the same on every peer
-    if let Some(play) = line(&mut g.voices[i], i, motion, draw).filter(|_| crate::audio::EMOTE_VOICES.load(std::sync::atomic::Ordering::Relaxed)) {
+    if let Some(play) = line(&mut g.voices[i], i, motion).filter(|_| crate::audio::EMOTE_VOICES.load(std::sync::atomic::Ordering::Relaxed)) {
         g.lines.push(Line::Emote(i, play));
     }
+}
+
+/// An emote's voice program and its takes `lo..=hi`, by motion: the reaction's (`sound::reaction_voice` as a
+/// winner, never the losers' group groan, the singles keys whatever the player count: the character's bank has them
+/// all), widened to every take of the program on the disc banks (B500: gu's 7 has 0–2 — key 0 the instant replay's —
+/// di's 8 0–4 — 2 the replay's, 3–4 the losing side's groan); gu_set's 9 and di_set's 10 have only their two.
+pub fn voice_keys(motion: usize) -> Option<(u8, i32, i32)> {
+    let (program, lo, hi, _) = sound::reaction_voice(2, motion as i32, false, false, || 100)?;
+    Some(match program {
+        7 => (7, 0, 2),
+        8 => (8, 0, 4),
+        _ => (program, lo, hi),
+    })
 }
 
 /// A voice line that cuts emote lines still sounding (B473): an emote's line its own player's last one, a post-point
@@ -183,10 +193,11 @@ pub(super) fn play_lines(
     }
 }
 
-/// Player `i`'s emote line for `motion` on its voice `v`, `draw` picking among the keys left.
-fn line(v: &mut sound::Voice, i: usize, motion: usize, draw: u32) -> Option<sound::Play> {
-    let (program, lo, hi, _) = sound::reaction_voice(2, motion as i32, false, false, || 100)?;
-    v.react(i, (program, lo, hi, Some(EMOTE_SLOT)), || draw)
+/// Player `i`'s emote line for `motion` on its voice `v`: the take after its last.
+fn line(v: &mut sound::Voice, i: usize, motion: usize) -> Option<sound::Play> {
+    let (program, lo, hi) = voice_keys(motion)?;
+    let k = v.cycle(lo, hi, EMOTE_SLOT);
+    v.react(i, (program, k, k, None), || 0)
 }
 
 /// The emotes' key-memory slot in `sound::Voice`.
@@ -197,13 +208,14 @@ mod tests {
     use super::super::tick_input::{IDLE, TickPads, decode};
     use super::*;
 
-    /// B300: repeated emotes of one direction play more than one line, and leave the reactions' key memory alone.
+    /// B300 / B500: repeated emotes of one direction go through every take of their program in turn, and leave the
+    /// reactions' key memory alone.
     #[test]
     fn emote_lines_vary() {
-        for m in MOTIONS {
+        for (m, program, keys) in [(0x2e, 9, &[0, 1, 0][..]), (0x2f, 10, &[0, 1, 0]), (0x2c, 7, &[0, 1, 2, 0]), (0x2d, 8, &[0, 1, 2, 3, 4, 0])] {
             let mut v = sound::Voice::default();
-            let keys: Vec<u8> = (0..4).map(|_| line(&mut v, 1, m, 7).unwrap().key).collect();
-            assert!(keys.windows(2).all(|w| w[0] != w[1]), "motion {m:#x}: {keys:?}");
+            let got: Vec<_> = keys.iter().map(|_| line(&mut v, 1, m).map(|p| (p.program, p.key)).unwrap()).collect();
+            assert_eq!(got, keys.iter().map(|&k| (program, k)).collect::<Vec<_>>(), "motion {m:#x}");
             let rv = sound::reaction_voice(2, m as i32, false, false, || 0).unwrap();
             let mut fresh = sound::Voice::default();
             assert_eq!(v.react(1, rv, || 3).map(|p| p.key), fresh.react(1, rv, || 3).map(|p| p.key), "motion {m:#x}");

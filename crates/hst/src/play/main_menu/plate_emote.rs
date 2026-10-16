@@ -44,9 +44,12 @@ struct Plates {
     until: [Option<f32>; 4],
     /// Each pad's last flick (a new one starts an emote, as the match's `tick_input` does).
     held: HashMap<Entity, Option<u8>>,
-    /// The voice banks heard (by bank path), and each card's last key per emote (the keys alternate, as the match's).
+    /// The voice banks heard (by bank path), and each card's last key per emote (the takes come round in turn, as
+    /// the match's).
     banks: HashMap<String, Option<Arc<SoundBank>>>,
     keys: [[u8; 4]; 4],
+    /// Each card's last emote line's play id (0 for none): a new one cuts it, as in a match (B473, B500).
+    lines: [u64; 4],
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -169,12 +172,16 @@ fn play(
         }
         // the match's length: the motion's ticks at 60 a second
         plates.until[i] = Some(now + d.motions[&id].length.ceil().max(1.0) / 60.0);
-        if let Some(s) = &sound {
+        // B474's mute covers these too
+        if let Some(s) = sound.as_ref().filter(|_| crate::audio::EMOTE_VOICES.load(std::sync::atomic::Ordering::Relaxed)) {
             let who = menu.pick(i).0;
-            let Plates { keys, banks, .. } = &mut *plates;
+            let Plates { keys, banks, lines, .. } = &mut *plates;
             let key = &mut keys[i][dir as usize];
             if let Some((bank, play)) = voice(id, who, &menu.mods, banks, key, Path::new(&args.iso)) {
-                s.play_centre(&bank, play);
+                if lines[i] != 0 {
+                    s.stop(std::mem::take(&mut lines[i]));
+                }
+                lines[i] = s.play_centre(&bank, play);
             }
         }
     }
@@ -191,23 +198,25 @@ fn play(
     }
 }
 
-/// The emote's match voice line (`play::emote`: `sound::reaction_voice` as a winner, singles keys), from the
-/// character's singles voice bank (set a); a mod's own `voice/` program of the same number (key 0), a costume pack its
-/// disc character's, a mod with none silent. `key` is the card's last key for this emote: the keys alternate.
+/// The emote's match voice line (`play::emote::voice_keys`), from the character's singles voice bank (set a); a mod's
+/// own `voice/` program of the same number (its takes wrap by key), a costume pack its disc character's, a mod with
+/// none silent. `key` is the card's last key for this emote: the takes come round in turn.
 fn voice(id: usize, who: Who, mods: &[crate::mods::Mod], banks: &mut HashMap<String, Option<Arc<SoundBank>>>, key: &mut u8, iso: &Path) -> Option<(Arc<SoundBank>, sound::Play)> {
-    let (program, lo, hi, _) = sound::reaction_voice(2, id as i32, false, false, || 100)?;
+    let (program, lo, hi) = emote::voice_keys(id)?;
+    let next = if (*key as i32) < hi && *key as i32 >= lo { *key + 1 } else { lo as u8 };
     let c = match who {
         Who::Disc(c) => c,
         Who::Mod(i) => {
             let m = mods.get(i).filter(|m| crate::modfs::ready(&m.dir))?;
             let own = banks.entry(format!("mod {}", m.dir.join(&m.voice).display())).or_insert_with(|| crate::mods::voice(m).map(Arc::new)).clone();
             if let Some(own) = own.filter(|o| o.wav.contains_key(&(program as usize))) {
-                return Some((own, sound::Play { slot: 0x16, program, key: 0, volume: 0x80, speed: 1.0 }));
+                *key = next;
+                return Some((own, sound::Play { slot: 0x16, program, key: next, volume: 0x80, speed: 1.0 }));
             }
             m.costume_of?
         }
     };
-    *key = if (*key as i32) < hi && *key as i32 >= lo { *key + 1 } else { lo as u8 };
+    *key = next;
     let bank = banks.entry(format!("disc {c}")).or_insert_with(|| Iso::open(iso).ok().and_then(|mut iso| crate::audio::voice_bank(&mut iso, c, 2, 0, false)).map(Arc::new)).clone()?;
     Some((bank, sound::Play { slot: 0x16, program, key: *key, volume: 0x80, speed: 1.0 }))
 }
@@ -310,7 +319,7 @@ mod tests {
         }
     }
 
-    /// The emotes' voice lines: the match's programs (gu_set 9, di_set 10, gu 7, di 8), the keys taking turns.
+    /// The emotes' voice lines: the match's programs (gu_set 9, di_set 10, gu 7, di 8), every take in turn (B500).
     #[test]
     fn emote_voices_take_turns() {
         let iso = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"));
@@ -318,10 +327,10 @@ mod tests {
             return eprintln!("no ISO, skipped");
         }
         let mut banks = HashMap::new();
-        for (id, program, keys) in [(0x2e, 9, [1, 0, 1]), (0x2f, 10, [1, 0, 1]), (0x2c, 7, [1, 2, 1]), (0x2d, 8, [1, 0, 1])] {
+        for (id, program, keys) in [(0x2e, 9, &[1, 0, 1][..]), (0x2f, 10, &[1, 0, 1]), (0x2c, 7, &[1, 2, 0, 1]), (0x2d, 8, &[1, 2, 3, 4, 0, 1])] {
             let mut key = 0;
-            let got: Vec<_> = (0..3).map(|_| voice(id, Who::Disc(2), &[], &mut banks, &mut key, iso).map(|(_, p)| (p.program, p.key)).unwrap()).collect();
-            assert_eq!(got, keys.map(|k| (program, k)), "motion {id:#x}");
+            let got: Vec<_> = keys.iter().map(|_| voice(id, Who::Disc(2), &[], &mut banks, &mut key, iso).map(|(_, p)| (p.program, p.key)).unwrap()).collect();
+            assert_eq!(got, keys.iter().map(|&k| (program, k)).collect::<Vec<_>>(), "motion {id:#x}");
         }
     }
 }
