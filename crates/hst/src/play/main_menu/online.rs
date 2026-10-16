@@ -783,8 +783,14 @@ impl Menu {
             }
             Screen::Lobbies => {
                 let n = self.net.list.len();
-                rows(n + 2, &mut self.sel, out);
-                if k.ok && self.sel < n {
+                rows(n + 3, &mut self.sel, out);
+                if (k.ok && self.sel == n + 1) || k.page {
+                    // B496: discovery can lag or miss a lobby: Join by Code one press away (its row, or □)
+                    self.net.go = None;
+                    (self.net.naming, self.net.entry) = (false, String::new());
+                    self.net.status.clear();
+                    self.go(Screen::Code, out);
+                } else if k.ok && self.sel < n {
                     // the lobby's kind and room: this machine's controllers next, then join it
                     let l = &self.net.list[self.sel];
                     (self.net.go, self.net.paste, self.doubles, self.net.fit) = (Some(Go::Find), l.dial().into(), l.doubles, l.open());
@@ -1389,16 +1395,16 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.frame(8, 5);
             // B195: every open lobby, singles and doubles together, a row each: host, kind, court, open seats
             let n = m.net.list.len();
-            // ponytail: one page of 7 rows; scroll when lobbies get that many
-            let first = m.sel.saturating_sub(6);
+            // ponytail: one page of 6 rows (B496: the note under them); scroll when lobbies get that many
+            let first = m.sel.saturating_sub(5);
             let (x, w) = (80.0, 480.0);
-            for (row, i) in (first..n + 2).take(7).enumerate() {
+            for (row, i) in (first..n + 3).take(6).enumerate() {
                 let (y, on) = (76.0 + 44.0 * row as f32, i == m.sel);
                 d.pill(x, y, w, if on { [128.0, 110.0, 40.0] } else { [70.0, 70.0, 80.0] });
                 d.hit([x, y, w, 38.0], Act::Row(i, OK));
                 let rgb = if on { WHITE } else { [100.0; 3] };
                 let Some(l) = m.net.list.get(i) else {
-                    d.centred(if i == n { "Refresh" } else { "Back" }, x + w / 2.0, y + 7.0, 24.0, rgb);
+                    d.centred(["Refresh", "Join by Code", "Back"][i - n], x + w / 2.0, y + 7.0, 24.0, rgb);
                     continue;
                 };
                 d.fitted(&l.name, x + 70.0, y + 9.0, 20.0, 120.0);
@@ -1410,17 +1416,23 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             // B236: searching, nothing found or failed, under Refresh / Back; still searching with some listed, a
             // spinner up by the title
             match (n, m.net.finding > 0, m.net.fail) {
-                (0, true, _) => busy(d, m.net.spin, 250.0, "Searching for lobbies...", "This network first, then the internet."),
-                (0, false, Some(t)) => failed(d, 250.0, t, "Refresh to try again (the reason is below)."),
-                (0, false, None) => notice(d, 250.0, "No open lobbies found", "Refresh to look again, or Host one from Online."),
+                (0, true, _) => busy(d, m.net.spin, 276.0, "Searching for lobbies...", "This network first, then the internet."),
+                (0, false, Some(t)) => failed(d, 276.0, t, "Refresh to try again (the reason is below)."),
+                (0, false, None) => notice(d, 276.0, "No open lobbies found", "Refresh to look again, or Host one from Online."),
                 (_, true, _) => {
                     spinner(d, m.net.spin, 596.0, 44.0, 12.0);
                     d.outlined(|d| d.text("Searching...", 452.0, 34.0, 20.0, WHITE));
                 }
                 _ => {}
             }
+            // B496: the list comes from discovery, so it can lag, linger or differ between players: always say so
+            d.box3([x, 346.0, w, 48.0], 12.0, [Some(super::INK), Some(WHITE), Some([40.0, 40.0, 50.0])], 120.0);
+            d.label("Lobbies can take a while to show up, or may be missing.", 320.0, 352.0, 16.0, w - 24.0, WHITE);
+            d.label("Join by Code is more reliable.", 320.0, 372.0, 16.0, w - 24.0, super::GOLD);
+            d.hit([x, 346.0, w, 48.0], Act::Row(n + 1, OK));
             let info = match m.net.list.get(m.sel) {
                 Some(l) => format!("{}'s {} lobby on {}: {} of {} seats open. OK joins, then you pick your characters.", l.name, if l.doubles { "doubles" } else { "singles" }, court_name(text, l.court), l.open(), l.seats),
+                None if m.sel == n + 1 => "Type the host's 4-character code, or paste their link or code.".into(),
                 None if m.net.status.is_empty() => "Looking for lobbies...".into(),
                 None => m.net.status.clone(),
             };
@@ -3044,6 +3056,26 @@ mod tests {
         m.screen = Screen::Chars;
         m.heard(Event::Failed("Refused: full".into()));
         assert_eq!(m.screen, Screen::Lobby);
+    }
+
+    /// B496: Find's list comes from discovery (late, stale or different per player): Join by Code is a row under
+    /// Refresh and □ from anywhere on the list, and its Back lands on Online's Join by Code.
+    #[test]
+    fn find_offers_join_by_code() {
+        let dev = super::super::Dev::Keys;
+        let l = Listing { id: "S".into(), name: "S".into(), doubles: false, court: 1, taken: 1, seats: 2, time: 0, code: String::new() };
+        for (sel, p) in [(2, Press { ok: true, ..default() }), (0, Press { page: true, ..default() }), (1, Press { page: true, ..default() })] {
+            let net = View { cfg: Some(Online::default()), list: vec![l.clone()], go: Some(Go::Find), finding: 1, ..default() };
+            let mut m = Menu { screen: Screen::Lobbies, sel, seats: [Some(dev), None, None, None], net, ..default() };
+            m.step(dev, p);
+            assert_eq!((m.screen, m.net.naming, m.net.url, m.net.go, m.net.entry.as_str()), (Screen::Code, false, false, None, ""));
+            m.step(dev, Press { back: true, ..default() });
+            assert_eq!((m.screen, m.sel), (Screen::Online, 3));
+        }
+        // Back is the last row, after Join by Code
+        let mut m = Menu { screen: Screen::Lobbies, sel: 3, net: View { cfg: Some(Online::default()), list: vec![l], go: Some(Go::Find), ..default() }, ..default() };
+        m.step(dev, Press { ok: true, ..default() });
+        assert_eq!(m.screen, Screen::Online);
     }
 
     /// B159: Enter on the keyboard finishes the entry, it doesn't type the hovered key.

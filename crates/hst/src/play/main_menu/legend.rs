@@ -171,7 +171,8 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Lobbies => {
             let n = m.net.list.len();
-            v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < n { "Join" } else if s == n { "Refresh" } else { "Back" }), (Act::Back, "Back")]);
+            // B496: □ Join by Code from anywhere on the list
+            v.extend([(Act::UpDown, "Move"), (Act::Ok, if s < n { "Join" } else if s == n { "Refresh" } else if s == n + 1 { "Join by Code" } else { "Back" }), (Act::Page, "Join by Code"), (Act::Back, "Back")]);
         }
         // B441: the name's popup (the Mods page's keyboard)
         Screen::Code if m.net.naming && !m.net.url => v.extend(super::osk::legend(s, (!m.net.entry.trim().is_empty()).then_some("Save"))),

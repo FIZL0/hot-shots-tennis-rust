@@ -730,6 +730,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B430** Pause menu names the stock umpire with a custom umpire (bug, user 2026-10-15): with a mod umpire picked, the pause menu still says 'Umpire Lily' (or whichever stock umpire it stands in for); it should show only the umpire in use, by its mod name → play/main_menu/pause.rs · play/umpire_mod.rs · mods_umpire.rs · mods/umpire.rs
 - [x] **B432** Random court/umpire never picks a mod (bug, user 2026-10-15): choosing Random for court or umpire draws only from the stock ones; it should draw from every installed court and umpire, mods included (menu RNG, never the sim's); online keeps to what every peer has → play/main_menu/confirm.rs · play/main_menu/court_mods.rs · play/main_menu/umpire_mods.rs · mods.rs
 - [x] **B472** Emotes can still be triggered between points (post-point timeline); block them outside live play — crates/hst-play/src/play/tick_input.rs
+- [x] **B496** Find warns that listed lobbies can lag or be missing (user 2026-10-16): Find (the server browser) builds its list from discovery, so a just-opened lobby can show late, a closed one can linger, and two players can see different lists. Show a short, always-visible note on the Find page, e.g. 'Lobbies can take a while to show up or may be missing. Join by Code is more reliable.', with Join by Code one press away (button/legend key). Front-end, ours to design; any aspect ratio, phone included → play/main_menu/online.rs (Find) · play/main_menu/legend.rs
 
 
 ### Shots
