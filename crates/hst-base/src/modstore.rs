@@ -93,6 +93,7 @@ impl Kind {
             crate::mods::Kind::Character => Kind::Character,
             crate::mods::Kind::Court => Kind::Court,
             crate::mods::Kind::Umpire => Kind::Umpire,
+            crate::mods::Kind::Textures => Kind::Textures,
             crate::mods::Kind::Other(_) => Kind::Other,
         }
     }

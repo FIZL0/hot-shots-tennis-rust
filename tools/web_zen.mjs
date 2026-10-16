@@ -2,7 +2,8 @@
 // picks the ISO (import into OPFS), visit 2 (same profile) must start the game. Console + screenshots into OUT.
 // Usage: node tools/web_zen.mjs ISO OUT [query] [seconds]  (serve web/ on :8765 first: python3 -m http.server -d web
 // 8765; WEB_PORT/BIDI_PORT pick other ports). ISO `-`: OUT's profile already has the pack, only visit 2 runs.
-// SHOT_EVERY=N a screenshot every N s (10). ZEN=path another Firefox-family browser. Headless; the page picks WebGL2 on Gecko unless the renderer says otherwise.
+// SHOT_EVERY=N a screenshot every N s (10). WEB_PRELOAD=js runs before the page's scripts (as web_check.mjs's; M5a put
+// texture packs into OPFS with it). ZEN=path another Firefox-family browser. Headless; the page picks WebGL2 on Gecko unless the renderer says otherwise.
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -41,7 +42,7 @@ await ok('session.new', { capabilities: {} });
 await ok('session.subscribe', { events: ['log.entryAdded'] });
 // the site's autoplay box ticked (straight into the game once a disc is in), the page's console, a count of the page's animation frames, logged with each screenshot (a black page that still draws vs a stopped one)
 const renderer = process.env.RENDERER ? `try { const s = (localStorage.getItem(\'./settings.txt\') ?? \'\').replace(/^renderer.*\\n?/m, \'\'); localStorage.setItem(\'./settings.txt\', \'renderer = ${process.env.RENDERER}\\n\' + s); } catch {}` : '';
-await ok('script.addPreloadScript', { functionDeclaration: '() => {' + renderer + ' window.__log = []; for (const k of [\'log\', \'info\', \'warn\', \'error\']) { const f = console[k]; console[k] = (...a) => { window.__log.push(`[page ${k}] ${a.join(\' \')}`); f.apply(console, a); }; } try { localStorage.setItem(\'hst-autoplay\', \'1\'); } catch {} window.__frames = 0; const f = () => { window.__frames++; requestAnimationFrame(f); }; requestAnimationFrame(f); }' });
+await ok('script.addPreloadScript', { functionDeclaration: '() => {' + renderer + (process.env.WEB_PRELOAD ?? '') + '; window.__log = []; for (const k of [\'log\', \'info\', \'warn\', \'error\']) { const f = console[k]; console[k] = (...a) => { window.__log.push(`[page ${k}] ${a.join(\' \')}`); f.apply(console, a); }; } try { localStorage.setItem(\'hst-autoplay\', \'1\'); } catch {} window.__frames = 0; const f = () => { window.__frames++; requestAnimationFrame(f); }; requestAnimationFrame(f); }' });
 const ctx = (await ok('browsingContext.getTree', {})).contexts[0].context;
 const evaluate = async expr => (await send('script.evaluate', { expression: expr, target: { context: ctx }, awaitPromise: true })).result?.result?.value;
 const shot = async name => writeFileSync(`${out}/${name}.png`, Buffer.from((await ok('browsingContext.captureScreenshot', { context: ctx })).data, 'base64'));

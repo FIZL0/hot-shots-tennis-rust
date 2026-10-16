@@ -2560,7 +2560,7 @@ mod tests {
             m.add.kind = Kind::Textures;
             m.sel = 0;
             assert_eq!(m.add.rows(), 0, "{page:?}");
-            assert!(info(&m).contains("mods/texture-replacements/"));
+            assert!(info(&m).contains("Add mod"));
             for k in [ok(), Press { down: true, ..default() }, Press { card: true, ..default() }] {
                 m.mods_step(k, &mut out);
                 assert_eq!((m.screen, m.add.kind, m.sel), (Screen::Mods, Kind::Textures, 0));

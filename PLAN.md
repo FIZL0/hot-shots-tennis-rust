@@ -104,7 +104,8 @@ there. It never names `hst`: hooks the top fills in go through statics/generics 
 
 - `lib.rs` `Args`, `Orbit`, `store` (settings file I/O), `Wire` (snapshot encoding) · `handshake.rs` online match seed
   (`MatchSeed`) and peer handshake check (M2e) · `mods_online.rs` mods in online lobbies: gameplay wire, looks packs,
-  stand-ins (M2i) · `mods_umpire.rs` umpire mods: manifest, calls over the donor's bank (M8f3) · `mods.rs`/`mods/`
+  stand-ins (M2i) · `mods_umpire.rs` umpire mods: manifest, calls over the donor's bank (M8f3) · `mods_textures.rs` texture packs: manifest,
+  order/off (M5a) · `mods.rs`/`mods/`
   `modfs.rs` `modstore.rs` `mods_court.rs` `court_mod.rs` character/court mods, zips, store · `character.rs` disc
   characters, rig, animate · `net.rs`/`net/` iroh transport, lobbies, codes · `audio.rs` · `graphics.rs` settings,
   auto-tune · `gs.rs` `shade.rs` `shadow.rs` `textures.rs` `lod.rs` `cull.rs` rendering · `widescreen.rs` HUD

@@ -438,7 +438,12 @@ impl Files {
 
 /// A PNG as straight RGBA8.
 pub fn read_png(p: &Path) -> Option<(u32, u32, Vec<u8>)> {
-    let mut d = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(p).ok()?));
+    decode_png(std::io::BufReader::new(std::fs::File::open(p).ok()?))
+}
+
+/// [`read_png`] of a PNG already read in (a browser mod file).
+pub fn decode_png(r: impl std::io::BufRead + std::io::Seek) -> Option<(u32, u32, Vec<u8>)> {
+    let mut d = png::Decoder::new(r);
     d.set_transformations(png::Transformations::normalize_to_color8());
     let mut r = d.read_info().ok()?;
     let mut buf = vec![0; r.output_buffer_size()?];

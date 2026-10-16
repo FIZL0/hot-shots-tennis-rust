@@ -12,9 +12,9 @@
 //! BGM in a `--play` match (off by default).
 //! `--inspect all|N[:C],…|MODDIR[:C],…` shows characters (costume C) and mods posed as the original's inspect screen, side
 //! by side (default: the disc roster; see inspect.rs).
-//! Textures come from `mods/texture-replacements/` (key-named files over a PCSX2 pack's) over the disc (beside the
-//! ISO; see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures-src/` to edit or
-//! upscale into `mods/texture-replacements/`.
+//! Textures come from the installed texture packs (M5a, mods_textures.rs), then `mods/texture-replacements/`
+//! (key-named files over a PCSX2 pack's), then the disc (beside the ISO; see textures.rs); `hst <iso> --dump-textures`
+//! writes every disc texture to `mods/textures-src/` to edit or upscale into a pack or `mods/texture-replacements/`.
 
 // the lower layer (P60): assets and drawing, sound, mods, the lobby transport, platform glue, `Args`
 pub use hst_base::*;
@@ -149,7 +149,7 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
                 let mut iso_ = Iso::open(&iso).expect("open iso");
                 let o = hst_data::texhash::Overrides::scan(std::path::Path::new(&iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()));
                 let n = o.dump(&mut iso_);
-                println!("wrote {n} disc textures to {} (upscale them into mods/texture-replacements)", o.root.join("mods/textures-src").display());
+                println!("wrote {n} disc textures to {} (edit or upscale them into a texture pack or mods/texture-replacements)", o.root.join("mods/textures-src").display());
                 std::process::exit(0);
             }
             "--swap-hands" => swap_hands = play::hand_swap::SwapHands::parse(&a.next().unwrap_or_default()),
@@ -319,6 +319,10 @@ fn start(argv: Vec<String>) {
     cull::set(gfx.cull);
     // B222: settings.txt's `original = on` too: the disc's own textures, no texture pack (its 4× walls would tile 4× big)
     play::menu_art::OFF.store(gfx.original, std::sync::atomic::Ordering::Relaxed);
+    // M5a: the texture packs' order and the ones off (settings.txt), for the menu's own textures too
+    if let Ok(t) = store::read_to_string(play::main_menu::Settings::path(&args.iso)) {
+        t.lines().filter_map(|l| l.split('#').next()?.split_once('=')).for_each(|(k, v)| _ = mods_textures::setting(k, v));
+    }
     if upscale && !gfx.original {
         textures::init(&args.iso);
     }

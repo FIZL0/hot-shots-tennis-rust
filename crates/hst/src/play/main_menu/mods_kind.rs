@@ -2,8 +2,8 @@
 //! between the L2 / R2 buttons (keyboard 1 / 3) in the legend's art: Characters · Courts · Umpires · Texture packs,
 //! each with its count (a kind with none hidden until it has some), the current one filled in its colours (B448); how the kind behaves online
 //! is the footer's line. Every Show (Everything, Installed, My uploads, …) and Upload lists only the chosen kind (`modstore::Meta::kind`; an installed mod's from its `mod.json`). The store
-//! carries characters, courts and umpires (M8f9); the Texture packs tab shows what is coming and from which task (M5)
-//! until it lands.
+//! carries characters, courts and umpires (M8f9); the Texture packs tab shows what is coming and from which task (M5b)
+//! until it lands (M5a's packs already play, `mods_textures.rs`).
 
 use super::look;
 use super::roster::{PX, PY};
@@ -37,7 +37,7 @@ pub(super) fn coming(k: Kind) -> Option<&'static str> {
     match k {
         Kind::Character | Kind::Court | Kind::Umpire => None,
         Kind::Textures | Kind::Other => {
-            Some("Texture packs arrive with M5: until then, install packs by hand in mods/texture-replacements/.")
+            Some("Texture packs already work: put a pack's folder in mods/ or add its .zip with Add mod on Installed. Listing and ordering them here arrives with M5b.")
         }
     }
 }
@@ -123,7 +123,7 @@ mod tests {
         assert_eq!(step(Kind::Court, true, &[Kind::Court]), Kind::Court);
         assert_eq!(ends(Kind::Court, &[Kind::Court]), [true, true]);
         assert!([Kind::Character, Kind::Court, Kind::Umpire].iter().all(|k| coming(*k).is_none()));
-        assert!(coming(Kind::Textures).unwrap().contains("M5") && coming(Kind::Textures).unwrap().contains("mods/texture-replacements/"));
+        assert!(coming(Kind::Textures).unwrap().contains("M5b") && coming(Kind::Textures).unwrap().contains("mods/"));
         assert!(KINDS.iter().all(|k| online(*k).starts_with("Online: ")));
     }
 }

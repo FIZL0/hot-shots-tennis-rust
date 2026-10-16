@@ -248,7 +248,7 @@ const MENU_SIZES: [u8; 12] = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 /// Settings screen's pages (`options.rs`).
 const SETTING_NAMES: [&str; 8] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat", "vibration", "update_check"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
-/// follows Upscaled Textures (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
+/// follows Texture Replacements (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 3;
 /// B301: the match's keyboard hints (`play::key_hints`).
 const KEY_HINTS: usize = 4;
@@ -259,7 +259,7 @@ const VIBRATION: usize = 6;
 /// B374: look for a newer release at start (`crate::update`).
 const UPDATE_CHECK: usize = 7;
 
-/// Upscaled textures and menu music on, match music off (user 2026-10-12); key hints on (B301); chat on (M20);
+/// Texture replacements and menu music on, match music off (user 2026-10-12); key hints on (B301); chat on (M20);
 /// vibration on (B118); update check on (B374).
 const SETTING_DEFAULTS: [bool; 8] = [true, true, false, true, true, true, true, true];
 
@@ -289,8 +289,11 @@ impl Settings {
     fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
         let (mut downloads, mut aspect, mut wide) = (None, None, None);
+        crate::mods_textures::set_order(Default::default());
         for (k, v) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
-            if k.trim() == "online_mods" {
+            if crate::mods_textures::setting(k, v) {
+                // M5a: the texture packs' order, kept in `mods_textures`
+            } else if k.trim() == "online_mods" {
                 s.4 = Ask::parse(v).unwrap_or(s.4);
             } else if k.trim() == "umpire" {
                 s.6 = v.trim().parse().ok().filter(|&u| u as usize <= UMPIRES).unwrap_or(UMPIRES as u8);
@@ -327,7 +330,7 @@ impl Settings {
 
     fn text(&self) -> String {
         let on: String = SETTING_NAMES.iter().zip(self.0).map(|(n, on)| format!("{n} = {}\n", if on { "on" } else { "off" })).collect();
-        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line() + &format!("umpire = {}\n", self.6) + &format!("menu_size = {}\n", if self.7 == 0 { "auto".into() } else { format!("{}", self.7 as u32 * 10) }) + &format!("downloads_at_once = {}\n", if self.8 == 0 { "auto".into() } else { self.8.to_string() }) + &format!("button_icons = {}\n", legend::LAYOUTS[self.9 as usize].1)
+        format!("aspect = {}\n", super::widescreen::ASPECTS[self.3 as usize]) + &on + &format!("online_mods = {}\n", self.4.word()) + &self.1.text() + &self.2.text() + &self.renderer_line() + &format!("umpire = {}\n", self.6) + &format!("menu_size = {}\n", if self.7 == 0 { "auto".into() } else { format!("{}", self.7 as u32 * 10) }) + &format!("downloads_at_once = {}\n", if self.8 == 0 { "auto".into() } else { self.8.to_string() }) + &format!("button_icons = {}\n", legend::LAYOUTS[self.9 as usize].1) + &crate::mods_textures::settings_text()
     }
 
     /// B339: how many store installs run at once: the setting, or on Auto 3 on desktop, 2 in a browser, 1 on a

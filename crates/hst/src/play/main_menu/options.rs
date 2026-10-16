@@ -105,10 +105,10 @@ pub(super) fn page(s: Screen) -> &'static [Opt] {
     }
 }
 
-/// The options the browser build keeps off and locked (B227: Upscaled Textures, `textures::set`, and Upscaled
-/// Downloads, `modstore::install`).
+/// The options the browser build keeps off and locked (B227: Upscaled Downloads, `modstore::install`; M5a: Texture
+/// Replacements is open there, for the texture packs).
 pub(super) fn locked(o: Opt) -> bool {
-    cfg!(target_arch = "wasm32") && matches!(o, Upscaled | Downloads)
+    cfg!(target_arch = "wasm32") && matches!(o, Downloads)
 }
 
 fn label(o: Opt) -> &'static str {
@@ -126,7 +126,7 @@ fn label(o: Opt) -> &'static str {
         Fps => "Frame Limit",
         Vsync => "VSync",
         Original => "Original Mode",
-        Upscaled => "Upscaled Textures",
+        Upscaled => "Texture Replacements",
         Cull => "Skip Off-Screen",
         Volume(i) => ["Master", "Music", "Sound Effects", "Voices", "Ambience"][i],
         MenuMusic => "Menu Music",
@@ -160,8 +160,9 @@ fn about(o: Opt) -> &'static str {
         Vsync => "Wait for the display between frames: no tearing, at most its refresh rate.",
         Mesh => "Draw the players, their rackets and the court's figures (umpire, ball kids, crowd) with this share of their triangles: lower runs faster on a weak GPU, most of all with detailed mod characters. Faces and the edges between parts keep their shape. Applies to characters loaded after a change (the next match).",
         Original => "Draw at the PS2's 640x448, 4:3, with the disc's textures, scaled up unfiltered.",
-        Upscaled | Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
-        Upscaled => "Use the upscaled textures in mods/texture-replacements.",
+        Downloads if locked(o) => "Upscaled textures aren't available in the browser.",
+        Upscaled if cfg!(target_arch = "wasm32") => "Draw the installed texture packs' textures in place of the disc's (from the next match).",
+        Upscaled => "Draw the installed texture packs' textures and the ones in mods/texture-replacements in place of the disc's (from the next match), and mods' upscaled textures.",
         Cull => "Don't draw players, figures and effects that are out of view (or their shadows out of the light's). Looks the same; turn it off if it makes this device slower.",
         Volume(0) => "The volume of everything.",
         Volume(1) => "The menu and match music and the jingles.",
@@ -290,7 +291,7 @@ impl Settings {
             Vsync => g.vsync = !g.vsync,
             Original => g.original = !g.original,
             Cull => g.cull = !g.cull,
-            // Upscaled Downloads follows Upscaled Textures (B227)
+            // Upscaled Downloads follows Texture Replacements (B227)
             Upscaled => {
                 self.0[0] = !self.0[0];
                 self.0[UPSCALED_DOWNLOADS] = self.0[0];

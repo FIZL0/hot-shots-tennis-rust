@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex};
 use crate::mods::{self, Mod};
 
 // Every mod file the browser build holds (never an upscaled set, `upscaled`); the main thread can't read OPFS
-// synchronously, so the page reads them in before `run` (only the small `.json`s, B336) or when `ready` asks.
+// synchronously, so the page reads them in before `run` (only the small `.json`s, B336, but a texture pack's all,
+// M5a) or when `ready` asks.
 static MEM: Mutex<BTreeMap<String, Arc<[u8]>>> = Mutex::new(BTreeMap::new());
 
 /// B336: the browser's mod files known by path and size but not in memory (a phone tab died holding 40 mods, ≈ 10–40
@@ -82,8 +83,13 @@ pub fn loaded(dir: &str) {
     LAZY.lock().unwrap().retain(|k, _| !k.starts_with(&pre));
 }
 
-/// Mod folder `dir`'s files out of memory again but its [`small`] ones (the browser: the page has them in OPFS).
+/// Mod folder `dir`'s files out of memory again but its [`small`] ones (the browser: the page has them in OPFS). A
+/// texture pack's all stay (M5a: `textures.rs` reads them as the menu's and a match's textures are made, with no
+/// frame to wait for a read-in; `web/index.html` reads them in whole at the start too).
 pub fn unload(dir: &Path) {
+    if mods::Kind::of_dir(dir) == mods::Kind::Textures {
+        return;
+    }
     let pre = format!("{}/", key(dir));
     let mut mem = MEM.lock().unwrap();
     let big: Vec<(String, u64)> = under(&mem, &pre).filter(|(k, _)| !small(k)).map(|(k, b)| (k.clone(), b.len() as u64)).collect();
@@ -787,6 +793,29 @@ pub mod tests {
         assert_eq!(kept.len(), files.len() - 1);
         assert!(kept.iter().all(|f| !f.0.contains("/textures/upscaled/")));
         remove(Path::new("t_upscaled"));
+    }
+
+    /// M5a: a texture pack's zip installs as one (in memory, as the browser does), each PNG checked, and stays in
+    /// memory when unloaded (its textures are read without a read-in); a pack with a broken PNG leaves nothing.
+    #[test]
+    fn texture_pack_installs_and_stays_in() {
+        let tmp = std::env::temp_dir().join(format!("hst-packzip-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        hst_data::texhash::write_png(&tmp.join("t.png"), 1, 1, &[1, 2, 3, 4]).unwrap();
+        let png = std::fs::read(tmp.join("t.png")).unwrap();
+        let json = br#"{"standard": 1, "kind": "textures", "id": "my_pack", "name": "My Pack"}"#;
+        let root = Path::new("t_packzip/mods");
+        let m = install(&zip(&[("mod.json", json), ("textures/COURT/x.0-00000000000000aa.png", &png)], true, 0o644), root).unwrap();
+        assert_eq!((m.id.as_str(), mods::Kind::of_dir(&m.dir)), ("my_pack", mods::Kind::Textures));
+        unload(&m.dir);
+        assert_eq!(read(&m.dir.join("textures/COURT/x.0-00000000000000aa.png")).unwrap(), png);
+        assert_eq!(crate::mods_textures::list(root).len(), 1);
+        let bad = zip(&[("mod.json", json), ("textures/x.0-00000000000000bb.png", b"not a png")], true, 0o644);
+        remove(Path::new("t_packzip"));
+        assert!(install(&bad, root).unwrap_err().contains("x.0-00000000000000bb.png"));
+        assert!(crate::mods_textures::list(root).is_empty());
+        remove(Path::new("t_packzip"));
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// B248: two mods sharing an id both install (`<id>`, `<id>-2`); the same mod again replaces its own copy: a
