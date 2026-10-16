@@ -32,7 +32,7 @@ pub fn small(n: &str) -> bool {
 }
 
 /// A browser mod file the page left in OPFS (`size` bytes): it reads as missing data until [`ready`] has it in.
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(any(test, feature = "testing", target_arch = "wasm32"))]
 pub fn add_lazy(path: &Path, size: u64) {
     LAZY.lock().unwrap().insert(key(path), size);
 }
@@ -43,9 +43,13 @@ fn under<'a, V>(m: &'a BTreeMap<String, V>, pre: &'a str) -> impl Iterator<Item 
 
 /// Whether mod folder `dir`'s files are all in memory; if not, asks the page to read them in (`web::mod_load`; it
 /// then calls [`loaded`]) and the caller tries again on a later frame. Marks `dir` as just wanted; one wanted past
-/// [`RESIDENT`] unloads the oldest. Always true outside the browser (nothing's ever lazy there).
+/// [`RESIDENT`] unloads the oldest. Always true outside the browser (nothing's ever lazy there but a test's
+/// [`add_lazy`] files, which it reports without asking anyone).
 pub fn ready(dir: &Path) -> bool {
-    !cfg!(target_arch = "wasm32") || want(dir)
+    if cfg!(target_arch = "wasm32") {
+        return want(dir);
+    }
+    under(&LAZY.lock().unwrap(), &format!("{}/", key(dir))).next().is_none()
 }
 
 fn want(dir: &Path) -> bool {

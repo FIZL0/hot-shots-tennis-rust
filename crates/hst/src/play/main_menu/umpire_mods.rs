@@ -158,6 +158,19 @@ impl Menu {
     }
 }
 
+/// B487: whether umpire `u`'s calls can be read for Preview Voice: a disc umpire's always, a mod's once its folder is
+/// in memory (the browser leaves a mod's voices in its storage, even straight after a store download, until
+/// `modfs::ready` asks the page for them; this asks). Read before then, the bank would be the donor's alone.
+pub(super) fn voice_ready(m: &Menu, u: u8) -> bool {
+    m.umpire_mod_of(u as usize).is_none_or(|x| crate::modfs::ready(&x.dir))
+}
+
+/// B487: whether the match's umpire mod (`--umpire-mod DIR` in `args`), if any, is in memory to be heard; asks the
+/// browser for it if not (the launch waits, as for `--slot-mod`).
+pub(super) fn launch_ready(args: &[String]) -> bool {
+    args.windows(2).filter(|w| w[0] == "--umpire-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[1])) && ok)
+}
+
 /// Preview Voice's bank for umpire `u`: the disc's, or a mod's calls over its donor's.
 pub(super) fn preview_bank(iso: &str, m: &Menu, u: u8) -> Option<crate::audio::SoundBank> {
     let mut iso = hst_data::iso::Iso::open(iso).ok()?;
@@ -214,6 +227,25 @@ mod tests {
         m.umpire_mods.pop();
         m.umpire_in_range();
         assert_eq!(m.umpire as usize, UMPIRES);
+    }
+
+    /// B487: a downloaded umpire mod's voices still in the browser's storage hold Preview Voice and the launch until
+    /// they're read in (else the bank is the donor's alone: Gloria heard as Lily); a disc umpire never waits.
+    #[test]
+    fn a_mods_voice_is_read_in_before_its_heard() {
+        let dir = std::path::PathBuf::from(format!("mods-b487-{}/gag_ump07", std::process::id()));
+        let ump = crate::mods_umpire::Umpire { dir: dir.clone(), id: "gag_ump07".into(), name: "Gloria".into(), source: String::new(), donor: 1, voice: "voice/".into() };
+        let m = Menu { umpire_mods: vec![ump], umpire_voices: vec![true], ..default() };
+        let mod_ = (UMPIRES + 1) as u8;
+        let launch = ["--umpire".to_string(), "1".into(), "--umpire-mod".into(), dir.display().to_string()];
+        crate::modfs::add_lazy(&dir.join("voice/1_1.wav"), 100);
+        assert!(super::voice_ready(&m, 1) && super::voice_ready(&m, UMPIRES as u8));
+        assert!(!super::voice_ready(&m, mod_) && !super::launch_ready(&launch));
+        assert!(super::launch_ready(&launch[..2]));
+        crate::modfs::add(&dir.join("voice/1_1.wav"), vec![0u8; 100].into());
+        crate::modfs::loaded(&dir.display().to_string());
+        assert!(super::voice_ready(&m, mod_) && super::launch_ready(&launch));
+        crate::modfs::remove(&dir);
     }
 
     /// B400: a mod's `previews/umpire.png` gives its head's square (0.36 of the figure's height, centred on its top

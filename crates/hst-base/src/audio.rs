@@ -128,9 +128,11 @@ impl SoundBank {
             let name = e.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
             let Some((p, k)) = name.strip_suffix(".wav").and_then(|s| s.split_once('_')) else { continue };
             let (Ok(p), Ok(k)) = (p.parse(), k.parse()) else { continue };
-            match crate::modfs::read(&e).ok().and_then(|d| pcm(&d)) {
-                Some((pcm, rate)) => _ = self.takes.insert((p, k), (pcm.into(), rate)),
-                None => warn!("{}: not a PCM16 wav, skipped", e.display()),
+            // B487: a read that fails (in the browser: still in its storage) says so, not "not a wav"
+            match crate::modfs::read(&e).map(|d| pcm(&d)) {
+                Ok(Some((pcm, rate))) => _ = self.takes.insert((p, k), (pcm.into(), rate)),
+                Ok(None) => warn!("{}: not a PCM16 wav, skipped", e.display()),
+                Err(err) => warn!("{}: {err}, skipped", e.display()),
             }
         }
         let n = self.takes.len();
