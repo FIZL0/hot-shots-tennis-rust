@@ -76,11 +76,11 @@ pub struct Placement {
 }
 
 pub fn plants(d: &[u8]) -> Result<Vec<Placement>, Error> {
-    if d.len() % 0x40 != 0 {
+    if !d.len().is_multiple_of(0x40) {
         return Err(Error(format!("plant file size {:#x} is not a multiple of 0x40", d.len())));
     }
     let f = |r: &[u8], o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
-    Ok(d.chunks_exact(0x40)
+    Ok(d.as_chunks::<0x40>().0.iter()
         .map(|r| Placement {
             index: i16::from_le_bytes([r[0], r[1]]),
             category: r[2].wrapping_add(0x11),
@@ -130,34 +130,6 @@ pub fn resolve<'a>(entries: &'a [Entry], p: &Placement, season: usize) -> Option
     variants.iter().find(|e| season_split(&e.stem).1[season.min(3)]).or(variants.first()).copied()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolves_by_directory_order() {
-        let list = entries("c:\\x\\tree\\a_s1111.mtl\r\nc:\\x\\structure\\brush.mtl\nc:\\x\\tree\\b_s1111.mtl\n");
-        let mut rec = vec![0u8; 0x40];
-        rec[0] = 1;
-        rec[2] = 17u8.wrapping_sub(0x11);
-        let p = &plants(&rec).unwrap()[0];
-        assert_eq!(p.category, 17);
-        assert_eq!(resolve(&list, p, 0).unwrap().stem, "b_s1111");
-    }
-
-    #[test]
-    fn season_variants_share_an_index() {
-        let list = entries("c:\\x\\tree\\a_s1111.mtl\nc:\\x\\tree\\net_s0100.mtl\nc:\\x\\tree\\net_s1000.mtl\n");
-        let mut rec = vec![0u8; 0x40];
-        rec[0] = 1;
-        rec[2] = 17u8.wrapping_sub(0x11);
-        let p = &plants(&rec).unwrap()[0];
-        assert_eq!(resolve(&list, p, 0).unwrap().stem, "net_s1000");
-        assert_eq!(resolve(&list, p, 1).unwrap().stem, "net_s0100");
-        assert!(in_season("greece00_sky_s1100", 1) && !in_season("greece00_sky_s1100", 2) && !in_season("resort_bg_s1111_p01", 0));
-    }
-}
-
 /// The background figures' files in a court's `COURTSET/NN/HOLE01.XB`: a model stem and its clips by motion number.
 /// Umpire `u`: motions 0 idle (`_h`), 1 turned right (`_r`), 2 left (`_l`).
 pub fn umpire_files(u: u8) -> (String, Vec<String>) {
@@ -187,4 +159,32 @@ pub fn cloud_count(envir: &[u8], hole_envir: &[u8], env: usize) -> Option<usize>
     let base = i16::from_le_bytes(envir.get(0x4d0 + 2 * env..0x4d2 + 2 * env)?.try_into().ok()?) as i32;
     let n = base * *hole_envir.get(0x50 + env)? as i32 / 100;
     Some(if n == 0 { 20 } else { n.max(0) as usize })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_by_directory_order() {
+        let list = entries("c:\\x\\tree\\a_s1111.mtl\r\nc:\\x\\structure\\brush.mtl\nc:\\x\\tree\\b_s1111.mtl\n");
+        let mut rec = vec![0u8; 0x40];
+        rec[0] = 1;
+        rec[2] = 17u8.wrapping_sub(0x11);
+        let p = &plants(&rec).unwrap()[0];
+        assert_eq!(p.category, 17);
+        assert_eq!(resolve(&list, p, 0).unwrap().stem, "b_s1111");
+    }
+
+    #[test]
+    fn season_variants_share_an_index() {
+        let list = entries("c:\\x\\tree\\a_s1111.mtl\nc:\\x\\tree\\net_s0100.mtl\nc:\\x\\tree\\net_s1000.mtl\n");
+        let mut rec = vec![0u8; 0x40];
+        rec[0] = 1;
+        rec[2] = 17u8.wrapping_sub(0x11);
+        let p = &plants(&rec).unwrap()[0];
+        assert_eq!(resolve(&list, p, 0).unwrap().stem, "net_s1000");
+        assert_eq!(resolve(&list, p, 1).unwrap().stem, "net_s0100");
+        assert!(in_season("greece00_sky_s1100", 1) && !in_season("greece00_sky_s1100", 2) && !in_season("resort_bg_s1111_p01", 0));
+    }
 }

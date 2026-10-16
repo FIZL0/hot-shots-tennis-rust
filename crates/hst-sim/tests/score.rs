@@ -665,7 +665,7 @@ fn every_match_length_ends() {
                         points += 1;
                         assert!(points < 100_000, "sets {sets} games {games}: no end");
                         assert!((0..r.players).contains(&s.server) && (0..r.players).contains(&s.receiver));
-                        assert!(s.set <= 2 * sets - 1 && s.sets.iter().all(|&n| n <= sets));
+                        assert!(s.set < 2 * sets && s.sets.iter().all(|&n| n <= sets));
                     }
                     assert_eq!(s.sets.iter().max(), Some(&sets));
                 }

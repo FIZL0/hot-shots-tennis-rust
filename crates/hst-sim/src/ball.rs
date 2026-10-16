@@ -366,10 +366,10 @@ impl Flight {
                 let side = if pos[2] > 0.0 { 1.0 } else if pos[2] < 0.0 { -1.0 } else { 0.0 };
                 if side != 0.0 {
                     let best = hit.map_or(f32::MAX, |(h, ..)| h.t);
-                    if let Some(h) = crate::contact::sweep(pos, target, r, ORIGIN, [0.0, 0.0, side, 0.0], best) {
-                        if h.centre[1] > -F(NET_TOP) && h.centre[0].abs() <= NET_HALF_WIDTH {
-                            hit = Some((h, [h.centre[0], h.centre[1], 0.0], NET, false));
-                        }
+                    if let Some(h) = crate::contact::sweep(pos, target, r, ORIGIN, [0.0, 0.0, side, 0.0], best)
+                        && h.centre[1] > -F(NET_TOP) && h.centre[0].abs() <= NET_HALF_WIDTH
+                    {
+                        hit = Some((h, [h.centre[0], h.centre[1], 0.0], NET, false));
                     }
                 }
             }
@@ -478,13 +478,13 @@ impl Flight {
             if self.in_play && contacts == 1 && !self.rolling && self.bounces == 1 && shot.bounce_turn != 0.0 {
                 d = turn(d, 0.0, shot.bounce_turn);
             }
-            if let Some(l) = self.lines.filter(|_| !self.rolling && (self.bounces == 1 || self.contacts == 1)) {
-                if let Some((call, dist)) = crate::judge::call_landing(self.call, self.special_contacts != 0, pos, &l) {
-                    self.call = call;
-                    self.line_distance = dist.unwrap_or(self.line_distance);
-                }
+            if let Some(l) = self.lines.filter(|_| !self.rolling && (self.bounces == 1 || self.contacts == 1))
+                && let Some((call, dist)) = crate::judge::call_landing(self.call, self.special_contacts != 0, pos, &l)
+            {
+                self.call = call;
+                self.line_distance = dist.unwrap_or(self.line_distance);
             }
-            remaining = remaining * (1.0 - F(h.t));
+            remaining *= 1.0 - F(h.t);
             if remaining <= k::MIN_REMAINDER || contacts >= MAX_SUBSTEPS {
                 break;
             }
@@ -619,18 +619,18 @@ impl Flight {
         if self.bounces == 1 {
             if matches!(shot.class, STROKE | VOLLEY) {
                 match shot.kind {
-                    SLICE => e = e * k::SLICE_RESTITUTION,
-                    DROP => e = e * k::DROP_RESTITUTION,
+                    SLICE => e *= k::SLICE_RESTITUTION,
+                    DROP => e *= k::DROP_RESTITUTION,
                     _ => {}
                 }
             }
             if shot.first_bounce_restitution != 0.0 {
-                e = e * shot.first_bounce_restitution;
+                e *= shot.first_bounce_restitution;
             }
             if matches!(shot.class, STROKE | VOLLEY) {
                 match shot.kind {
-                    SLICE => kick = kick * k::SLICE_KICK,
-                    DROP => kick = kick * k::DROP_KICK,
+                    SLICE => kick *= k::SLICE_KICK,
+                    DROP => kick *= k::DROP_KICK,
                     _ => {}
                 }
             }

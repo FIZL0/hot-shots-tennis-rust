@@ -383,7 +383,7 @@ pub fn voice(m: &Mod) -> Option<crate::audio::SoundBank> {
 /// A `.glb`: its document and binary chunk.
 pub fn open(path: &Path) -> Result<(gltf::Document, Vec<u8>), String> {
     // ponytail: glTF's own validation skipped (older rerig.py output lacks POSITION min/max); §7's checks gate the file
-    let g = gltf::Gltf::from_slice_without_validation(&crate::modfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
+    let g = gltf::Gltf::from_slice_without_validation(&crate::modfs::read(path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
     if g.buffers().any(|b| !matches!(b.source(), gltf::buffer::Source::Bin)) {
         return Err(format!("{}: buffers must be embedded (.glb)", path.display()));
     }
@@ -852,7 +852,7 @@ fn joints_of(doc: &gltf::Document, blob: &[u8]) -> Vec<Joint> {
     for n in doc.nodes() {
         n.children().for_each(|c| up[c.index()] = Some(n.index()));
     }
-    let w = worlds(&doc);
+    let w = worlds(doc);
     let space = doc.default_scene().or_else(|| doc.scenes().next()).and_then(|s| s.nodes().next()).map_or(Mat4::IDENTITY, |r| w[r.index()].inverse());
     let ibm: Vec<Mat4> = skin.reader(|_| Some(blob)).read_inverse_bind_matrices().map(|i| i.map(|m| Mat4::from_cols_array_2d(&m)).collect()).unwrap_or_else(|| vec![Mat4::IDENTITY; nodes.len()]);
     nodes
@@ -1848,8 +1848,7 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.path())
-            .map(|d| if d.join("mod.json").is_file() { vec![d] } else { std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()).collect() })
-            .flatten()
+            .flat_map(|d| if d.join("mod.json").is_file() { vec![d] } else { std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()).collect() })
             .filter(|d| d.join("mod.json").is_file() && Kind::of_dir(d) == Kind::Character && !d.file_name().unwrap().to_string_lossy().starts_with("opentee_"))
             .count();
         assert_eq!(all.len(), n);

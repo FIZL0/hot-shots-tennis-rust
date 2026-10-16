@@ -52,7 +52,7 @@ fn formation_matches_the_game() {
     // header: count, then per player its address, AI address, 0x12b0..0x12c0 and 0x13f0..0x13f8; ball, shot table
     let players: Vec<(f32, usize, u8)> =
         (0..4).map(|p| 4 + 32 * p).map(|o| (f(&d, o + 8), i(&d, o + 16) as usize, d[o + 28])).collect();
-    let frames: Vec<Frame> = d[4 + 32 * 4 + 8..].chunks_exact(FRAME).map(Frame).collect();
+    let frames: Vec<Frame> = d[4 + 32 * 4 + 8..].as_chunks::<FRAME>().0.iter().map(|s| Frame(s)).collect();
     let (mut starts, mut repicks, mut holds, mut stops) = (0, 0, 0, 0);
     for w in frames.windows(2) {
         let (a, b) = (&w[0], &w[1]);

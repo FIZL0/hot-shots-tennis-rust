@@ -62,6 +62,8 @@ pub(super) fn matrix(v: &hst_sim::camera::View) -> [[f32; 4]; 4] {
     m
 }
 
+impl super::snapshot::Wire for Frames {}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -73,5 +75,3 @@ mod tests {
         assert!((0..3).all(|k| (got[k] - want[k]).abs() < 1e-5), "{got:?} {want:?}");
     }
 }
-
-impl super::snapshot::Wire for Frames {}

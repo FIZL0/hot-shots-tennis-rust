@@ -99,7 +99,7 @@ impl Patched {
     pub fn set(&mut self, v: usize, p: [f32; 3]) -> bool {
         let Some(dst) = self.packed.get_mut(v * self.stride + self.at..).and_then(|d| d.get_mut(..12)) else { return false };
         let mut new = [0u8; 12];
-        for (d, x) in new.chunks_exact_mut(4).zip(p) {
+        for (d, x) in new.as_chunks_mut::<4>().0.iter_mut().zip(p) {
             d.copy_from_slice(&x.to_ne_bytes());
         }
         if dst == new {
@@ -151,7 +151,7 @@ fn write(mut queued: ResMut<Queued>, mut waiting: Local<(Vec<u8>, Queued)>, mut 
     kept_ages.clear();
     keep.clear();
     let new = queued.writes.iter().map(|w| (0, w, &queued.bytes));
-    for (age, w, bytes) in ages.iter().map(|&a| a).zip(&wait.writes).map(|(a, w)| (a, w, &wait.bytes)).chain(new) {
+    for (age, w, bytes) in ages.iter().copied().zip(&wait.writes).map(|(a, w)| (a, w, &wait.bytes)).chain(new) {
         let bytes = &bytes[w.at..][..w.len];
         let Some(slice) = allocator.mesh_vertex_slice(&w.mesh) else {
             if age < 60 {

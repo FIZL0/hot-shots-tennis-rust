@@ -38,7 +38,7 @@ pub fn spawn(draws: &[u32], models: usize, y: [f32; 2]) -> Vec<Cloud> {
     let unit = |t: u32| ps2::utof(t & DRAW_BITS);
     let at = |lo: f32, hi: f32, t: u32| (F::ZERO + lo).madd(DRAW_SCALE * (F(hi) - lo), unit(t)).0;
     let mut v: Vec<Cloud> = draws
-        .chunks_exact(DRAWS)
+        .as_chunks::<DRAWS>().0.iter()
         .map(|d| Cloud {
             yaw: (crate::world::TWO_PI * (DRAW_SCALE * F(unit(d[0])))).0,
             pos: [at(NEG_R, R, d[3]), at(y[0], y[1], d[2]), at(NEG_R, R, d[1])],

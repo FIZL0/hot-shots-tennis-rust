@@ -41,7 +41,7 @@ fn bits(s: &Spark) -> Vec<u32> {
 fn sparks_s05() {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let Ok(data) = std::fs::read(format!("{dir}/sparks_s05.bin")) else { return eprintln!("sparks_s05.bin absent, skipped") };
-    let frames: Vec<&[u8]> = data.chunks_exact(SIZE).collect();
+    let frames: Vec<&[u8]> = data.as_chunks::<SIZE>().0.iter().map(|s| s.as_slice()).collect();
     let mut sp = Sparks::new(rolls(frames[0]));
     let (mut bursts, mut kinds) = (0, [0; 5]);
     for (i, w) in frames.windows(2).enumerate() {

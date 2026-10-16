@@ -89,7 +89,7 @@ impl Sig {
             match (addr.parse::<std::net::IpAddr>(), uuid(addr)) {
                 (Ok(std::net::IpAddr::V4(ip)), _) => b.extend([4].iter().chain(&ip.octets())),
                 (Ok(std::net::IpAddr::V6(ip)), _) => b.extend([6].iter().chain(&ip.octets())),
-                (_, Some(u)) => b.extend([b'm'].iter().chain(&u)),
+                (_, Some(u)) => b.extend(b"m".iter().chain(&u)),
                 _ => b.extend([0, addr.len() as u8].iter().chain(addr.as_bytes())),
             }
             b.extend_from_slice(&port.to_be_bytes());

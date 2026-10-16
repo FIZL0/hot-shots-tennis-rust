@@ -28,7 +28,7 @@ fn match_s05_camera() {
     let Ok(data) = std::fs::read(format!("{dir}/camera_s05.bin")) else {
         return eprintln!("camera_s05.bin absent, skipped");
     };
-    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    let frames: Vec<&[u8]> = data.as_chunks::<SAMPLE>().0.iter().map(|s| s.as_slice()).collect();
     let (rest, base) = (view(frames[0]), hst_sim::camera::base());
     assert!((0..3).all(|j| (rest.eye[j] - base.eye[j]).abs() < 2e-3) && (rest.fov - base.fov).abs() < 1e-6, "resting view {base:?} vs {rest:?}");
     let mut cam = Camera::from_view(view(frames[0]));

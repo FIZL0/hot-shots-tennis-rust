@@ -240,7 +240,7 @@ fn match_reaction_root() {
         gu_set.insert(c, (get(0x35).and_then(|d| Path::new(&d)), a.end_tick() as f32 / a.ticks_per_frame as f32));
     }
     for (name, data, lineup) in &matches {
-        let frames = frames_live(&data);
+        let frames = frames_live(data);
         let (mut exact, mut held, mut gu, mut t) = (0, 0, 0, [0f32; 4]);
         for k in 1..frames.len() {
             let (a, fr) = (frames[k - 1], frames[k]);

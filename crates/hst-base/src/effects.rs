@@ -168,7 +168,7 @@ fn cpu_morph(mesh: &Handle<Mesh>, root: Entity, meshes: &mut Assets<Mesh>) -> Cp
     let old = meshes.get(mesh).expect("just added");
     let mut new = Mesh::new(old.primitive_topology(), bevy::asset::RenderAssetUsages::default());
     for (attr, values) in old.attributes() {
-        new.insert_attribute(attr.clone(), values.clone());
+        new.insert_attribute(*attr, values.clone());
     }
     if let Some(i) = old.indices() {
         new.insert_indices(i.clone());

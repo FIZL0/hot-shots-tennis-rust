@@ -72,7 +72,7 @@ fn ball_off_a_player_s05() {
         return eprintln!("bodyhit_s05.bin or disc absent, skipped");
     };
     let (world, materials) = (hst_sim::court::world(&mut iso, 10), hst_sim::court::materials(&exe::Game::new(&cnf, &bin).unwrap()));
-    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    let frames: Vec<&[u8]> = data.as_chunks::<SAMPLE>().0.iter().collect();
     // the hit: a player's hit tick (+0x3b60) turns from -1
     let hit = |s: &[u8]| (0..4).any(|p| i(s, 4 + 0x60 + 0x290 + p * 0x140 + 0x20) != -1);
     let n = frames.iter().position(|s| hit(s)).expect("no body hit recorded");

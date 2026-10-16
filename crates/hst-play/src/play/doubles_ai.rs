@@ -313,12 +313,12 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         };
         // the singles hit message on an opponent's shot: its kind and spot (ponytail: the hitter's position for the
         // shot's own spot, P11l6), and the dash after a dive
-        if singles && g.last_hitter >= 0 && g.last_hitter as usize & 1 != i & 1 {
-            if let Some(seen) = p.ai_seen[0] {
-                x.opp_kind = seen.kind;
-                x.last = b.opp[0];
-                x.heard_hit(seen.kind, row.style, &b);
-            }
+        if singles && g.last_hitter >= 0 && g.last_hitter as usize & 1 != i & 1
+            && let Some(seen) = p.ai_seen[0]
+        {
+            x.opp_kind = seen.kind;
+            x.last = b.opp[0];
+            x.heard_hit(seen.kind, row.style, &b);
         }
     }
     let mut early = me.early.take();

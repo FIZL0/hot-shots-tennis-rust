@@ -78,7 +78,7 @@ fn decode_with(d: &[u8], expand: bool) -> Result<Vec<Picture>, Error> {
         if clut_type & 0x3f == 1 {
             // 16-bit entries: the GS widens 5 bits to 8 by shifting, alpha from TEXA
             let n = raw_clut.len();
-            raw_clut = clut.chunks_exact(2).take(n).map(|c| u16::from_le_bytes([c[0], c[1]])).map(|v| {
+            raw_clut = clut.as_chunks::<2>().0.iter().take(n).map(|c| u16::from_le_bytes([c[0], c[1]])).map(|v| {
                 [((v & 31) << 3) as u8, ((v >> 5 & 31) << 3) as u8, ((v >> 10 & 31) << 3) as u8, if v & 0x8000 != 0 { 0x80 } else { 0 }]
             }).collect();
             if clut_type & 0x80 == 0 && image_type == 5 {

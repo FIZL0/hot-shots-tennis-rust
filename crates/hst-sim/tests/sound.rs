@@ -511,7 +511,7 @@ fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, 
     let (mut sure, mut chance, mut dives, mut quiet) = (0, 0, 0, 0);
     let (mut launches, mut whiffs) = (Vec::new(), Vec::new());
     let mut check = |k: usize, p: usize, want: Option<u8>, may: Option<u8>| {
-        let got: Vec<_> = (k..=k + 1).flat_map(|j| heard(j)).filter(|v| v.1 < 6).collect();
+        let got: Vec<_> = (k..=k + 1).flat_map(&heard).filter(|v| v.1 < 6).collect();
         assert!(got.len() <= 1, "frame {k}: {got:?}");
         match (got.first(), want, may) {
             (None, None, _) => quiet += (may.is_none()) as i32,
@@ -567,7 +567,7 @@ fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, 
     // and no shout; the recordings tell them apart by timing only
     let mut shouted = 0;
     for &(k, p) in whiffs.iter().filter(|w| w.0 + 10 < s.len()) {
-        let got: Vec<_> = (k + 8..=k + 10).flat_map(|j| heard(j)).filter(|v| v.1 < 7).collect();
+        let got: Vec<_> = (k + 8..=k + 10).flat_map(&heard).filter(|v| v.1 < 7).collect();
         let last = launches.iter().rev().find(|l| l.1 == p && l.0 < k).map_or(0, |l| l.0);
         let run = whiffs.iter().any(|&(j, q)| q == p && j < k && j > last);
         let theirs = launches.iter().rev().find(|l| l.0 < k).is_some_and(|l| l.1 & 1 != p & 1);

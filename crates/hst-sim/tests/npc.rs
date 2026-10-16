@@ -771,7 +771,7 @@ fn passing_ball_matches_the_game() {
         };
         let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         // a sample: vsync, match state, the object, its buffer (playing, route), controller, animation header, generator
-        let samples: Vec<&[u8]> = d[4..].chunks_exact(5 + 0x290 + 8 + 0x40 + 0x30 + 0x9d0).collect();
+        let samples: Vec<&[u8]> = d[4..].as_chunks::<{ 5 + 0x290 + 8 + 0x40 + 0x30 + 0x9d0 }>().0.iter().map(|s| s.as_slice()).collect();
         let mt = 5 + 0x290 + 8 + 0x40 + 0x30;
         let state = |s: &[u8]| {
             // the object, controller and header as tools/record_npc.py lays them out

@@ -112,7 +112,7 @@ fn footsteps(name: &str) {
     };
     let t = exe::Game::new(&cnf, &bin).unwrap().foot();
     let court = i(&data, 0) as usize;
-    let frames: Vec<&[u8]> = data[8..].chunks_exact(SIZE).collect();
+    let frames: Vec<&[u8]> = data[8..].as_chunks::<SIZE>().0.iter().map(|s| s.as_slice()).collect();
     let mut feet = state(frames[0]);
     let (mut steps, mut prints, mut checked, mut skipped, mut doubled, mut resets, mut wets, mut stalls) = (0, 0, 0, 0, 0, 0, 0, 0);
     for k in 1..frames.len() {
@@ -240,7 +240,7 @@ fn foot_extras_s05() {
         continue;
     };
     let court = i(&data, 0) as usize;
-    let frames: Vec<&[u8]> = data[8..].chunks_exact(EX + 4 * EXSZ).collect();
+    let frames: Vec<&[u8]> = data[8..].as_chunks::<{ EX + 4 * EXSZ }>().0.iter().map(|s| s.as_slice()).collect();
     let full = |fr: &[u8]| {
         let mut s = state(fr);
         let n = i(fr, RUN + 0x11c) as usize;
@@ -390,7 +390,7 @@ fn foot_debris_s05() {
         let court = i(&data, 0) as usize;
         // the dirt recording turns the court's grass off and clay on
         (t.courts[court].grass, t.courts[court].clay) = (kind == 1, kind == 0);
-        let frames: Vec<&[u8]> = data[8..].chunks_exact(ANCHOR + 0x100).collect();
+        let frames: Vec<&[u8]> = data[8..].as_chunks::<{ ANCHOR + 0x100 }>().0.iter().map(|s| s.as_slice()).collect();
         let (mut alive, mut skipped) = (0, 0);
         for k in 1..frames.len() {
             let (fr, prev, h) = (frames[k], frames[k - 1], &frames[k][RUN..]);
@@ -477,7 +477,7 @@ fn dive_inputs_s05() {
             eprintln!("foot_s05{name}.bin absent, skipped");
             continue;
         };
-        let frames: Vec<&[u8]> = data[8..].chunks_exact(EX + 4 * EXSZ).collect();
+        let frames: Vec<&[u8]> = data[8..].as_chunks::<{ EX + 4 * EXSZ }>().0.iter().map(|s| s.as_slice()).collect();
         for p in 0..4 {
             let (mut watch, mut until, mut seen) = (DiveWatch::default(), None, false);
             for fr in &frames {

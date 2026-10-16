@@ -155,8 +155,8 @@ fn ball_shadow_matches_the_game() {
     };
     let world = court::world(&mut iso, 10);
     let (mut exact, mut off, mut bad) = (0, 0, Vec::new());
-    for r in rec.chunks_exact(0x80) {
-        let f: Vec<f32> = r[0x10..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    for r in rec.as_chunks::<0x80>().0 {
+        let f: Vec<f32> = r[0x10..].as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect();
         let v = |k: usize| [f[k], f[k + 1], f[k + 2], f[k + 3]];
         let (pos, eye, normal) = (v(0), v(4), v(8));
         let want: Vec<u32> = f[12..28].iter().map(|x| x.to_bits()).collect();
@@ -290,7 +290,7 @@ fn ball_scale_and_outline_match_the_game() {
         return;
     };
     let (mut grown, mut bad) = (0, Vec::new());
-    for r in rec.chunks_exact(0x130) {
+    for r in rec.as_chunks::<0x130>().0 {
         let f = |o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
         let v = |o: usize| std::array::from_fn::<f32, 4, _>(|k| f(o + 4 * k));
         let (pos, eye, down, fov) = (v(0x10), v(0x20), v(0x40), f(0x50));
@@ -304,7 +304,7 @@ fn ball_scale_and_outline_match_the_game() {
         let got: Vec<u32> = m.as_flattened().iter().map(|x| x.to_bits()).collect();
         grown += (ball != scale) as usize;
         if ball.to_bits() != f(0xd0).to_bits() || s.to_bits() != f(0x120).to_bits() || got != want {
-            bad.push(format!("phase {phase} depth {depth} scale {ball}/{} outline {s}/{}\n  game {:?}\n  port {:?}", f(0xd0), f(0x120), &want, &got));
+            bad.push(format!("phase {phase} depth {depth} scale {ball}/{} outline {s}/{}\n  game {:?}\n  port {:?}", f(0xd0), f(0x120), want, got));
         }
     }
     eprintln!("{grown} frames grown");

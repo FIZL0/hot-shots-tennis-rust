@@ -27,7 +27,7 @@ const SIZE: usize = MARK + 0x40;
 fn flight_s05() {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let Ok(data) = std::fs::read(format!("{dir}/flight_s05.bin")) else { return eprintln!("flight_s05.bin absent, skipped") };
-    let frames: Vec<&[u8]> = data.chunks_exact(SIZE).collect();
+    let frames: Vec<&[u8]> = data.as_chunks::<SIZE>().0.iter().map(|s| s.as_slice()).collect();
     let (mut fl, mut glow) = (Flight::default(), Glow::default());
     let (mut starts, mut glows, mut checked) = (0, 0, 0);
     for (n, w) in frames.windows(2).enumerate() {

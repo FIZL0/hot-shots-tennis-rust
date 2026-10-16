@@ -81,7 +81,7 @@ fn sweep_case(s: &mut u64) -> (V4, V4, f32, V4, V4, f32) {
     };
     // sideways moves (in the plane) or a little across it
     let side: [f32; 3] = std::array::from_fn(|_| uni(s, -0.2, 0.2) * (rng(s) & 1) as f32);
-    let across = (side[0] * n[0] + side[1] * n[1] + side[2] * n[2]) * if rng(s) % 4 == 0 { 0.9 } else { 1.0 };
+    let across = (side[0] * n[0] + side[1] * n[1] + side[2] * n[2]) * if rng(s).is_multiple_of(4) { 0.9 } else { 1.0 };
     let side = [0, 1, 2].map(|k| side[k] - n[k] * across);
     let end = [0, 1, 2].map(|k| start[k] + n[k] * along + side[k]);
     let best = match rng(s) % 4 {

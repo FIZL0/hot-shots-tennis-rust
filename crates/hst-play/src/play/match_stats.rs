@@ -520,7 +520,7 @@ fn setup(
 /// hidden nodes too.
 fn pool(mut commands: Commands, g: Res<Game>, root: Query<Entity, (With<Root>, Without<Fade>)>, slots: Query<Entity, With<Slot>>) {
     for r in &root {
-        crate::ui_pool::keep(&mut commands, r, g.match_stats.result.is_some(), &slots, POOL, |i| (Slot(i), crate::ui_pool::quad()));
+        crate::ui_pool::keep(&mut commands, r, g.match_stats.result.is_some(), slots, POOL, |i| (Slot(i), crate::ui_pool::quad()));
     }
 }
 
@@ -829,6 +829,8 @@ fn draw_banner(
     }
 }
 
+impl super::snapshot::Wire for Serving {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -937,5 +939,3 @@ mod tests {
         assert_eq!((a[0], a[20], a[21], a[41], a[42]), (0, 102, 102, 0, 0));
     }
 }
-
-impl super::snapshot::Wire for Serving {}

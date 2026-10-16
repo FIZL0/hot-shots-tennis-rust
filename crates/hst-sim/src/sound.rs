@@ -611,7 +611,7 @@ pub fn reaction(call: u8, game: bool, applause: Option<bool>, errors: &mut u32) 
         6 => Some(Reaction { cheer: false, event: Some(1), chain: false }),
         _ if error => {
             *errors += 1;
-            Some(Reaction { cheer: false, event: Some(1), chain: *errors % 2 == 0 })
+            Some(Reaction { cheer: false, event: Some(1), chain: (*errors).is_multiple_of(2) })
         }
         _ => {
             *errors = 0;

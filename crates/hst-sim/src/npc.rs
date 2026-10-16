@@ -1320,7 +1320,7 @@ impl Trigger {
                         }
                         face = true;
                     }
-                    if self.node / n & 1 != 0 {
+                    if (self.node / n) & 1 != 0 {
                         i = n - 1 - i;
                     }
                 }

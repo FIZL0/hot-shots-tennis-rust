@@ -2507,7 +2507,7 @@ async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unb
     if let Some(ep) = cx.ep.as_ref().filter(|_| cx.relays) {
         let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
-    let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
+    let Some((conn, link, inbox, me)) = connect(cx, code, cmds).await else { return false };
     link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap() });
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
@@ -3253,7 +3253,7 @@ mod tests {
         };
         let modded = Pick { r#mod: Some(Box::new(w)), swap: true, random: true, ..Pick::disc(5, 2) };
         let mut r = room(false);
-        assert!(r.take("host", &[modded.clone()]));
+        assert!(r.take("host", std::slice::from_ref(&modded)));
         assert!(r.allowed(std::slice::from_ref(&modded)).is_ok());
         let v = r.ver;
         assert!(r.set_vanilla(true) && !r.set_vanilla(true));
@@ -3583,7 +3583,7 @@ mod tests {
             assert_eq!(found, ["AAAA", "BBBB"]);
             // the rest of the board taken: one more host isn't listed
             let json = serde_json::to_string(&listing("CCCC")).unwrap();
-            let free = (0..SLOTS).filter(|&i| i != first && i != sb.load(Relaxed)).map(|i| slot_name(i)).collect::<Vec<_>>();
+            let free = (0..SLOTS).filter(|&i| i != first && i != sb.load(Relaxed)).map(slot_name).collect::<Vec<_>>();
             n0_future::join_all(free.iter().map(|n| publish(&c, n, &json))).await;
             let full = AtomicUsize::new(SLOTS);
             assert!(list_in_slot(&c, &full, &listing("DDDD")).await.unwrap_err().contains("taken"));
@@ -4222,7 +4222,7 @@ mod tests {
             let ((hcx, hev), (acx, aev), (bcx, bev)) = (cx("Host").await, cx("Ann").await, cx("Bob").await);
             let (hcmd, mut hrx) = amp::unbounded_channel();
             let (acmd, mut arx) = amp::unbounded_channel();
-            let (bcmd, mut brx) = amp::unbounded_channel();
+            let (_bcmd, mut brx) = amp::unbounded_channel();
             let mut r = room(true);
             r.take("host", &[Pick::disc(0, 0)]);
             tokio::spawn(async move { host(&hcx, r, &mut hrx).await });

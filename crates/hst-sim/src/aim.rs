@@ -251,10 +251,10 @@ impl AiParams {
         let u = percent(roll);
         let away = if 0.0 < (F(l.opp[0]) * s).0 { 0 } else { 2 };
         if l.kind == contact::SMASH {
-            if md == 0 && od == 0 && chance(roll, 50) {
-                if let Some(stick) = body(l) {
-                    return Aim { stick, plan: plan::SMASH };
-                }
+            if md == 0 && od == 0 && chance(roll, 50)
+                && let Some(stick) = body(l)
+            {
+                return Aim { stick, plan: plan::SMASH };
             }
             let mut d = match od {
                 2 => (u < 10) as u8,

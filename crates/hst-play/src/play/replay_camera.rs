@@ -383,6 +383,8 @@ fn show(g: &mut Game, rc: &mut ReplayCamera, q: &Query<(&Figure, &Motion)>) {
     }
 }
 
+impl super::snapshot::Wire for ReplayCamera {}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -458,5 +460,3 @@ mod tests {
         assert_eq!(head(&data, &m), cutaway::bone(&p, &data, 0x10, 9.0, pos, "Bip01Head").unwrap(), "not the drawn clip");
     }
 }
-
-impl super::snapshot::Wire for ReplayCamera {}

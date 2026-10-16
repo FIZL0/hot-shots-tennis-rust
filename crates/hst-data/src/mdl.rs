@@ -328,7 +328,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                 let noise = if ph[0x56] != 0 {
                     let x = c.take((ph[0x57] as usize) << 4)?;
                     let num = x.get(6).map_or(0, |&n| if n == 0 { 256 } else { n as usize });
-                    x.get(8..).unwrap_or_default().chunks_exact(4).take(num).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+                    x.get(8..).unwrap_or_default().as_chunks::<4>().0.iter().take(num).map(|&b| f32::from_le_bytes(b)).collect()
                 } else {
                     Vec::new()
                 };
@@ -339,7 +339,7 @@ pub fn parse(d: &[u8]) -> Result<Model, Error> {
                     let n = if k >= 3 { size_at(b, 0x10)?.min(k - 3) } else { 0 };
                     morphs.push(
                         b.get(0x30..0x30 + n * 16).unwrap_or_default()
-                            .chunks_exact(16)
+                            .as_chunks::<16>().0.iter()
                             .map(|q| Ok((size_at(q, 12)?, [f32_at(q, 0), f32_at(q, 4), f32_at(q, 8)])))
                             .collect::<Result<_, Error>>()?,
                     );
@@ -464,7 +464,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                                 tri_start = pk.triangles.len();
                             }
                             1 => {
-                                for v in data.chunks_exact(16) {
+                                for v in data.as_chunks::<16>().0 {
                                     pk.vertices.push(Vertex {
                                         pos: [f32_at(v, 0), f32_at(v, 4), f32_at(v, 8)],
                                         color: [0x80; 4],
@@ -477,8 +477,8 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                                 for (v, uv) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(16)) {
                                     v.uv = [f32_at(uv, 0), f32_at(uv, 4)];
                                 }
-                                pk.uvs.extend(data.chunks_exact(16).map(|uv| [f32_at(uv, 0), f32_at(uv, 4)]));
-                                pk.uv_w.extend(data.chunks_exact(16).map(|uv| f32_at(uv, 12)));
+                                pk.uvs.extend(data.as_chunks::<16>().0.iter().map(|uv| [f32_at(uv, 0), f32_at(uv, 4)]));
+                                pk.uv_w.extend(data.as_chunks::<16>().0.iter().map(|uv| f32_at(uv, 12)));
                                 // the third vertex's UV w is the triangle's winding (VU1 culls by it, as the
                                 // collision sweep orients by it): ≥ 0 keeps strip order, else reversed
                                 for t in &mut pk.triangles[tri_start..] {
@@ -494,7 +494,7 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                     }
                     (3, 1, _) => {
                         let mut kick = Vec::new();
-                        pk.entry_flags.extend(data.chunks_exact(8).map(|nb| u16::from_le_bytes([nb[6], nb[7]])));
+                        pk.entry_flags.extend(data.as_chunks::<8>().0.iter().map(|nb| u16::from_le_bytes([nb[6], nb[7]])));
                         for (i, (v, nb)) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(8)).enumerate() {
                             let s = |o: usize| i16::from_le_bytes([nb[o], nb[o + 1]]);
                             v.normal = [s(0) as f32 / 16384.0, s(2) as f32 / 16384.0, s(4) as f32 / 16384.0];
@@ -505,14 +505,14 @@ fn decode_vif(d: &[u8]) -> Result<Packet, Error> {
                         for i in kick {
                             let i = i as u32;
                             // alternate winding along the strip so all faces keep one orientation
-                            pk.triangles.push(if (i - strip_start as u32) % 2 == 0 { [i - 2, i - 1, i] } else { [i - 1, i - 2, i] });
+                            pk.triangles.push(if (i - strip_start as u32).is_multiple_of(2) { [i - 2, i - 1, i] } else { [i - 1, i - 2, i] });
                         }
                     }
                     (3, 2, _) => {
                         for (v, c) in pk.vertices[strip_start..].iter_mut().zip(data.chunks_exact(4)) {
                             v.color = [c[0], c[1], c[2], c[3]];
                         }
-                        pk.colors.extend(data.chunks_exact(4).take(n).map(|c| [c[0], c[1], c[2], c[3]]));
+                        pk.colors.extend(data.as_chunks::<4>().0.iter().take(n).map(|c| [c[0], c[1], c[2], c[3]]));
                     }
                     (3, 0, true) => {
                         let c = row.map(|r| r.min(255) as u8);

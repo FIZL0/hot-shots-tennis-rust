@@ -80,7 +80,7 @@ impl Pop {
         self.alpha = 128;
         if self.popup == Popup::Swirl {
             self.n += 1;
-            if self.n % 3 == 0 {
+            if self.n.is_multiple_of(3) {
                 self.cell = (self.cell + 1) % 5;
             }
         }

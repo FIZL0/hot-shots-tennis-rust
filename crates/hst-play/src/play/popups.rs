@@ -1668,11 +1668,11 @@ fn setup_speed(mut commands: Commands, args: Res<Args>, mut images: ResMut<Asset
 fn tick_speed(g: Res<Game>, speed: Option<ResMut<Speed>>) {
     let Some(mut s) = speed else { return };
     s.tick();
-    if g.shots != std::mem::replace(&mut s.shots, g.shots) && g.shots > 0 && g.last_hitter >= 0 {
-        if matches!(g.finish.prev.1, 0 | 4) {
-            let right = g.players[g.last_hitter as usize].pos[0] < 0.0;
-            s.start(hst_sim::sound::kmh(g.flight.ball.vel), right);
-        }
+    if g.shots != std::mem::replace(&mut s.shots, g.shots) && g.shots > 0 && g.last_hitter >= 0
+        && matches!(g.finish.prev.1, 0 | 4)
+    {
+        let right = g.players[g.last_hitter as usize].pos[0] < 0.0;
+        s.start(hst_sim::sound::kmh(g.flight.ball.vel), right);
     }
 }
 

@@ -85,14 +85,14 @@ pub fn place(category: u8, pos: [f32; 3], yaw: f32, code: [u8; 4]) -> (M4, bool)
         if code[1] != 0 {
             let mut a = F(PI) * digit(code[1]) / STEPS;
             if a > HALF_PI {
-                a = a + NEG_PI;
+                a += NEG_PI;
             }
             m = mat_mul(&mat_mul(&IDENTITY, &rot_x(a.0)), &m);
         }
         if code[0] != 0 {
             let mut a = F(TWO_PI) * digit(code[0]) / STEPS;
             if a > PI {
-                a = a - TWO_PI;
+                a -= TWO_PI;
             } else if a < NEG_PI {
                 a = TWO_PI + a;
             }

@@ -463,7 +463,7 @@ fn step(
         for (_, t, row) in &mut npcs.triggers {
             heard.extend(t.hear(row, 0xe, false, phase, &mut npcs.near, &mut roll).into_iter().map(|s| (s, t.ty, t.pos3())));
             // B261: court 3's type 10 sounds at its reset here once every second game (the games so far even)
-            if t.ty == 10 && phase == 4 && games != 0 && games % 2 == 0 && games != npcs.games {
+            if t.ty == 10 && phase == 4 && games != 0 && games.is_multiple_of(2) && games != npcs.games {
                 heard.push((row.sound, t.ty, t.pos3()));
             }
         }
@@ -597,10 +597,10 @@ fn step(
             }
             let a = a.clamp(0.0, 1.0);
             // ponytail: at 0 hidden outright, not drawn see-through with its Z (the GS's Z write there not looked at)
-            if a == 0.0 {
-                if let Ok(mut v) = shown.get_mut(*e) {
-                    v.set_if_neq(Visibility::Hidden);
-                }
+            if a == 0.0
+                && let Ok(mut v) = shown.get_mut(*e)
+            {
+                v.set_if_neq(Visibility::Hidden);
             }
             // faded: the vertex alpha (material colour × a) as the GS alpha, blended (TFX MODULATE, ABE)
             for (h, alpha, key) in &npcs.fade[k].1 {
@@ -788,7 +788,7 @@ fn crowd_model(
         .map(|(h, m)| {
             let track = uva.tracks.iter().find(|tr| tr.name.strip_prefix("@mtluva_") == Some(&m.name));
             // the frame's key: the last at or before it
-            let at = |f: i32| track.and_then(|tr| tr.ticks.iter().rposition(|&k| k <= f * uva.ticks_per_frame as i32).map(|k| [tr.values[k][0], tr.values[k][1]]));
+            let at = |f: i32| track.and_then(|tr| tr.ticks.iter().rposition(|&k| k <= f * uva.ticks_per_frame).map(|k| [tr.values[k][0], tr.values[k][1]]));
             (h.clone(), (0..16).map(|f| at(f).unwrap_or([0.0; 2])).collect())
         })
         .collect()
@@ -985,7 +985,7 @@ impl Ambience {
     /// type 30's and 49's ring again as each ends until rung `rings` times, then the next ringing rings once more
     /// (1 to 4, round again).
     fn chime(&mut self, ty: u8, key: i32, frames: u32, mut play: impl FnMut(i32) -> u64, playing: impl Fn(u64) -> bool) {
-        if frames % 14400 == 0 && frames != 0 && self.chime.is_none() {
+        if frames.is_multiple_of(14400) && frames != 0 && self.chime.is_none() {
             (self.chime, self.rung) = (Some(play(key)), 1);
         }
         let Some(id) = self.chime else { return };

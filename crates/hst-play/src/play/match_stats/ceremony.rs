@@ -355,7 +355,7 @@ fn shout(c: &mut Ceremony, sound: Option<&Sound>) {
     let bit = pick(c.speaker, 1 + c.plan.lost as u8, 2);
     info!("ceremony voice: character {} program {} line {bit}", c.speaker, c.plan.lost as u8);
     if let (Some(s), Some(v)) = (sound, &c.voice) {
-        s.play_centre(v, sound::Play { slot: 1, program: c.plan.lost as u8, key: bit as u8, volume: 0x80, speed: 1.0 });
+        s.play_centre(v, sound::Play { slot: 1, program: c.plan.lost as u8, key: bit, volume: 0x80, speed: 1.0 });
     }
     let roll = &mut || c.court_rng.next();
     c.gallery.point(Reaction { cheer: true, event: Some(if c.plan.lost { 4 } else { 3 }), chain: true }, roll);

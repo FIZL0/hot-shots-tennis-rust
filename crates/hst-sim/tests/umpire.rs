@@ -122,7 +122,7 @@ fn run(name: &str, mid: bool) {
     let game = exe::Game::new(&cnf, &bin).unwrap();
     let timing = game.scoreboard_timing(0, 4);
     // the last sample of each game tick (a sample taken mid-tick shows the tick half done)
-    let mut ss: Vec<S> = data.chunks_exact(N).map(S).collect();
+    let mut ss: Vec<S> = data.as_chunks::<N>().0.iter().map(|s| S(s)).collect();
     ss.dedup_by(|b, a| a.tick() == b.tick() && {
         std::mem::swap(a, b);
         true
@@ -213,6 +213,6 @@ fn chair_c10() {
         return eprintln!("no ISO, skipped");
     };
     let at = hst_sim::court::umpire_chair(&mut iso, 10).unwrap();
-    let live = [6.515_601_2, -1.771_156_1, -0.010_923_3];
+    let live = [6.515_601, -1.771_156_1, -0.010_923_3];
     assert!((0..3).all(|k| (at[k] - live[k]).abs() < 1e-5), "{at:?}");
 }

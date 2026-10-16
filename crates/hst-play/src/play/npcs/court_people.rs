@@ -252,10 +252,10 @@ fn show(
             }
             let (_, since) = p.playing.unwrap();
             let l = &p.clips[k].1;
-            if let Some((head, Some(rest))) = p.head {
-                if let Ok(mut h) = nodes.get_mut(head) {
-                    h.rotation = rest;
-                }
+            if let Some((head, Some(rest))) = p.head
+                && let Ok(mut h) = nodes.get_mut(head)
+            {
+                h.rotation = rest;
             }
             l.pose((now - since) % l.length, &mut nodes);
         }

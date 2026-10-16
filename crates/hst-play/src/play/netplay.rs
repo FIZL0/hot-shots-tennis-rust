@@ -250,7 +250,7 @@ impl Netplay {
         *r ^= *r << 17;
         let t = self.lock.tick as u64 + s as u64 * 7;
         let dir = [0, 0x10, 0x20, 0x40, 0x80, 0x30, 0x60, 0xc0, 0x90][((t / 30).wrapping_mul(0x9e37_79b9) >> 7) as usize % 9];
-        let press = if *r % 20 == 0 { [0x1000, 0x2000, 0x4000, 0x8000][(*r >> 8) as usize % 4] } else { 0 };
+        let press = if (*r).is_multiple_of(20) { [0x1000, 0x2000, 0x4000, 0x8000][(*r >> 8) as usize % 4] } else { 0 };
         Pad { buttons: dir | press, ..IDLE }
     }
 }
@@ -869,7 +869,7 @@ mod tests {
             app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
             app.init_asset::<crate::gs::GsMaterial>();
             let chars = [0, 2, 1, 3].map(|s| room.seats[s].as_ref().unwrap().pick.char).to_vec();
-            app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: room.umpire, sets: 1, games: room.games as i32, pads: None });
+            app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: room.umpire, sets: 1, games: room.games, pads: None });
             // the computer plays the seats no person has (B151: started with open seats)
             let human = std::array::from_fn(|i| room.seats[i].as_ref().is_some_and(Seat::human));
             app.insert_resource(Pads { seats: Some(human), autoplay: false, ..default() });

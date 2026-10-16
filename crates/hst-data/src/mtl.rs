@@ -111,7 +111,7 @@ fn texture(h: &[u8], src: &mut Cursor) -> Result<Texture, Error> {
         }
     }
     let entries = i16::from_le_bytes([h[0], h[1]]).max(0) as usize;
-    let mut clut: Vec<[u8; 4]> = src.take(entries * 4)?.chunks_exact(4).map(|c| c.try_into().unwrap()).collect();
+    let mut clut: Vec<[u8; 4]> = src.take(entries * 4)?.as_chunks::<4>().0.to_vec();
     if entries == 256 {
         // CSM1 layout: entries 8..15 and 16..23 of every 32 are swapped
         for block in clut.chunks_mut(32) {

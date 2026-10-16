@@ -1024,11 +1024,11 @@ impl Rally {
                     me.index = ct.at as i32 - me.first;
                     me.kind = kind;
                 };
-                if row.style == style::BASE {
-                    if let Some(ct) = s.reach_search(None, 1, true, self.body, roll) {
-                        hit(self, ct, contact::REACH);
-                        found = true;
-                    }
+                if row.style == style::BASE
+                    && let Some(ct) = s.reach_search(None, 1, true, self.body, roll)
+                {
+                    hit(self, ct, contact::REACH);
+                    found = true;
                 }
                 if !found {
                     for tier in if self.low { 3 } else { 0 }..4 {
@@ -1039,11 +1039,11 @@ impl Rally {
                         }
                     }
                 }
-                if !found {
-                    if let Some((stand, ball, frames, index)) = self.smash_search(b, w, c, -1, 1) {
-                        (self.stand, self.ball, self.frames, self.index, self.kind) = (stand, ball, frames, index, contact::SMASH);
-                        found = true;
-                    }
+                if !found
+                    && let Some((stand, ball, frames, index)) = self.smash_search(b, w, c, -1, 1)
+                {
+                    (self.stand, self.ball, self.frames, self.index, self.kind) = (stand, ball, frames, index, contact::SMASH);
+                    found = true;
                 }
             }
             let _ = searched;
@@ -1405,11 +1405,11 @@ impl Rally {
             return Some(contact::SMASH);
         }
         let near = self.forward_ball(b, w) || (self.mate > 0 && abs(b.pos[2]) < abs(b.mate[2]));
-        if net || near {
-            if let Some(f) = self.volley_search(b, w, c, self.next, !net, self.body) {
-                take(self, f);
-                return Some(contact::VOLLEY);
-            }
+        if (net || near)
+            && let Some(f) = self.volley_search(b, w, c, self.next, !net, self.body)
+        {
+            take(self, f);
+            return Some(contact::VOLLEY);
         }
         let path = self.path(c);
         let s = Searcher {
@@ -1440,11 +1440,11 @@ impl Rally {
             }
         } else if self.fresh && !self.landing_short(c) {
             self.fresh = false;
-            if !net {
-                if let Some(ct) = s.reach_search(None, 1, true, self.body, roll) {
-                    hit(self, ct);
-                    return Some(contact::REACH);
-                }
+            if !net
+                && let Some(ct) = s.reach_search(None, 1, true, self.body, roll)
+            {
+                hit(self, ct);
+                return Some(contact::REACH);
             }
             for min in [1, 0] {
                 for tier in tiers.clone() {
@@ -1739,17 +1739,17 @@ impl Rally {
         let take = |me: &mut Rally, (stand, ball, frames, index): Found| {
             (me.stand, me.ball, me.frames, me.index) = (stand, ball, frames, index);
         };
-        if let Some(f) = self.smash_search(b, w, c, self.next, 0) {
-            if net || !(f.1[1] < b.reach.smash[1]) {
-                take(self, f);
-                return Some(contact::SMASH);
-            }
+        if let Some(f) = self.smash_search(b, w, c, self.next, 0)
+            && (net || !(f.1[1] < b.reach.smash[1]))
+        {
+            take(self, f);
+            return Some(contact::SMASH);
         }
-        if net {
-            if let Some(f) = self.volley_search(b, w, c, self.next, false, self.body) {
-                take(self, f);
-                return Some(contact::VOLLEY);
-            }
+        if net
+            && let Some(f) = self.volley_search(b, w, c, self.next, false, self.body)
+        {
+            take(self, f);
+            return Some(contact::VOLLEY);
         }
         if self.dash && sign(b.pos[2]) == sign(w.ball[2]) && !(abs(w.ball[2]) <= abs(b.pos[2])) {
             self.dash = false;
@@ -1774,11 +1774,11 @@ impl Rally {
         };
         let tiers = if self.low { 3 } else { 0 }..4;
         if self.dash {
-            if !net {
-                if let Some(f) = self.volley_search(b, w, c, self.next, true, self.body) {
-                    take(self, f);
-                    return Some(contact::VOLLEY);
-                }
+            if !net
+                && let Some(f) = self.volley_search(b, w, c, self.next, true, self.body)
+            {
+                take(self, f);
+                return Some(contact::VOLLEY);
             }
             let from = (self.next >= 0).then_some(self.next as usize);
             for tier in tiers {
@@ -1789,11 +1789,11 @@ impl Rally {
             }
         } else if self.fresh && !self.landing_short(c) {
             self.fresh = false;
-            if !net {
-                if let Some(ct) = s.reach_search(None, 1, true, self.body, roll) {
-                    hit(self, ct);
-                    return Some(contact::REACH);
-                }
+            if !net
+                && let Some(ct) = s.reach_search(None, 1, true, self.body, roll)
+            {
+                hit(self, ct);
+                return Some(contact::REACH);
             }
             for min in [1, 0] {
                 for tier in tiers.clone() {
@@ -2005,12 +2005,12 @@ impl Rally {
                 h.kind = contact::SMASH;
                 return;
             }
-            if h.volley {
-                if let Some((stand, _, _, at)) = self.volley_search(b, w, c, h.next, true, false) {
-                    put(w, at, contact::VOLLEY as i32, stand);
-                    h.kind = contact::VOLLEY;
-                    return;
-                }
+            if h.volley
+                && let Some((stand, _, _, at)) = self.volley_search(b, w, c, h.next, true, false)
+            {
+                put(w, at, contact::VOLLEY as i32, stand);
+                h.kind = contact::VOLLEY;
+                return;
             }
             for min in [1, 0] {
                 if let Some(ct) = s.tier_search(Some(h.next.max(0) as usize), 3, min, true, false, false, seen, roll) {

@@ -61,7 +61,7 @@ struct Replay {
 
 /// A `record_live.py` file as (vsync, live ball) samples.
 fn samples(data: &[u8]) -> Vec<(i32, &[u8])> {
-    data.chunks_exact(SAMPLE).map(|w| (i(w, 0), &w[4..4 + 0x290])).collect()
+    data.as_chunks::<SAMPLE>().0.iter().map(|w| (i(w, 0), &w[4..4 + 0x290])).collect()
 }
 
 /// Steps every recorded frame pair once against `court` and compares the next frame.
@@ -218,7 +218,7 @@ fn net_touch_words_match_the_game() {
             eprintln!("{name}.bin missing, skipped");
             continue;
         };
-        let s: Vec<(i32, &[u8], &[u8])> = data.chunks_exact(SIZE).map(|w| (i(w, 0), &w[4..0x294], &w[0x384..0x384 + 0x720])).collect();
+        let s: Vec<(i32, &[u8], &[u8])> = data.as_chunks::<SIZE>().0.iter().map(|w| (i(w, 0), &w[4..0x294], &w[0x384..0x384 + 0x720])).collect();
         let start = s.iter().position(|f| f.0 == poke + 1).expect("frame after the overwrite");
         let (mut fl, shot) = load(s[start].1);
         let mut words = BounceWords::default();
@@ -275,7 +275,7 @@ fn net_touch_keeps_the_predicted_contacts() {
     let Ok(data) = std::fs::read(format!("{root}/context/live/net_s05.bin")) else {
         return eprintln!("recording missing, skipped");
     };
-    let s: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    let s: Vec<&[u8]> = data.as_chunks::<SAMPLE>().0.iter().map(|s| s.as_slice()).collect();
     fn live(w: &[u8]) -> &[u8] {
         &w[4..4 + 0x290]
     }

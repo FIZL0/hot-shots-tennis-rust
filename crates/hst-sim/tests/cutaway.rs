@@ -26,7 +26,7 @@ fn cutaway_s05() {
     };
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let shots = Game::new(&cnf, &bin).unwrap().camera_shots();
-    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    let frames: Vec<&[u8]> = data.as_chunks::<SAMPLE>().0.iter().map(|s| s.as_slice()).collect();
     let vsync = |s: &[u8]| u32::from_le_bytes(s[0..4].try_into().unwrap());
     let (mut shot, mut prev): (Option<Shot>, Option<Shot>) = (None, None);
     let (mut n, mut worst, mut stale, mut court) = (0, 0.0f32, 0, 0.0f32);
@@ -90,7 +90,7 @@ fn debug_frame() {
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let shots = Game::new(&cnf, &bin).unwrap().camera_shots();
     let k: usize = std::env::var("K").unwrap().parse().unwrap();
-    let s = data.chunks_exact(SAMPLE).nth(k).unwrap();
+    let s = data.as_chunks::<SAMPLE>().0.get(k).unwrap();
     let number = s[CAM + 0x114];
     let table = |i: u8| mat(s, TAB + i as usize * 0x40);
     let mut sh = Shot::new(&shots, number, s[CAM + 0x50] == 0xff);
@@ -122,7 +122,7 @@ fn director_s05() {
     let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
     let lists = Game::new(&cnf, &bin).unwrap().cutaway_lists();
     let i32_ = |s: &[u8], o: usize| i32::from_le_bytes(s[o..o + 4].try_into().unwrap());
-    let samples: Vec<&[u8]> = data.chunks_exact(PL + 4 * 0x170).collect();
+    let samples: Vec<&[u8]> = data.as_chunks::<{ PL + 4 * 0x170 }>().0.iter().map(|s| s.as_slice()).collect();
     let mut runs = vec![0];
     for k in 1..samples.len() {
         if i32_(samples[k], 0) != i32_(samples[k - 1], 0) + 1 || samples[k][CAM + 0x114] != samples[k - 1][CAM + 0x114] {
@@ -202,7 +202,7 @@ fn prediction_s05() {
     };
     let i32_ = |s: &[u8], o: usize| i32::from_le_bytes(s[o..o + 4].try_into().unwrap());
     let v4 = |s: &[u8], o: usize| [0, 4, 8, 12].map(|d| f(s, o + d));
-    let samples: Vec<&[u8]> = data.chunks_exact(PL + 4 * 0x170).collect();
+    let samples: Vec<&[u8]> = data.as_chunks::<{ PL + 4 * 0x170 }>().0.iter().map(|s| s.as_slice()).collect();
     let cg_data = iso.read("PCDATA/PCCG0.XB").unwrap();
     let cg = Archive::parse(&cg_data).unwrap();
     let team = ["co01_f", "co02_f", "co03", "co04", "co05"];

@@ -43,12 +43,12 @@ pub struct Frame<'a>(pub &'a [u8]);
 
 /// Every whole sample in a fixture file.
 pub fn frames(data: &[u8]) -> Vec<Frame<'_>> {
-    data.chunks_exact(SAMPLE).map(Frame).collect()
+    data.as_chunks::<SAMPLE>().0.iter().map(|s| Frame(s)).collect()
 }
 
 /// Every whole sample of a recording with the live ball and rally block.
 pub fn frames_live(data: &[u8]) -> Vec<Frame<'_>> {
-    data.chunks_exact(SAMPLE_LIVE).map(Frame).collect()
+    data.as_chunks::<SAMPLE_LIVE>().0.iter().map(|s| Frame(s)).collect()
 }
 
 fn i32_at(b: &[u8], o: usize) -> i32 {

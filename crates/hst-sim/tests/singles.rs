@@ -46,7 +46,7 @@ fn singles_matches_the_game() {
         return eprintln!("ai_pos_singles.bin missing, skipped");
     };
     assert_eq!(u32::from_le_bytes(d[..4].try_into().unwrap()), N as u32 | 0x100);
-    let frames: Vec<Frame> = d[4 + 32 * N + 8..].chunks_exact(FRAME).map(Frame).collect();
+    let frames: Vec<Frame> = d[4 + 32 * N + 8..].as_chunks::<FRAME>().0.iter().map(|s| Frame(s)).collect();
     let (mut starts, mut afters, mut dashes, mut stops) = (0, 0, 0, 0);
     for w in frames.windows(2) {
         let (a, b) = (&w[0], &w[1]);

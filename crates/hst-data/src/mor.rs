@@ -41,7 +41,7 @@ pub fn parse(d: &[u8], width: usize) -> Result<Tracks, Error> {
         let (name, n) = (size(i32_at(th, 0))?, size(i32_at(th, 4))?);
         let name = take(name)?;
         let name = String::from_utf8_lossy(name.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
-        let ticks = take(4 * n)?.chunks_exact(4).map(|b| i32_at(b, 0)).collect();
+        let ticks = take(4 * n)?.as_chunks::<4>().0.iter().map(|b| i32_at(b, 0)).collect();
         let values = take(4 * width * n)?
             .chunks_exact(4 * width)
             .map(|b| std::array::from_fn(|k| if k < width { f32::from_le_bytes(b[4 * k..4 * k + 4].try_into().unwrap()) } else { 0.0 }))

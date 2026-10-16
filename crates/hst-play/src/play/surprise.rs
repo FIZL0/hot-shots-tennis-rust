@@ -222,6 +222,8 @@ fn place_balloons(
     }
 }
 
+impl super::snapshot::Wire for Pops {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +235,3 @@ mod tests {
         assert!((half_width(0.35, 2.0, 1.0) - 0.35 * 0.6).abs() < 1e-6);
     }
 }
-
-impl super::snapshot::Wire for Pops {}

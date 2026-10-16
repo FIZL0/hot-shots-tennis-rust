@@ -94,12 +94,12 @@ pub(super) fn run(w: &mut World) {
     }
     let pressed = presses(w);
     let skip = buttons(&mut w.resource_mut::<Game>(), pressed);
-    if skip > 0 {
-        if let Some(mut t) = w.get_resource_mut::<Time<Fixed>>() {
-            // the skipped ticks run before the next frame, without drawing
-            let step = t.timestep();
-            t.accumulate_overstep(step * skip as u32);
-        }
+    if skip > 0
+        && let Some(mut t) = w.get_resource_mut::<Time<Fixed>>()
+    {
+        // the skipped ticks run before the next frame, without drawing
+        let step = t.timestep();
+        t.accumulate_overstep(step * skip as u32);
     }
     let g = w.resource::<Game>();
     let (set_up, pending) = (g.instant.set_up, g.instant.pending && REPLAYS);
@@ -263,7 +263,7 @@ pub(super) fn bounce(g: &mut Game, at: [f32; 3], vel: [f32; 3]) {
 pub(super) fn point(g: &mut Game, team: usize, event: Option<Event>, call: u8) {
     let hitter = usize::try_from(g.last_hitter).ok();
     let p = Point {
-        players: g.rules.players as i32,
+        players: g.rules.players,
         awarded: event.is_some(),
         replaying: g.instant.replaying,
         allowed: g.instant.decision.allowed,
@@ -303,6 +303,24 @@ pub(super) fn point(g: &mut Game, team: usize, event: Option<Event>, call: u8) {
         bevy::log::info!("instant replay: {} shots, class {} kind {}, event {}, {:.0} km/h", p.shots, p.ball_kind, p.ball_sub, p.event, instant::speed_kmh(p.ball_vel));
     }
     g.instant.decision = d;
+}
+
+// a resync (`snapshot::encode`) keeps this machine's serve snapshot (the replay's start)
+/// The state the last serve set-up kept (B154b's resync sends it along).
+pub(super) fn serve(w: &World) -> Option<Arc<snapshot::Snapshot>> {
+    w.get_resource::<Recorder>().and_then(|r| r.serve.clone())
+}
+
+pub(super) fn set_serve(w: &mut World, s: Option<Arc<snapshot::Snapshot>>) {
+    if let Some(mut r) = w.get_resource_mut::<Recorder>() {
+        r.serve = s;
+    }
+}
+
+impl snapshot::Wire for Recorder {
+    fn local(&mut self, l: &Self) {
+        self.serve = l.serve.clone();
+    }
 }
 
 /// A bot-only singles match through the app, headless: the original replays a bot match's point only when it wins
@@ -459,23 +477,5 @@ pub(super) mod tests {
         assert!(!back.score.match_over && back.phase == Phase::Post);
         assert!(now.instant.replays == 1 && now.instant.asked == 1);
         same(back, &now);
-    }
-}
-
-// a resync (`snapshot::encode`) keeps this machine's serve snapshot (the replay's start)
-/// The state the last serve set-up kept (B154b's resync sends it along).
-pub(super) fn serve(w: &World) -> Option<Arc<snapshot::Snapshot>> {
-    w.get_resource::<Recorder>().and_then(|r| r.serve.clone())
-}
-
-pub(super) fn set_serve(w: &mut World, s: Option<Arc<snapshot::Snapshot>>) {
-    if let Some(mut r) = w.get_resource_mut::<Recorder>() {
-        r.serve = s;
-    }
-}
-
-impl snapshot::Wire for Recorder {
-    fn local(&mut self, l: &Self) {
-        self.serve = l.serve.clone();
     }
 }

@@ -335,6 +335,14 @@ fn draw_bits(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>
     fill(&mut meshes, empty, vec![], vec![], vec![], vec![]);
 }
 
+// a resync's state (`snapshot::encode`) keeps this machine's drawing entities and handles
+impl super::snapshot::Wire for FootFx {
+    fn local(&mut self, l: &Self) {
+        (self.dry_puffs, self.wet_puffs, self.prints, self.bits) = (l.dry_puffs.clone(), l.wet_puffs.clone(), l.prints.clone(), l.bits.clone());
+        self.dash.iter_mut().zip(&l.dash).for_each(|(d, l)| d.1 = l.1.clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -384,13 +392,5 @@ mod tests {
         }
         eprintln!("{replays} replay ticks, {close} on close-ups, {steps} footsteps");
         assert!(close > 0 && steps > 0, "no footstep on a close-up");
-    }
-}
-
-// a resync's state (`snapshot::encode`) keeps this machine's drawing entities and handles
-impl super::snapshot::Wire for FootFx {
-    fn local(&mut self, l: &Self) {
-        (self.dry_puffs, self.wet_puffs, self.prints, self.bits) = (l.dry_puffs.clone(), l.wet_puffs.clone(), l.prints.clone(), l.bits.clone());
-        self.dash.iter_mut().zip(&l.dash).for_each(|(d, l)| d.1 = l.1.clone());
     }
 }

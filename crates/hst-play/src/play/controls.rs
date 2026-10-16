@@ -504,7 +504,7 @@ mod tests {
         let slot = |key: Option<KeyCode>, pad: Option<GamepadButton>| {
             let mut w = World::new();
             let mut keys = ButtonInput::<KeyCode>::default();
-            key.map(|k| keys.press(k));
+            if let Some(k) = key { keys.press(k) }
             w.insert_resource(keys);
             w.insert_resource(super::super::Pads::default());
             w.init_resource::<Bindings>();

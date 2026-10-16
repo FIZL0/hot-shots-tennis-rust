@@ -461,10 +461,10 @@ struct Cached {
 pub fn list(fresh: bool) {
     let shown = |c: Cached| c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id) && !retired(e)).collect::<Vec<_>>();
     let cached = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok());
-    if !fresh {
-        if let Some(c) = cached.as_ref().filter(|c| now().saturating_sub(c.at) < CACHE_SECS) {
-            return send(Event::Listing(Ok(shown(Cached { at: c.at, entries: c.entries.clone() }))));
-        }
+    if !fresh
+        && let Some(c) = cached.as_ref().filter(|c| now().saturating_sub(c.at) < CACHE_SECS)
+    {
+        return send(Event::Listing(Ok(shown(Cached { at: c.at, entries: c.entries.clone() }))));
     }
     spawn(async move {
         match lists().await {
@@ -1370,7 +1370,7 @@ mod tests {
         let m = rt.block_on(ranged(&e, root, false)).unwrap();
         let files = modfs::files_under(&m.dir);
         let mb = files.iter().map(|f| f.1.len()).sum::<usize>() >> 20;
-        let fetched = take().into_iter().filter_map(|e| if let Event::Progress(_, p) = e { Some(p) } else { None }).last().unwrap();
+        let fetched = take().into_iter().filter_map(|e| if let Event::Progress(_, p) = e { Some(p) } else { None }).next_back().unwrap();
         eprintln!("{} files, {mb} MB kept of a {} MB zip; last progress: {fetched}", files.len(), e.meta.size >> 20);
         assert!(files.iter().all(|f| !f.0.contains("/textures/upscaled/")) && files.iter().any(|f| f.0.ends_with(".glb")));
         assert!(mb < 64);
@@ -1860,11 +1860,11 @@ mod tests {
         let mut failed = 0;
         while left > 0 {
             for e in take() {
-                if let Event::Upload(d, up) = e {
-                    if up != Up::Uploading {
-                        (left, failed) = (left - 1, failed + matches!(up, Up::Failed(_)) as usize);
-                        eprintln!("{}: {up:?}", d.display());
-                    }
+                if let Event::Upload(d, up) = e
+                    && up != Up::Uploading
+                {
+                    (left, failed) = (left - 1, failed + matches!(up, Up::Failed(_)) as usize);
+                    eprintln!("{}: {up:?}", d.display());
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));

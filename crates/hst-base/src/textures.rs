@@ -354,9 +354,9 @@ fn reload(time: Res<Time>, mut next: Local<f32>, mut scan: Local<Option<Task<Sca
         };
         info!("textures: reloaded {}", s.o.mods[&key].0.display());
         for &id in ids {
-            if let Some(mut img) = images.get_mut(id) {
+            if let Some(img) = images.get_mut(id) {
                 let disc = img.size_f32() / s.scale.get(&id).copied().unwrap_or(Vec2::ONE);
-                apply(&mut img, r.clone());
+                apply(img, r.clone());
                 s.scale.insert(id, img.size_f32() / disc);
             }
         }

@@ -157,7 +157,10 @@ pub fn files_under(p: &Path) -> Vec<(String, Arc<[u8]>)> {
 /// Writes file `p` of an installed mod: in memory in the browser (the page stores it), else on disk.
 pub fn write(p: &Path, b: Vec<u8>) -> Result<(), String> {
     if cfg!(target_arch = "wasm32") {
-        return Ok(add(p, b.into()));
+        return {
+            add(p, b.into());
+            Ok(())
+        };
     }
     std::fs::write(p, b).map_err(|e| format!("can't write {}: {e}", p.display()))
 }
@@ -232,7 +235,10 @@ pub fn unpack(zip: &[u8]) -> Result<Files, String> {
 #[cfg(any(test, feature = "testing"))]
 fn unpack_capped(zip: &[u8], max_file: usize, max_total: usize) -> Result<Files, String> {
     let mut out = Vec::new();
-    now(unpack_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), |_| true, |n, b| Ok(out.push((n.to_string(), b))), max_file, max_total))?;
+    now(unpack_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), |_| true, |n, b| {
+        let _: () = out.push((n.to_string(), b));
+        Ok(())
+    }, max_file, max_total))?;
     Ok(out)
 }
 
@@ -538,7 +544,10 @@ pub async fn install_with<F: Future<Output = Result<Vec<u8>, String>>>(
         let put = |n: &str, b: Vec<u8>| {
             let p = stage.join(n);
             if !disk {
-                return Ok(add(&p, b.into()));
+                return {
+                    add(&p, b.into());
+                    Ok(())
+                };
             }
             std::fs::create_dir_all(p.parent().unwrap()).and_then(|_| std::fs::write(&p, b)).map_err(|e| format!("can't write {}: {e}", p.display()))
         };
