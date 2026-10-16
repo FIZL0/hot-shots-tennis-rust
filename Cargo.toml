@@ -4,7 +4,9 @@ members = ["crates/*"]
 
 [profile.dev]
 debug = "line-tables-only"  # panics keep file:line; full debug info made every build and link of the game slower
+split-debuginfo = "unpacked"  # P59: debug info stays in the .o/.dwo files, not re-linked into every test binary
 [profile.dev.package."*"]
+debug = false  # P59: dependencies without line tables: hst's test binary 772 → 205 MB, links ~35% faster
 opt-level = 3
 # tests play whole matches: optimised game crates run them 3-4x faster for about the same rebuild time
 # (f32 results don't depend on opt-level: no fast-math in Rust)
@@ -17,8 +19,10 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.ps2-oracle]
 opt-level = 3
+debug = "line-tables-only"  # ours (git dependency): keeps file:line past the "*" above
 [profile.dev.package.ps2-float]
 opt-level = 3
+debug = "line-tables-only"  # ours (git dependency): keeps file:line past the "*" above
 [profile.dev.package.hst]
 opt-level = 1
 
