@@ -498,7 +498,7 @@ fn stand_sides_match_the_game() {
         return eprintln!("disc or ai_side_s05.bin missing, skipped");
     };
     let table = AiParams::table(&csv);
-    let recs: Vec<&[u8]> = d.chunks_exact(0x50).collect();
+    let recs: Vec<&[u8]> = d.as_chunks::<0x50>().0.iter().map(|s| s.as_slice()).collect();
     let int = |b: &[u8], o: usize| word(b, o) as i32;
     let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
     let (mut checked, mut ran, mut kept_nearer_on_roll) = (0, 0, 0);
@@ -546,8 +546,8 @@ fn aims_match_the_game() {
     let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
     let at = |b: &[u8], o: usize| [f(b, o), f(b, o + 4)];
     let mut kinds = [0; 5];
-    let recs: Vec<&[u8]> = d.chunks_exact(0xc90).collect();
-    for w in recs.chunks_exact(2) {
+    let recs: Vec<&[u8]> = d.as_chunks::<0xc90>().0.iter().map(|s| s.as_slice()).collect();
+    for w in recs.as_chunks::<2>().0 {
         let (a, b) = (w[0], w[1]);
         assert_eq!((word(a, 0), word(b, 0) & 0x10, word(a, 8)), (3, 0x10, word(b, 8)), "unpaired at vsync {}", word(a, 4));
         let ai = &a[0x10..0x290];
@@ -588,8 +588,8 @@ fn singles_aims_match_the_game() {
     let f = |b: &[u8], o: usize| f32::from_bits(word(b, o) as u32);
     let at = |b: &[u8], o: usize| [f(b, o), f(b, o + 4)];
     let (mut seen, mut opp) = ([[0; 5]; 2], [0; 5]);
-    let recs: Vec<&[u8]> = d.chunks_exact(0xc90).collect();
-    for w in recs.chunks_exact(2) {
+    let recs: Vec<&[u8]> = d.as_chunks::<0xc90>().0.iter().map(|s| s.as_slice()).collect();
+    for w in recs.as_chunks::<2>().0 {
         let (a, b) = (w[0], w[1]);
         let tag = word(a, 0);
         assert!((1..=2).contains(&tag) && word(b, 0) == 0x10 && word(a, 8) == word(b, 8), "unpaired at vsync {}", word(a, 4));

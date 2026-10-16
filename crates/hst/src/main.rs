@@ -290,6 +290,7 @@ fn dev_env() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "android", allow(dead_code))] // the bin's entry; the Android .so (the `hst` example) starts at `android_main`
 fn main() {
     dev_env();
     handshake::set_build(BUILD_ID);
@@ -852,10 +853,10 @@ fn load(
         if envir.is_some() {
             commands.insert_resource(look);
         }
-        if let (Some((frame, hole)), Some(_)) = (shade_frame, sun) {
-            if let Some((model, mats)) = raw_models.get(&hole) {
-                commands.insert_resource(shade::build(frame, &shade_casters, model, mats, hst_sim::court::world(&mut iso, n)));
-            }
+        if let (Some((frame, hole)), Some(_)) = (shade_frame, sun)
+            && let Some((model, mats)) = raw_models.get(&hole)
+        {
+            commands.insert_resource(shade::build(frame, &shade_casters, model, mats, hst_sim::court::world(&mut iso, n)));
         }
         // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
         if args.singles {
@@ -1122,7 +1123,7 @@ fn cutout_mips(t: &mtl::Texture) -> Option<Vec<Vec<u8>>> {
                     acc[3] += p[3] as u32;
                 }
                 let o = &mut next[(y * nw + x) * 4..][..4];
-                (0..3).for_each(|i| o[i] = if acc[3] == 0 { 0 } else { ((acc[i] + acc[3] / 2) / acc[3]) as u8 });
+                (0..3).for_each(|i| o[i] = (acc[i] + acc[3] / 2).checked_div(acc[3]).unwrap_or(0) as u8);
                 o[3] = ((acc[3] + 2) / 4) as u8;
             }
         }
@@ -1317,6 +1318,7 @@ fn log_fps(time: Res<Time<Real>>, mut acc: Local<(u32, f32, f32, f32)>, mut dts:
         stall::diag!("{}", frame_spread(&mut dts));
         dts.clear();
         // the process's CPU time (all threads) per frame: steadier than fps on a busy machine
+        #[cfg(not(target_os = "ios"))]
         let cpu = std::fs::read_to_string("/proc/self/stat").ok().and_then(|s| {
             let f: Vec<u64> = s.rsplit_once(')')?.1.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
             Some(f.iter().sum::<u64>() as f32 * 10.0)
@@ -1428,7 +1430,7 @@ fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut
         }
         _ => {
             if let Some(path) = what.strip_prefix("shot=") {
-                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.to_string()));
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(std::path::PathBuf::from(path)));
             }
             return;
         }

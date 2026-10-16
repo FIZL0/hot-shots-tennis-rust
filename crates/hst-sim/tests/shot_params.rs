@@ -17,7 +17,7 @@ fn built_table_equals_the_games_runtime_table() {
     };
     let src = Game::new(&cnf, &bin).unwrap().shot_params();
     let built = ShotParams::build(&src.base, &src.kinds, &src.weights, src.middle_mix);
-    let want: Vec<f32> = ram.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+    let want: Vec<f32> = ram.as_chunks::<4>().0.iter().map(|&c| f32::from_le_bytes(c)).collect();
     let mut checked = 0;
     for class in 0..4 {
         for kind in 0..src.kinds[class] as usize {

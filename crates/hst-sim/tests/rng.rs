@@ -214,10 +214,10 @@ fn sound_draws_like_the_game() {
     let rolls = |s: &[u8]| -> Vec<u32> { (0..SPARKS).flat_map(|i| (0..0x13).map(move |k| ROLLS + 0x50 * i + 4 * k)).map(|o| u(s, o)).collect() };
     let mine = |t: &[Roll; SPARKS]| -> Vec<u32> { t.iter().flat_map(|r| r.turn.concat().into_iter().chain(r.u)).map(f32::to_bits).collect() };
     let parts = |s: &[u8]| -> [Spark; SPARKS] { std::array::from_fn(|i| Spark { life: if u(s, PARTS + 0x40 * i) != 0 { u(s, PARTS + 0x40 * i + 0x34) as i32 } else { 0 }, ..Spark::default() }) };
-    let frames: Vec<&[u8]> = d.chunks_exact(MT + 0x9d0).collect();
+    let frames: Vec<&[u8]> = d.as_chunks::<{ MT + 0x9d0 }>().0.iter().map(|s| s.as_slice()).collect();
     // rng_s05: vsync → (rand(), shared generator)
     let rng: std::collections::HashMap<u32, (Rand, Mt)> = r
-        .chunks_exact(12 + 4 * 0x9d0)
+        .as_chunks::<{ 12 + 4 * 0x9d0 }>().0.iter()
         .map(|s| (u(s, 0), (Rand(u64::from_le_bytes(s[4..12].try_into().unwrap())), Mt::from_ram(&s[12..]))))
         .collect();
     let f0 = frames[0];
@@ -414,18 +414,18 @@ fn shared_draws_like_the_game() {
             let (u0, u1) = (draw(), draw());
             assert_eq!((uniform(u0), uniform(u1)), (u(bb, 0x258), u(bb, 0x25c)), "vsync {v}: the launch's uniforms");
         }
-        for p in 0..4 {
+        for (p, voice) in voices.iter_mut().enumerate().take(4) {
             if pb(b, p, 0x3ec1) == 3 && pb(a, p, 0x3ec1) != 3 {
-                voices[p].shout(p, sound::DIVE_SHOUT, 4, draw() >> 16 & 0x7fff);
+                voice.shout(p, sound::DIVE_SHOUT, 4, draw() >> 16 & 0x7fff);
                 tally[4] += 1;
             }
         }
         if (0..4).any(|p| pi(a, p, 0x3db0) == 0 && pi(b, p, 0x3db0) != 0) {
             let mut taken = Vec::new();
-            for p in 0..4 {
+            for (p, &ch) in chars.iter().enumerate().take(4) {
                 let want = pi(b, p, 0x3db0);
                 let base = if want >= 0x30 { 0x2c } else { want };
-                let id = motion::team_reaction(base, chars[p], &taken, |m| (draw() >> 16 & 0x7fff) % m);
+                let id = motion::team_reaction(base, ch, &taken, |m| (draw() >> 16 & 0x7fff) % m);
                 assert_eq!(id, want, "vsync {v}: player {p}'s team reaction");
                 if id >= 0x30 {
                     taken.push(id - 0x30);
@@ -484,7 +484,7 @@ fn post_views(d: &[u8]) -> std::collections::HashMap<u32, PostView> {
     const PL: usize = 0x70;
     let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let v4 = |b: &[u8], o: usize| -> [f32; 4] { std::array::from_fn(|k| f32::from_bits(u(b, o + 4 * k))) };
-    d.chunks_exact(H + 4 * PL)
+    d.as_chunks::<{ H + 4 * PL }>().0.iter()
         .map(|r| {
             let players = (0..4)
                 .map(|k| {
@@ -553,7 +553,7 @@ fn setup_draws_like_the_game() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let (Ok(d), Ok(mut iso)) = (
         std::fs::read(format!("{root}/context/p3d3/setup_ram.bin")),
-        hst_data::iso::Iso::open(&format!("{root}/Hot Shots Tennis (USA).iso")),
+        hst_data::iso::Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")),
     ) else {
         return eprintln!("setup_ram.bin or the ISO missing, skipped");
     };
@@ -576,8 +576,8 @@ fn setup_draws_like_the_game() {
     let inv = (0..63).fold((1u64, A), |(x, b), _| (x.wrapping_mul(b), b.wrapping_mul(b))).0;
     const SIZE: usize = 20 + 8 + 32 + 8 + 0x9d0 + 68 + 65 * 8;
     assert!(d.len() >= SIZE * 5);
-    for (s, chars) in d.chunks_exact(SIZE).map(|s| (s, [0, 1, 2, 3])).chain(same.chunks_exact(SIZE + 16).map(|s| {
-        (s, std::array::from_fn(|k| u32::from_le_bytes(s[SIZE + 4 * k..][..4].try_into().unwrap())))
+    for (s, chars) in d.as_chunks::<SIZE>().0.iter().map(|s| (s.as_slice(), [0, 1, 2, 3])).chain(same.as_chunks::<{ SIZE + 16 }>().0.iter().map(|s| {
+        (s.as_slice(), std::array::from_fn(|k| u32::from_le_bytes(s[SIZE + 4 * k..][..4].try_into().unwrap())))
     })) {
         let u = |o: usize| u32::from_le_bytes(s[o..o + 4].try_into().unwrap());
         let (court, players, games, sets, match_seed) = (u(0), u(4) as usize, u(8), u(12), u(16));
@@ -649,7 +649,7 @@ fn rand_draws_like_the_game() {
         ours.iter().map(|&k| timer(&a, k) - timer(&b, k)).filter(|&d| d >= 0).max()
     };
     // both recordings' frames
-    let vs: Vec<u32> = rng.chunks_exact(12 + 4 * 0x9d0).map(|s| u(s, 0)).filter(|&v| ticks(v).is_some() && sample(v + 1).is_some()).collect();
+    let vs: Vec<u32> = rng.as_chunks::<{ 12 + 4 * 0x9d0 }>().0.iter().map(|s| u(s, 0)).filter(|&v| ticks(v).is_some() && sample(v + 1).is_some()).collect();
     assert!(vs.windows(2).all(|w| w[1] == w[0] + 1), "contiguous frames");
     let (start, _) = sample(vs[0]).unwrap();
     let mut g = Rngs::new(start, Mt::new(1));
@@ -697,7 +697,7 @@ fn setup_rand_like_the_game() {
     };
     let low = |r: &Rand| r.0 as u32;
     let find = |mut r: Rand, w: u32, max: usize| (0..max).find(|_| low(&r) == w || { r.next(); false }).map(|_| r);
-    for rec in d.chunks_exact(12) {
+    for rec in d.as_chunks::<12>().0 {
         let [seed, effects, point] = std::array::from_fn(|k| u32::from_le_bytes(rec[4 * k..4 * k + 4].try_into().unwrap()));
         let mut r = find(Rand::default(), seed, 1 << 20).expect("the seed's state from boot");
         let mt = Mt::new(r.next());
@@ -726,7 +726,7 @@ fn menu_flame_draws_like_the_game() {
         };
         // records: vsync, caller, s0, gm+0x54, rand()'s low word before the call, match frame
         let rec: Vec<[u32; 6]> =
-            d.chunks_exact(24).map(|c| std::array::from_fn(|k| u32::from_le_bytes(c[4 * k..4 * k + 4].try_into().unwrap()))).collect();
+            d.as_chunks::<24>().0.iter().map(|c| std::array::from_fn(|k| u32::from_le_bytes(c[4 * k..4 * k + 4].try_into().unwrap()))).collect();
         let seed = rec.iter().position(|x| x[1] == 0x322f1c).expect("the match seed");
         let low = |r: &Rand| r.0 as u32;
         let mut r = Rand::default();
@@ -736,12 +736,12 @@ fn menu_flame_draws_like_the_game() {
         // the frame loop's calls (the spawn's own, made from a helper, carry other s0s)
         let mut ends = vec![];
         let mut prev = 0;
-        for k in first..seed {
-            if (0x37ba20..0x37c2ac).contains(&rec[k][1]) {
-                if rec[k][2] < prev {
+        for (k, r) in rec.iter().enumerate().take(seed).skip(first) {
+            if (0x37ba20..0x37c2ac).contains(&r[1]) {
+                if r[2] < prev {
                     ends.push(k);
                 }
-                prev = rec[k][2];
+                prev = r[2];
             }
         }
         ends.push(seed);
@@ -770,7 +770,7 @@ fn intro_ticks_like_the_game() {
         return eprintln!("intro.bin missing, skipped");
     };
     let low = |r: &Rand| r.0 as u32;
-    for rec in d.chunks_exact(16) {
+    for rec in d.as_chunks::<16>().0 {
         let [court, players, start, point] = std::array::from_fn(|k| u32::from_le_bytes(rec[4 * k..4 * k + 4].try_into().unwrap()));
         let mut r = Rand::default();
         while low(&r) != start {
@@ -834,7 +834,7 @@ fn clouds_remade_like_the_game() {
     let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
     // records: vsync, caller, s0, gm+0x54, rand()'s low word before the call, match frame
-    let rec: Vec<[u32; 6]> = d.chunks_exact(24).map(|c| std::array::from_fn(|k| u(c, 4 * k))).collect();
+    let rec: Vec<[u32; 6]> = d.as_chunks::<24>().0.iter().map(|c| std::array::from_fn(|k| u(c, 4 * k))).collect();
     let low = |r: &Rand| r.0 as u32;
     let points: Vec<usize> = (0..rec.len()).filter(|&k| rec[k][1] == 0x324ca0).collect();
     let mut r = Rand(u64::from_le_bytes(rng[4..12].try_into().unwrap()));
@@ -870,7 +870,7 @@ fn clouds_remade_like_the_game() {
         }
         let ours = clouds::spawn(&draws, models.len(), [y0 * 40.0, y1 * 40.0]);
         assert_eq!(ours.len() * 0x1e0, list.len());
-        for (i, (a, b)) in ours.iter().zip(list.chunks_exact(0x1e0)).enumerate() {
+        for (i, (a, b)) in ours.iter().zip(list.as_chunks::<0x1e0>().0).enumerate() {
             assert_eq!(a.pos[1].to_bits(), f(b, 0x154).to_bits(), "weather {w}, cloud {i}: y");
             assert_eq!(models[a.model], u(b, 0x1b4), "weather {w}, cloud {i}: model");
             assert!((a.pos[0] - f(b, 0x150)).abs() < 5.0 && (a.pos[2] - f(b, 0x158)).abs() < 5.0, "weather {w}, cloud {i}: x, z");

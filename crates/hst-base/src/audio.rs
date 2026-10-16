@@ -170,7 +170,7 @@ fn pcm_frames(d: &[u8]) -> Option<(Vec<i16>, usize, u32)> {
     let ((1, ch @ 1.., rate @ 1.., 16), Some(data)) = (fmt?, data) else { return None };
     let ch = ch as usize;
     let whole = data.len() / (2 * ch) * 2 * ch;
-    Some((data[..whole].chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]])).collect(), ch, rate))
+    Some((data[..whole].as_chunks::<2>().0.iter().map(|s| i16::from_le_bytes([s[0], s[1]])).collect(), ch, rate))
 }
 
 /// The tone every disc voice take keys on (all 14 characters' banks): set volume 127, tone volume 127, centred,
@@ -181,7 +181,7 @@ const VOICE_TONE: snd::Tone = snd::Tone { raw: [0, 0, 0, 0, 0, 0, 0xff, 0x80, 0x
 /// like a disc tone's (`snd::pitch`).
 fn wav_pitch(rate: u32, scale: u32) -> u16 {
     let base = (rate as u64 * 4096 + 24_000) / 48_000;
-    ((scale & 0xffff) as u64 * base >> 12) as u16
+    (((scale & 0xffff) as u64 * base) >> 12) as u16
 }
 
 /// The MIDI file in archive `xb`.
@@ -1445,7 +1445,7 @@ mod tests {
         }
         let (lo, hi) = all.iter().fold((f32::MAX, 0f32), |(l, h), &r| (l.min(r), h.max(r)));
         assert!((lo..=hi).contains(&Track::AMBIENCE_RMS), "{lo}..{hi}");
-        assert!(Track::AMBIENCE_RMS < Track::BGM_RMS / 3.0);
+        const { assert!(Track::AMBIENCE_RMS < Track::BGM_RMS / 3.0) };
     }
 
     /// P0b4c: umpire 4 a's clips as the match times them (`centre_frames`), the lengths behind the slot-5 voice

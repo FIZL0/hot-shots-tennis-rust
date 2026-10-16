@@ -337,7 +337,7 @@ pub fn solid(c: &Court, singles: bool) -> Vec<[Vec3; 3]> {
             let Some(pos) = r.read_positions() else { continue };
             let pos: Vec<Vec3> = pos.map(|v| m.transform_point3(Vec3::from(v))).collect();
             let idx: Vec<u32> = r.read_indices().map_or_else(|| (0..pos.len() as u32).collect(), |i| i.into_u32().collect());
-            out.extend(idx.chunks_exact(3).filter_map(|t| Some([*pos.get(t[0] as usize)?, *pos.get(t[1] as usize)?, *pos.get(t[2] as usize)?])));
+            out.extend(idx.as_chunks::<3>().0.iter().filter_map(|t| Some([*pos.get(t[0] as usize)?, *pos.get(t[1] as usize)?, *pos.get(t[2] as usize)?])));
         }
     }
     out

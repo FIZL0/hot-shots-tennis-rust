@@ -189,10 +189,10 @@ fn steps(g: &mut Game, feet: &Feet, states: &[u8; 4]) {
     let look = [x, y, z, 0.0];
     let view = super::reaction_voices::matrix(&v);
     let focal = 240.0 / hst_sim::musl::tanf(v.fov);
-    for i in 0..g.players.len() {
+    for (i, &state) in states.iter().enumerate().take(g.players.len()) {
         let p = &g.players[i];
         let at = [p.pos[0], p.pos[1], p.pos[2], 1.0];
-        for _ in feet.stepped[i].iter().filter(|&&s| s && states[i] == 1 && hst_sim::sound::step_heard(eye, look, &view, focal, at)) {
+        for _ in feet.stepped[i].iter().filter(|&&s| s && state == 1 && hst_sim::sound::step_heard(eye, look, &view, focal, at)) {
             debug!("replay footstep, player {i}");
             g.whooshes.push((0, i, hst_sim::sound::step(crate::weather::now())));
         }
@@ -335,6 +335,14 @@ fn draw_bits(fx: Option<Res<FootFx>>, cam: Query<&Transform, With<crate::Orbit>>
     fill(&mut meshes, empty, vec![], vec![], vec![], vec![]);
 }
 
+// a resync's state (`snapshot::encode`) keeps this machine's drawing entities and handles
+impl super::snapshot::Wire for FootFx {
+    fn local(&mut self, l: &Self) {
+        (self.dry_puffs, self.wet_puffs, self.prints, self.bits) = (l.dry_puffs.clone(), l.wet_puffs.clone(), l.prints.clone(), l.bits.clone());
+        self.dash.iter_mut().zip(&l.dash).for_each(|(d, l)| d.1 = l.1.clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -384,13 +392,5 @@ mod tests {
         }
         eprintln!("{replays} replay ticks, {close} on close-ups, {steps} footsteps");
         assert!(close > 0 && steps > 0, "no footstep on a close-up");
-    }
-}
-
-// a resync's state (`snapshot::encode`) keeps this machine's drawing entities and handles
-impl super::snapshot::Wire for FootFx {
-    fn local(&mut self, l: &Self) {
-        (self.dry_puffs, self.wet_puffs, self.prints, self.bits) = (l.dry_puffs.clone(), l.wet_puffs.clone(), l.prints.clone(), l.bits.clone());
-        self.dash.iter_mut().zip(&l.dash).for_each(|(d, l)| d.1 = l.1.clone());
     }
 }

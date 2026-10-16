@@ -657,6 +657,8 @@ fn draw(
     }
 }
 
+impl super::snapshot::Wire for Clock {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,5 +809,3 @@ mod tests {
         assert_eq!(banners(&v), [0.0]);
     }
 }
-
-impl super::snapshot::Wire for Clock {}

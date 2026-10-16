@@ -750,7 +750,7 @@ mod tests {
     fn presses_wait_out_a_switch() {
         let mut app = App::new();
         app.init_resource::<Next>().init_resource::<ButtonInput<KeyCode>>().add_systems(Update, hush);
-        let mut press = |app: &mut App, k| {
+        let press = |app: &mut App, k| {
             app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(k);
             app.update();
             let keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();

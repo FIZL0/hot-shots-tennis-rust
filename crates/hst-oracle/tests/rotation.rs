@@ -5,6 +5,8 @@
 //! included) from the micro memory the game's boot DMA chain fills; it is checked bare (as the motion sampler's squad
 //! calls it) and inside the wrapper (t = 0/1 shortcuts, the shortest-arc flip and its dot).
 
+use std::f32::consts::PI;
+
 use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::contact::{Hit, contact_point, sweep};
 use hst_sim::quat::{self, M4};
@@ -79,7 +81,7 @@ fn sweep_case(s: &mut u64) -> (V4, V4, f32, V4, V4, f32) {
     };
     // sideways moves (in the plane) or a little across it
     let side: [f32; 3] = std::array::from_fn(|_| uni(s, -0.2, 0.2) * (rng(s) & 1) as f32);
-    let across = (side[0] * n[0] + side[1] * n[1] + side[2] * n[2]) * if rng(s) % 4 == 0 { 0.9 } else { 1.0 };
+    let across = (side[0] * n[0] + side[1] * n[1] + side[2] * n[2]) * if rng(s).is_multiple_of(4) { 0.9 } else { 1.0 };
     let side = [0, 1, 2].map(|k| side[k] - n[k] * across);
     let end = [0, 1, 2].map(|k| start[k] + n[k] * along + side[k]);
     let best = match rng(s) % 4 {
@@ -206,10 +208,10 @@ fn matrix(s: &mut u64) -> M4 {
     };
     match rng(s) % 5 {
         0 => rot(s, uni(&mut s.clone(), -0.5, 0.5)),
-        1 => rot(s, uni(&mut s.clone(), 2.6, 3.1416)),
-        2 => rot(s, uni(&mut s.clone(), -3.1416, 3.1416)),
+        1 => rot(s, uni(&mut s.clone(), 2.6, PI)),
+        2 => rot(s, uni(&mut s.clone(), -PI, PI)),
         3 => {
-            let mut m = rot(s, uni(&mut s.clone(), -3.1416, 3.1416));
+            let mut m = rot(s, uni(&mut s.clone(), -PI, PI));
             let k = uni(s, 0.98, 1.02);
             for row in &mut m[..3] {
                 for c in &mut row[..3] {

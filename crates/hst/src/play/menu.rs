@@ -21,7 +21,6 @@
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
-use hst_sim::sound;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -221,7 +220,7 @@ impl Menu {
             // first press, then after 32 ticks held every 8; one direction at a time
             let repeat = |on: bool, n: &mut u32| {
                 *n = if on { *n + 1 } else { 0 };
-                *n == 1 || (*n >= 32 && (*n - 32) % 8 == 0)
+                *n == 1 || (*n >= 32 && (*n - 32).is_multiple_of(8))
             };
             let up = self.held[1] == 0 && repeat(up, &mut self.held[0]);
             let down = self.held[0] == 0 && repeat(down, &mut self.held[1]);
@@ -256,7 +255,7 @@ impl Menu {
             (std::mem::take(&mut self.start), std::mem::take(&mut self.cancel), std::mem::take(&mut self.confirm));
         let repeat = |on: bool, n: &mut u32| {
             *n = if on { *n + 1 } else { 0 };
-            *n == 1 || (*n >= 32 && (*n - 32) % 8 == 0)
+            *n == 1 || (*n >= 32 && (*n - 32).is_multiple_of(8))
         };
         let u = self.held[1] == 0 && repeat(up, &mut self.held[0]);
         let d = self.held[0] == 0 && repeat(down, &mut self.held[1]);
@@ -566,7 +565,7 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
 /// P39: the menu's quads while it's open (`pool`), none in play: UI layout walks hidden nodes too.
 fn pool(mut commands: Commands, menu: Res<Menu>, root: Query<Entity, With<Root>>, slots: Query<Entity, With<Slot>>) {
     for r in &root {
-        crate::ui_pool::keep(&mut commands, r, menu.open, &slots, POOL, |i| (Slot(i), crate::ui_pool::quad()));
+        crate::ui_pool::keep(&mut commands, r, menu.open, slots, POOL, |i| (Slot(i), crate::ui_pool::quad()));
     }
 }
 

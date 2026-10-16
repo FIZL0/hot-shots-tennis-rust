@@ -24,7 +24,7 @@ fn human_aims() {
         };
         let (mut n, mut corners, mut bad, mut slices) = (0, 0, Vec::new(), [0; 2]); // slices: incoming off-sweet, sweet
         let (mut nudges, mut helds, mut swapped) = (0, 0, 0);
-        for pair in data.chunks_exact(2 * (SAMPLE_LIVE + EXTRA)) {
+        for pair in data.as_chunks::<{ 2 * (SAMPLE_LIVE + EXTRA) }>().0 {
             let (pre, cur) = (Frame(&pair[..SAMPLE_LIVE]), Frame(&pair[SAMPLE_LIVE + EXTRA..2 * SAMPLE_LIVE + EXTRA]));
             let x = &pair[SAMPLE_LIVE..SAMPLE_LIVE + EXTRA];
             assert_eq!(cur.global(0x422fa4), players, "{name}: player count");
@@ -119,7 +119,7 @@ fn human_serve_aims() {
     };
     let rows = hst_data::exe::Game::new(&cnf, &bin).unwrap().serve_miss();
     let (mut n, mut nudged, mut bad) = (0, 0, Vec::new());
-    for pair in data.chunks_exact(2 * (SAMPLE_LIVE + EXTRA)) {
+    for pair in data.as_chunks::<{ 2 * (SAMPLE_LIVE + EXTRA) }>().0 {
         let (pre, cur) = (Frame(&pair[..SAMPLE_LIVE]), Frame(&pair[SAMPLE_LIVE + EXTRA..2 * SAMPLE_LIVE + EXTRA]));
         let x = &pair[SAMPLE_LIVE..SAMPLE_LIVE + EXTRA];
         let pi = |o: usize| cur.player_f32(0, o).to_bits() as i32;

@@ -70,10 +70,10 @@ pub(crate) fn disc(path: &str, data: &[u8]) {
         return;
     }
     note("disc", || path.to_string());
-    if let Some(k) = archive_key(data) {
-        if let Some(log) = LOG.lock().unwrap().as_mut() {
-            log.archives.entry(k).or_insert_with(|| path.to_string());
-        }
+    if let Some(k) = archive_key(data)
+        && let Some(log) = LOG.lock().unwrap().as_mut()
+    {
+        log.archives.entry(k).or_insert_with(|| path.to_string());
     }
 }
 

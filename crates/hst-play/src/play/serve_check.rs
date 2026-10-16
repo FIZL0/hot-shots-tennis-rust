@@ -184,7 +184,7 @@ mod tests {
         let chars: Vec<usize> = (0..4).map(|p| ram[PICKS + PICK_ROW * p] as usize).collect();
         let app = set_up(chars.clone());
         let g = app.world().resource::<Game>();
-        for p in 0..4 {
+        for (p, &ch) in chars.iter().enumerate() {
             let obj = u(u(MATCH) + PLAYERS + 4 * p);
             let d = &g.serve_data[p];
             let table = |(g, b, n): (usize, usize, usize)| -> (Vec<u8>, Vec<i32>) {
@@ -195,8 +195,7 @@ mod tests {
             assert_eq!(
                 (d.over, d.under, d.reach, d.power, d.low_power, d.short_miss),
                 (at(OVER), at(UNDER), REACH.map(|o| u(obj + o) as i32), u(obj + POWER) as i32, u(obj + LOW_POWER) as i32, f(obj + SHORT_MISS)),
-                "p{p} character {}",
-                chars[p]
+                "p{p} character {ch}"
             );
             assert_eq!((d.strong_grades.clone(), d.strong_bias.clone()), table(STRONG), "p{p} strong");
             assert_eq!((d.weak_grades.clone(), d.weak_bias.clone()), table(WEAK), "p{p} weak");

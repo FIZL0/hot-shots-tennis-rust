@@ -254,9 +254,9 @@ fn walkers_animate_like_the_game() {
             }
             // a new point restarts every walker's stagger counter; the last walker's is still counting after the tick
             let fresh = (0..n).any(|k| state(a, k, lens[k]).counter < 0 && state(b, k, lens[k]).counter >= 0);
-            for k in 0..n {
-                let want = state(b, k, lens[k]);
-                let mut before = state(a, k, lens[k]);
+            for (k, &len) in lens.iter().enumerate().take(n) {
+                let want = state(b, k, len);
+                let mut before = state(a, k, len);
                 if before.mode == 0 && want.mode == 2 {
                     before.react();
                     reactions += 1;
@@ -314,7 +314,7 @@ fn walkers_face_like_the_game() {
         let mut last: Vec<Option<usize>> = vec![None; n];
         for i in 0..samples.len() {
             let b = samples[i];
-            for k in 0..n {
+            for (k, last) in last.iter_mut().enumerate().take(n) {
                 let home = std::array::from_fn(|c| f(b, wo(k) + 0xa0 + 4 * c));
                 let centre = bits(npc::walker_facing(home, 0.0));
                 let have = drawn(b, k);
@@ -322,7 +322,7 @@ fn walkers_face_like_the_game() {
                     blank += 1;
                     continue;
                 }
-                let Some(a) = last[k].replace(i).map(|j| samples[j]) else {
+                let Some(a) = last.replace(i).map(|j| samples[j]) else {
                     assert!([6.4, -6.4, 0.0].iter().any(|&z| bits(npc::walker_facing(home, z)) == have), "court {court}: walker {k} first facing");
                     continue;
                 };
@@ -565,7 +565,7 @@ fn startled_creatures_match_the_game() {
         let (mut ticks, mut startles, mut turns, mut blocked, mut struck, mut sounds, mut legs, mut aimed) = (0, 0, 0, 0, 0, 0, 0, 0);
         // the creatures' paths from the disc, by their home position
         let (entries, plants) = court_layout(&mut iso, court);
-        let paths: Vec<([f32; 4], Vec<[f32; 4]>, Vec<f32>, i16)> = npc::spawn(&entries, &plants, &game.npc_roster(court), &game.walkers(court), 2)
+        let paths: Vec<_> = npc::spawn(&entries, &plants, &game.npc_roster(court), &game.walkers(court), 2)
             .into_iter()
             .map(|m| (m.world[3], m.path, m.radii, m.start))
             .collect();
@@ -771,7 +771,7 @@ fn passing_ball_matches_the_game() {
         };
         let u = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         // a sample: vsync, match state, the object, its buffer (playing, route), controller, animation header, generator
-        let samples: Vec<&[u8]> = d[4..].chunks_exact(5 + 0x290 + 8 + 0x40 + 0x30 + 0x9d0).collect();
+        let samples: Vec<&[u8]> = d[4..].as_chunks::<{ 5 + 0x290 + 8 + 0x40 + 0x30 + 0x9d0 }>().0.iter().map(|s| s.as_slice()).collect();
         let mt = 5 + 0x290 + 8 + 0x40 + 0x30;
         let state = |s: &[u8]| {
             // the object, controller and header as tools/record_npc.py lays them out

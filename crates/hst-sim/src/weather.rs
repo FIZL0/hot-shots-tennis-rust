@@ -219,9 +219,9 @@ pub fn wind(degrees: f32, speed: f32) -> [f32; 4] {
     const NEG_PI: f32 = -PI;
     let mut a = F(degrees) * DEGREE;
     if PI < a {
-        a = a - TWO_PI;
+        a -= TWO_PI;
     } else if a < NEG_PI {
-        a = a + TWO_PI;
+        a += TWO_PI;
     }
     let s = F(speed) * PER_FRAME;
     crate::world::rot_y(a.0)[2].map(|v| (F(v) * s).0)

@@ -715,10 +715,10 @@ pub fn disc_racket(
         // ponytail: drawn without Z for the A ≥ 0x70 half too; nothing in the racket sits behind the strings but the frame
         for ((m, h), packets) in rmats.materials.iter().zip(&rh).zip(&rmodel.materials) {
             let mode = i16::from_le_bytes([m.header[0x1e], m.header[0x1f]]);
-            if (20..30).contains(&mode) && packets.iter().any(|p| p.prim & 0x40 != 0) {
-                if let Some(mat) = materials.get_mut(h) {
-                    mat.alpha_mode = AlphaMode::Blend;
-                }
+            if (20..30).contains(&mode) && packets.iter().any(|p| p.prim & 0x40 != 0)
+                && let Some(mat) = materials.get_mut(h)
+            {
+                mat.alpha_mode = AlphaMode::Blend;
             }
         }
         for (mi, packets) in rmodel.materials.iter().enumerate() {

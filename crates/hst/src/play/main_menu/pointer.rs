@@ -437,10 +437,6 @@ pub(super) mod tests {
     use super::super::{Bindings, Text, drawn};
     use super::*;
 
-    fn text() -> Text {
-        text_with_mods(0)
-    }
-
     /// A stand-in for the disc's words with `n` mods' grades, every glyph 16 wide (so words cost their quads).
     pub(in crate::play::main_menu) fn text_with_mods(n: usize) -> Text {
         let glyphs = (' '..='~').chain("·…–—".chars()).map(|c| (c, (0.0, 0.0, 16.0))).collect();

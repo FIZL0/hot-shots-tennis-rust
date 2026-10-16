@@ -46,7 +46,7 @@ struct Glb {
 
 impl Glb {
     fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
-        while self.bin.len() % 4 != 0 {
+        while !self.bin.len().is_multiple_of(4) {
             self.bin.push(0);
         }
         let mut v = json!({"buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len()});
@@ -93,8 +93,9 @@ fn inverse(m: &M4) -> M4 {
         a[c].iter_mut().for_each(|v| *v /= d);
         for r in (0..4).filter(|&r| r != c) {
             let f = a[r][c];
-            for k in 0..8 {
-                a[r][k] -= f * a[c][k];
+            let pivot = a[c];
+            for (x, p) in a[r].iter_mut().zip(pivot) {
+                *x -= f * p;
             }
         }
     }
@@ -318,8 +319,8 @@ fn export(model: &mdl::Model, mats: &mtl::Mtl, noise: &[noi::Deformer], motions:
     let ibm: Vec<[f32; 16]> = (0..n)
         .map(|i| {
             let mut m = inverse(&model.node_bind[i]);
-            for r in 0..3 {
-                m[r][3] = 0.0;
+            for row in m.iter_mut().take(3) {
+                row[3] = 0.0;
             }
             m[3][3] = 1.0;
             std::array::from_fn(|k| m[k / 4][k % 4])
@@ -455,7 +456,7 @@ fn export(model: &mdl::Model, mats: &mtl::Mtl, noise: &[noi::Deformer], motions:
     doc["buffers"] = json!([{"byteLength": g.bin.len()}]);
 
     let mut js = serde_json::to_vec(&doc).unwrap();
-    while js.len() % 4 != 0 {
+    while !js.len().is_multiple_of(4) {
         js.push(b' ');
     }
     let mut out = Vec::with_capacity(28 + js.len() + g.bin.len());

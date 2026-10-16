@@ -83,6 +83,8 @@ pub(super) fn server(g: &Game) -> Option<usize> {
     Some(s.server as usize)
 }
 
+impl super::snapshot::Wire for Swing {}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
@@ -181,5 +183,3 @@ mod tests {
         assert!(eye(&after).distance(eye(&to)) < 0.05, "the serve set-up continues from it: {after:?} vs {to:?}");
     }
 }
-
-impl super::snapshot::Wire for Swing {}

@@ -194,8 +194,8 @@ fn play(
             }
         }
     }
-    for i in 0..4 {
-        if !live[i] {
+    for (i, &up) in live.iter().enumerate() {
+        if !up {
             plates.until[i] = None;
             match plates.queued[i] {
                 Some((_, t)) if now - t >= WAIT || !on(&menu) => plates.queued[i] = None,
@@ -277,7 +277,7 @@ mod tests {
         app.insert_resource(Menu { screen: Screen::Chars, doubles: true, seats: [Some(Dev::Keys), Some(Dev::Pad(pad)), Some(Dev::Pad(touch)), None], ..default() });
         app.add_systems(Update, input);
         let queued = |app: &mut App| std::mem::take(&mut app.world_mut().resource_mut::<Plates>().queued).map(|q| q.map(|q| q.0));
-        let mut keys = |app: &mut App, k: KeyCode| {
+        let keys = |app: &mut App, k: KeyCode| {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.reset_all();
             keys.press(k);

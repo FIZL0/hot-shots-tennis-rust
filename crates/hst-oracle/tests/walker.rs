@@ -124,10 +124,10 @@ fn walkers_wander_like_the_game() {
         };
         // what's around: players and walkers near or far, standing still or moving; the ball near, still or flying
         let mut ps = Vec::new();
-        for i in 0..np {
+        for (i, &pl) in players.iter().enumerate().take(np) {
             let p = if rng.bit(40) { near(&mut rng, 2.5) } else { [rng.f(-6.0, 6.0), 0.0, rng.f(-13.0, 13.0), 1.0] };
             let prev = if rng.bit(30) { p } else { [p[0] + rng.f(-0.2, 0.2), p[1], p[2] + rng.f(-0.2, 0.2), 1.0] };
-            put(&mut ee, players[i], p);
+            put(&mut ee, pl, p);
             put(&mut ee, w + 0x220 + 0x10 * i as u32, prev);
             ps.push(p);
             wa.players[i] = prev;

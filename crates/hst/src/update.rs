@@ -18,6 +18,7 @@
 //! it finds without waiting for the button (an unattended end-to-end run).
 
 /// The release page the desktop notice's Download opens.
+#[cfg(not(target_arch = "wasm32"))]
 pub const RELEASES: &str = "https://github.com/FIZL0/opentennis/releases/tag/beta";
 
 /// This build's release tag (`v0.1.0-beta.9`, `v1.0.0`): only builds made by `tools/release.sh` have one, and only
@@ -26,6 +27,7 @@ pub const VERSION: Option<&str> = option_env!("HST_VERSION");
 
 /// The minisign key `tools/release.sh` signs each release's `SHA256SUMS` with (its secret half stays with the
 /// maintainer, `~/.config/hst/release.key`).
+#[cfg(not(target_arch = "wasm32"))]
 pub const PUBLIC_KEY: &str = "RWTW5uzveKqmVluF6+6vYS5Uq/H7St1d9WMjyxVxXGpJAbr8+sT6HimM";
 
 /// B374: the Check for Updates setting (settings.txt `update_check`) and `--no-update-check`.
@@ -199,6 +201,7 @@ fn found(j: &serde_json::Value, ours: &str, asset: Option<&str>) -> Option<Found
 
 /// Whether version `a` comes after `b` (`v1.2.3`, `v0.1.0-beta.10`; semver order: a pre-release before its
 /// release, numeric parts by number). Unreadable ones are never newer.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn newer(a: &str, b: &str) -> bool {
     fn parse(s: &str) -> Option<([u64; 3], Option<&str>)> {
         let s = s.trim().trim_start_matches('v').split('+').next()?;
@@ -241,6 +244,7 @@ fn exe() -> Option<std::path::PathBuf> {
 
 /// At start: notes the game's path and removes the `.old` an update on Windows leaves behind.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_os = "android", allow(dead_code))] // only `main` calls it, which the Android .so doesn't run
 pub fn cleanup() {
     if let Some(e) = exe() {
         let _ = std::fs::remove_file(old(&e));

@@ -41,9 +41,7 @@ pub(super) fn show_ends(v: &View) -> [bool; 2] {
 // The mods folder, in hst-base (`web.rs` reads it too)
 pub(crate) use hst_base::modfs::{root, set_root};
 
-/// The pills above the list on Installed (Add mod, Reload, Remove all) and Upload (Sign in, Upload all): the rows
-/// before the mods.
-const TOP: usize = 3;
+/// The pills above the list on Upload (Sign in, Upload all): the rows before the mods.
 const UP_TOP: usize = 2;
 /// The tabs across the title band, in Q/E order.
 const PAGES: [Page; 4] = [Page::Browse, Page::Installed, Page::Upload, Page::Mine];
@@ -152,8 +150,12 @@ struct PhoneApp(bool);
 
 impl Default for PhoneApp {
     fn default() -> Self {
-        PhoneApp(cfg!(any(target_os = "ios", target_os = "android")))
+        PhoneApp(PhoneApp::BUILD)
     }
+}
+
+impl PhoneApp {
+    const BUILD: bool = cfg!(any(target_os = "ios", target_os = "android"));
 }
 
 #[derive(Clone, Debug)]
@@ -192,11 +194,6 @@ impl View {
                 };
             }
         }
-    }
-
-    /// How many mods the store lists (the Browse tab's count).
-    fn entries_len(&self) -> usize {
-        self.store.as_ref().map_or(0, Vec::len)
     }
 
     fn refresh(&mut self) {
@@ -1484,7 +1481,7 @@ pub(super) fn sample(m: &mut Menu, screen: &str) {
                     name: md.name.clone(),
                     source: md.source.clone(),
                     author: ["FIZL0", "someone", ""][i % 3].into(),
-                    size: (i as u64 + 1) * 7 << 20,
+                    size: ((i as u64 + 1) * 7) << 20,
                     sha256: if screen == "browsemods" { format!("{i:064x}") } else { format!("{:064}", i % 2) },
                     style: (player && i % 3 != 2).then_some((i % 4) as u8),
                     grades: (player && i % 3 != 2).then_some([5, 4, 3, 2, 1].map(|g: u8| 1 + (g + i as u8) % 5)),
@@ -2249,7 +2246,7 @@ mod tests {
         // the foot the footer's words, ↑ back to the tile, ↑ off the top the strip's sort and filter (B471), ↑ from
         // the filter the search box
         let (l, r, u, d) = (Press { left: true, ..default() }, Press { right: true, ..default() }, Press { up: true, ..default() }, Press { down: true, ..default() });
-        let mut go = |m: &mut Menu, k: Press| {
+        let go = |m: &mut Menu, k: Press| {
             m.mods_step(k, &mut Vec::new());
             m.sel
         };

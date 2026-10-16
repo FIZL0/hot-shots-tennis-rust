@@ -426,7 +426,7 @@ fn recorded_dives() {
                     steps += 1;
                     n += 1;
                 }
-                assert!(n == d.len() || n > 40 || k + n == frames.len(), "{at}: {n} frames");
+                assert!(n == d.lock_frames() || n > 40 || k + n == frames.len(), "{at}: {n} frames");
             }
         }
     }

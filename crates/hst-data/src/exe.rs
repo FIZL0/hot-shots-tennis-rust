@@ -38,7 +38,7 @@ impl<'a> Game<'a> {
         &self.bin[o..o + len]
     }
     fn f32s(&self, addr: u32, n: usize) -> Vec<f32> {
-        self.at(addr, n * 4).chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+        self.at(addr, n * 4).as_chunks::<4>().0.iter().map(|&c| f32::from_le_bytes(c)).collect()
     }
     fn f32(&self, addr: u32) -> f32 {
         self.f32s(addr, 1)[0]
@@ -49,7 +49,7 @@ impl<'a> Game<'a> {
         ShotParamSource {
             // per shot class: 0x451 floats = up to 5 kinds × 0xdd floats = 17 records × 13 floats
             base: self.f32s(0x40_4810, 4 * 0x451),
-            kinds: self.at(0x40_3b90, 16).chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect(),
+            kinds: self.at(0x40_3b90, 16).as_chunks::<4>().0.iter().map(|&c| i32::from_le_bytes(c)).collect(),
             // 17 rows of 0x7c bytes; rows 3..16 (= character + 3) hold the blend weights
             weights: self.f32s(0x40_3f60, 17 * 0x7c / 4),
             middle_mix: self.f32(0x41_0a18),
@@ -88,7 +88,7 @@ impl<'a> Game<'a> {
     /// How the ball bounces off each collision material id (256 rows of 16 bytes).
     pub fn surfaces(&self) -> Vec<Surface> {
         self.at(0x41_0b70, 256 * 16)
-            .chunks_exact(16)
+            .as_chunks::<16>().0.iter()
             .map(|r| Surface {
                 court: r[0] != 0,
                 special: r[1] != 0,
@@ -103,7 +103,7 @@ impl<'a> Game<'a> {
     /// Per court (13) how ball bounces look on it: the dust and the mark colours and whether dust puffs rise.
     pub fn bounce_looks(&self) -> Vec<BounceLook> {
         let rgb = |r: &[u8], o: usize| std::array::from_fn(|k| f32::from_le_bytes(r[o + 4 * k..o + 4 * k + 4].try_into().unwrap()));
-        self.at(0x41_5000, 13 * 0x90).chunks_exact(0x90).map(|r| BounceLook { dust: rgb(r, 0), mark: rgb(r, 0x60), puffs: r[0x80] != 0 }).collect()
+        self.at(0x41_5000, 13 * 0x90).as_chunks::<0x90>().0.iter().map(|r| BounceLook { dust: rgb(r, 0), mark: rgb(r, 0x60), puffs: r[0x80] != 0 }).collect()
     }
 
     /// The running players' footstep effects: per character (0..13) the step rule, the dry and wet puff rows,
@@ -134,7 +134,7 @@ impl<'a> Game<'a> {
         let n = |r: &[u8], o: usize| i32::from_le_bytes(r[o..o + 4].try_into().unwrap());
         let courts = self
             .at(0x41_5000, 13 * 0x90)
-            .chunks_exact(0x90)
+            .as_chunks::<0x90>().0.iter()
             .map(|r| FootCourt {
                 dusty: r[0x80] != 0,
                 prints: r[0x83] != 0,
@@ -297,7 +297,7 @@ impl<'a> Game<'a> {
     pub fn wind(&self, court: u32) -> (Vec<f32>, f32) {
         let row = self.at(0x41_cf90 + (court - 1) * 0x14, 0x14);
         let i32_at = |o: usize| i32::from_le_bytes(row[o..o + 4].try_into().unwrap());
-        let degrees = self.at(0x41_d070, 32).chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f32);
+        let degrees = self.at(0x41_d070, 32).as_chunks::<4>().0.iter().map(|&c| i32::from_le_bytes(c) as f32);
         let allowed: Vec<f32> = degrees.zip(&row[8..16]).filter(|(_, f)| **f != 0).map(|(d, _)| d).collect();
         let speed = if i32_at(0) > 0 { i32_at(0x10) as f32 } else { 0.0 };
         (if allowed.is_empty() { vec![0.0] } else { allowed }, speed)
@@ -467,14 +467,14 @@ pub fn pitch_table(irx: &[u8]) -> Result<Vec<u16>, Error> {
     if irx.len() != 28093 || !irx.windows(13).any(|w| w == b"sg2iop_driver") {
         return Err(Error("SG2IOPM1.IRX does not match the supported US 1.00 driver".into()));
     }
-    Ok(irx[0x4880..0x4880 + 2 * 608].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect())
+    Ok(irx[0x4880..0x4880 + 2 * 608].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect())
 }
 
 /// The sound library's voice volume tables (`snd::Level`), read from the main program `SCUS_976.10` of the supported
 /// disc: `pan` 128 × u16 (high byte left gain, low byte right, 0x7f = full) and `gain` 129 × u16 (32767 · cos of
 /// i · 90° / 128, the centre-panned tones' L/R gains).
 pub fn sound_tables(elf: &[u8]) -> Result<(Vec<u16>, Vec<u16>), Error> {
-    let u16s = |addr: usize, n: usize| -> Vec<u16> { boot_at(elf, addr, 2 * n).chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect() };
+    let u16s = |addr: usize, n: usize| -> Vec<u16> { boot_at(elf, addr, 2 * n).as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect() };
     check_boot(elf)?;
     Ok((u16s(0x1b_b880, 128), u16s(0x1b_b988, 129)))
 }
@@ -482,7 +482,7 @@ pub fn sound_tables(elf: &[u8]) -> Result<(Vec<u16>, Vec<u16>), Error> {
 /// The sound library's positional stereo tables (`hst_sim::sound::stereo`): left and right gains, 720 × i32 each,
 /// 2048 · cos over half-degree steps, −4096 where the gain is zero. From `SCUS_976.10` of the supported disc.
 pub fn stereo_tables(elf: &[u8]) -> Result<[Vec<i32>; 2], Error> {
-    let i32s = |addr: usize| -> Vec<i32> { boot_at(elf, addr, 4 * 720).chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect() };
+    let i32s = |addr: usize| -> Vec<i32> { boot_at(elf, addr, 4 * 720).as_chunks::<4>().0.iter().map(|&c| i32::from_le_bytes(c)).collect() };
     check_boot(elf)?;
     Ok([i32s(0x1b_db78), i32s(0x1b_d038)])
 }
@@ -490,7 +490,7 @@ pub fn stereo_tables(elf: &[u8]) -> Result<[Vec<i32>; 2], Error> {
 /// The volume the sound library gives each of its 24 bank slots (slot 0 the court's SE bank: 118), by the slot's
 /// category. From `SCUS_976.10` of the supported disc.
 pub fn bank_volumes(elf: &[u8]) -> Result<Vec<u32>, Error> {
-    let u32s = |addr: usize, n: usize| -> Vec<u32> { boot_at(elf, addr, 4 * n).chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect() };
+    let u32s = |addr: usize, n: usize| -> Vec<u32> { boot_at(elf, addr, 4 * n).as_chunks::<4>().0.iter().map(|&c| u32::from_le_bytes(c)).collect() };
     check_boot(elf)?;
     let volume = u32s(0x1b_bf00, 5);
     Ok(u32s(0x1c_e970, 24).into_iter().map(|c| volume[c as usize]).collect())
@@ -500,7 +500,7 @@ pub fn bank_volumes(elf: &[u8]) -> Result<Vec<u32>, Error> {
 /// ratings (bright balls out of 4). From `SCUS_976.10` of the supported disc.
 pub fn court_plates(elf: &[u8]) -> Result<Vec<[u8; 3]>, Error> {
     check_boot(elf)?;
-    Ok(boot_at(elf, 0x1b_b790, 3 * 14).chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+    Ok(boot_at(elf, 0x1b_b790, 3 * 14).as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect())
 }
 
 fn check_boot(elf: &[u8]) -> Result<(), Error> {

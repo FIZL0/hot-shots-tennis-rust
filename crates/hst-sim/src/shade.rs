@@ -210,6 +210,9 @@ impl Caster {
     }
 }
 
+/// A triangle's three corners (model space) and their texture coordinates.
+pub type Tri = ([[f32; 3]; 3], [[f32; 2]; 3]);
+
 /// An alpha-tested material's triangles (model space, with their texture coordinates) and its texture's alpha
 /// (PS2, 0x80 opaque) and GS wrap modes.
 #[derive(Clone, Default)]
@@ -220,7 +223,7 @@ pub struct Cutout {
     pub wrap: [u8; 2],
     /// The red its triangles blend toward: 0x80, fogged (PRIM FGE, fog 0xff) 0x7f.
     pub red: u8,
-    pub tris: Vec<([[f32; 3]; 3], [[f32; 2]; 3])>,
+    pub tris: Vec<Tri>,
 }
 
 /// A caster model as its shadow texture draws it: an alpha-tested (TEST mode 10..29), textured material's
@@ -252,7 +255,7 @@ impl Shape {
                 width: t.width as usize,
                 height: t.height as usize,
                 // back from the expanded alpha (a·255/128) to the PS2's
-                alpha: t.rgba.chunks_exact(4).map(|c| ((c[3] as u32 * 128).div_ceil(255)) as u8).collect(),
+                alpha: t.rgba.as_chunks::<4>().0.iter().map(|c| ((c[3] as u32 * 128).div_ceil(255)) as u8).collect(),
                 wrap: model.wrap.get(mi).copied().unwrap_or([0, 0]),
                 red: if packets.iter().any(|p| p.prim & (TME | FGE) == TME | FGE) { FOGGED_RED } else { FULL },
                 tris: Vec::new(),
@@ -340,7 +343,7 @@ fn texture(c: &Caster) -> Vec<u8> {
                 let a = alpha(k, st[0], st[1]);
                 if a >= 1 {
                     let d = &mut red[x + y * TEX];
-                    *d = (((k.red as i32 - *d as i32) * a as i32 >> 7) + *d as i32) as u32;
+                    *d = ((((k.red as i32 - *d as i32) * a as i32) >> 7) + *d as i32) as u32;
                 }
             });
         }
@@ -922,13 +925,13 @@ pub fn pass_texture(draws: &[PassDraw]) -> Vec<u8> {
             pass_tri(&mut target, d, t);
         }
     }
-    let half = |p: usize, q: usize| p as i32 + ((q as i32 - p as i32) * 8 >> 4);
+    let half = |p: usize, q: usize| p as i32 + (((q as i32 - p as i32) * 8) >> 4);
     (0..TEX * TEX)
         .map(|i| {
             let (x, y) = (2 * (i % TEX), 2 * (i / TEX));
             let at = |dx: usize, dy: usize| target[x + dx + (y + dy) * TARGET] as usize;
             let (r0, r1) = (half(at(0, 0), at(1, 0)), half(at(0, 1), at(1, 1)));
-            ((r0 + ((r1 - r0) * 8 >> 4)) >> 4) as u8
+            ((r0 + (((r1 - r0) * 8) >> 4)) >> 4) as u8
         })
         .collect()
 }
@@ -974,9 +977,9 @@ fn pass_sample(t: &PassTexture, u: i32, v: i32) -> i32 {
     };
     let ([x0, x1], [y0, y1], uf, vf) = (ax(u, 0), ax(v, 1), (u & 0xffff) >> 12, (v & 0xffff) >> 12);
     let at = |x: i32, y: i32| t.alpha[(x + (y << t.log2[0])) as usize] as i32;
-    let r0 = at(x0, y0) + ((at(x1, y0) - at(x0, y0)) * uf >> 4);
-    let r1 = at(x0, y1) + ((at(x1, y1) - at(x0, y1)) * uf >> 4);
-    r0 + ((r1 - r0) * vf >> 4)
+    let r0 = at(x0, y0) + (((at(x1, y0) - at(x0, y0)) * uf) >> 4);
+    let r1 = at(x0, y1) + (((at(x1, y1) - at(x0, y1)) * uf) >> 4);
+    r0 + (((r1 - r0) * vf) >> 4)
 }
 
 /// One triangle into the target: the vertices' (s, t, colour) as the GS's software setup takes them, then
@@ -996,7 +999,7 @@ fn pass_tri(target: &mut [u8], d: &PassDraw, t: &[PassVertex; 3]) {
             Some(tex) => {
                 let s = pass_lanes(tc[2], dscan[2], left, n).zip(pass_lanes(tc[3], dscan[3], left, n)).map(|(u, v)| pass_sample(tex, u, v));
                 if d.modulate {
-                    s.zip(pass_colour(tc[4], dscan[4], left, n)).map(|(a, g)| ((a << 2) * g >> 16).min(255)).collect()
+                    s.zip(pass_colour(tc[4], dscan[4], left, n)).map(|(a, g)| (((a << 2) * g) >> 16).min(255)).collect()
                 } else {
                     s.collect()
                 }

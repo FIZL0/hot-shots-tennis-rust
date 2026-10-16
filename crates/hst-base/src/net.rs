@@ -1253,13 +1253,10 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
     cx.say(Event::Status("Online.".into()));
     // B321: a Host, Join, Quickplay or Find that came in during a Find (dropped for it)
     let mut cut: Option<Cmd> = None;
-    loop {
-        let Some(c) = (match cut.take() {
-            Some(c) => Some(c),
-            None => cmds.recv().await,
-        }) else {
-            break;
-        };
+    while let Some(c) = match cut.take() {
+        Some(c) => Some(c),
+        None => cmds.recv().await,
+    } {
         #[cfg(not(target_arch = "wasm32"))]
         if matches!(c, Cmd::Host(_) | Cmd::Find | Cmd::Quick(_) | Cmd::Join(..)) {
             cx.revive_dht(&mut dht_since).await;
@@ -1463,6 +1460,7 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
 }
 
 /// A joiner's side, inside the host task.
+#[allow(clippy::large_enum_variant)] // `Said` keeps its `Msg` by value so the host's match arms destructure it
 enum Guest {
     In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device },
     Said(String, Msg),
@@ -1692,12 +1690,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let mut last = None;
                 while let Some(a) = addrs.next().await {
                     let r = a.relay_urls().next().cloned();
-                    if r.is_some() && r != last {
+                    if let Some(url) = &r
+                        && r != last
+                    {
                         bevy::log::info!("home relay {r:?}");
-                        last = r.clone();
-                        if htx.send(r.unwrap()).is_err() {
+                        if htx.send(url.clone()).is_err() {
                             return;
                         }
+                        last = r;
                     }
                 }
             });
@@ -2525,7 +2525,7 @@ async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unb
     if let Some(ep) = cx.ep.as_ref().filter(|_| cx.relays) {
         let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
-    let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
+    let Some((conn, link, inbox, me)) = connect(cx, code, cmds).await else { return false };
     link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap() });
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
@@ -3047,21 +3047,21 @@ async fn find_slots(dht: &Dht) -> (Vec<Listing>, Option<String>) {
     // B527: the browser reads every slot through the pkarr relay (SLOTS requests of its ~10 per network): a Find, the
     // Online screen's list and Quick play within FIND_CACHE share one read
     #[cfg(target_arch = "wasm32")]
-    {
+    let all = {
         thread_local!(static LAST: std::cell::RefCell<Option<(n0_future::time::Instant, Vec<Result<Option<(Listing, i64)>, String>>)>> = const { std::cell::RefCell::new(None) });
         const FIND_CACHE: Duration = Duration::from_secs(15);
-        let all = match LAST.with_borrow(|l| l.clone().filter(|(t, all)| t.elapsed() < FIND_CACHE && all.iter().all(Result::is_ok))) {
+        match LAST.with_borrow(|l| l.clone().filter(|(t, all)| t.elapsed() < FIND_CACHE && all.iter().all(Result::is_ok))) {
             Some((_, all)) => all,
             None => {
                 let all = read_slots(dht).await;
                 LAST.set(Some((n0_future::time::Instant::now(), all.clone())));
                 all
             }
-        };
-        return slots_list(all);
-    }
+        }
+    };
     #[cfg(not(target_arch = "wasm32"))]
-    slots_list(read_slots(dht).await)
+    let all = read_slots(dht).await;
+    slots_list(all)
 }
 
 /// The open lobbies in `all` (the board slots' answers) and why some couldn't be read.
@@ -3271,7 +3271,7 @@ mod tests {
         };
         let modded = Pick { r#mod: Some(Box::new(w)), swap: true, random: true, ..Pick::disc(5, 2) };
         let mut r = room(false);
-        assert!(r.take("host", &[modded.clone()]));
+        assert!(r.take("host", std::slice::from_ref(&modded)));
         assert!(r.allowed(std::slice::from_ref(&modded)).is_ok());
         let v = r.ver;
         assert!(r.set_vanilla(true) && !r.set_vanilla(true));
@@ -3601,7 +3601,7 @@ mod tests {
             assert_eq!(found, ["AAAA", "BBBB"]);
             // the rest of the board taken: one more host isn't listed
             let json = serde_json::to_string(&listing("CCCC")).unwrap();
-            let free = (0..SLOTS).filter(|&i| i != first && i != sb.load(Relaxed)).map(|i| slot_name(i)).collect::<Vec<_>>();
+            let free = (0..SLOTS).filter(|&i| i != first && i != sb.load(Relaxed)).map(slot_name).collect::<Vec<_>>();
             n0_future::join_all(free.iter().map(|n| publish(&c, n, &json))).await;
             let full = AtomicUsize::new(SLOTS);
             assert!(list_in_slot(&c, &full, &listing("DDDD")).await.unwrap_err().contains("taken"));
@@ -4181,8 +4181,8 @@ mod tests {
             let ann = ("Ann".to_string(), "hi all".to_string());
             let host = ("Host".to_string(), "welcome".to_string());
             assert_eq!(heard(&bev, 1500).await, [ann.clone(), host.clone()]);
-            assert_eq!(heard(&hev, 0).await, [ann.clone()]);
-            assert_eq!(heard(&aev, 0).await, [host.clone()]);
+            assert_eq!(heard(&hev, 0).await, std::slice::from_ref(&ann));
+            assert_eq!(heard(&aev, 0).await, std::slice::from_ref(&host));
             // a burst: only the first few get through
             for i in 0..8 {
                 bcmd.send(Cmd::Chat(format!("spam {i}"))).unwrap();
@@ -4240,7 +4240,7 @@ mod tests {
             let ((hcx, hev), (acx, aev), (bcx, bev)) = (cx("Host").await, cx("Ann").await, cx("Bob").await);
             let (hcmd, mut hrx) = amp::unbounded_channel();
             let (acmd, mut arx) = amp::unbounded_channel();
-            let (bcmd, mut brx) = amp::unbounded_channel();
+            let (_bcmd, mut brx) = amp::unbounded_channel();
             let mut r = room(true);
             r.take("host", &[Pick::disc(0, 0)]);
             tokio::spawn(async move { host(&hcx, r, &mut hrx).await });

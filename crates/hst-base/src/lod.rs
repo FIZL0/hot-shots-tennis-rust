@@ -117,7 +117,7 @@ pub fn reduce(pos: &[[f32; 3]], idx: &[u32], x: &Extra, percent: u32) -> Vec<u32
             *first.entry((group[v], same.get(v).copied().unwrap_or(0), if lock { v as u32 } else { u32::MAX })).or_insert(v as u32)
         })
         .collect();
-    let mut tri: Vec<[u32; 3]> = idx.chunks_exact(3).map(|t| [t[0], t[1], t[2]].map(|v| one[v as usize])).collect();
+    let mut tri: Vec<[u32; 3]> = idx.as_chunks::<3>().0.iter().map(|t| [t[0], t[1], t[2]].map(|v| one[v as usize])).collect();
     let g3 = |t: &[u32; 3]| t.map(|v| group[v as usize]);
     let mut alive: Vec<bool> = tri.iter().map(|t| { let g = g3(t); g[0] != g[1] && g[1] != g[2] && g[0] != g[2] }).collect();
     let mut live = alive.iter().filter(|&&a| a).count();
@@ -392,7 +392,7 @@ mod tests {
 
     fn edges(idx: &[u32], pos: &[[f32; 3]]) -> HashMap<([u32; 3], [u32; 3]), u32> {
         let mut e = HashMap::new();
-        for t in idx.chunks_exact(3) {
+        for t in idx.as_chunks::<3>().0 {
             for k in 0..3 {
                 let (a, b) = (pos[t[k] as usize].map(f32::to_bits), pos[t[(k + 1) % 3] as usize].map(f32::to_bits));
                 *e.entry((a.min(b), a.max(b))).or_insert(0) += 1;
@@ -412,7 +412,7 @@ mod tests {
             let want = idx.len() / 3 * pc as usize / 100;
             assert!((want..want + 3).contains(&(out.len() / 3)), "{pc}%: {} of {}", out.len() / 3, idx.len() / 3);
             assert!(edges(&out, &pos).values().all(|&c| c == 2), "{pc}%: a hole or a fin");
-            for t in out.chunks_exact(3) {
+            for t in out.as_chunks::<3>().0 {
                 let [a, b, c] = [0, 1, 2].map(|k| glam(pos[t[k] as usize]));
                 let mid = (a + b + c) / 3.0;
                 let cos = (b - a).cross(c - a).normalize().dot(mid.normalize());
@@ -439,7 +439,7 @@ mod tests {
             same.push(1);
         }
         // the last column's triangles take the copies
-        for t in idx.chunks_exact_mut(3) {
+        for t in idx.as_chunks_mut::<3>().0 {
             if t.iter().any(|&v| v >= 2 && (v as usize - 2) % segs == segs - 1) {
                 t.iter_mut().for_each(|v| *v = copy.get(v).copied().unwrap_or(*v));
             }
@@ -450,7 +450,7 @@ mod tests {
         assert!(out.len() < idx.len() * 2 / 5, "{} of {}", out.len() / 3, idx.len() / 3);
         assert!(out.contains(&100));
         assert!(edges(&out, &pos).values().all(|&c| c == 2));
-        for t in out.chunks_exact(3) {
+        for t in out.as_chunks::<3>().0 {
             // every triangle winds the same way on the texture as on the sphere; one stitched across the seam to the
             // wrong copy wraps the long way round and turns over
             if t.iter().all(|&v| v >= 2) {
@@ -484,7 +484,7 @@ mod tests {
         use crate::character::{self, CharacterData};
         use bevy::prelude::*;
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-        let Ok(mut iso) = hst_data::iso::Iso::open(&format!("{root}/Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
+        let Ok(mut iso) = hst_data::iso::Iso::open(format!("{root}/Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
         let (mut m, mut t, mut i, mut b) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default(), Assets::default());
         let mut who: Vec<(String, CharacterData)> = [0, 6].iter().map(|&n| (format!("pc{n:02}"), character::load_disc(&mut iso, n, 0, &mut m, &mut t, &mut i, &mut b).unwrap())).collect();
         for id in ["getagrip_pc00_emi", "fore_pc00_phoebe"] {

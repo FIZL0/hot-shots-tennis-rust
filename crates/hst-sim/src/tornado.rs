@@ -61,6 +61,7 @@ impl Tornado {
     /// game draws it: the ball at `pos` moving at `vel`, `bounces` so far; `uv` the UV animation's times before and
     /// after the last tick; `floor` the game's lowest alpha. Returns the drawn scale and UV time (`t` stays the
     /// tick's; the alpha is the in-between's).
+    #[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
     pub fn between(&mut self, bounces: i32, pos: V4, vel: V4, frac: f32, uv: [f32; 2], fade: i32, floor: i32) -> (f32, f32) {
         let mut scale = F(self.t);
         if self.t < self.end {

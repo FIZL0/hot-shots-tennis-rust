@@ -321,7 +321,7 @@ fn notice_setup(mut commands: Commands) {
 fn notice_pool(mut commands: Commands, n: Res<OnlineNotice>, root: Query<Entity, With<NoticeRoot>>, slots: Query<Entity, With<NoticeSlot>>, mut env: Local<Option<bool>>) {
     let env = *env.get_or_insert_with(|| std::env::var_os("HST_NOTICE").is_some());
     for r in &root {
-        crate::ui_pool::keep(&mut commands, r, env || !n.text.is_empty(), &slots, NOTICE_POOL, |i| (NoticeSlot(i), crate::ui_pool::quad()));
+        crate::ui_pool::keep(&mut commands, r, env || !n.text.is_empty(), slots, NOTICE_POOL, |i| (NoticeSlot(i), crate::ui_pool::quad()));
     }
 }
 
@@ -416,7 +416,7 @@ pub(in crate::play) fn plugin(app: &mut App) {
                 .in_set(Systems),
         )
         // M14: the Settings screens' legend, as the main menu's
-        .add_systems(Update, super::legend::fill.run_if(open.and(resource_exists::<super::legend::Legend>)).after(Systems));
+        .add_systems(Update, super::legend::fill.run_if(open.and_then(resource_exists::<super::legend::Legend>)).after(Systems));
 }
 
 /// B221/B244: the phone's on-screen stick keeps to its corner while the pause or result screen is up, so taps reach the

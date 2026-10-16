@@ -67,8 +67,8 @@ fn match_locomotion() {
             if f(fr.gm(), 0x58).to_bits() as i32 - f(a.gm(), 0x58).to_bits() as i32 > 2 {
                 break;
             }
-            for p in 0..4 {
-                let (s, hand) = (&lineup[p].s, lineup[p].hand);
+            for (p, l) in lineup.iter().enumerate().take(4) {
+                let (s, hand) = (&l.s, l.hand);
                 let mode = p_u8(fr, p, 0x3fa5);
                 if mode > 1 || p_u8(a, p, 0x3fa5) > 1 {
                     continue;
@@ -158,8 +158,8 @@ fn match_stroke_stamina() {
         let mut n = 0;
         for k in 1..frames.len() {
             let (a, fr) = (frames[k - 1], frames[k]);
-            for p in 0..4 {
-                let (s, hand) = (&lineup[p].s, lineup[p].hand);
+            for (p, l) in lineup.iter().enumerate().take(4) {
+                let (s, hand) = (&l.s, l.hand);
                 let (before, after) = (p_i32(a, p, 0x3df4), p_i32(fr, p, 0x3df4));
                 let drained = before - after == 1 && p_i32(fr, p, 0x3df8) == 0;
                 if after >= before || drained {
@@ -192,7 +192,7 @@ fn match_facing() {
             if f(fr.gm(), 0x50).to_bits().wrapping_sub(f(a.gm(), 0x50).to_bits()) != 1 || fr.gm()[0x55] != a.gm()[0x55] {
                 continue;
             }
-            for p in 0..4 {
+            for (p, l) in lineup.iter().enumerate().take(4) {
                 // the turn runs in the play state (+0x3fa4 = 0), not while serving or after the point
                 if p_u8(fr, p, 0x3fa4) != 0 {
                     continue;
@@ -216,7 +216,7 @@ fn match_facing() {
                     face.dir = target;
                 }
                 let stepping = target.map(f32::to_bits) != face.dir.map(f32::to_bits);
-                turn(&mut face, target, fwd, lineup[p].hand, start as usize, base_motion(start), now as usize, &lineup[p].pelvis);
+                turn(&mut face, target, fwd, l.hand, start as usize, base_motion(start), now as usize, &l.pelvis);
                 n += 1;
                 steps += stepping as i32;
                 let want = (p_v4(fr, p, 0x3d60), p_i32(fr, p, 0x3dd4), p_v4(fr, p, 0x3de0));
@@ -650,9 +650,8 @@ fn p7f_bot_stick() {
     let fr = bot_frames(&data);
     let (mut runs, mut bad_dir, mut bad_vel, mut receive, mut rally, mut walks) = (0, 0, 0, 0, 0, 0);
     for k in 1..fr.len() {
-        for p in 0..4 {
+        for (p, &(spe, agi, sta, costs)) in STATS.iter().enumerate() {
             let (a, b, phase) = (&fr[k - 1].p[p], &fr[k].p[p], fr[k].phase);
-            let (spe, agi, sta, costs) = STATS[p];
             let s = Stats::new(spe, agi, sta, costs, 0);
             if b.mode == 1 && a.mode <= 1 {
                 runs += 1;

@@ -1033,7 +1033,7 @@ fn reach(iso: &mut Iso) -> Reach {
             .expect("TParam slash cell")
     };
     let right = cols[6].starts_with(&[0x89, 0x45]); // 右 (right) in Shift-JIS
-    let reach = Reach {
+    Reach {
         base: num(55),
         reach: (num(56) + num(57)) / 100.0,
         stroke_height: pair(63, 0) / 100.0,
@@ -1053,8 +1053,7 @@ fn reach(iso: &mut Iso) -> Reach {
         hand: if right { 1.0 } else { -1.0 },
         // each player's own from its skeleton and motions (`skeleton_reach`)
         dive_arm: [[[0.0; 4]; 4]; 2],
-    };
-    reach
+    }
 }
 
 /// Character `n`'s reach for the contact search: `base` (character 0's measured contact offsets, body-shot widths,
@@ -1901,7 +1900,6 @@ fn strike(
         random_bit: branch != branch::SMASH && kind != kind::DROP && !swing::grade::clean(grade) && g.rng.sound.bit(),
         framed: framed.is_some(),
         dull: miss.is_some_and(|m| m.dull),
-        ..default()
     };
     g.sounds
         .extend(sound::hit_sounds(&hit).into_iter().map(|p| (p, at)));
@@ -1934,7 +1932,8 @@ fn strike(
         },
     };
     // the ball launch's two uniforms (kept on the ball; nothing ported reads them)
-    (g.rng.shared.next(), g.rng.shared.next());
+    g.rng.shared.next();
+    g.rng.shared.next();
     g.flight = Flight::struck(Ball { pos: at, vel, spin }, launched.frame, launched.frame);
     ai_heard_hit(g, who, branch, vel);
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
@@ -2049,11 +2048,7 @@ fn serve_turn(g: &mut Game, i: usize, stick: Vec2, press: Option<i32>) {
     }
     match s.swing {
         None if !s.whiffed => {
-            let allowed = match (toss, press) {
-                (Toss::Under, Some(3)) => true,
-                (Toss::Strong | Toss::Weak, Some(0 | 1)) => true,
-                _ => false,
-            };
+            let allowed = matches!((toss, press), (Toss::Under, Some(3)) | (Toss::Strong | Toss::Weak, Some(0 | 1)));
             if allowed {
                 g.players[i].missed = false;
                 let grades = g.serve_data[i].grades(toss).to_vec();
@@ -2250,7 +2245,8 @@ fn pads_aim(g: &Game, i: usize) -> bool {
 /// The toss's ball launch draws the ball's two shared uniforms, as every launch does (kept on the ball; nothing
 /// ported reads them).
 fn toss_draws(g: &mut Game) {
-    (g.rng.shared.next(), g.rng.shared.next());
+    g.rng.shared.next();
+    g.rng.shared.next();
 }
 
 /// A new point's placement message: one shared draw per player, right after the reseed.
@@ -2784,10 +2780,10 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
                 ..c
             });
             // the swing waiting behind the body's turn starts 8 frames before contact
-            if c.frames as i32 - 1 == motion::SWING_LEAD {
-                if let Some(anim) = p.wait_swing.take() {
-                    set_motion(p, anim, 1.0, false, None);
-                }
+            if c.frames as i32 - 1 == motion::SWING_LEAD
+                && let Some(anim) = p.wait_swing.take()
+            {
+                set_motion(p, anim, 1.0, false, None);
             }
         }
     }
@@ -3354,18 +3350,14 @@ fn bot(g: &mut Game, i: usize) {
             // the AI presses once the frames left plus its timing error for this stroke reach the sweet frame
             let t = g.players[i].ai_timing;
             let go = ai_lets_go(g, i);
-            if !go && find_contact(g, i).is_some_and(|c| {
+            if !go && (find_contact(g, i).is_some_and(|c| {
                 let err = match c.swing.branch {
                     swing::Branch::Ground => t.stroke,
                     swing::Branch::Volley => t.volley,
                     swing::Branch::Smash => t.smash,
                 };
                 c.frames as i32 + err <= SWEET_FRAME
-            }) {
-                let kind = ai_press_kind(g, i);
-                press(g, i, kind);
-                g.players[i].bot_due = None;
-            } else if !go && ai_dives(g, i) {
+            }) || ai_dives(g, i)) {
                 let kind = ai_press_kind(g, i);
                 press(g, i, kind);
                 g.players[i].bot_due = None;
@@ -3598,7 +3590,6 @@ fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
     };
     let rng = &mut g.rng;
     let stick = if g.players.len() == 4 {
-        let human_mate = g.humans.get(i ^ 2) == Some(&true);
         let l = Pair {
             me: at(i),
             mate: at(i ^ 2),
@@ -3926,24 +3917,24 @@ fn simulate(mut g: ResMut<Game>) {
     let why = CALLS[verdict.call as usize];
     let Some(team) = verdict.winner else {
         g.umpire
-            .point_over(None, 0, g.score.swapped, verdict.call as u8);
+            .point_over(None, 0, g.score.swapped, verdict.call);
         g.message = if verdict.call == 2 {
             "Fault - second serve".into()
         } else {
             format!("{why} - serve again")
         };
         info!("no point: {why} after {} frames", g.since_hit);
-        g.post = Some(PostPoint::called(None, verdict.call as u8, &g.board));
+        g.post = Some(PostPoint::called(None, verdict.call, &g.board));
         g.phase = Phase::Post;
         return;
     };
     g.post_winner = team as i32;
     let before = g.score.clone();
-    let event = g.score.point(&g.rules, team as usize);
-    match_stats::scored(g, &before, event, team as usize);
+    let event = g.score.point(&g.rules, team);
+    match_stats::scored(g, &before, event, team);
     g.umpire
-        .point_over(event, team as i32, g.score.swapped, verdict.call as u8);
-    instant_replay::point(g, team as usize, event, verdict.call as u8);
+        .point_over(event, team as i32, g.score.swapped, verdict.call);
+    instant_replay::point(g, team, event, verdict.call);
     g.score.note_tiebreak_start();
     g.gallery_game = matches!(event, Some(Event::Game | Event::Set));
     // ponytail: played at the verdict; the game's director cues it a little later in the post-point sequence
@@ -3952,9 +3943,9 @@ fn simulate(mut g: ResMut<Game>) {
             if g.humans
                 .iter()
                 .enumerate()
-                .any(|(i, &h)| h && i & 1 == team as usize)
+                .any(|(i, &h)| h && i & 1 == team)
                 // the side the ceremony shows won: a bot-only match too (P26c)
-                || !g.humans.iter().enumerate().any(|(i, &h)| h && i & 1 != team as usize)
+                || !g.humans.iter().enumerate().any(|(i, &h)| h && i & 1 != team)
             {
                 3
             } else {
@@ -3966,7 +3957,7 @@ fn simulate(mut g: ResMut<Game>) {
         _ => None,
     };
     let applause = if g.gallery_game {
-        sound::favoured(&g.humans)[team as usize].then_some(false)
+        sound::favoured(&g.humans)[team].then_some(false)
     } else {
         let won = g.last_hitter & 1 == team as i32;
         g.finish.applause(&g.rally, won, g.body_hit.is_some(), g.flight.contacts, g.players.len() > 2)
@@ -3988,7 +3979,7 @@ fn simulate(mut g: ResMut<Game>) {
     );
     let mut post = PostPoint::called(
         Some(event.expect("match in progress")),
-        verdict.call as u8,
+        verdict.call,
         &g.board,
     );
     post.before = Some(before);
@@ -4269,7 +4260,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             let under = s.toss == Some(Toss::Under);
             match (s.toss, s.swing) {
                 // the baseline walk's motion (`serve_turn`), standing before it
-                (None, _) if (0x20..=0x22).contains(&p.cmd.id) => m.play(p.cmd.id as usize, 1.0, true),
+                (None, _) if (0x20..=0x22).contains(&p.cmd.id) => m.play(p.cmd.id, 1.0, true),
                 (None, _) => m.play(0x20, 1.0, true),
                 (Some(_), Some(sw)) => {
                     let (id, speed) = motion::serve_swing(under, sw.frames as i32);

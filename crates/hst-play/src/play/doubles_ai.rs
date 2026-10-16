@@ -313,12 +313,12 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         };
         // the singles hit message on an opponent's shot: its kind and spot (ponytail: the hitter's position for the
         // shot's own spot, P11l6), and the dash after a dive
-        if singles && g.last_hitter >= 0 && g.last_hitter as usize & 1 != i & 1 {
-            if let Some(seen) = p.ai_seen[0] {
-                x.opp_kind = seen.kind;
-                x.last = b.opp[0];
-                x.heard_hit(seen.kind, row.style, &b);
-            }
+        if singles && g.last_hitter >= 0 && g.last_hitter as usize & 1 != i & 1
+            && let Some(seen) = p.ai_seen[0]
+        {
+            x.opp_kind = seen.kind;
+            x.last = b.opp[0];
+            x.heard_hit(seen.kind, row.style, &b);
         }
     }
     let mut early = me.early.take();
@@ -555,12 +555,12 @@ pub(super) fn formations(g: &mut Game, draws: &[u32]) {
         return;
     }
     let human = |g: &Game, k: usize| g.humans.get(k) == Some(&true);
-    for i in 0..4 {
+    for (i, &draw) in draws.iter().enumerate().take(4) {
         let m = i ^ 2;
         g.players[i].formation = if i < 2 {
             let rows = (g.players[i].ai.formation, g.players[m].ai.formation);
             // the menus' setup words have no third byte (slots 3 and 5 read 0)
-            Team::pick((human(g, i), human(g, m)), rows, 0, draws[i])
+            Team::pick((human(g, i), human(g, m)), rows, 0, draw)
         } else {
             g.players[m].formation
         };

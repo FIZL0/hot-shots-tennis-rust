@@ -38,7 +38,7 @@ fn tornado_s05() {
     };
     let fade = hst_data::exe::Game::new(&cnf, &bin).unwrap().tornado_fade();
     assert_eq!(fade, 30);
-    let frames: Vec<&[u8]> = data[8..].chunks_exact(SIZE).collect();
+    let frames: Vec<&[u8]> = data[8..].as_chunks::<SIZE>().0.iter().map(|s| s.as_slice()).collect();
     let state = |fr: &[u8]| {
         let t = &fr[TOR..];
         Tornado {
@@ -90,7 +90,7 @@ fn tornado_slowmo() {
     const ANIM: usize = MODEL + 8;
     const B: usize = ANIM + 0x30;
     let fade = i(&data, 0);
-    let frames: Vec<&[u8]> = data[4..].chunks_exact(B + 0x290).collect();
+    let frames: Vec<&[u8]> = data[4..].as_chunks::<{ B + 0x290 }>().0.iter().map(|s| s.as_slice()).collect();
     let state = |fr: &[u8]| {
         let t = &fr[T..];
         Tornado {

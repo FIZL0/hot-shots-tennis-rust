@@ -336,6 +336,7 @@ pub fn scatter_along(side: f32, depth: f32, hit: [f32; 3], aim: [f32; 3]) -> [f3
 /// scatter toward the aim, and the ball flies to aim + scatter. `turn` is the shot record's spin and side angle
 /// (radians; only slice serves have a side angle) and whether the server is left-handed (see
 /// `shot::launch_turned`), and `bend` the special serve's (`shot::effect`).
+#[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
 pub fn launch(table: &Table, underhand: bool, radius: f32, hit: [f32; 3], aim: [f32; 3], scatter: [f32; 3], turn: (f32, f32, bool), bend: f32) -> shot::Launch {
     let l = shot::lookup(table, &Bounds::serve(underhand, radius), [(F(hit[0]) - scatter[0]).0, hit[1], (F(hit[2]) - scatter[2]).0], aim);
     let target = [(F(aim[0]) + scatter[0]).0, aim[1], (F(aim[2]) + scatter[2]).0, 1.0];
@@ -634,7 +635,7 @@ mod tests {
         let server = [3.0, 0.0, -12.25];
         // centred: the deuce box's centre; full tilt reaches its corner exactly
         assert_eq!(target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [0.0, 0.0], || false), ([-2.0575, 0.0, 4.7], Miss::default()));
-        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-0.7071, 0.7071], || false);
+        let (corner, _) = target(&d, Toss::Strong, 0, 1, server, 1.0, 0, false, [-std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2], || false);
         assert!((corner[0] + 4.115).abs() < 1e-3 && (corner[2] - 6.4).abs() < 1e-3, "{corner:?}");
         // the same aim with a late strong toss lands past the service line (fault)
         let hit = [3.0, -2.5, -12.0];

@@ -779,7 +779,7 @@ pub fn reaction(call: u8, game: bool, applause: Option<bool>, errors: &mut u32) 
         verdict::ILLEGAL_HIT => Some(Reaction { cheer: false, event: Some(GROAN), chain: false }),
         _ if error => {
             *errors += 1;
-            Some(Reaction { cheer: false, event: Some(GROAN), chain: *errors % 2 == 0 })
+            Some(Reaction { cheer: false, event: Some(GROAN), chain: (*errors).is_multiple_of(2) })
         }
         _ => {
             *errors = 0;

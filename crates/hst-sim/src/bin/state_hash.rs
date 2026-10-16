@@ -46,7 +46,7 @@ impl Fnv {
 fn main() {
     let path = std::env::args().nth(1).expect("usage: state_hash <camera_s05.bin>");
     let data = std::fs::read(path).expect("read fixture");
-    let frames: Vec<&[u8]> = data.chunks_exact(SAMPLE).collect();
+    let frames: Vec<&[u8]> = data.as_chunks::<SAMPLE>().0.iter().map(|s| s.as_slice()).collect();
     let mut cam = Camera::from_view(view(frames[0]));
     for (k, s) in frames.iter().enumerate().skip(1) {
         let phase = s[GM + 0x55];

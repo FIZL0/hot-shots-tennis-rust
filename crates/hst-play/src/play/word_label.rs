@@ -79,7 +79,7 @@ pub fn label(iso: &mut Iso, images: &mut Assets<Image>, s: &str) -> Handle<Image
     for y in 0..h as i32 {
         for x in 0..w as i32 {
             let near = (-2..=2i32).flat_map(|dy| (-2..=2i32).map(move |dx| (dx, dy))).filter(|(dx, dy)| dx * dx + dy * dy <= 5);
-            let edge = near.filter_map(|(dx, dy)| (x + dx >= 0 && y + dy >= 0 && x + dx < w as i32 && y + dy < h as i32).then(|| ink[((y + dy) * w as i32 + x + dx) as usize])).fold(0f32, f32::max);
+            let edge = near.filter(|&(dx, dy)| x + dx >= 0 && y + dy >= 0 && x + dx < w as i32 && y + dy < h as i32).map(|(dx, dy)| ink[((y + dy) * w as i32 + x + dx) as usize]).fold(0f32, f32::max);
             let a = ink[(y * w as i32 + x) as usize];
             let c = (30.0 + 225.0 * a) as u8;
             rgba[(y as usize * w + x as usize) * 4..][..4].copy_from_slice(&[c, c, c, (edge.max(a) * 255.0) as u8]);

@@ -89,7 +89,7 @@ impl Sig {
             match (addr.parse::<std::net::IpAddr>(), uuid(addr)) {
                 (Ok(std::net::IpAddr::V4(ip)), _) => b.extend([4].iter().chain(&ip.octets())),
                 (Ok(std::net::IpAddr::V6(ip)), _) => b.extend([6].iter().chain(&ip.octets())),
-                (_, Some(u)) => b.extend([b'm'].iter().chain(&u)),
+                (_, Some(u)) => b.extend(b"m".iter().chain(&u)),
                 _ => b.extend([0, addr.len() as u8].iter().chain(addr.as_bytes())),
             }
             b.extend_from_slice(&port.to_be_bytes());
@@ -345,7 +345,7 @@ mod web {
         }
 
         /// Connect with the guest's answer (30 s at most): the guest's peer name (its ufrag) and the connection.
-        pub async fn accept(self, code: &str) -> Result<(String, Conn, Link, Inbox), String> {
+        pub(in crate::net) async fn accept(self, code: &str) -> Result<(String, Conn, Link, Inbox), String> {
             let a = Sig::parse(code, ANSWER).ok_or("not an answer code")?;
             self.peer.remote(&a, RtcSdpType::Answer).await?;
             let pc = self.peer.pc.clone();
@@ -385,7 +385,7 @@ mod web {
         }
 
         /// Connected once the host has taken the answer.
-        pub async fn open(self) -> Result<(Conn, Link, Inbox), String> {
+        pub(in crate::net) async fn open(self) -> Result<(Conn, Link, Inbox), String> {
             self.peer.open(self.inbox).await
         }
     }
@@ -407,7 +407,7 @@ impl Offer {
         match *self {}
     }
 
-    pub async fn accept(self, _: &str) -> Result<(String, super::Conn, super::Link, super::Inbox), String> {
+    pub(in crate::net) async fn accept(self, _: &str) -> Result<(String, super::Conn, super::Link, super::Inbox), String> {
         match self {}
     }
 }
@@ -418,7 +418,7 @@ impl Pending {
         match *self {}
     }
 
-    pub async fn open(self) -> Result<(super::Conn, super::Link, super::Inbox), String> {
+    pub(in crate::net) async fn open(self) -> Result<(super::Conn, super::Link, super::Inbox), String> {
         match self {}
     }
 }

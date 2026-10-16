@@ -1499,7 +1499,7 @@ fn search_box(d: &mut Draw, v: &View, b @ [x, y, w, h]: [f32; 4], on: bool, foun
     } else {
         let tail = format!("{found} found");
         let fw = d.width(&tail, 11.0 * PY) + 12.0 * PX;
-        let caret = if on && v.b.tick / 30 % 2 == 0 { "_" } else { "" };
+        let caret = if on && (v.b.tick / 30).is_multiple_of(2) { "_" } else { "" };
         let words = ellipsis(d, &format!("{}{caret}", v.b.search), size, x + w - 10.0 * PX - fw - tx);
         d.text(&words, tx, ty, size, ink);
         d.text(&tail, x + w - fw, y + (h - 11.0 * PY) / 2.0, 11.0 * PY, soft);

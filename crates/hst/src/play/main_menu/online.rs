@@ -120,6 +120,7 @@ pub(super) struct Facts {
 
 /// What an Online press asks of the app.
 #[derive(Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)] // a press's few effects live for one frame; boxing `Net`'s command only adds an allocation
 pub enum Fx {
     Net(Cmd),
     /// Stop the network (back to the main menu, or the relay changed).
@@ -2386,7 +2387,7 @@ pub(super) fn linked(m: &mut Menu) {
     let text = std::env::var("HST_CODE").ok();
     let Some(code) = text.as_deref().and_then(crate::net::code_in) else { return };
     let net = View { paste: code, go: Some(Go::Code), ..default() };
-    *m = Menu { screen: Screen::Assign, doubles: true, net, settings: m.settings.clone(), mods: std::mem::take(&mut m.mods), ..default() };
+    *m = Menu { screen: Screen::Assign, doubles: true, net, settings: m.settings, mods: std::mem::take(&mut m.mods), ..default() };
 }
 
 /// Join by Code's keyboard: typed symbols, Backspace and Enter (finish) go into the code, not to the menu's key bindings (the
@@ -3918,6 +3919,7 @@ mod tests {
         assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Join(..))))), "the same build's joins: {fx:?}");
     }
 
+    #[test]
     fn find_first_then_pick_in_the_lobby() {
         let dev = super::super::Dev::Keys;
         let ok = Press { ok: true, ..default() };

@@ -283,7 +283,7 @@ fn tiebreak_points(v: &View, a: i32, out: &mut Vec<Quad>) {
     let cell = |i: usize, w: i32| [(w * TB_U[i]) as f32, (64 * TB_V[i]) as f32, w as f32, 64.0];
     let y = |t: usize| 104.0 + 180.0 * ((t == 0) != v.swapped) as i32 as f32;
     let slide = if (1..=2).contains(&st.stage) { 3 * st.n } else { 0 };
-    for t in 0..2 {
+    for (t, &cell_at) in idx.iter().enumerate() {
         if st.fading_out && t == k {
             continue;
         }
@@ -302,7 +302,7 @@ fn tiebreak_points(v: &View, a: i32, out: &mut Vec<Quad>) {
         };
         let w = if v.advantage && t == k { 128 } else { 64 };
         let up = if t == k { slide } else { 0 };
-        push(out, Tex::Tiebreak, cell(idx[t], w), [336.0, y(t) - up as f32, w as f32, 64.0], WHITE, alpha);
+        push(out, Tex::Tiebreak, cell(cell_at, w), [336.0, y(t) - up as f32, w as f32, 64.0], WHITE, alpha);
     }
     if st.stage >= 2 {
         let w = if v.advantage { 128 } else { 64 };
@@ -1668,11 +1668,11 @@ fn setup_speed(mut commands: Commands, args: Res<Args>, mut images: ResMut<Asset
 fn tick_speed(g: Res<Game>, speed: Option<ResMut<Speed>>) {
     let Some(mut s) = speed else { return };
     s.tick();
-    if g.shots != std::mem::replace(&mut s.shots, g.shots) && g.shots > 0 && g.last_hitter >= 0 {
-        if matches!(g.finish.prev.1, 0 | 4) {
-            let right = g.players[g.last_hitter as usize].pos[0] < 0.0;
-            s.start(hst_sim::sound::kmh(g.flight.ball.vel), right);
-        }
+    if g.shots != std::mem::replace(&mut s.shots, g.shots) && g.shots > 0 && g.last_hitter >= 0
+        && matches!(g.finish.prev.1, 0 | 4)
+    {
+        let right = g.players[g.last_hitter as usize].pos[0] < 0.0;
+        s.start(hst_sim::sound::kmh(g.flight.ball.vel), right);
     }
 }
 

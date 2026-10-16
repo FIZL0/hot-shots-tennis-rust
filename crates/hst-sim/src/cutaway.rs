@@ -976,7 +976,7 @@ pub fn intro_script(dat: &[u8]) -> Vec<(u8, f32)> {
     use op::*;
     let mut out = Vec::new();
     let mut orbit = true;
-    for (i, r) in dat.chunks_exact(40).take(20).enumerate() {
+    for (i, r) in dat.as_chunks::<40>().0.iter().take(20).enumerate() {
         let h = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]);
         let f = |o: usize| f32::from_le_bytes(r[o..o + 4].try_into().unwrap());
         let time = h(0);
@@ -1023,7 +1023,7 @@ pub fn intro_script(dat: &[u8]) -> Vec<(u8, f32)> {
 
 /// The intro's frames: the camera file's record times added up.
 pub fn intro_frames(dat: &[u8]) -> u32 {
-    dat.chunks_exact(40).take(20).map(|r| i16::from_le_bytes([r[0], r[1]]).max(0) as u32).sum()
+    dat.as_chunks::<40>().0.iter().take(20).map(|r| i16::from_le_bytes([r[0], r[1]]).max(0) as u32).sum()
 }
 
 impl Shot {

@@ -19,7 +19,7 @@ const SIZE: usize = 0x10c + 4 * PLAYER;
 fn trails_s05() {
     let dir = std::env::var("HST_FIXTURES").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/fixtures").into());
     let Ok(data) = std::fs::read(format!("{dir}/trails_s05.bin")) else { return eprintln!("trails_s05.bin absent, skipped") };
-    let frames: Vec<&[u8]> = data.chunks_exact(SIZE).collect();
+    let frames: Vec<&[u8]> = data.as_chunks::<SIZE>().0.iter().map(|s| s.as_slice()).collect();
     let mut trails = vec![Trail::default(); 4];
     let (mut starts, mut drawn) = (0, 0);
     for (n, w) in frames.windows(2).enumerate() {

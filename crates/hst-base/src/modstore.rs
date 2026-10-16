@@ -278,7 +278,7 @@ async fn pulls() -> Result<Vec<(u32, String)>, String> {
             break;
         }
     }
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|p| std::cmp::Reverse(p.0));
     Ok(out)
 }
 
@@ -461,10 +461,10 @@ struct Cached {
 pub fn list(fresh: bool) {
     let shown = |c: Cached| c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id) && !retired(e)).collect::<Vec<_>>();
     let cached = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok());
-    if !fresh {
-        if let Some(c) = cached.as_ref().filter(|c| now().saturating_sub(c.at) < CACHE_SECS) {
-            return send(Event::Listing(Ok(shown(Cached { at: c.at, entries: c.entries.clone() }))));
-        }
+    if !fresh
+        && let Some(c) = cached.as_ref().filter(|c| now().saturating_sub(c.at) < CACHE_SECS)
+    {
+        return send(Event::Listing(Ok(shown(Cached { at: c.at, entries: c.entries.clone() }))));
     }
     spawn(async move {
         match lists().await {
@@ -997,7 +997,7 @@ fn pack_check(m: &Mod, files: &[(String, Vec<u8>)], iso: &str) -> Result<(u32, O
 fn before_after(before: (u32, u32, &[u8]), after: (u32, u32, &[u8])) -> Option<Vec<u8>> {
     let img = |(w, h, rgba): (u32, u32, &[u8])| image::RgbaImage::from_raw(w, h, rgba.to_vec());
     let (a, b) = (img(after)?, img(before)?);
-    let h = a.height().min(PAIR).max(1);
+    let h = a.height().clamp(1, PAIR);
     let fit = |i: &image::RgbaImage, f| image::imageops::resize(i, (i.width() as u64 * h as u64 / i.height().max(1) as u64).max(1) as u32, h, f);
     let (b, a) = (fit(&b, image::imageops::FilterType::Nearest), fit(&a, image::imageops::FilterType::Lanczos3));
     let gap = (h / 32).max(2);
@@ -1370,7 +1370,7 @@ mod tests {
         let m = rt.block_on(ranged(&e, root, false)).unwrap();
         let files = modfs::files_under(&m.dir);
         let mb = files.iter().map(|f| f.1.len()).sum::<usize>() >> 20;
-        let fetched = take().into_iter().filter_map(|e| if let Event::Progress(_, p) = e { Some(p) } else { None }).last().unwrap();
+        let fetched = take().into_iter().filter_map(|e| if let Event::Progress(_, p) = e { Some(p) } else { None }).next_back().unwrap();
         eprintln!("{} files, {mb} MB kept of a {} MB zip; last progress: {fetched}", files.len(), e.meta.size >> 20);
         assert!(files.iter().all(|f| !f.0.contains("/textures/upscaled/")) && files.iter().any(|f| f.0.ends_with(".glb")));
         assert!(mb < 64);
@@ -1599,7 +1599,7 @@ mod tests {
             assert_eq!((got.id.as_str(), crate::mods::Kind::of_dir(&got.dir)), (m.id.as_str(), kind.clone()));
             match kind {
                 crate::mods::Kind::Umpire => assert_eq!(crate::mods_umpire::list(&root).iter().map(|u| (u.id.as_str(), u.donor)).collect::<Vec<_>>(), [("gag_ump09", 2)]),
-                _ => assert_eq!(crate::mods_court::list(&root).iter().map(|c| c.id.clone()).collect::<Vec<_>>(), [m.id.clone()]),
+                _ => assert_eq!(crate::mods_court::list(&root).iter().map(|c| c.id.clone()).collect::<Vec<_>>(), std::slice::from_ref(&m.id)),
             }
             // not a character: the roster leaves it out
             assert!(crate::mods::list(&root).is_empty());
@@ -1860,11 +1860,11 @@ mod tests {
         let mut failed = 0;
         while left > 0 {
             for e in take() {
-                if let Event::Upload(d, up) = e {
-                    if up != Up::Uploading {
-                        (left, failed) = (left - 1, failed + matches!(up, Up::Failed(_)) as usize);
-                        eprintln!("{}: {up:?}", d.display());
-                    }
+                if let Event::Upload(d, up) = e
+                    && up != Up::Uploading
+                {
+                    (left, failed) = (left - 1, failed + matches!(up, Up::Failed(_)) as usize);
+                    eprintln!("{}: {up:?}", d.display());
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));

@@ -65,4 +65,3 @@ Done tasks: one line each in `plan/REFERENCE.md` *Done*, full text in `plan/DONE
 ### Polish (at the end, user 2026-10-08)
 
 - [~] Z3 Check for optimizations that can be made by making the game less 1:1 but still very similar.
-- [ ] **B503** Compiler warnings (cleanup, user 2026-10-16): build the whole workspace (`cargo build --workspace --all-targets` + `cargo clippy --workspace --all-targets`, also the wasm/android/ios targets), collect every warning, fix each one using the Rust skills (idiomatic-rust, ownership-not-clone, unsafe-rust, rust-concurrency, async-rust as the warning calls for; rust-code-review on the diff). No blanket `#[allow]`; a kept `allow` gets a one-line reason. Sim changes stay bit-exact (replay tests). Files: Cargo.toml, crates/*

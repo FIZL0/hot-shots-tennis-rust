@@ -67,7 +67,7 @@ pub struct Table(Vec<u32>);
 
 impl Table {
     pub fn parse(bytes: &[u8]) -> Option<Self> {
-        (bytes.len() == N * N * N * 4).then(|| Table(bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()))
+        (bytes.len() == N * N * N * 4).then(|| Table(bytes.as_chunks::<4>().0.iter().map(|&c| u32::from_le_bytes(c)).collect()))
     }
 
     /// (elevation, speed, frames) of one cell.
@@ -282,20 +282,20 @@ pub fn effect(e: &hst_data::exe::ShotEffects, class: u8, kind: i32, hit: V3, tar
         let (dx, dz) = (target[0] - hit[0], target[2] - hit[2]);
         let s = ((dz * dz).madd(dx, dx).sqrt() / LENGTH).clamp(0.0, 1.0);
         if bend != 0.0 {
-            bend = bend * s;
+            bend *= s;
             if flip {
-                bend = bend * -1.0;
+                bend *= -1.0;
             }
             if lefty {
-                bend = bend * -1.0;
+                bend *= -1.0;
             }
         }
         if curve != 0.0 {
-            curve = curve * s;
+            curve *= s;
         }
     }
     if turn != 0.0 && lefty {
-        turn = turn * -1.0;
+        turn *= -1.0;
     }
     (bend.0, curve.0, turn.0)
 }
@@ -524,7 +524,7 @@ pub fn aim_from(h: &Hitter, s: &AimStats, stick: [f32; 2], four: bool, button: b
     }] as f32;
     if plain_smash && h.offset.abs() > 1 {
         let z = h.from[1].abs().clamp(3.0, BASELINE);
-        a = a * F(1.0).msub(0.4, (F(z) - 3.0) / 8.885);
+        a *= F(1.0).msub(0.4, (F(z) - 3.0) / 8.885);
     }
     if (b == branch::GROUND && (h.kind == kind::SLICE || h.kind == kind::LOB)) || rally_kind(kind::LOB) {
         a = F(90.0);
@@ -605,8 +605,8 @@ impl Margins {
         } else {
             let across = (aim[0] < 0.0 && lo < hit[0]) || (0.0 < aim[0] && hit[0] < hi);
             if across && !special {
-                mx = mx * abs(dx * inv);
-                mz = mz * abs(dz * inv);
+                mx *= abs(dx * inv);
+                mz *= abs(dz * inv);
             }
             let extra = if topspin && across { self.angled(lo, hi, character, hit, aim) } else { F::ZERO };
             if mx <= extra {

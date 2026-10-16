@@ -93,7 +93,7 @@ pub fn micro_slerp(q1: V4, q2: V4, t: f32) -> V4 {
     let sin2 = msub_w(Vf(1.0) + 0.0, dot);
     // flags: negative dot (the S flag is the sign bit, so −0 counts), sin²θ == 0 or dot > 0.999 fall back to a
     // plain lerp
-    let lerp_only = dot.0.is_sign_negative() || sin2 == 0.0 || dot - 0.999_000_013 > 0.0;
+    let lerp_only = dot.0.is_sign_negative() || sin2 == 0.0 || dot - 0.999 > 0.0;
     let (w1, w2, s1, s2) = if lerp_only {
         (one_minus_t, t, q1, q2)
     } else {

@@ -134,7 +134,7 @@ pub fn watch() {
 
 /// Whether this frame is one of `watch`'s (side 0 game, 1 render).
 fn watched(side: usize) -> bool {
-    WATCH[side].fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)).is_ok()
+    WATCH[side].try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)).is_ok()
 }
 
 /// Seconds since the first frame, as the stall lines give them.

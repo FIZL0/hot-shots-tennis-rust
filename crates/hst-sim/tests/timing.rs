@@ -192,7 +192,8 @@ fn timed_launches_like_the_game() {
                 let doubles = w1.global(0x422fa4) >= 3;
                 let t3 = table(c, &format!("{}3", if class == 1 { "strk" } else { "voly" })).unwrap();
                 // (spot, side, depth) of each way `wild_aim` can land, by its two free numbers
-                let shapes: [&dyn Fn(f32, f32) -> ([f32; 3], f32, f32); 4] = [
+                type Shape<'a> = dyn Fn(f32, f32) -> ([f32; 3], f32, f32) + 'a;
+                let shapes: [&Shape; 4] = [
                     &|x, z| ([x, 0.0, z], 0.0, 0.0),
                     &|x, d| ([x, 0.0, mul(11.885, end)], 0.0, d),
                     &|z, sd| ([if doubles { 5.485 } else { 4.115 }, 0.0, z], sd, 0.0),

@@ -27,7 +27,7 @@ fn replay_shots_on_the_games_frames() {
     let shots = Game::new(&cnf, &bin).unwrap().camera_shots();
     let (mut shot, mut run): (Option<Shot>, usize) = (None, 0);
     let mut worst = [(0u8, 0.0f32, 0.0f32); 2];
-    for s in data.chunks_exact(SAMPLE) {
+    for s in data.as_chunks::<SAMPLE>().0 {
         // the shot camera's own byte (+0x114) changes at the cut, the handler's (+0x51) some frames later; during
         // 0x38 the former reads 6 (meaning not traced)
         let number = match s[5] {

@@ -471,9 +471,12 @@ fn shouts_match_the_game() {
     assert!(sure >= 3 && banks == 4 && whiffs == 6);
 }
 
+/// A reaction voice: the vsync its sequence started, player, program, key.
+type Reaction = (u32, usize, u8, u8);
+
 /// The shouts of `recording` (doubles, `tools/record_sound.py … hits`) on the voice banks `spu` lists: certain,
 /// players heard on their own bank, dive shouts, whiff shouts and call-outs, each checked as `shouts_match_the_game` says.
-fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, Vec<(u32, usize, u8, u8)>)> {
+fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, Vec<Reaction>)> {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let csv = std::fs::read_to_string(format!("{root}/context/fixtures/{spu}")).ok()?;
     let (data, _) = Court::load(recording)?;
@@ -511,7 +514,7 @@ fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, 
     let (mut sure, mut chance, mut dives, mut quiet) = (0, 0, 0, 0);
     let (mut launches, mut whiffs) = (Vec::new(), Vec::new());
     let mut check = |k: usize, p: usize, want: Option<u8>, may: Option<u8>| {
-        let got: Vec<_> = (k..=k + 1).flat_map(|j| heard(j)).filter(|v| v.1 < 6).collect();
+        let got: Vec<_> = (k..=k + 1).flat_map(&heard).filter(|v| v.1 < 6).collect();
         assert!(got.len() <= 1, "frame {k}: {got:?}");
         match (got.first(), want, may) {
             (None, None, _) => quiet += (may.is_none()) as i32,
@@ -567,7 +570,7 @@ fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, 
     // and no shout; the recordings tell them apart by timing only
     let mut shouted = 0;
     for &(k, p) in whiffs.iter().filter(|w| w.0 + 10 < s.len()) {
-        let got: Vec<_> = (k + 8..=k + 10).flat_map(|j| heard(j)).filter(|v| v.1 < 7).collect();
+        let got: Vec<_> = (k + 8..=k + 10).flat_map(&heard).filter(|v| v.1 < 7).collect();
         let last = launches.iter().rev().find(|l| l.1 == p && l.0 < k).map_or(0, |l| l.0);
         let run = whiffs.iter().any(|&(j, q)| q == p && j < k && j > last);
         let theirs = launches.iter().rev().find(|l| l.0 < k).is_some_and(|l| l.1 & 1 != p & 1);
@@ -599,10 +602,10 @@ fn shouts(recording: &str, spu: &str) -> Option<(i32, usize, i32, usize, usize, 
     }
     // the reaction voices: player, program, key and the frame the sequence started (its key-on frame back)
     let mut reactions = Vec::new();
-    for k in 0..s.len() {
+    for (k, sample) in s.iter().enumerate() {
         for (b, program, key) in heard(k).into_iter().filter(|v| v.1 >= 7) {
             let bank = Bank::parse(&banks[b].1).unwrap();
-            let start = s[k].vsync - bank.key_ons(program as usize, key as usize).unwrap()[0].frame;
+            let start = sample.vsync - bank.key_ons(program as usize, key as usize).unwrap()[0].frame;
             reactions.push((start, bank_of.iter().position(|&x| x == Some(b)).unwrap(), program, key));
         }
     }
@@ -646,16 +649,16 @@ fn umpire_calls_match_the_game() {
     };
     let points = |k: usize| [u(s[k].hit, 0x68 + 0x24) as i32, u(s[k].hit, 0x68 + 0x28) as i32];
     let (mut umpire, mut want, mut got) = (sound::Umpire::default(), Vec::new(), Vec::new());
-    for k in 1..s.len() {
+    for (k, sample) in s.iter().enumerate().skip(1) {
         if let Some(p) = umpire.step(&gaps) {
             want.push((k, p.program as usize, p.key as usize));
         }
         let (before, now) = (points(k - 1), points(k));
         if now != before && now != [0, 0] {
-            let r = s[k].rally;
+            let r = sample.rally;
             let score = hst_sim::score::Score {
                 points: now,
-                server: u(s[k].hit, 0x68 + 0xc) as i32,
+                server: u(sample.hit, 0x68 + 0xc) as i32,
                 tiebreak: r[0x2a] != 0,
                 deuce: r[0x30] != 0,
                 deuce_count: u(r, 0x34) as i32,
@@ -731,7 +734,9 @@ fn gallery_matches_the_game() {
         seed
     };
     let (mut gallery, mut errors) = (sound::Gallery::default(), 0);
-    let (mut want, mut got): (Vec<(usize, u8, u8, i32, i32)>, Vec<(usize, u8, u8, i32, i32)>) = (Vec::new(), Vec::new());
+    // per voice: sample, program, key, angle, volume
+    type Call = (usize, u8, u8, i32, i32);
+    let (mut want, mut got): (Vec<Call>, Vec<Call>) = (Vec::new(), Vec::new());
     for k in 1..s.len() {
         if s[k].rally[0] == 0 && s[k - 1].rally[0] == 1 {
             gallery.hush();

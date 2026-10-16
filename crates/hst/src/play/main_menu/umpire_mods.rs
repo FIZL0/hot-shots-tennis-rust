@@ -143,8 +143,9 @@ pub(super) fn voice_ready(m: &Menu, u: u8) -> bool {
 /// B487: whether the match's umpire mod (`--umpire-mod DIR` in `args`) and court mod (`--court-mod DIR`), if any, are
 /// in memory to be heard and drawn; asks the browser for them if not (the launch waits, as for `--slot-mod`). Launched
 /// before then, the court's `.glb`s read as missing and the match plays on an empty layout court.
+/// Each one is asked (no short-circuit), so the browser fetches them all at once.
 pub(super) fn launch_ready(args: &[String]) -> bool {
-    args.windows(2).filter(|w| w[0] == "--umpire-mod" || w[0] == "--court-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[1])) && ok)
+    args.windows(2).filter(|w| w[0] == "--umpire-mod" || w[0] == "--court-mod").fold(true, |ok, w| crate::modfs::ready(std::path::Path::new(&w[1])) & ok)
 }
 
 /// Preview Voice's bank for umpire `u`: the disc's, or a mod's calls over its donor's.

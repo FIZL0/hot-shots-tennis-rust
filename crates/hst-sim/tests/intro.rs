@@ -29,7 +29,7 @@ fn intro_cameras() {
         // move ends)
         let mut sh = Shot::intro(&shots, &dat);
         let mut at = 0;
-        for (i, r) in dat.chunks_exact(40).enumerate() {
+        for (i, r) in dat.as_chunks::<40>().0.iter().enumerate() {
             let time = (i16::from_le_bytes([r[0], r[1]]) as u32).max(2 * (i > 0) as u32);
             for _ in 0..time {
                 sh.step(Shot::court);
@@ -43,7 +43,7 @@ fn intro_cameras() {
             assert!((v.fov - f(r, 0x24) * 0.008726646).abs() < 1e-5, "court {n} frame {at}: fov");
             assert!((sh.ch(7) - f(r, 0x20) * 0.017453292).abs() < 1e-5, "court {n} frame {at}: roll");
         }
-        let cuts = dat.chunks_exact(40).skip(1).filter(|r| r[0] == 0 && r[1] == 0).count() as u32;
+        let cuts = dat.as_chunks::<40>().0.iter().skip(1).filter(|r| r[0] == 0 && r[1] == 0).count() as u32;
         assert_eq!(at, cutaway::intro_frames(&dat) + 2 * cuts);
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context");
         let rec = [format!("{root}/b42/cam_c{n:02}.bin"), format!("{root}/b42d/cam_c{n:02}.bin")]
@@ -59,9 +59,9 @@ fn intro_cameras() {
 
 /// Court `n`'s recorded shot camera (`rec`) against the port's, every sample up to the shot's end.
 fn follows(n: u32, shots: &[hst_data::exe::CameraShot], dat: &[u8], rec: &[u8]) {
-    let cuts = dat.chunks_exact(40).skip(1).filter(|r| r[0] == 0 && r[1] == 0).count() as u32;
+    let cuts = dat.as_chunks::<40>().0.iter().skip(1).filter(|r| r[0] == 0 && r[1] == 0).count() as u32;
     let end = cutaway::intro_frames(dat) + 2 * cuts;
-    let frames: Vec<&[u8]> = rec.chunks_exact(SAMPLE).collect();
+    let frames: Vec<&[u8]> = rec.as_chunks::<SAMPLE>().0.iter().map(|s| s.as_slice()).collect();
     let ch = |s: &[u8], c: usize| f(s, CAM + 0x2d58 + c * 0x1c);
     // the shot steps with the match's frame counter (it holds while the loading screen is up)
     let count = |s: &[u8]| u32::from_le_bytes(s[4 + 0x58..4 + 0x5c].try_into().unwrap());

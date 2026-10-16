@@ -18,7 +18,8 @@ fn skirt_sway_gs_s05() {
     let table = noise::table();
     let (mut screen, mut deformers) = ([0f64; 3], Vec::new());
     // per vertex: node, drawn (x, y), entries (p, w, weight, 3×4 matrix)
-    let mut verts: Vec<(usize, [f64; 2], Vec<([f32; 3], f32, f32, [f64; 12])>)> = Vec::new();
+    type Entry = ([f32; 3], f32, f32, [f64; 12]);
+    let mut verts: Vec<(usize, [f64; 2], Vec<Entry>)> = Vec::new();
     for line in text.lines() {
         let t: Vec<&str> = line.split_whitespace().collect();
         match t[0] {

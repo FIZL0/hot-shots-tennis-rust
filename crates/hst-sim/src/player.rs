@@ -512,6 +512,7 @@ fn cross(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 /// frame's start (`start`, raw number; `start_base` folded) and the one chosen this frame (`now`) — `pelvis[m]`
 /// is the forward row (x, z) of motion m's `Bip01Pelvis` model matrix at frame 0 — against the angle still to
 /// turn, either way round.
+#[allow(clippy::too_many_arguments)] // the ported routine's own inputs, one argument each as the game passes them
 pub fn turn(f: &mut Facing, target: [f32; 4], forward: f32, hand: f32, start: usize, start_base: i32, now: usize, pelvis: &[[f32; 2]]) {
     let d = f.dir;
     let settle = |f: &mut Facing| {

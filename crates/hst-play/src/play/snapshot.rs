@@ -537,7 +537,7 @@ mod tests {
         let mut app = app();
         let mut r = 7u64;
         let mut next = move || {
-            (r ^= r << 13, r ^= r >> 7, r ^= r << 17);
+            r ^= r << 13; r ^= r >> 7; r ^= r << 17;
             r
         };
         let (mut stick, mut held) = ((0x80, 0x80), None);

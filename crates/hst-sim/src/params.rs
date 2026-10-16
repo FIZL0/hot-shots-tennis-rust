@@ -74,8 +74,8 @@ impl ShotParams {
     /// 31 floats (`weight::ROW`); `mid`: mix between the two weights for the middle group.
     pub fn build(base: &[f32], kinds: &[i32], weights: &[f32], mid: f32) -> Self {
         let mut t = vec![0.0f32; CLASSES * CLASS];
-        for class in 0..CLASSES {
-            for kind in 0..kinds[class].max(0) as usize {
+        for (class, &kinds) in kinds[..CLASSES].iter().enumerate() {
+            for kind in 0..kinds.max(0) as usize {
                 let k0 = class * CLASS + kind * KIND;
                 for r in 0..RECORDS {
                     let o = k0 + r * REC;

@@ -209,10 +209,10 @@ pub fn pack_part(part: js_sys::Uint8Array) -> Result<(), JsValue> {
 
 /// The page's boot status (`index.html`) goes once the game has drawn its first frames.
 pub fn shown(frames: Res<bevy::diagnostic::FrameCount>) {
-    if frames.0 == 3 {
-        if let Ok(f) = js_sys::Reflect::get(&js_sys::global(), &"hstShown".into()).and_then(|f| f.dyn_into::<js_sys::Function>()) {
-            let _ = f.call0(&JsValue::NULL);
-        }
+    if frames.0 == 3
+        && let Ok(f) = js_sys::Reflect::get(&js_sys::global(), &"hstShown".into()).and_then(|f| f.dyn_into::<js_sys::Function>())
+    {
+        let _ = f.call0(&JsValue::NULL);
     }
 }
 

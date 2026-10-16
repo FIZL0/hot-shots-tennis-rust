@@ -328,7 +328,7 @@ const FPS: f64 = 60.0;
 /// pitch table (`exe::pitch_table`). At the root note the voice plays at 44.1 kHz (0x0eb3).
 pub fn pitch(table: &[u16], word: u32, scale: u32) -> u16 {
     let [bend, fine, note, root] = word.to_le_bytes();
-    let bend = (bend as i32 - 0x40) * (scale >> 24) as i32 >> 2;
+    let bend = ((bend as i32 - 0x40) * (scale >> 24) as i32) >> 2;
     let at = |step: i32| table[(step * 16 + bend + 0xd0 + fine as i8 as i32) as usize] as u32;
     let p = if root > note {
         let d = (root - note) as i32;
@@ -337,7 +337,7 @@ pub fn pitch(table: &[u16], word: u32, scale: u32) -> u16 {
         let d = (note - root) as i32;
         at(d % 12) << (d / 12)
     };
-    ((scale & 0xffff) * (p * 441 / 480) >> 12) as u16
+    (((scale & 0xffff) * (p * 441 / 480)) >> 12) as u16
 }
 
 /// What the driver builds a voice's L/R volume from. `seq` is the play call's volume per side, `bank` the bank's
@@ -474,7 +474,7 @@ impl Voice {
             }
             self.write += 4;
             self.next += 1;
-            if self.next % 8 == 0 {
+            if self.next.is_multiple_of(8) {
                 if self.flags & 1 != 0 {
                     self.next = self.loop_start;
                     if self.flags & 2 == 0 {
@@ -494,15 +494,15 @@ impl Voice {
             return [0; 2];
         }
         let g = gaussian()[(self.sp as usize & 0xff0) >> 4];
-        let x: i32 = (0..4).map(|k| g[k] as i32 * self.fifo[(self.read as usize + k) % 32] >> 15).sum();
+        let x: i32 = (0..4).map(|k| (g[k] as i32 * self.fifo[(self.read as usize + k) % 32]) >> 15).sum();
         if !self.envelope() {
             self.stop();
         }
-        self.out = x * self.level >> 15;
+        self.out = (x * self.level) >> 15;
         self.sp += self.pitch.min(0x3fff) as u32;
         self.read += self.sp >> 12;
         self.sp &= 0xfff;
-        self.volume.map(|v| self.out * (v << 1) as i32 >> 15)
+        self.volume.map(|v| (self.out * (v << 1) as i32) >> 15)
     }
 
     /// One envelope step; false when the voice ends.
@@ -524,7 +524,7 @@ impl Voice {
             counter_inc >>= 2;
         }
         if exp && decr {
-            level_inc = (level_inc * self.level >> 15) as i16 as i32;
+            level_inc = ((level_inc * self.level) >> 15) as i16 as i32;
         }
         self.counter += counter_inc.max(1);
         if self.counter >= 0x8000 {
@@ -544,7 +544,7 @@ impl Voice {
 /// The PS-ADPCM sample at byte `start` of `bd`, decoded up to and including its end-flagged block.
 pub fn adpcm(bd: &[u8], start: usize) -> Vec<i16> {
     let (mut out, mut prev) = (Vec::new(), [0; 2]);
-    for b in bd.get(start..).unwrap_or_default().chunks_exact(16) {
+    for b in bd.get(start..).unwrap_or_default().as_chunks::<16>().0 {
         out.extend(decode(b, &mut prev));
         if b[1] & 1 != 0 {
             break;

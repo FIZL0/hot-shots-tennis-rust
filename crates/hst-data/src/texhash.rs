@@ -7,6 +7,7 @@
 //!   blocks in raster order;
 //! - anything smaller than a block, and 16/24-bit: the texture expanded row by row (8-bit indices for palettes,
 //!   RGBA32 otherwise).
+//!
 //! With mipmapping on, each level of the drawn LOD range is hashed after the base into the same digest.
 
 use std::collections::HashMap;
@@ -324,7 +325,7 @@ pub fn disc_textures(iso: &mut crate::iso::Iso, mut f: impl FnMut(DiscTexture)) 
 
 /// A picture's pixels that aren't fully transparent.
 fn opaque(rgba: &[u8]) -> usize {
-    rgba.chunks_exact(4).filter(|p| p[3] != 0).count()
+    rgba.as_chunks::<4>().0.iter().filter(|p| p[3] != 0).count()
 }
 
 /// M5c: what an upload's pack check keeps of a disc texture: its size and [`pixels_hash`].
@@ -368,7 +369,7 @@ pub fn pixels_hash(w: u32, h: u32, rgba: &[u8]) -> u64 {
 /// them scaled up by whole factors with nearest-neighbour (each pixel a solid block).
 pub fn is_disc_copy(w: u32, h: u32, rgba: &[u8], disc: Print) -> bool {
     let (dw, dh, hash) = disc;
-    if dw == 0 || dh == 0 || w % dw != 0 || h % dh != 0 || rgba.len() != (w * h * 4) as usize {
+    if dw == 0 || dh == 0 || !w.is_multiple_of(dw) || !h.is_multiple_of(dh) || rgba.len() != (w * h * 4) as usize {
         return false;
     }
     let (fx, fy) = ((w / dw) as usize, (h / dh) as usize);

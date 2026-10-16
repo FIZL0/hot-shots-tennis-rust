@@ -96,7 +96,7 @@ impl Pop {
         self.alpha = OPAQUE;
         if self.popup == Popup::Swirl {
             self.n += 1;
-            if self.n % SWIRL_FRAMES == 0 {
+            if self.n.is_multiple_of(SWIRL_FRAMES) {
                 self.cell = (self.cell + 1) % SWIRL_CELLS;
             }
         }

@@ -185,7 +185,7 @@ impl Rngs {
     /// streamed sound are done long before. Same in singles and doubles.
     pub fn intro_ticks_of(camera: &[u8], banner: &Anim) -> usize {
         let flyover: usize = camera
-            .chunks_exact(40)
+            .as_chunks::<40>().0.iter()
             .take(20)
             .enumerate()
             .map(|(i, r)| (i16::from_le_bytes([r[0], r[1]]).max(0) as usize).max(2 * (i > 0) as usize))
