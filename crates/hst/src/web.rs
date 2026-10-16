@@ -115,6 +115,11 @@ pub fn run(pack: js_sys::Uint8Array) {
             if k == "webgl2" {
                 continue;
             }
+            // B469: `?log` turns `HST_FPS`'s logs on; only `info!` lines reach the console (the heap growth), not eprintln
+            if k == "log" {
+                crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             if k == "code" {
                 paste(js_sys::decode_uri_component(v).map(String::from).unwrap_or_default());
                 continue;
@@ -132,6 +137,16 @@ pub fn shown(frames: Res<bevy::diagnostic::FrameCount>) {
         if let Ok(f) = js_sys::Reflect::get(&js_sys::global(), &"hstShown".into()).and_then(|f| f.dyn_into::<js_sys::Function>()) {
             let _ = f.call0(&JsValue::NULL);
         }
+    }
+}
+
+/// B469 (`?log`): each time the wasm heap grows, its new size and when. It never shrinks, and a phone's browser
+/// kills the tab past its memory limit: a growth mid-match is something allocated on first use.
+pub fn heap_growth(time: Res<bevy::time::Time<bevy::time::Real>>, mut last: bevy::prelude::Local<usize>) {
+    let now = core::arch::wasm32::memory_size(0) * 65536;
+    if now != *last {
+        *last = now;
+        bevy::log::info!("wasm heap {} MB at {:.2} s", now >> 20, time.elapsed_secs());
     }
 }
 
