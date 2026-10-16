@@ -32,3 +32,9 @@ Also, OOB's stiffness, applied per 60 Hz step, rings at ~7 Hz with its 0.83 damp
 
 ## Not 1:1
 Out of Bounds' own solver is still not ported. `SOFT` and the 3° cap were picked by eye.
+
+## Follow-up: fresh rigs start hanging (2026-10-16)
+The soft springs take ~2 s to fall from the bind pose; select-card bakes (6 ticks after posing) caught Sophie's
+pigtails sticking out sideways. A fresh (or teleported) rig now runs `HANG` = 180 steps at its first pose before
+drawing; previews `RENDER` 8 → 9 so old caches rebake. Full bake (disc + Sophie) 20 s, pigtails hang (user: "perfect").
+Keep `SOFT`, `LAG`, `HANG` as they are unless the user asks: picked with the user side by side.
