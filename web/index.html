@@ -676,7 +676,7 @@ if (answer) await new Promise(() => {});
 // installable and playable offline (sw.js)
 navigator.serviceWorker?.register('sw.js').catch(() => {});
 // B317: a new build pushed while the page is open never reloads it: `version.txt` (the commit, tools/web.sh) as the
-// page loads, read again every 10 minutes and on coming back to the tab; once it differs, `hstLatest` holds the new
+// page loads, read again every minute and on coming back to the tab; once it differs, `hstLatest` holds the new
 // one and the game's main menu shows a New version card whose Refresh reloads into it (`update.rs`). B470: with the
 // service worker, `version.txt` is the cached build this page opens (its pkg is pinned to it, `?v=`) and `?next` the
 // build a reload would open, which sw.js only answers once it has downloaded all of it in the background.
@@ -688,7 +688,10 @@ const loaded = await read();
     const now = await read('?next');
     if (loaded && now && now !== loaded && /^[0-9a-f]{7,40}$/.test(now)) window.hstLatest = now;
   };
-  setInterval(check, 600000);
+  // every minute (was 10: a phone's short sessions and throttled timers never saw it), and soon after load; each
+  // `?next` is a tiny read that also keeps sw.js's background download going (a phone stops an idle service worker)
+  setInterval(check, 60000);
+  setTimeout(check, 5000);
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && check());
 }
 say('Opening this browser\'s storage…');
