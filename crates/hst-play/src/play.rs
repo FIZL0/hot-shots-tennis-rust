@@ -925,7 +925,7 @@ fn serve_data(row: &[String], data: &CharacterData) -> ServeData {
     let toss = |k: usize| {
         serve::toss_setup(&data.skeleton, &data.motions[&k], &data.motions[&(k + 2)])
     };
-    let ((hand_over, racket_over), (hand_under, racket_under)) = (toss(0x23), toss(0x24));
+    let ((hand_over, racket_over), (hand_under, racket_under)) = (toss(motion::id::TOSS as usize), toss(motion::id::TOSS_UNDER as usize));
     ServeData {
         over: cm(65),
         under: cm(66),
@@ -1714,7 +1714,7 @@ pub fn read_input(
 ) {
     use controls::Action as A;
     let mut now = [SlotPad::default(); 4];
-    let dirs = [(A::Up, 0x10), (A::Down, 0x40), (A::Left, 0x80), (A::Right, 0x20)];
+    let dirs = [(A::Up, loco::pad::UP), (A::Down, loco::pad::DOWN), (A::Left, loco::pad::LEFT), (A::Right, loco::pad::RIGHT)];
     let shots = [(A::Normal, 0), (A::Cut, 1), (A::Lob, 3)];
     // the keyboard drives its own seat (1P without `--pads`)
     let mut kb = SlotPad::default();
@@ -2166,7 +2166,7 @@ fn serve_ik_start(g: &mut Game, i: usize, toss: Toss, k: usize, ball: [f32; 3]) 
     let under = toss == Toss::Under;
     let Some(d) = g.data.get(i).cloned() else { return };
     let Some(clip) = d.motions.get(&(motion::serve_swing(under, 0).0 as usize)) else { return };
-    let arm = serve::serve_arm(&d.skeleton, clip, d.paths.get(&0x25), under);
+    let arm = serve::serve_arm(&d.skeleton, clip, d.paths.get(&(motion::id::SERVE as usize)), under);
     let p = &mut g.players[i];
     let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
     // the second size factor is 1 in normal play, as the strokes' solve
@@ -2306,7 +2306,7 @@ fn hold_ball(g: &mut Game) {
     );
 }
 
-/// Where the server holds the ball before the toss leaves the hand, as the original: in the stance (0x20) on
+/// Where the server holds the ball before the toss leaves the hand, as the original: in the stance (`id::SERVE_STANCE`) on
 /// the stance's ball track (`*_serve_ad00_ball`), on the walk and through the toss at the left hand's
 /// `Bip01LFinger21`, both at the motion's sampled time.
 /// ponytail: posed from the motion's own clip; the original's pose mid-crossfade is the mixed one.
@@ -2336,7 +2336,7 @@ fn held_ball(mut g: ResMut<Game>, q: Query<(&Figure, &Motion)>) {
     let rows = [player[0], player[1], player[2]];
     let t = m.clock.sampled;
     let sk = &data.skeleton;
-    let at = if m.id == 0x20 {
+    let at = if m.id == motion::id::SERVE_STANCE as usize {
         data.stance_ball
             .as_ref()
             .map(|b| serve::stance_ball(b.at(t), rows, p.pos))
@@ -2532,7 +2532,7 @@ fn locomote(g: &mut Game, i: usize, dir: Vec2) {
             ];
             let acc = motion::reaction_root(
                 path.at(t),
-                r.motion >= 0x30,
+                r.motion >= motion::id::TEAM as usize,
                 g.chars[i],
                 rows,
                 r.base,
@@ -2625,19 +2625,19 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             square_up(p);
             let kind = p.kind;
             whoosh(g, i, branch_code(c.swing.branch), kind);
-            // the arm reaches for the ball: strokes 0x10–0x19 and volleys 0x1a/0x1b (higher motions: the game indexes
+            // the arm reaches for the ball: ground strokes and volleys (`id::STROKES`) and the body shots after them (higher motions: the game indexes
             // past its table; serves step 0, so no IK)
             let a = c.swing.anim as usize;
             if let (Some(t), true) = (
                 g.data.get(i).and_then(|d| d.arm.clone()),
-                (0x10..0x1c).contains(&a),
+                (motion::id::FORE_TOPSPIN as usize..motion::id::SOFT_FORE as usize).contains(&a),
             ) {
                 let p = &mut g.players[i];
                 let b = c.swing.ball;
                 let pos = [p.pos[0], p.pos[1], p.pos[2], 1.0];
                 // the side scale is +1 on the −z end (`end`); the second size factor is 1 in normal play
                 let solve =
-                    contact_solve(&t, a - 0x10, [b[0], -b[1], b[2], 1.0], pos, [p.end, 1.0]);
+                    contact_solve(&t, a - motion::id::FORE_TOPSPIN as usize, [b[0], -b[1], b[2], 1.0], pos, [p.end, 1.0]);
                 p.ik = Some(ArmIk::new(solve, c.frames as i32, pos));
             }
         } else if let Some(d) = find_dive(g, i) {
@@ -2672,7 +2672,7 @@ fn advance_stroke(g: &mut Game, i: usize, aim: impl Fn(&mut Game) -> Vec2) -> Op
             p.body.running = false;
             p.facing = yaw(dir);
             p.vel = Vec2::ZERO;
-            set_motion(p, 0x1e, 1.0, false, None);
+            set_motion(p, motion::id::RECEIVE, 1.0, false, None);
         } else {
             g.players[i].pending = None;
             let quiet = g.players[i].whiff_quiet;
@@ -2805,7 +2805,7 @@ fn dive_frame(g: &mut Game, i: usize, aim: &impl Fn(&mut Game) -> Vec2) {
     let Game { players, data, .. } = g;
     let (p, root) = (
         &mut players[i],
-        data.get(i).and_then(|d| d.paths.get(&0x1e)),
+        data.get(i).and_then(|d| d.paths.get(&(motion::id::RECEIVE as usize))),
     );
     let n = d.tick;
     p.cmd.speed = if (4..d.frame.saturating_sub(1)).contains(&n) {
@@ -4009,8 +4009,8 @@ fn react(g: &mut Game, event: Event) {
         let id = if n == 4 {
             let draw = |m: u32| g.rng.shared.r15() % m;
             let id = motion::team_reaction(base, g.chars[i], &taken, draw);
-            if id >= 0x30 {
-                taken.push(id - 0x30);
+            if id >= motion::id::TEAM {
+                taken.push(id - motion::id::TEAM);
             }
             id
         } else {
@@ -4023,7 +4023,7 @@ fn react(g: &mut Game, event: Event) {
         p.emote = 0;
         // the reaction ends a serve's follow-through
         p.served = None;
-        // the ball's target keeps the 0x2b it has played since the hit, in place
+        // the ball's target keeps the hit-by-the-ball motion it has played since the hit, in place
         // ponytail: one the reaction finds unfinished isn't snapped to its end (in a match it has long ended by then)
         if bodyhit::standing(g, i) {
             g.players[i].root = None;
@@ -4260,8 +4260,8 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             let under = s.toss == Some(Toss::Under);
             match (s.toss, s.swing) {
                 // the baseline walk's motion (`serve_turn`), standing before it
-                (None, _) if (0x20..=0x22).contains(&p.cmd.id) => m.play(p.cmd.id, 1.0, true),
-                (None, _) => m.play(0x20, 1.0, true),
+                (None, _) if (motion::id::SERVE_STANCE as usize..=motion::id::SERVE_RIGHT as usize).contains(&p.cmd.id) => m.play(p.cmd.id, 1.0, true),
+                (None, _) => m.play(motion::id::SERVE_STANCE as usize, 1.0, true),
                 (Some(_), Some(sw)) => {
                     let (id, speed) = motion::serve_swing(under, sw.frames as i32);
                     // the speed is set once, at the swing's start
@@ -4275,7 +4275,7 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
                 // a whiffed swing plays at speed 1 through its contact pose, then its miss motion (`serve_whiff`)
                 (Some(_), None) if s.whiffed => {
                     let swing = motion::serve_swing(under, 0).0 as usize;
-                    let miss = motion::whiff(swing as i32).unwrap_or(0x29) as usize;
+                    let miss = motion::whiff(swing as i32).unwrap_or(motion::id::WHIFF_SMASH) as usize;
                     let id = if m.id == miss || m.id == swing && m.clock.time > SWEET_FRAME as f32 { miss } else { swing };
                     // the miss motion run out (a double fault's call outlasts it), the stance until the reaction (B270)
                     let out = g.data[i].motions.get(&miss).is_some_and(|c| m.id == miss && m.clock.time >= c.length);

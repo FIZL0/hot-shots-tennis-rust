@@ -893,6 +893,14 @@ pub mod call {
     pub const GAME_END: u8 = 8;
 }
 
+/// The match's state as a trigger creature reads it when a message comes ([`Trigger::hear`]'s `phase`): the
+/// match's start, the first serve after a change of ends, and play otherwise.
+pub mod match_phase {
+    pub const START: u8 = 0;
+    pub const AFTER_ENDS: u8 = 1;
+    pub const PLAY: u8 = 4;
+}
+
 /// The match's messages a trigger creature acts on ([`Trigger::hear`]): entering the change of ends, the serve
 /// set-up, and a reset without the serve set-up's keeping.
 const CHANGE_ENDS: u32 = crate::rally::msg::CHANGE_ENDS as u32;
@@ -1599,15 +1607,14 @@ impl Trigger {
                 sounds
             }
             SERVE => self.serve_setup(row, replaying, phase, near, roll),
-            RESET if self.ty != 37 && (phase > 1 || self.ty == 15) => self.reset_near(row, near, roll),
+            RESET if self.ty != 37 && (phase > match_phase::AFTER_ENDS || self.ty == 15) => self.reset_near(row, near, roll),
             _ => Vec::new(),
         }
     }
 
     /// The serve set-up's message (also sent when a replay starts): out of a replay it keeps `done`, the matrix and the
     /// path's place, at a replay's start it puts them back; then it resets, except type 37 and, while the match's
-    /// phase (`phase`, read when the message comes: 0 the match's start, 1 a change of ends) is 0 or 1, all but
-    /// type 15. The restored matrix and place only last when no reset follows.
+    /// phase (`phase`, read when the message comes, [`match_phase`]) is `START` or `AFTER_ENDS`, all but type 15. The restored matrix and place only last when no reset follows.
     pub fn serve_setup(&mut self, row: &TriggerRow, replaying: bool, phase: u8, near: &mut Near, roll: &mut impl FnMut() -> u32) -> Vec<i32> {
         self.msg = SERVE;
         if replaying {
@@ -1615,7 +1622,7 @@ impl Trigger {
         } else {
             (self.kept_done, self.kept) = (self.done, (self.world, self.node, self.prev, self.left, self.wait));
         }
-        if self.ty != 37 && (phase > 1 || self.ty == 15) { self.reset_near(row, near, roll) } else { Vec::new() }
+        if self.ty != 37 && (phase > match_phase::AFTER_ENDS || self.ty == 15) { self.reset_near(row, near, roll) } else { Vec::new() }
     }
 
     /// Type 2's matrix: at the landing spot, turned (about Y) to face the camera's eye.

@@ -218,7 +218,7 @@ fn state(g: &Game, i: usize) -> u8 {
 fn sub(g: &Game, i: usize, reacted: bool) -> i32 {
     match () {
         _ if !reacted => 0,
-        _ if super::bodyhit::standing(g, i) => 0x2b,
+        _ if super::bodyhit::standing(g, i) => hst_sim::motion::id::HIT_BY_BALL,
         _ => g.players[i].root.map_or(0, |r| r.motion as i32),
     }
 }

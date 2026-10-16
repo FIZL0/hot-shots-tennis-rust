@@ -122,7 +122,7 @@ mod tests {
         p.dive = Some(dive);
         p.body.running = false;
         p.vel = Vec2::ZERO;
-        set_motion(p, 0x1e, 1.0, false, None);
+        set_motion(p, hst_sim::motion::id::RECEIVE, 1.0, false, None);
         // the old rule: a partner's dive left player 2 nothing to hit
         assert!(find_contact(g, 2).is_some(), "player 2 can't lock while player 0 dives (frame {k})");
         press(g, 2, 0);

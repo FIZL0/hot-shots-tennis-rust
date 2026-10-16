@@ -2,7 +2,7 @@
 //! swinging is tested against the ball with its head and trunk bones as posed; the first hit ends the point and
 //! pops up CONK or SMACK at the ball, a camera-facing quad hanging up from its anchor, until the players react.
 //! The ball comes back off the player (`Flight::step_plane`), and the player turns to face where it came from,
-//! cries out and plays motion 0x2b, standing in it until the point's reaction.
+//! cries out and plays the hit-by-the-ball motion (`motion::id::HIT_BY_BALL`), standing in it until the point's reaction.
 
 use bevy::prelude::*;
 use hst_data::{iso::Iso, xb::Archive};
@@ -240,7 +240,7 @@ pub(super) fn pose(mut posed: ResMut<Posed>, mut bones: ResMut<Bones>, g: Res<Ga
 }
 
 /// The hit as the original's handler takes it: the ball's extra step back off the player; the player faces against
-/// the ball's last move (normalised flat), plays motion 0x2b once and cries out.
+/// the ball's last move (normalised flat), plays the hit-by-the-ball motion once and cries out.
 fn struck(g: &mut Game, i: usize, last: [f32; 3]) {
     use hst_sim::ps2::{div, madd, mul, sqrt, sub};
     let (shot, surface, material) = (g.shot, &hst_sim::ball::COURTS[g.court], g.world.1[0]);
@@ -256,7 +256,7 @@ fn struck(g: &mut Game, i: usize, last: [f32; 3]) {
     p.vel = Vec2::ZERO;
     // the hit state drops a press still running toward the ball
     (p.pending, p.approach) = (None, None);
-    super::set_motion(p, 0x2b, 1.0, false, None);
+    super::set_motion(p, hst_sim::motion::id::HIT_BY_BALL, 1.0, false, None);
     g.whooshes.push((0, i, hst_sim::sound::hit_cry(i)));
 }
 

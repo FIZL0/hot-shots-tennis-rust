@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 use hst_data::iso::Iso;
 use hst_sim::cutaway::{self, CameraShot, Frames, M4, PickInput, Shot};
+use hst_sim::motion::id;
 use hst_sim::pose::node_world;
 use hst_sim::score::Event;
 
@@ -83,7 +84,7 @@ fn predicted(g: &Game, i: usize, t: f32, motion: Option<usize>) -> Option<(M4, M
     };
     let len = data.motions.get(&r.motion)?.length;
     let pos = match data.paths.get(&r.motion) {
-        Some(path) if r.motion == 0x2e || r.motion >= 0x30 => {
+        Some(path) if r.motion == id::WON_GAME as usize || r.motion >= id::TEAM as usize => {
             let [fx, _, fz, _] = p.body.face.dir;
             let rows = [[p.hand * fz, 0.0, -(p.hand * fx), 0.0], [0.0, 1.0, 0.0, 0.0], [fx, 0.0, fz, 0.0]];
             cutaway::reaction_spot(path.at(t.min(len)), r.motion, g.chars[i], rows, r.base)
@@ -141,7 +142,7 @@ pub(super) fn step(mut g: ResMut<Game>, mut d: ResMut<Director>, q: Query<(&Figu
             &d.lists,
             &mut d.counters,
             &PickInput {
-                team: p.root.is_some_and(|r| r.motion >= 0x30),
+                team: p.root.is_some_and(|r| r.motion >= id::TEAM as usize),
                 game_end,
                 lost: !winner(shown),
                 low: frames.shown[0][2][3][1] > -0.8,
