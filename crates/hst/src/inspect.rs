@@ -200,8 +200,9 @@ fn uv_held(t: f32, data: &CharacterData) -> UvClock {
 }
 
 /// Do `act` on preview `p`'s character `data`.
-/// The motions a preview plays: the pose, the win and the loss reaction (B102: a preview loads only these).
-pub const MOTIONS: [usize; 3] = [POSE, 0x2e, 0x2f];
+/// The motions a preview plays: the pose, the win and the loss reaction (B102: a preview loads only these); B460: and
+/// the won and lost point's (`gu`, `di`), the lobby's other two emotes.
+pub const MOTIONS: [usize; 5] = [POSE, 0x2e, 0x2f, 0x2c, 0x2d];
 
 pub fn apply(p: &mut Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Transform, &mut UvClock)>, data: &CharacterData) {
     let Ok((mut m, mut t, mut uv)) = rigs.get_mut(p.rig) else { return };
@@ -219,6 +220,27 @@ pub fn apply(p: &mut Preview, act: Act, rigs: &mut Query<(&mut Motion, &mut Tran
     };
     *m = motion;
     t.rotation = Quat::from_rotation_y(yaw);
+}
+
+/// B460: preview `p` plays reaction `id` (a lobby emote, `play::emote::MOTIONS`) as R2/L2 play theirs (from frame 0,
+/// the face's `.UVA` from 0, the loss's yaw for the loss, facing the camera otherwise); false if its character lacks it.
+pub fn react(p: &mut Preview, id: usize, rigs: &mut Query<(&mut Motion, &mut Transform, &mut UvClock)>, data: &CharacterData) -> bool {
+    match id {
+        0x2e => apply(p, Act::Win, rigs, data),
+        0x2f => apply(p, Act::Loss, rigs, data),
+        _ => {
+            let Ok((mut m, mut t, mut uv)) = rigs.get_mut(p.rig) else { return false };
+            if !data.motions.contains_key(&id) {
+                return false;
+            }
+            *uv = UvClock(Clock::start(1.0, false, None));
+            let serial = m.serial;
+            m.set(id, 1.0, false, None, serial);
+            p.centre |= p.n == 5 || p.n == 13;
+            t.rotation = Quat::from_rotation_y(PI);
+        }
+    }
+    data.motions.contains_key(&id)
 }
 
 /// The model's (x, z) that puts `Bip01Pelvis` over its spot (0, 8) at frame `t` of `clip`, yawed `yaw` and

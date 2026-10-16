@@ -68,6 +68,7 @@ mod court_picker;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
+mod plate_emote;
 mod previews;
 mod roster;
 mod slide;
@@ -3303,6 +3304,7 @@ pub fn plugin(app: &mut App) {
         (online::poll.after(step).before(draw), online::typing.before(step), names::typing.before(step), names::persist.after(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
     );
     previews::plugin(app);
+    plate_emote::plugin(app);
     mods_screen::plugin(app);
     osk::plugin(app);
     // B221/B244: the menus take taps, so the on-screen pad's stick keeps to its corner there; the match frees it

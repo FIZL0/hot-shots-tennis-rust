@@ -1067,7 +1067,7 @@ struct Shot;
 
 /// A preview camera's player.
 #[derive(Component)]
-struct Card(usize);
+pub(super) struct Card(pub(super) usize);
 
 /// Each seated player's right stick up / down (keyboard R / F) on their own preview (B422: off R2 / L2, the
 /// roster's section jumps): a flick past half way, again once the stick has come back.
@@ -1165,7 +1165,7 @@ fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<S
 
 /// Each player's R2/L2 pressed on a card not yet showing its live model.
 #[derive(Resource, Default)]
-struct Pending([Option<Act>; 4]);
+pub(super) struct Pending(pub(super) [Option<Act>; 4]);
 
 /// `HST_SELECT=c,c,c,c`: every player seated on the keyboard, hovering those characters (grid order is not
 /// character order: each is looked up); `c/k` on costume `k`; a trailing `!` swaps the hand (B140).
@@ -1279,7 +1279,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// A card's load (B102) has the preview's three motions, the same as a full load's, for every disc character.
+    /// A card's load (B102) has the preview's motions (B460: and the lobby's other two emotes), the same as a full load's, for every disc character.
     #[test]
     fn preview_loads_only_its_motions() {
         let iso = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso"));
@@ -1290,7 +1290,7 @@ mod tests {
             let full = character::load_disc(&mut disc, c, 0, &mut m, &mut t, &mut i, &mut b).unwrap();
             let mut ids: Vec<usize> = part.motions.keys().copied().collect();
             ids.sort();
-            assert_eq!(ids, [0x2e, 0x2f, character::POSE], "character {c}");
+            assert_eq!(ids, [0x2c, 0x2d, 0x2e, 0x2f, character::POSE], "character {c}");
             for id in ids {
                 assert_eq!(part.motions[&id].length, full.motions[&id].length, "character {c} motion {id:#x}");
                 assert_eq!(part.motions[&id].locals(&part.skeleton, 3.0), full.motions[&id].locals(&full.skeleton, 3.0), "character {c} motion {id:#x}");

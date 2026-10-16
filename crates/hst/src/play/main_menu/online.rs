@@ -1240,7 +1240,7 @@ impl Menu {
                 v.status = "Back in the lobby.".into();
                 self.align();
             }
-            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) | Event::Chat { .. } => {}
+            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) | Event::Chat { .. } | Event::Emote { .. } => {}
         }
     }
 
