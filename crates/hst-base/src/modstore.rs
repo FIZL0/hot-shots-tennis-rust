@@ -1,6 +1,8 @@
 //! The mod store (M17, `plan/M17.md`): players' mods on the public Hugging Face dataset repo [`REPO`]. Browse lists
 //! `mods/<id>/` on `main` (merged: Verified) and on every open pull request (an upload goes live as its PR opens; the
-//! PR's author is the mod's author); `main` wins an id, then the newest PR. Install downloads `mod.zip` over HTTPS
+//! PR's author is the mod's author); `main` wins an id, then the newest PR. M116: read from the store's `index.json`
+//! ([`Index`]) plus the PRs opened since it was built, not every PR's tree (HF allows an IP 500 API calls per 5
+//! minutes). Install downloads `mod.zip` over HTTPS
 //! from the store only, checks its size and sha256 against `meta.json`, then installs it through M16's checks
 //! (`modfs::install`): into `mods/<id>/` on disk, or the page's OPFS store in the browser. Upload packages an
 //! installed mod (`mod.zip`, `meta.json`, `preview.png` and B372's ~256 px `thumb.png`) and commits it to the repo as a pull request through the
@@ -137,6 +139,8 @@ pub enum Event {
     Progress(String, String),
     /// M19: the signed-in player's own uploads ([`mine`]).
     Mine(Result<Vec<Entry>, String>),
+    /// M116: something to tell the player after a [`Event::Listing`] (the store is busy: the last listing is shown).
+    Note(String),
     /// M19: mod `id`'s removal ([`remove`]): what to tell the player.
     Removed(String, Result<String, String>),
 }
@@ -184,10 +188,20 @@ fn file_url(rev: &str, path: &str) -> String {
     format!("{HF}/datasets/{REPO}/resolve/{}/{path}", rev_part(rev))
 }
 
+/// M116: what a 429 or 5xx from the store says.
+pub const BUSY: &str = "The mod store is busy, try again in a minute.";
+/// M116: requests sent to the store so far (what a listing costs).
+static REQUESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// GET `url` (the store's only): its answer, unless it says it's more than `cap` bytes.
 async fn answer(url: &str, cap: u64) -> Result<reqwest::Response, String> {
     debug_assert!(url.starts_with(HF));
+    REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let r = client().get(url).send().await.map_err(|e| format!("can't reach the store: {e}"))?;
+    // M116: HF rate-limits by IP (500 API calls per 5 minutes; 429 with Retry-After), and a 5xx passes too
+    if r.status().as_u16() == 429 || r.status().is_server_error() {
+        return Err(BUSY.into());
+    }
     let r = r.error_for_status().map_err(|e| format!("the store said {}", e.status().map_or("no".into(), |s| s.to_string())))?;
     if r.content_length().is_some_and(|n| n > cap) {
         return Err("too big".into());
@@ -204,11 +218,15 @@ async fn get(url: &str, cap: u64) -> Result<Vec<u8>, String> {
     Ok(b.to_vec())
 }
 
-/// The mod ids under `mods/` at `rev` (none when the folder isn't there).
-async fn ids(rev: &str) -> Vec<String> {
+/// The mod ids under `mods/` at `rev` (none when the folder isn't there); a store that can't be read is an error.
+async fn ids(rev: &str) -> Result<Vec<String>, String> {
     // ponytail: one tree page (HF's is ~1000 entries); follow its Link header when the store outgrows it
-    let Ok(b) = get(&format!("{HF}/api/datasets/{REPO}/tree/{}/mods", rev_part(rev)), 4 << 20).await else { return Vec::new() };
-    ids_in(&b)
+    match get(&format!("{HF}/api/datasets/{REPO}/tree/{}/mods", rev_part(rev)), 4 << 20).await {
+        Ok(b) => Ok(ids_in(&b)),
+        // 404: no `mods/` there
+        Err(e) if e.starts_with("the store said") => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
 }
 
 fn ids_in(tree: &[u8]) -> Vec<String> {
@@ -222,29 +240,33 @@ fn ids_in(tree: &[u8]) -> Vec<String> {
     nodes.into_iter().filter(|n| n.kind == "directory").filter_map(|n| n.path.strip_prefix("mods/").map(str::to_string)).filter(|id| modfs::good_id(id)).collect()
 }
 
-/// Open pull requests, newest first: (number, author's account name).
-async fn pulls() -> Vec<(u32, String)> {
-    let mut out = Vec::new();
+/// Open pull requests, newest first: (number, author's account name). M116: pages (50 each) only until the reply's
+/// `count` is in, so 82 open PRs are two requests.
+async fn pulls() -> Result<Vec<(u32, String)>, String> {
+    let (mut out, mut seen) = (Vec::new(), 0);
     for p in 0..20 {
         let url = format!("{HF}/api/datasets/{REPO}/discussions?type=pull_request&status=open&p={p}");
-        let Ok(b) = get(&url, 4 << 20).await else { break };
-        let page = pulls_in(&b);
-        if page.is_empty() {
+        let (page, n, count) = pulls_in(&get(&url, 4 << 20).await?);
+        out.extend(page);
+        seen += n;
+        if n == 0 || seen >= count {
             break;
         }
-        out.extend(page);
     }
     out.sort_by(|a, b| b.0.cmp(&a.0));
-    out
+    Ok(out)
 }
 
-fn pulls_in(page: &[u8]) -> Vec<(u32, String)> {
+/// A discussions page: its open PRs, how many items it had, and the reply's `count` of all of them.
+fn pulls_in(page: &[u8]) -> (Vec<(u32, String)>, usize, usize) {
     let v: serde_json::Value = serde_json::from_slice(page).unwrap_or_default();
     let list = v["discussions"].as_array().cloned().unwrap_or_default();
-    list.iter()
+    let open = list
+        .iter()
         .filter(|d| d["isPullRequest"].as_bool() == Some(true) && d["status"] == "open")
         .filter_map(|d| Some((d["num"].as_u64()? as u32, d["author"]["name"].as_str().unwrap_or("").to_string())))
-        .collect()
+        .collect();
+    (open, list.len(), v["count"].as_u64().map_or(usize::MAX, |n| n as usize))
 }
 
 /// `s` as plain text: no control characters, at most `n` characters.
@@ -272,23 +294,90 @@ fn meta_of(b: &[u8], id: &str) -> Option<Meta> {
     (!m.name.is_empty()).then_some(m)
 }
 
-async fn entries(rev: String, author: Option<String>) -> Vec<Entry> {
-    let ids = ids(&rev).await;
+async fn entries(rev: String, author: Option<String>) -> Result<Vec<Entry>, String> {
+    let ids = ids(&rev).await?;
     let metas = n0_future::join_all(ids.iter().map(|id| get_meta(&rev, id))).await;
-    metas
-        .into_iter()
-        .flatten()
-        .map(|mut meta| {
-            if let Some(a) = &author {
-                meta.author = plain_text(a, 40);
-            }
-            Entry { meta, verified: rev == "main", rev: rev.clone() }
-        })
-        .collect()
+    let metas = metas.into_iter().collect::<Result<Vec<_>, _>>()?;
+    Ok(metas.into_iter().flatten().map(|meta| entry(meta, &rev, author.as_deref())).collect())
 }
 
-async fn get_meta(rev: &str, id: &str) -> Option<Meta> {
-    meta_of(&get(&file_url(rev, &format!("mods/{id}/meta.json")), MAX_META).await.ok()?, id)
+/// A store entry: `meta` at `rev`; a PR's mod is its author's (`author`).
+fn entry(mut meta: Meta, rev: &str, author: Option<&str>) -> Entry {
+    if let Some(a) = author {
+        meta.author = plain_text(a, 40);
+    }
+    Entry { meta, verified: rev == "main", rev: rev.to_string() }
+}
+
+/// `mods/<id>/meta.json` at `rev`: None when it's missing or fails [`meta_of`]; a busy store is an error.
+async fn get_meta(rev: &str, id: &str) -> Result<Option<Meta>, String> {
+    match get(&file_url(rev, &format!("mods/{id}/meta.json")), MAX_META).await {
+        Ok(b) => Ok(meta_of(&b, id)),
+        Err(e) if e == BUSY => Err(e),
+        Err(_) => Ok(None),
+    }
+}
+
+/// M116: `index.json` on the store's `main`, kept by the mods repo's `tools/store_index` (rebuilt within a minute of
+/// any change to the store by a Hugging Face webhook, and hourly): every mod on `main` and on each PR open when it
+/// was built, so a listing is this, the open PR list, and the trees of only the PRs opened since.
+#[derive(Deserialize)]
+struct Index {
+    version: u32,
+    /// The PRs open when it was built (their author and head commit, which the game doesn't need).
+    pulls: std::collections::BTreeMap<u32, serde::de::IgnoredAny>,
+    /// `main`'s mods, then each PR's.
+    entries: Vec<Entry>,
+}
+
+/// The store's index, or None when it isn't there or can't be read (the listing crawls the store instead).
+async fn index() -> Result<Option<Index>, String> {
+    match get(&file_url("main", "index.json"), 32 << 20).await {
+        Ok(b) => Ok(serde_json::from_slice::<Index>(&b).ok().filter(|i| i.version == 1)),
+        Err(e) if e == BUSY => Err(e),
+        Err(_) => Ok(None),
+    }
+}
+
+/// One rev's part of a listing: known from the index, or to read from the store (rev, its PR's author).
+#[derive(Debug, PartialEq)]
+enum Part {
+    Have(Vec<Entry>),
+    Read(String, Option<String>),
+}
+
+/// `main`, then each open PR newest first: the index's copy, re-checked, where it has one (a PR only if still open,
+/// as its author); without an index, every rev read from the store.
+fn parts(ix: Option<Index>, open: Vec<(u32, String)>) -> Vec<Part> {
+    let Some(ix) = ix else {
+        return std::iter::once(Part::Read("main".into(), None)).chain(open.into_iter().map(|(n, who)| Part::Read(format!("refs/pr/{n}"), Some(who)))).collect();
+    };
+    let at = |rev: &str, author: Option<&str>| -> Vec<Entry> {
+        let ok = |e: &&Entry| e.rev == rev && modfs::good_id(&e.meta.id);
+        let meta = |e: &Entry| meta_of(&serde_json::to_vec(&e.meta).unwrap(), &e.meta.id);
+        ix.entries.iter().filter(ok).filter_map(meta).map(|m| entry(m, rev, author)).collect()
+    };
+    let mut out = vec![Part::Have(at("main", None))];
+    for (n, who) in open {
+        let rev = format!("refs/pr/{n}");
+        out.push(if ix.pulls.contains_key(&n) { Part::Have(at(&rev, Some(&who))) } else { Part::Read(rev, Some(who)) });
+    }
+    out
+}
+
+/// The store's mods, unmerged: `main`'s, then each open PR's, newest first. M116: from the index plus the PRs opened
+/// since it was built (3 requests for 70+ open PRs), else the whole store (a tree and every meta.json per rev).
+async fn lists() -> Result<Vec<Vec<Entry>>, String> {
+    let (ix, open) = n0_future::future::zip(index(), pulls()).await;
+    let parts = parts(ix?, open?);
+    let got = n0_future::join_all(parts.into_iter().map(|p| async move {
+        match p {
+            Part::Have(l) => Ok(l),
+            Part::Read(rev, who) => entries(rev, who).await,
+        }
+    }))
+    .await;
+    got.into_iter().collect::<Result<Vec<_>, _>>().map_err(|e| if e == BUSY { e } else { "Can't reach the mod store.".into() })
 }
 
 /// `main` first, then each PR newest first; one already listed (same id, and same author or zip) is left out, so
@@ -320,25 +409,43 @@ struct Cached {
     entries: Vec<Entry>,
 }
 
-/// Lists the store ([`Event::Listing`]): the cached listing if it's under an hour old and not `fresh`.
+/// Lists the store ([`Event::Listing`]): the cached listing if it's under an hour old and not `fresh`. M116: if the
+/// store can't be read (busy: HF's rate limit) the last listing stays up, with a [`Event::Note`] saying why.
 pub fn list(fresh: bool) {
+    let shown = |c: Cached| c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id) && !retired(e)).collect::<Vec<_>>();
+    let cached = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok());
     if !fresh {
-        let c = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok());
-        if let Some(c) = c.filter(|c| now().saturating_sub(c.at) < CACHE_SECS) {
-            return send(Event::Listing(Ok(c.entries.into_iter().filter(|e| !crate::mods::dropped(&e.meta.id) && !retired(e)).collect())));
+        if let Some(c) = cached.as_ref().filter(|c| now().saturating_sub(c.at) < CACHE_SECS) {
+            return send(Event::Listing(Ok(shown(Cached { at: c.at, entries: c.entries.clone() }))));
         }
     }
-    spawn(async {
-        let (main, prs) = n0_future::future::zip(entries("main".into(), None), pulls()).await;
-        let reachable = !main.is_empty() || !prs.is_empty() || get(&format!("{HF}/api/datasets/{REPO}"), 1 << 20).await.is_ok();
-        if !reachable {
-            return send(Event::Listing(Err("Can't reach the mod store.".into())));
+    spawn(async move {
+        match lists().await {
+            Ok(l) => {
+                let all: Vec<Entry> = merge(l).into_iter().filter(|e| !retired(e)).collect();
+                let _ = crate::store::write(CACHE, serde_json::to_string(&Cached { at: now(), entries: all.clone() }).unwrap());
+                send(Event::Listing(Ok(all)));
+            }
+            Err(e) => match cached.filter(|c| !c.entries.is_empty()) {
+                Some(c) => {
+                    send(Event::Listing(Ok(shown(c))));
+                    send(Event::Note(e));
+                }
+                None => send(Event::Listing(Err(e))),
+            },
         }
-        let pr = n0_future::join_all(prs.into_iter().map(|(n, who)| entries(format!("refs/pr/{n}"), Some(who)))).await;
-        let all: Vec<Entry> = merge(std::iter::once(main).chain(pr).collect()).into_iter().filter(|e| !retired(e)).collect();
-        let _ = crate::store::write(CACHE, serde_json::to_string(&Cached { at: now(), entries: all.clone() }).unwrap());
-        send(Event::Listing(Ok(all)));
     });
+}
+
+/// M116: the cached listing goes stale (the next Browse reads the store), but is still what a busy store shows;
+/// `gone` (an id and rev taken down) leaves it at once.
+fn stale(gone: Option<(&str, &str)>) {
+    let Some(mut c) = crate::store::read_to_string(CACHE).ok().and_then(|s| serde_json::from_str::<Cached>(&s).ok()) else { return };
+    c.at = 0;
+    if let Some((id, rev)) = gone {
+        c.entries.retain(|e| !(e.meta.id == id && e.rev == rev));
+    }
+    let _ = crate::store::write(CACHE, serde_json::to_string(&c).unwrap());
 }
 
 /// M19: `name`'s own uploads ([`Event::Mine`]): the mods on their open PRs, and those on `main` whose meta.json
@@ -348,14 +455,10 @@ pub fn mine(name: String) {
 }
 
 async fn uploads_of(name: &str) -> Result<Vec<Entry>, String> {
-    let (main, prs) = n0_future::future::zip(entries("main".into(), None), pulls()).await;
-    if main.is_empty() && prs.is_empty() && get(&format!("{HF}/api/datasets/{REPO}"), 1 << 20).await.is_err() {
-        return Err("Can't reach the mod store.".into());
-    }
-    let prs = prs.into_iter().filter(|p| p.1.eq_ignore_ascii_case(name));
-    let pr = n0_future::join_all(prs.map(|(n, who)| entries(format!("refs/pr/{n}"), Some(who)))).await;
-    let main: Vec<Entry> = main.into_iter().filter(|e| e.meta.author.eq_ignore_ascii_case(name)).collect();
-    Ok(pr.into_iter().flatten().chain(std::iter::once(main).flatten()).collect())
+    let mut l = lists().await?;
+    let main = if l.is_empty() { Vec::new() } else { l.remove(0) };
+    // a PR's entries carry its author's name ([`entry`])
+    Ok(l.into_iter().flatten().chain(main).filter(|e| e.meta.author.eq_ignore_ascii_case(name)).collect())
 }
 
 /// `refs/pr/<n>`'s `n`.
@@ -382,7 +485,7 @@ pub fn remove(e: &Entry, token: String) {
                     format!("Asked to delete {name}: it leaves the store when a maintainer merges {pr}")
                 }
             };
-            let _ = crate::store::write(CACHE, "");
+            stale(Some((&id, &rev)));
             Ok(said)
         };
         let got = got.await;
@@ -880,7 +983,7 @@ pub fn publish(mods: Vec<Upload>, name: String, token: String) {
             send(Event::Upload(m.dir.clone(), got.unwrap_or_else(Up::Failed)));
         }
         // the next Browse reads the store again, these uploads included
-        let _ = crate::store::write(CACHE, "");
+        stale(None);
     });
 }
 
@@ -1126,7 +1229,26 @@ mod tests {
         assert_eq!(ids_in(tree), ["oob_pc16_gloria"]);
         assert!(ids_in(br#"{"error":"mods does not exist on \"main\""}"#).is_empty());
         let page = br#"{"discussions":[{"num":82,"author":{"name":"Cathleen"},"status":"open","isPullRequest":true},{"num":7,"author":{"name":"x"},"status":"open","isPullRequest":false}],"count":2,"start":0}"#;
-        assert_eq!(pulls_in(page), [(82, "Cathleen".to_string())]);
+        assert_eq!(pulls_in(page), (vec![(82, "Cathleen".to_string())], 2, 2));
+    }
+
+    /// M116: a listing takes the index's copy of `main` and of every PR still open (re-checked, as the PR's author),
+    /// reads only the PRs opened since it was built, and drops those closed since; no index reads every rev.
+    #[test]
+    fn index_then_new_pulls() {
+        let e = |id: &str, rev: &str| Entry { meta: Meta { author: "someone".into(), ..meta(id, b"zip") }, rev: rev.into(), verified: rev == "main" };
+        let bad = Entry { meta: Meta { sha256: "nope".into(), ..e("broken", "main").meta }, ..e("broken", "main") };
+        let j = serde_json::json!({ "version": 1, "built": 1, "pulls": { "5": { "author": "ann", "commit": "c5" }, "3": {}, "2": {} },
+            "entries": [e("a", "main"), bad, e("b", "refs/pr/5"), e("c", "refs/pr/3"), e("d", "refs/pr/2")], "extra": 0 });
+        let ix: Index = serde_json::from_value(j).unwrap();
+        let open = vec![(7, "bo".to_string()), (5, "ann".to_string()), (3, "cy".to_string())];
+        let got = parts(Some(ix), open.clone());
+        let by = |id: &str, rev: &str, who: &str| Entry { meta: Meta { author: who.into(), ..e(id, rev).meta }, ..e(id, rev) };
+        assert_eq!(got, [Part::Have(vec![e("a", "main")]), Part::Read("refs/pr/7".into(), Some("bo".into())), Part::Have(vec![by("b", "refs/pr/5", "ann")]), Part::Have(vec![by("c", "refs/pr/3", "cy")])]);
+        let crawl = parts(None, open);
+        assert_eq!(crawl[0], Part::Read("main".into(), None));
+        assert_eq!(crawl[3], Part::Read("refs/pr/3".into(), Some("cy".into())));
+        assert!(serde_json::from_slice::<Index>(b"{\"version\":1}").is_err());
     }
 
     /// A meta.json is taken only for its own folder, with a real sha256 and a size within the cap; its text is
@@ -1417,6 +1539,25 @@ mod tests {
 
     fn walk_len(d: &Path) -> usize {
         std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| if e.path().is_dir() { walk_len(&e.path()) } else { 1 }).sum()
+    }
+
+    /// M116 against the real store (`HST_LIVE=1`): a cold listing costs at most 3 requests (index.json and the open
+    /// PR list's pages) with up to 100 open PRs, plus a tree and the meta.json files of each PR opened since the index.
+    #[test]
+    fn live_listing_cost() {
+        if std::env::var("HST_LIVE").is_err() {
+            return eprintln!("HST_LIVE unset (skipped)");
+        }
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let before = REQUESTS.load(std::sync::atomic::Ordering::Relaxed);
+        let (ix, open) = rt.block_on(n0_future::future::zip(index(), pulls()));
+        let (ix, open) = (ix.unwrap().expect("no index.json on the store"), open.unwrap());
+        let new = open.iter().filter(|p| !ix.pulls.contains_key(&p.0)).count();
+        let cost = REQUESTS.load(std::sync::atomic::Ordering::Relaxed) - before;
+        eprintln!("{} open PRs, {new} newer than the index, {} entries in it: {cost} requests", open.len(), ix.entries.len());
+        assert!(cost <= 3 && open.len() <= 100 || cost <= 1 + open.len().div_ceil(50), "{cost}");
+        let l = rt.block_on(lists()).unwrap();
+        assert_eq!(l.len(), 1 + open.len());
     }
 
     #[test]
