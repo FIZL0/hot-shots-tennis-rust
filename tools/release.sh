@@ -36,11 +36,12 @@ command -v minisign >/dev/null || { echo "minisign missing: sudo pacman -S minis
 # `gh release view` can't see drafts (they have no tag yet); the list can
 ! gh release list -L 100 --json tagName -q '.[].tagName' | grep -qx "$tag" || { echo "$tag already has a release (a draft?): delete or publish it on GitHub first" >&2; exit 1; }
 
-# the game reports its crate version (lobby handshake, updater), so it must be the tag's
-if ! grep -qx "version = \"$version\"" crates/hst/Cargo.toml; then
-    sed -i "0,/^version = \".*\"/s//version = \"$version\"/" crates/hst/Cargo.toml
-    cargo metadata -q --offline --format-version 1 >/dev/null  # rewrites hst's entry in Cargo.lock
-    git commit -q -m "Release $tag" crates/hst/Cargo.toml Cargo.lock
+# the game reports its crates' version (lobby handshake, updater), so it must be the tag's: the workspace's
+# `[workspace.package]` version, the one the game's crates share (P60)
+if ! grep -qx "version = \"$version\"" Cargo.toml; then
+    sed -i "0,/^version = \".*\"/s//version = \"$version\"/" Cargo.toml
+    cargo metadata -q --offline --format-version 1 >/dev/null  # rewrites the game crates' entries in Cargo.lock
+    git commit -q -m "Release $tag" Cargo.toml Cargo.lock
 fi
 
 # M97: prompt/token/commit counts for the website and donate screen; the ledger keeps transcripts Claude Code deletes

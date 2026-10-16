@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// `eprintln!` for the `HST_FPS` log: on the web (no stderr there) the browser's console (B453: `?fps` in the URL).
+#[macro_export]
 macro_rules! diag {
     ($($t:tt)*) => {{
         #[cfg(target_arch = "wasm32")]
@@ -22,7 +23,7 @@ macro_rules! diag {
         eprintln!($($t)*);
     }};
 }
-pub(crate) use diag;
+pub use crate::diag;
 
 /// A frame or a stage of one this long counts as a stall (ms).
 const STALL: f32 = 50.0;
@@ -122,7 +123,7 @@ fn start() -> Instant {
 static WATCH: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 
 /// The next frames get logged in full: the loading screen just came down (`mode::loaded`).
-pub(crate) fn watch() {
+pub fn watch() {
     for w in &WATCH {
         w.store(10, Ordering::Relaxed);
     }
@@ -134,7 +135,7 @@ fn watched(side: usize) -> bool {
 }
 
 /// Seconds since the first frame, as the stall lines give them.
-pub(crate) fn since_start() -> f32 {
+pub fn since_start() -> f32 {
     start().elapsed().as_secs_f32()
 }
 

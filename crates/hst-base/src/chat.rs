@@ -238,7 +238,7 @@ fn input(
     let open = chat.open;
     phone(&mut was, open);
     // the pads: R2 shows / steps the phrases, L2 says the one shown
-    let pads: Vec<_> = pads.iter().filter(|g| crate::play::controls::readable(g)).collect();
+    let pads: Vec<_> = pads.iter().filter(|g| crate::seats::readable(g)).collect();
     let next = pads.iter().any(|g| g.just_pressed(GamepadButton::RightTrigger2)) || ask == 2;
     let say = pads.iter().any(|g| g.just_pressed(GamepadButton::LeftTrigger2));
     let n = chat.phrases().len();

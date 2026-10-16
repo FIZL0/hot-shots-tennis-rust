@@ -81,12 +81,12 @@ static SAFE: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
 static TOP_GAP: AtomicU32 = AtomicU32::new(0);
 
 /// Sets `TOP_GAP` (a share of the window's height).
-pub(crate) fn set_top_gap(share: f32) {
+pub fn set_top_gap(share: f32) {
     TOP_GAP.store(share.clamp(0.0, 0.45).to_bits(), Ordering::Relaxed);
 }
 
 /// The safe-area insets in logical px of a `size` window (the touch pad's layout keeps clear of them too).
-pub(crate) fn safe_insets(size: Vec2) -> [f32; 4] {
+pub fn safe_insets(size: Vec2) -> [f32; 4] {
     let s = SAFE.each_ref().map(|a| f32::from_bits(a.load(Ordering::Relaxed)));
     [s[0] * size.x, s[1] * size.y, s[2] * size.x, s[3] * size.y]
 }
@@ -175,31 +175,31 @@ pub fn screen_43() -> (Node, Screen43) {
 pub static MENU_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000);
 
 /// The Menu Size factor in force.
-pub(super) fn menu_scale() -> f32 {
+pub fn menu_scale() -> f32 {
     f32::from_bits(MENU_SCALE.load(Ordering::Relaxed))
 }
 
 /// The menus' `share` and `vshare` on a view `aspect` wide at Menu Size `k`: the 640×448 screen's share of the view's
 /// width and height (over 1 when it's bigger than the view).
-pub(super) fn menu_shares(aspect: f32, k: f32) -> (f32, f32) {
+pub fn menu_shares(aspect: f32, k: f32) -> (f32, f32) {
     (share(aspect) * k, vshare(aspect) * k)
 }
 
 /// The menus' `menu_shares` on the primary window's view at the Menu Size in force ((1, 1) without one).
-pub(super) fn window_menu_shares(window: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> (f32, f32) {
+pub fn window_menu_shares(window: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> (f32, f32) {
     window.single().map_or((1.0, 1.0), |w| menu_shares(aspect(w), menu_scale()))
 }
 
 /// Share of the window's width the 4:3 screen covers: all of it at 4:3 or narrower (narrower windows letterbox it
 /// top and bottom, `vshare`).
-pub(super) fn share(aspect: f32) -> f32 {
+pub fn share(aspect: f32) -> f32 {
     (4.0 / 3.0 / aspect).min(1.0)
 }
 
 /// A 640-wide screen rect `x, w` on a full-window node, at the 4:3 screen's scale (`share`): left of the screen's
 /// centre it keeps its distance from the window's left edge, right of it from the right edge. Left and width in
 /// percent of the window.
-pub(super) fn pin(x: f32, w: f32, share: f32) -> (f32, f32) {
+pub fn pin(x: f32, w: f32, share: f32) -> (f32, f32) {
     let left = if x + w / 2.0 < 320.0 { x / 6.4 * share } else { 100.0 - (640.0 - x) / 6.4 * share };
     (left, w / 6.4 * share)
 }
@@ -218,7 +218,7 @@ pub enum Anchor {
 }
 
 /// A 640-wide screen rect `x, w` placed by `a`: left and width in percent of the window.
-pub(super) fn place(x: f32, w: f32, share: f32, a: Anchor) -> (f32, f32) {
+pub fn place(x: f32, w: f32, share: f32, a: Anchor) -> (f32, f32) {
     match a {
         Anchor::Span => {
             let right = if x + w >= 640.0 { 100.0 } else { (x + w) / 6.4 * share };
@@ -231,7 +231,7 @@ pub(super) fn place(x: f32, w: f32, share: f32, a: Anchor) -> (f32, f32) {
 
 /// Share of the window's height the 4:3 screen covers: all of it at 4:3 or wider. A taller window letterboxes it
 /// (B232): the HUD keeps its shape, the 3D view fills the rest.
-pub(super) fn vshare(aspect: f32) -> f32 {
+pub fn vshare(aspect: f32) -> f32 {
     (aspect * 0.75).min(1.0)
 }
 
@@ -239,12 +239,12 @@ pub(super) fn vshare(aspect: f32) -> f32 {
 /// Same scale as across (`share`), so nothing stretches in a tall window: `Centre` rides the centred 4:3 screen,
 /// `Sides`/`Span` keep to the window's top or bottom edge (by which half the rect's centre is in), and a full-height
 /// rect (a wall, a dim) fills it.
-pub(super) fn vplace(y: f32, h: f32, aspect: f32, a: Anchor) -> (f32, f32) {
+pub fn vplace(y: f32, h: f32, aspect: f32, a: Anchor) -> (f32, f32) {
     vplace_in(y, h, vshare(aspect), a)
 }
 
 /// `vplace` with the 448-high screen covering `s` of the view's height (the menus' `menu_shares`).
-pub(super) fn vplace_in(y: f32, h: f32, s: f32, a: Anchor) -> (f32, f32) {
+pub fn vplace_in(y: f32, h: f32, s: f32, a: Anchor) -> (f32, f32) {
     let height = h / 4.48 * s;
     match a {
         Anchor::Centre => (50.0 * (1.0 - s) + y / 4.48 * s, height),
@@ -255,18 +255,18 @@ pub(super) fn vplace_in(y: f32, h: f32, s: f32, a: Anchor) -> (f32, f32) {
 }
 
 /// The primary window's view's width over height (4:3 without one).
-pub(super) fn window_aspect(window: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> f32 {
+pub fn window_aspect(window: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> f32 {
     window.single().map_or(4.0 / 3.0, aspect)
 }
 
 /// Pixels (logical) per 448-space unit: the 4:3 screen's height over 448.
-pub(super) fn unit_px(w: &Window) -> f32 {
+pub fn unit_px(w: &Window) -> f32 {
     let v = view_size(w);
     v.y.min(v.x * 0.75) / 448.0
 }
 
 /// `share` of the primary window's view (1 without one).
-pub(super) fn window_share(window: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> f32 {
+pub fn window_share(window: &Query<&Window, With<bevy::window::PrimaryWindow>>) -> f32 {
     window.single().map_or(1.0, |w| share(aspect(w)))
 }
 
@@ -398,7 +398,7 @@ fn legend_strip_under_the_description_bar() {
 
 /// Places a HUD quad (percent of the view); only a real change marks the node, since a changed `Node` relayouts the
 /// whole UI tree (B328: every frame otherwise).
-pub(crate) fn put(node: &mut Mut<Node>, left: f32, top: f32, width: f32, height: f32) {
+pub fn put(node: &mut Mut<Node>, left: f32, top: f32, width: f32, height: f32) {
     let placed = Node { left: Val::Percent(left), top: Val::Percent(top), width: Val::Percent(width), height: Val::Percent(height), ..(**node).clone() };
     node.set_if_neq(placed);
 }

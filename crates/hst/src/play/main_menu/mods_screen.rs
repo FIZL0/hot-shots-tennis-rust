@@ -37,18 +37,9 @@ pub(super) fn show_ends(v: &View) -> [bool; 2] {
     grid::show_ends(v)
 }
 
-/// The mods folder: `mods/` beside the disc, as the select's roster reads it (`main_menu.rs setup` sets it; a
-/// relative `mods` broke when the game was started from elsewhere, e.g. a desktop shortcut).
-static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+// The mods folder, in hst-base (`web.rs` reads it too)
+pub(crate) use hst_base::modfs::{root, set_root};
 
-pub(crate) fn set_root(dir: std::path::PathBuf) {
-    // `./mods` (a disc path with no folder, the browser's) stays `mods`, the OPFS paths' form
-    let _ = ROOT.set(dir.strip_prefix(".").map(Into::into).unwrap_or(dir));
-}
-
-pub(crate) fn root() -> &'static Path {
-    ROOT.get().map(|p| p.as_path()).unwrap_or(Path::new("mods"))
-}
 /// The pills above the list on Installed (Add mod, Reload, Remove all) and Upload (Sign in, Upload all): the rows
 /// before the mods.
 const TOP: usize = 3;

@@ -74,7 +74,7 @@ impl FromWorld for Pipeline {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let shader = world.resource::<AssetServer>().load("embedded://hst/hud_gamma.wgsl");
+        let shader = world.resource::<AssetServer>().load("embedded://hst_base/hud_gamma.wgsl");
         Pipeline { mix, composite, weight, fullscreen: world.resource::<FullscreenShader>().clone(), shader }
     }
 }

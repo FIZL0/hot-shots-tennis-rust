@@ -1,0 +1,106 @@
+[package]
+name = "hst-base"
+version.workspace = true
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# The lower layer of the game (P60, `src/lib.rs`): split out of `hst` so an edit in the match or the menus rebuilds less.
+# The same dependencies as `hst`'s (its modules came from there).
+[dependencies]
+# rollback (M2h, `play/rollback.rs`): ggrs core, its messages as bincode in iroh datagrams
+ggrs = { version = "0.13", features = ["sync-send"] }
+bincode = "1.3"
+hst-data = { path = "../hst-data" }
+hst-sim = { path = "../hst-sim" }
+# `debug`: type names, which `mode.rs` tells its resources by; `bevy_debug_stepping`: its executor's skip list, which
+# `mode.rs` runs a mode's start a slice a frame with (P50)
+bevy = { version = "0.19.1", features = ["debug", "bevy_debug_stepping"] }
+gltf = { version = "1.4", default-features = false, features = ["extras", "names", "utils"] }
+serde_json = "1"
+# `SystemTime` that also works in the browser (std's panics on wasm32-unknown-unknown)
+web-time = "1"
+serde = { version = "1", features = ["derive"] }
+# the select cards' PNG encode (`play/main_menu/previews.rs`; bevy's own image crate)
+image = { version = "0.25", default-features = false, features = ["png"] }
+# join codes as QR (`play/main_menu/online.rs`)
+qrcode = { version = "0.14", default-features = false }
+# the menus' remastered art (`play/menu_art.rs`): vector labels from an OFL font (both already in the lock via bevy)
+tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
+ab_glyph = "0.2"
+# netplay transport (`net.rs`): iroh QUIC (relay-only in the browser), tickets for codes/QR; tasks and timers through
+# n0-future (tokio natively, the browser's event loop on wasm)
+iroh = "1.3"
+iroh-tickets = "1"
+n0-future = "0.3"
+tokio = { version = "1", features = ["macros", "sync"] }
+# the browser's LAN codes (M2k, `net/rtc.rs`)
+data-encoding = "2"
+# short lobby codes through a pkarr relay (`net.rs`; iroh already builds it: rustls natively, fetch in the browser)
+reqwest = { version = "0.13", default-features = false, features = ["stream"] }
+# mod zips (M16, `modfs.rs`): deflate, already built for png
+miniz_oxide = "0.8"
+# the mod store's download check (M17, `modstore.rs`; already built for iroh)
+sha2 = "0.11"
+
+# copy/paste of join codes through the OS clipboard (arboard: none on iOS/Android, where it stays in-app)
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+bevy = { version = "0.19.1", features = ["system_clipboard"] }
+
+# iOS: stderr into the app's log file (`ios.rs`); the window's view for the on-screen pad's safe area (`play/touch_pad.rs`)
+[target.'cfg(target_os = "ios")'.dependencies]
+libc = "0.2"
+# P28: the GPU's frame time from Metal's command buffers (`graphics.rs` gpu_time); the versions wgpu-hal already uses
+objc2 = "0.6"
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "MTLCommandBuffer"] }
+block2 = "0.6"
+# P49: a display link asking ProMotion for 120 Hz (`ios.rs` frame_rate); the versions wgpu-hal already uses
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CADisplayLink", "CAFrameRateRange"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSRunLoop", "NSString", "NSObjCRuntime"] }
+wgpu = "29"
+raw-window-handle = "0.6"
+
+# M99: the Android start page's file picker and restart (`android.rs` → `android/…/HstActivity.java`)
+# M101: the input device list for gamepad hot-plug (`android_pad.rs`; the version android-activity already builds)
+# M102: the window's safe area and the on-screen pad's haptic tick through JNI (`android.rs`; android-activity's own jni)
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+# M105: stderr and the engine log into hst-log.txt (`android.rs`)
+libc = "0.2"
+# B454: the root certificates the app's HTTPS checks against (`android.rs` tls; the version iroh-relay already builds)
+webpki-roots = "1"
+# B418: the phone's own certificate check for that HTTPS (`android.rs` init_tls, tls; the versions reqwest already builds;
+# its Java classes go into the APK in tools/apk.sh)
+rustls-platform-verifier = "0.7"
+jni22 = { package = "jni", version = "0.22", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+ggrs = { version = "0.13", features = ["wasm-bindgen"] }
+web-sys = { version = "0.3", features = ["Blob", "Document", "DomRect", "Element", "File", "FileReaderSync", "FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "Location", "Storage", "UrlSearchParams", "Window", "MessageEvent", "RtcPeerConnection", "RtcPeerConnectionState", "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelState", "RtcDataChannelType", "RtcSessionDescription", "RtcSessionDescriptionInit", "RtcSdpType", "RtcIceGatheringState"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# the window icon (`main.rs` window_icon), on bevy's own winit
+winit = { version = "0.30", default-features = false }
+# lobbies: addresses and lobby list on the mainline DHT and LAN mDNS (UDP: not in the browser)
+iroh-mainline-address-lookup = "0.6"
+n0-mainline = "0.7"
+# the crypto reqwest uses for the pkarr relay (`net.rs` relay_put): iroh's own ring
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+iroh-mdns-address-lookup = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+# B374: the self-updater's check of a release's signed SHA256SUMS (`update.rs`; no dependencies). iOS builds it too:
+# the app bundle can't be written, so there it only offers the release page
+minisign-verify = "0.3"
+
+
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))'.dependencies]
+# Add mod's file picker on desktop (the xdg portal on Linux; the browser build uses the page's input, iOS the Files app; none on Android)
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+
+[features]
+# the browser build on WebGPU (`hst`'s `webgpu` turns it on)
+webgpu = ["bevy/webgpu"]
+# test helpers (`Sound::test`, `Net::wired`, …) for the crates above's tests (`hst`'s dev-dependency turns it on)
+testing = []

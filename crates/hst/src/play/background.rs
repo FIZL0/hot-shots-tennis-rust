@@ -29,6 +29,30 @@ pub fn back(w: &mut World, left: bool) {
     }
 }
 
+/// M108, each frame (`First`, before the match's ticks): keeps `android::LEAVE` up to date, and on the first frame after a
+/// pause, tells the match ([`back`]). Here, not in `android.rs`, as it
+/// reaches into the match (P60).
+#[cfg(target_os = "android")]
+pub fn background(w: &mut World, mut seen: Local<u32>) {
+    use crate::android::{LEAVE, LEFT, PAUSED, PAUSES};
+    use std::sync::atomic::Ordering;
+    let pauses = PAUSES.load(Ordering::Relaxed);
+    if PAUSED.load(Ordering::Relaxed) {
+        return;
+    }
+    if *seen != pauses {
+        *seen = pauses;
+        back(w, LEFT.swap(false, Ordering::Relaxed));
+    }
+    let leave = leaver(w);
+    let mut l = LEAVE.lock().unwrap();
+    match leave {
+        Some(f) if l.is_none() => *l = Some(Box::new(f)),
+        None => *l = None,
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

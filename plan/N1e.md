@@ -11,4 +11,4 @@
   mixed bone transforms per frame against a recording of the motion object (+0x44..+0x74) through
   stand→run→stroke→ready transitions.
 
-Done: `hst_sim::motion::Fade` (start/tick/tick_hold) and `motion::mix`. The state machine is bit-exact against the anim_s05 fixture (35283 frames, 3076 fading, 713 sets of which 10 are held and 121 mid-fade, 0 missed). The per-bone mix is bit-exact against RAM (3 players mid-fade in s04/s08/s09, 69 tracks). It is wired into the app in `crates/hst/src/character.rs`.
+Done: `hst_sim::motion::Fade` (start/tick/tick_hold) and `motion::mix`. The state machine is bit-exact against the anim_s05 fixture (35283 frames, 3076 fading, 713 sets of which 10 are held and 121 mid-fade, 0 missed). The per-bone mix is bit-exact against RAM (3 players mid-fade in s04/s08/s09, 69 tracks). It is wired into the app in `crates/hst-base/src/character.rs`.

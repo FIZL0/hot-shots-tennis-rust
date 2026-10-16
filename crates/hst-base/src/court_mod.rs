@@ -77,22 +77,22 @@ enum Role {
 
 /// The court mod's materials and how each is lit, re-applied over each weather change (`keep`).
 #[derive(Resource, Default)]
-pub(crate) struct Kept {
+pub struct Kept {
     materials: Vec<(AssetId<GsMaterial>, Role)>,
     fog: Option<(Vec4, Vec4)>,
 }
 
 /// A glTF animation looping on its own clock: per channel the node's entity, its times and its values.
 #[derive(Component)]
-pub(crate) struct Looped {
-    pub(crate) length: f32,
+pub struct Looped {
+    pub length: f32,
     channels: Vec<Channel>,
 }
 
 /// M8f5a3: a `__clear` set piece (standard §2): its box in game space at rest and what to hide while it stands
 /// between the eye and the court (its node, and its skinned meshes, which hang elsewhere).
 #[derive(Component)]
-pub(crate) struct ClearView {
+pub struct ClearView {
     lo: Vec3,
     hi: Vec3,
     hide: Vec<Entity>,
@@ -100,9 +100,9 @@ pub(crate) struct ClearView {
 
 /// M8f7: what `scene` spawned for its caller to drive: the animations by name (not left looping) and the named nodes.
 #[derive(Default)]
-pub(crate) struct Spawned {
-    pub(crate) clips: Vec<(String, Looped)>,
-    pub(crate) nodes: Vec<(String, Entity)>,
+pub struct Spawned {
+    pub clips: Vec<(String, Looped)>,
+    pub nodes: Vec<(String, Entity)>,
 }
 
 struct Channel {
@@ -166,21 +166,21 @@ fn setup(
     FLARE_OFF.store(c.lens_flare.is_none(), std::sync::atomic::Ordering::Relaxed);
 }
 
-pub(crate) struct Store<'a> {
-    pub(crate) meshes: &'a mut Assets<Mesh>,
-    pub(crate) images: &'a mut Assets<Image>,
-    pub(crate) materials: &'a mut Assets<GsMaterial>,
-    pub(crate) binds: &'a mut Assets<SkinnedMeshInverseBindposes>,
-    pub(crate) kept: &'a mut Kept,
+pub struct Store<'a> {
+    pub meshes: &'a mut Assets<Mesh>,
+    pub images: &'a mut Assets<Image>,
+    pub materials: &'a mut Assets<GsMaterial>,
+    pub binds: &'a mut Assets<SkinnedMeshInverseBindposes>,
+    pub kept: &'a mut Kept,
     /// M110: the `.glb`'s `textures/upscaled/<stem>/` (`mods::upscaled_in`), drawn in place of its images.
-    pub(crate) upscaled: Option<std::path::PathBuf>,
+    pub upscaled: Option<std::path::PathBuf>,
 }
 
 /// Spawns a court mod `.glb`'s scene under `parent` in the layout court's game space (the scene's `game_space` node
 /// undone), leaving out the other match kind's `__singles`/`__doubles` nodes; its animations loop, or with `spawned`
 /// go there by name with the named nodes. Returns the draws.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u8], parent: Entity, singles: bool, light: Option<&Light>, sky: bool, mut spawned: Option<&mut Spawned>) -> Result<usize, String> {
+pub fn scene(commands: &mut Commands, s: &mut Store, doc: &gltf::Document, blob: &[u8], parent: Entity, singles: bool, light: Option<&Light>, sky: bool, mut spawned: Option<&mut Spawned>) -> Result<usize, String> {
     let worlds = worlds(doc);
     let space = doc.nodes().find(|n| n.name() == Some("game_space")).map_or(Mat4::IDENTITY, |n| worlds[n.index()]);
     let to_game = space.inverse();
@@ -494,7 +494,7 @@ fn bounds(m: &Mesh, rest: &[Mat4]) -> Option<(Vec3, Vec3)> {
 /// of the playing area (the doubles court and 2 m behind each baseline, where the players stand, on the ground and
 /// 2 m up) passes through it, or the eye is inside it.
 /// ponytail: sampled (9 across, 9 along, 2 high), so a piece thinner than the gap between two lines can slip through.
-pub(crate) fn blocks(eye: Vec3, lo: Vec3, hi: Vec3) -> bool {
+pub fn blocks(eye: Vec3, lo: Vec3, hi: Vec3) -> bool {
     // the doubles sideline and the baseline (m from the centre), 2 m further back
     let (w, l) = (5.485, 11.885 + 2.0);
     (0..9).any(|i| {
@@ -561,7 +561,7 @@ fn animate(time: Res<Time>, clips: Query<&Looped>, mut nodes: Query<&mut Transfo
 
 impl Looped {
     /// Its nodes as at `t` s into it.
-    pub(crate) fn pose<F: bevy::ecs::query::QueryFilter>(&self, t: f32, nodes: &mut Query<&mut Transform, F>) {
+    pub fn pose<F: bevy::ecs::query::QueryFilter>(&self, t: f32, nodes: &mut Query<&mut Transform, F>) {
         for ch in &self.channels {
             let Ok(mut tf) = nodes.get_mut(ch.node) else { continue };
             let k = ch.times.partition_point(|&x| x <= t).saturating_sub(1);

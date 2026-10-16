@@ -11,7 +11,7 @@ use std::process::Command;
 
 /// `$XDG_DATA_HOME/hst` (else `~/.local/share/hst`); `%APPDATA%\hst` on Windows; the app's Documents on iOS (the
 /// folder the Files app shows, so the ISO, settings.txt and mods/ go in and out there).
-pub(crate) fn data_dir() -> PathBuf {
+pub fn data_dir() -> PathBuf {
     let env = |k| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     if cfg!(target_os = "ios") {
         return env("HOME").unwrap_or_default().join("Documents");

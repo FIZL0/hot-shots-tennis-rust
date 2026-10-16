@@ -16,63 +16,16 @@
 //! ISO; see textures.rs); `hst <iso> --dump-textures` writes every disc texture to `mods/textures-src/` to edit or
 //! upscale into `mods/texture-replacements/`.
 
-#[cfg(any(target_os = "android", test))]
-mod android_pad;
-mod audio;
-mod character;
-mod court_anim;
-mod cull;
-#[cfg(not(target_arch = "wasm32"))]
-mod disc;
-#[cfg(target_os = "ios")]
-mod ios;
-#[cfg(target_os = "android")]
-mod android;
-mod effects;
-mod graphics;
-mod handshake;
-mod gs;
-mod modfs;
-mod modstore;
-mod mods;
-mod mods_online;
-mod mods_umpire;
-mod mods_court;
-mod court_mod;
-mod net;
-mod chat;
-mod hud_gamma;
-mod inspect;
+// the lower layer (P60): assets and drawing, sound, mods, the lobby transport, platform glue, `Args`
+pub use hst_base::*;
+
 mod loading;
 mod mash;
-mod lod;
 mod mode;
-mod noise;
 mod play;
-mod jobs;
 mod preload;
 mod sandbox;
-mod shade;
-mod shadow;
-mod spring;
-mod stall;
-mod textures;
-mod ui_census;
-mod scene_census;
-mod ui_pool;
 mod update;
-mod vertex_patch;
-mod weather;
-#[cfg(target_arch = "wasm32")]
-mod web;
-
-/// settings.txt, controls.txt and online.txt: files beside the disc, or in the browser its localStorage.
-mod store {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub use std::fs::{read_to_string, write};
-    #[cfg(target_arch = "wasm32")]
-    pub use crate::web::{read_to_string, write};
-}
 
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -82,47 +35,6 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use hst_data::{iso::Iso, layout, mdl, mtl, xb::Archive};
-
-#[derive(Resource, Clone)]
-pub struct Args {
-    pub iso: String,
-    archives: Vec<String>,
-    shot: Option<String>,
-    /// Seconds of game time before the shot (`--shot-at`, default 0.5).
-    shot_at: f32,
-    radius: Option<f32>,
-    ball: bool,
-    pub court: usize,
-    stage: Option<u32>,
-    play: bool,
-    pub singles: bool,
-    /// Characters on court (player order), `--chars 0,2,1,5`.
-    pub chars: Vec<usize>,
-    /// Their outfits (costumes 0..9), `--outfits 9,9,4,9`: the model, the panel face and the computer players' AI row.
-    pub outfits: Vec<usize>,
-    /// Character viewer: `--character N [--motion M]`.
-    pub viewer: Option<(usize, usize)>,
-    /// Sound audition: archive, bank header, program, key.
-    pub sound: Option<(String, String, usize, usize)>,
-    /// `--music`: the court's BGM in a match (off by default).
-    pub music: bool,
-    /// The umpire (`--umpire N`, the menu's order: 0 Chika, 1 Suzuki, 2 Lily, 3 Robot Tennis, 4 Anna; default 4).
-    pub umpire: u8,
-    /// Sets to win (`--sets`, default 1) and games to win a set (`--games`, default 4).
-    pub sets: i32,
-    pub games: i32,
-    /// `--pads a,b,c,d`: what drives seats 1P..4P (`k` the keyboard, a gamepad's index into the sorted pad list, `-`
-    /// the computer), as the main menu assigned them (`controls::PadSlots`).
-    pub pads: Option<[Option<play::controls::Seat>; 4]>,
-}
-
-#[derive(Component)]
-pub struct Orbit {
-    pub focus: Vec3,
-    pub radius: f32,
-    pub yaw: f32,
-    pub pitch: f32,
-}
 
 /// The command line: the app's `Args` and the flags that only pick how it starts.
 struct Cli {
@@ -303,6 +215,47 @@ fn parse(mut a: impl Iterator<Item = String>) -> Cli {
 #[cfg(target_arch = "wasm32")]
 fn main() {}
 
+/// Page (`web.rs`): start the game from the pack read in (`web::pack_begin`), with the URL's flags.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn run() -> Result<(), wasm_bindgen::JsValue> {
+    use web::{FILLING, PACK, paste};
+    let (bytes, at) = FILLING.with(|f| f.borrow_mut().take()).ok_or("run before pack_begin")?;
+    if at != bytes.len() {
+        return Err(format!("pack read {at} of {} bytes", bytes.len()).into());
+    }
+    // SAFETY: the parts filled every byte (checked just above)
+    hst_data::iso::mount(PACK, unsafe { bytes.assume_init() });
+    let mut argv = vec![PACK.to_string()];
+    // B453: the site's "Frame log" box (index.html), or `?fps` below
+    if web_sys::window().unwrap().local_storage().ok().flatten().and_then(|s| s.get_item("hst-fps").ok().flatten()).as_deref() == Some("1") {
+        crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Ok(q) = web_sys::window().unwrap().location().search() {
+        for kv in q.trim_start_matches('?').split('&').filter(|s| !s.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            // the page's own (`index.html`)
+            if k == "webgl2" {
+                continue;
+            }
+            // B469: `?log` turns `HST_FPS`'s logs on; only `info!` lines reach the console (the heap growth), not eprintln
+            // B453: `?fps` the same (frame rate, stalls, pipelines), with the page's own frame log (index.html)
+            if k == "log" || k == "fps" {
+                crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
+            if k == "code" {
+                paste(js_sys::decode_uri_component(v).map(String::from).unwrap_or_default());
+                continue;
+            }
+            argv.push(format!("--{k}"));
+            argv.extend(js_sys::decode_uri_component(&v.replace('+', " ")).map(String::from).unwrap_or_default().split_whitespace().map(String::from));
+        }
+    }
+    start(argv);
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     #[cfg(target_os = "ios")]
@@ -414,7 +367,7 @@ fn start(argv: Vec<String>) {
     #[cfg(target_os = "android")]
     {
         android::watch_lifecycle();
-        app.add_systems(First, android::background);
+        app.add_systems(First, play::background::background);
     }
     #[cfg(not(target_arch = "wasm32"))]
     app.add_systems(Update, window_icon);
@@ -432,7 +385,8 @@ fn start(argv: Vec<String>) {
     app.add_plugins(MaterialPlugin::<effects::OnTop>::default());
     app.add_systems(PostUpdate, effects::morph_on_cpu);
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
-    app.add_plugins(graphics::plugin).insert_resource(gfx);
+    let _ = graphics::SAVE.set(play::main_menu::save_graphics);
+    app.add_plugins(graphics::plugin::<play::Game>).insert_resource(gfx);
     app.add_plugins((noise::plugin, mash::plugin, spring::plugin, chat::plugin, vertex_patch::plugin));
     // M91a1: the iPhone's on-screen pad, kept through mode switches
     app.add_plugins(play::touch_pad::plugin);
@@ -564,11 +518,6 @@ fn court_layout(iso: &mut Iso, n: usize) -> Option<(Vec<layout::Entry>, Vec<layo
     let list = layout::entries(&String::from_utf8_lossy(&find(&cmn, &format!("entry_c{n:02}.txt"))?));
     Some((list, layout::plants(&find(&hol, &format!("plant_c{n:02}_h01_0.dat"))?).ok()?))
 }
-
-/// Parent for everything in game space: game space is Y-down, a half-turn about X maps it to Bevy's
-/// Y-up without mirroring.
-#[derive(Component)]
-pub struct GameSpace;
 
 /// How many clouds court `n` makes outside heavy rain (`layout::cloud_count`; singles' environment row 1, doubles' 0).
 fn cloud_count(iso: &mut Iso, n: u32, envir: Option<&[u8]>, singles: bool) -> usize {
@@ -1264,14 +1213,6 @@ fn orbit(
     }
 }
 
-impl Orbit {
-    /// The camera's transform on this rig.
-    fn transform(&self) -> Transform {
-        let rot = Quat::from_euler(EulerRot::YXZ, self.yaw, self.pitch, 0.0);
-        Transform::from_translation(self.focus + rot * Vec3::Z * self.radius).looking_at(self.focus, Vec3::Y)
-    }
-}
-
 /// The sky's clouds and the wind they drift on (`--stage` in singles).
 #[derive(Resource)]
 struct Clouds {
@@ -1397,14 +1338,6 @@ fn clouds(
     }
 }
 
-/// A sky, `_clo`, `_acc` or `_bg` model: the court draw stands it at the camera's eye + (0, lift, 0), turned by yaw
-/// about game y (`gs::backdrop`; slot 5's RAM has these matrices).
-#[derive(Component)]
-struct Backdrop {
-    yaw: f32,
-    lift: f32,
-}
-
 /// A model not drawn while the eye is inside its box (model space `lo..hi`, `at` = game space → model space).
 /// From inside a Grand Palais end house (B185) its walls are all back faces, but the clock on its end façade pokes
 /// through the wall, so its casing's back half drew a ∧ in mid-court; the original shows only the court there (its
@@ -1425,9 +1358,6 @@ fn hide_inside(camera: Query<&Transform, With<Orbit>>, mut models: Query<(&HideI
         v.set_if_neq(if e.cmpge(h.lo).all() && e.cmple(h.hi).all() { Visibility::Hidden } else { Visibility::Inherited });
     }
 }
-
-/// The backdrops' blended-draw sort offset (`GsMaterial::order`): before the hole's `-1e6`, so before everything.
-const BACKDROP: f32 = -2.0e6;
 
 /// Runs after every Update camera move, so the backdrop never lags the camera by a frame.
 fn backdrops(camera: Query<&Transform, (With<Orbit>, Without<Backdrop>)>, mut models: Query<(&Backdrop, &mut Transform)>) {
@@ -1452,15 +1382,6 @@ fn fixed_eye(mut camera: Query<(&mut Transform, &mut Projection), With<Orbit>>, 
     if let Projection::Perspective(p) = &mut *proj {
         p.fov = 2.0 * (v[9] * 0.75f32.max(1.0 / aspect)).atan();
     }
-}
-
-/// The phone builds turn the frame-rate log on here: setting `HST_FPS` while the OS's own threads read the
-/// environment is undefined behaviour.
-pub static FPS_LOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// `HST_FPS=1` or `FPS_LOG`.
-fn fps_log() -> bool {
-    FPS_LOG.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("HST_FPS").is_some()
 }
 
 /// `HST_FPS=1`: every 5 s, the frame rate and the slowest frame to stderr, and each frame over 33 ms as it happens

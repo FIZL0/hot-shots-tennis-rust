@@ -139,7 +139,7 @@ impl SoundBank {
 }
 
 /// A RIFF PCM16 wav as mono samples (channels averaged) and its sample rate.
-pub(crate) fn pcm(d: &[u8]) -> Option<(Vec<i16>, u32)> {
+pub fn pcm(d: &[u8]) -> Option<(Vec<i16>, u32)> {
     let (data, ch, rate) = pcm_frames(d)?;
     Some((data.chunks_exact(ch).map(|f| (f.iter().map(|&s| s as i32).sum::<i32>() / ch as i32) as i16).collect(), rate))
 }
@@ -623,13 +623,13 @@ impl Sound {
     }
 
     /// A mixer with no tables and no output, for tests that only follow plays.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn bare() -> Self {
         Self(Arc::new(Mutex::new(Mix { pitch: Vec::new(), pan: Vec::new(), gain: Vec::new(), stereo: Default::default(), bank_volumes: Vec::new(), voices: Vec::new(), playing: Vec::new(), music: None, ids: 0, tags: Tags::default(), followed: Vec::new(), vol: Vol::default(), menu: [0; 2], loops: Vec::new() })))
     }
 
     /// A play that never keys on and never ends (a weather loop's stand-in), for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn endless(&self) -> u64 {
         let mut m = self.0.lock().unwrap();
         let id = m.id();
@@ -696,25 +696,25 @@ impl Sound {
     }
 
     /// A mixer on `iso`'s banks with no output, for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn test(iso: &mut Iso) -> Self {
         Self(Arc::new(Mutex::new(mix(iso))))
     }
 
     /// How many plays have started (the BGM counts 16), for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn plays(&self) -> u64 {
         self.0.lock().unwrap().ids
     }
 
     /// M8f3: how many wav takes are sounding (an umpire mod's calls, a mod's voice), for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn takes_sounding(&self) -> usize {
         self.0.lock().unwrap().voices.iter().filter(|v| v.0.pcm.is_some()).count()
     }
 
     /// M8f6: how many loops (a court mod's BGM and ambience) are playing, for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn looping(&self) -> usize {
         self.0.lock().unwrap().loops.len()
     }
@@ -831,7 +831,7 @@ fn start(mut commands: Commands, args: Res<Args>, mut streams: ResMut<Assets<Str
     let mut iso = Iso::open(&args.iso).expect("open iso");
     let sound = Sound(Arc::new(Mutex::new(mix(&mut iso))));
     // B235: the saved volumes (the menu's Sound screen sets them again as they change)
-    let settings = crate::play::main_menu::Settings::path(&args.iso);
+    let settings = crate::store::settings(&args.iso);
     sound.set_volumes(crate::store::read_to_string(settings).map_or_else(|_| Volumes::default(), |t| Volumes::parse(&t)));
     commands.spawn(AudioPlayer(streams.add(Stream(sound.0.clone()))));
     if let Some((xb, hd, program, key)) = &args.sound {

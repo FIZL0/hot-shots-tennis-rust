@@ -133,7 +133,7 @@ fn follow_window(
 ) {
     let Ok(w) = window.single() else { return };
     // B117: the images are the view's size, the composite drawn only there
-    let v = crate::play::widescreen::view(Vec2::new(w.physical_width() as f32, w.physical_height() as f32));
+    let v = crate::widescreen::view(Vec2::new(w.physical_width() as f32, w.physical_height() as f32));
     let (pos, vs) = (v.min.round().as_uvec2(), v.size().round().as_uvec2().max(UVec2::ONE));
     let viewport = (vs != w.physical_size()).then(|| bevy::camera::Viewport { physical_position: pos, physical_size: vs, ..default() });
     let key = |v: &Option<bevy::camera::Viewport>| v.as_ref().map(|v| (v.physical_position, v.physical_size));
@@ -238,7 +238,7 @@ fn pixel_aspect(g: Res<crate::graphics::Graphics>, window: Query<&Window, With<P
     if !g.original {
         return;
     }
-    let aspect = crate::play::widescreen::scene_aspect(w);
+    let aspect = crate::widescreen::scene_aspect(w);
     for (mut cam, proj) in &mut q {
         if let Projection::Perspective(p) = proj {
             let clip = PerspectiveProjection { aspect_ratio: aspect, ..p.clone() }.get_clip_from_view();

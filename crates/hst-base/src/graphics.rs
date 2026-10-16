@@ -202,7 +202,8 @@ impl Shadows {
     }
 }
 
-pub fn plugin(app: &mut App) {
+/// `Match`: the match's resource (`play::Game`); P53: Auto times a match's first seconds, while one is on.
+pub fn plugin<Match: Resource>(app: &mut App) {
     if !app.is_plugin_added::<bevy::diagnostic::FrameTimeDiagnosticsPlugin>() {
         app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
     }
@@ -211,7 +212,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(First, mesh_detail)
         .add_systems(PostUpdate, (window, lights, msaa.after(bevy::camera::CameraUpdateSystems), fps_counter))
         .add_systems(Last, limit)
-        .add_systems(Last, auto_tune.run_if(crate::play::match_on()))
+        .add_systems(Last, auto_tune.run_if(resource_exists::<Match>))
         .add_systems(PreStartup, cpu_clusters)
         .add_systems(PostUpdate, unclustered.before(bevy::light::SimulationLightSystems::AssignLightsToClusters));
     // Show FPS → Detailed: where the frame's time goes (`frame_start`)
@@ -922,6 +923,10 @@ fn held_fps(window: &mut [f32]) -> f32 {
     keep.len() as f32 / keep.iter().sum::<f32>().max(1e-6)
 }
 
+/// Where `auto_tune` saves what it stepped down to: settings.txt's graphics (`main_menu::save_graphics`, set before
+/// this plugin is added).
+pub static SAVE: std::sync::OnceLock<fn(&str, Graphics)> = std::sync::OnceLock::new();
+
 /// The Auto preset (`Graphics::auto`) in a match: after its first seconds, times 2 s windows and steps one notch
 /// cheaper (`cheaper`, saved to settings.txt so the next match starts there) after each that falls under 93 % of 60
 /// fps (or of the display's rate when that's lower: a browser in Low Power Mode at 30 Hz isn't the game's fault),
@@ -943,8 +948,8 @@ fn auto_tune(mut g: ResMut<Graphics>, time: Res<Time<Real>>, frames: Res<bevy::d
     let _ = &monitors;
     if let Some(c) = t.frame_time(*g, time.delta_secs(), hz.min(60.0)) {
         *g = c;
-        if let Some(a) = &args {
-            crate::play::main_menu::save_graphics(&a.iso, c);
+        if let (Some(a), Some(save)) = (&args, SAVE.get()) {
+            save(&a.iso, c);
         }
     }
 }

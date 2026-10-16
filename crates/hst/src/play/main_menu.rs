@@ -66,8 +66,6 @@ mod umpire_mods;
 mod umpire_picker;
 mod court_mods;
 mod court_picker;
-#[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
-pub(crate) use mods_screen::root as mods_root;
 pub(super) mod pause;
 mod plate_emote;
 mod previews;
@@ -366,7 +364,7 @@ impl Settings {
     }
 
     pub(crate) fn path(iso: &str) -> std::path::PathBuf {
-        std::path::Path::new(iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()).join("settings.txt")
+        crate::store::settings(iso)
     }
 
     /// The match's flags for these settings.

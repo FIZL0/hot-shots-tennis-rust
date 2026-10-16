@@ -19,7 +19,7 @@ use crate::character::{self, CharacterData, Joint, Motions, Store};
 pub mod umpire;
 
 /// The skeleton every mod is rigged to (names, parents, HST pc00's bind frames).
-const SKELETON: &str = include_str!("../hst_skeleton.json");
+const SKELETON: &str = include_str!("../../hst/hst_skeleton.json");
 /// The face channels a morph face must carry (§4a).
 const FACE: [&str; 8] = ["joy_eye", "joy_mouth", "anger_eye", "anger_mouth", "sorrow_eye", "sorrow_mouth", "doki_eye", "doki_mouth"];
 
@@ -361,7 +361,7 @@ pub fn voice(m: &Mod) -> Option<crate::audio::SoundBank> {
 }
 
 /// A `.glb`: its document and binary chunk.
-pub(crate) fn open(path: &Path) -> Result<(gltf::Document, Vec<u8>), String> {
+pub fn open(path: &Path) -> Result<(gltf::Document, Vec<u8>), String> {
     // ponytail: glTF's own validation skipped (older rerig.py output lacks POSITION min/max); §7's checks gate the file
     let g = gltf::Gltf::from_slice_without_validation(&crate::modfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
     if g.buffers().any(|b| !matches!(b.source(), gltf::buffer::Source::Bin)) {
@@ -654,12 +654,12 @@ fn upscaled_dir(m: &Mod, glb: &Path) -> Option<PathBuf> {
 }
 
 /// `textures/upscaled/<glb stem>/` of mod folder `dir` (any kind: court, umpire), when the setting is on (M110).
-pub(crate) fn upscaled_in(dir: &Path, glb: &Path) -> Option<PathBuf> {
+pub fn upscaled_in(dir: &Path, glb: &Path) -> Option<PathBuf> {
     crate::textures::on().then(|| dir.join("textures/upscaled").join(glb.file_stem().unwrap_or_default()))
 }
 
 /// The PNG standing for `.glb` image `im` in `upscaled` (`upscaled_in`), if there is one.
-pub(crate) fn upscaled_image(upscaled: Option<&Path>, im: &gltf::Image) -> Option<Vec<u8>> {
+pub fn upscaled_image(upscaled: Option<&Path>, im: &gltf::Image) -> Option<Vec<u8>> {
     upscaled.filter(|_| crate::modfs::plain(&image_file(im))).and_then(|d| crate::modfs::read(&d.join(image_file(im))).ok())
 }
 

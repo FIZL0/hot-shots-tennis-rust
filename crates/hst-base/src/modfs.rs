@@ -90,7 +90,7 @@ pub fn unload(dir: &Path) {
 }
 
 /// `p` as a `MEM` key: `/`-separated, without `.` parts (`./mods/x` and `mods/x` are one file).
-pub(crate) fn key(p: &Path) -> String {
+pub fn key(p: &Path) -> String {
     p.components().filter(|c| !matches!(c, Component::CurDir)).map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
@@ -168,7 +168,7 @@ pub const MAX_FILE: usize = 768 << 20;
 pub const MAX_TOTAL: usize = 1 << 30;
 
 /// A mod's files: paths relative to its folder, and their bytes.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub type Files = Vec<(String, Vec<u8>)>;
 
 /// Whether `n` is a plain relative path that stays inside the mod's folder: no root, drive, `..`, `.`, empty part,
@@ -205,12 +205,12 @@ fn crc32(d: &[u8]) -> u32 {
 /// [`plain`] path with a known extension, no symlink, device or duplicate (case-blind), within the caps; `mod.json`
 /// at the top or in the one folder everything is in (that folder is dropped). macOS's `__MACOSX/` and `.DS_Store`
 /// are left out. Anything else wrong rejects the whole zip.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn unpack(zip: &[u8]) -> Result<Files, String> {
     unpack_capped(zip, MAX_FILE, MAX_TOTAL)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 fn unpack_capped(zip: &[u8], max_file: usize, max_total: usize) -> Result<Files, String> {
     let mut out = Vec::new();
     now(unpack_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), |_| true, |n, b| Ok(out.push((n.to_string(), b))), max_file, max_total))?;
@@ -408,7 +408,7 @@ fn image_ok(b: &[u8], ext: &str) -> Result<(), String> {
 }
 
 /// A mod zip installed into `root` (the `mods/` folder) as `root/<id>/`, in memory ([`install_with`]).
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn install(zip: &[u8], root: &Path) -> Result<Mod, String> {
     now(install_with(zip.len() as u64, |at, n| std::future::ready(Ok(zip[at as usize..at as usize + n].to_vec())), root, None, None, false, false))
 }
@@ -584,15 +584,28 @@ pub fn zip(files: &[(&str, &[u8])], deflate: bool, mode: u32) -> Vec<u8> {
     out
 }
 
+/// The mods folder: `mods/` beside the disc, as the select's roster reads it (`play/main_menu.rs setup` sets it, through
+/// `mods_screen`; a relative `mods` broke when the game was started from elsewhere, e.g. a desktop shortcut).
+static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_root(dir: std::path::PathBuf) {
+    // `./mods` (a disc path with no folder, the browser's) stays `mods`, the OPFS paths' form
+    let _ = ROOT.set(dir.strip_prefix(".").map(Into::into).unwrap_or(dir));
+}
+
+pub fn root() -> &'static Path {
+    ROOT.get().map(|p| p.as_path()).unwrap_or(Path::new("mods"))
+}
+
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
 
     /// The real mods (`context/mods`, links into the mods repo's `out/mods`).
-    pub(crate) const MODS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/mods");
+    pub const MODS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../context/mods");
 
     /// Every file under `dir` (relative path, bytes), sorted.
-    pub(crate) fn dir_files(dir: &Path) -> Files {
+    pub fn dir_files(dir: &Path) -> Files {
         fn walk(d: &Path, pre: &str, out: &mut Files) {
             let mut es: Vec<_> = std::fs::read_dir(d).into_iter().flatten().flatten().collect();
             es.sort_by_key(|e| e.file_name());

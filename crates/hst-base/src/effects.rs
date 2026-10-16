@@ -18,11 +18,11 @@ const IMPACTS: [&str; 6] = ["top", "slice", "flat", "lob", "drop", "smash"];
 
 /// The entities drawing one effect model.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct Shown<M: Asset = StandardMaterial> {
-    pub(crate) root: Entity,
+pub struct Shown<M: Asset = StandardMaterial> {
+    pub root: Entity,
     joints: Vec<Entity>,
     #[serde(skip)]
-    pub(crate) materials: Vec<Handle<M>>,
+    pub materials: Vec<Handle<M>>,
 }
 
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
@@ -80,7 +80,7 @@ pub fn load(
 
 /// Effect model `s` (archive path without extension): its player and its hidden entities under `parent`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn model<M: EffectMaterial>(
+pub fn model<M: EffectMaterial>(
     arc: &Archive,
     s: &str,
     commands: &mut Commands,
@@ -154,7 +154,7 @@ pub(crate) fn model<M: EffectMaterial>(
 /// morphed sprites as big flat panels (B137a; WebGL2 and desktop fine), and Bevy morphs through storage buffers only on
 /// WebGPU. The effects' meshes are a few dozen vertices, so the positions are rewritten whenever the weights change.
 #[derive(Component)]
-pub(crate) struct CpuMorph {
+pub struct CpuMorph {
     /// The entity with the `MorphWeights`.
     root: Entity,
     base: Vec<Vec3>,
@@ -212,7 +212,7 @@ pub fn morph_on_cpu(mut parts: Query<(&mut CpuMorph, &Mesh3d)>, weights: Query<&
 /// descriptor is built before the mesh instance it needs), so an impact's disc flashed at full size before shrinking
 /// to its morphed size (B253): morphed parts stay drawn, collapsed to a point while their effect is hidden.
 #[derive(Component)]
-pub(crate) struct Collapse(Entity);
+pub struct Collapse(Entity);
 
 /// Scale each `Collapse` holder to nothing while its root is hidden (by itself or an ancestor), else back to 1.
 pub fn collapse_hidden(mut holders: Query<(&Collapse, &mut Transform)>, vis: Query<(&Visibility, Option<&ChildOf>)>) {
@@ -238,7 +238,7 @@ pub fn collapse_hidden(mut holders: Query<(&Collapse, &mut Transform)>, vis: Que
 }
 
 /// Show `effect` on `view` this frame (posed, morphed, faded) when live, else hide it.
-pub(crate) fn pose<F: bevy::ecs::query::QueryFilter, M: EffectMaterial>(effect: &Effect, view: &Shown<M>, q: &mut Query<(&mut Visibility, &mut MorphWeights)>, joints: &mut Query<&mut Transform, F>, materials: &mut Assets<M>) {
+pub fn pose<F: bevy::ecs::query::QueryFilter, M: EffectMaterial>(effect: &Effect, view: &Shown<M>, q: &mut Query<(&mut Visibility, &mut MorphWeights)>, joints: &mut Query<&mut Transform, F>, materials: &mut Assets<M>) {
     let live = effect.live;
     if let Ok((mut v, mut w)) = q.get_mut(view.root) {
         *v = if live { Visibility::Visible } else { Visibility::Hidden };
@@ -297,7 +297,7 @@ pub struct HitSparks {
 }
 
 /// `yumoto/<name>.tm2` (or `<dir>/<name>.tm2`) from the effect archive as an unlit, alpha-blended, two-sided material.
-pub(crate) fn look<M: EffectMaterial>(iso: &mut Iso, name: &str, materials: &mut Assets<M>, images: &mut Assets<Image>) -> Result<Handle<M>, String> {
+pub fn look<M: EffectMaterial>(iso: &mut Iso, name: &str, materials: &mut Assets<M>, images: &mut Assets<Image>) -> Result<Handle<M>, String> {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     // ponytail: re-reads the archive per texture; a handful at load
@@ -315,7 +315,7 @@ pub(crate) fn look<M: EffectMaterial>(iso: &mut Iso, name: &str, materials: &mut
 /// ball's ribbon, the hit sparks, the swing trail, a bounce's puff and mark): blended draws sort by their mesh's
 /// centre, and these meshes sit at the court's origin or the ball, so this puts them after any of those.
 /// The landing markers go after these still (`1e3 +`).
-pub(crate) const AFTER_SCENE: f32 = 500.0;
+pub const AFTER_SCENE: f32 = 500.0;
 
 /// The in-match effects' material: a `StandardMaterial` whose `depth_bias` only orders the blended draws. Bevy also
 /// writes it into the pipeline as a hardware depth bias in units the GPU picks: nothing at court depths on desktop
@@ -368,7 +368,7 @@ impl bevy::pbr::MaterialExtension for NoDepth {
 }
 
 /// A material `model`/`look` can build: the menus' and NPCs' plain `StandardMaterial` or the match's `Fx`.
-pub(crate) trait EffectMaterial: Material {
+pub trait EffectMaterial: Material {
     fn new(m: StandardMaterial) -> Self;
     fn std(&mut self) -> &mut StandardMaterial;
     fn std_ref(&self) -> &StandardMaterial;
@@ -415,7 +415,7 @@ static EMPTIED: std::sync::Mutex<Vec<(AssetId<Mesh>, bool)>> = std::sync::Mutex:
 
 /// Shown on no camera while its mesh is [`fill`]'s empty placeholder.
 #[derive(Component)]
-pub(crate) struct Emptied;
+pub struct Emptied;
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostUpdate, hide_empty.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility));
@@ -446,7 +446,7 @@ fn hide_empty(mut commands: Commands, q: Query<(Entity, &Mesh3d, Has<Emptied>, H
 /// mesh allocator skips a mesh with no vertices but then copies it anyway, logging a use-after-free every frame.
 /// Sets an effect mesh's quads; one that's unchanged (mostly empty → empty) isn't touched, since a `get_mut` makes
 /// Bevy repack and re-upload the whole mesh (B328).
-pub(crate) fn fill(meshes: &mut Assets<Mesh>, h: &Handle<Mesh>, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]>, mut colour: Vec<[f32; 4]>, mut index: Vec<u32>) {
+pub fn fill(meshes: &mut Assets<Mesh>, h: &Handle<Mesh>, mut pos: Vec<[f32; 3]>, mut uv: Vec<[f32; 2]>, mut colour: Vec<[f32; 4]>, mut index: Vec<u32>) {
     use bevy::mesh::{Indices, VertexAttributeValues as V};
     if pos.is_empty() {
         (pos, uv, colour, index) = (vec![[0.0; 3]; 3], vec![[0.0; 2]; 3], vec![[0.0; 4]; 3], vec![0, 0, 0]);
@@ -940,32 +940,32 @@ pub fn draw_marks(fx: Res<LandingMarks>, mut q: Query<(&mut Visibility, &mut Mor
 }
 
 // a resync's state (`play::snapshot::encode`) keeps this machine's drawing entities and handles
-impl crate::play::snapshot::Wire for Impacts {
+impl crate::Wire for Impacts {
     fn local(&mut self, l: &Self) {
         self.models.iter_mut().zip(&l.models).for_each(|(m, l)| m.1 = l.1.clone());
     }
 }
 
-impl crate::play::snapshot::Wire for HitSparks {
+impl crate::Wire for HitSparks {
     fn local(&mut self, l: &Self) {
         (self.mesh, self.view, self.looks) = (l.mesh.clone(), l.view, l.looks.clone());
     }
 }
 
-impl crate::play::snapshot::Wire for BallFlight {
+impl crate::Wire for BallFlight {
     fn local(&mut self, l: &Self) {
         (self.ribbon, self.disc, self.looks) = (l.ribbon.clone(), l.disc, l.looks.clone());
     }
 }
 
-impl crate::play::snapshot::Wire for BallBounce {
+impl crate::Wire for BallBounce {
     fn local(&mut self, l: &Self) {
         (self.ring, self.crater) = (l.ring.clone(), l.crater.clone());
         (self.marks, self.puffs, self.dust) = (l.marks.clone(), l.puffs.clone(), l.dust.clone());
     }
 }
 
-impl crate::play::snapshot::Wire for LandingMarks {}
+impl crate::Wire for LandingMarks {}
 
 #[cfg(test)]
 mod tests {

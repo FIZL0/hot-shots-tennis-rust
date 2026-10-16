@@ -13,7 +13,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{File, FileReaderSync, FileSystemReadWriteOptions, FileSystemSyncAccessHandle};
 
 /// The path the mounted pack answers to (settings.txt and controls.txt "beside" it are in localStorage).
-const PACK: &str = "disc.pack";
+pub const PACK: &str = "disc.pack";
 
 fn io_err(e: JsValue) -> io::Error {
     io::Error::other(js_err(e))
@@ -178,10 +178,10 @@ pub fn import_disc_to_memory(iso: File, progress: js_sys::Function, chunk: js_sy
 }
 
 /// The pack as the page reads it in ([`pack_begin`], [`pack_part`]): the buffer and how much of it is filled.
-type Filling = (Arc<[std::mem::MaybeUninit<u8>]>, usize);
+pub type Filling = (Arc<[std::mem::MaybeUninit<u8>]>, usize);
 
 thread_local! {
-    static FILLING: std::cell::RefCell<Option<Filling>> = const { std::cell::RefCell::new(None) };
+    pub static FILLING: std::cell::RefCell<Option<Filling>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Page: a pack of `len` bytes follows in parts ([`pack_part`]), then [`run`]. B468: the page reads the pack from
@@ -204,45 +204,6 @@ pub fn pack_part(part: js_sys::Uint8Array) -> Result<(), JsValue> {
         *at = end;
         Ok(())
     })
-}
-
-/// Page: start the game from the pack read in ([`pack_begin`]), with the URL's flags.
-#[wasm_bindgen]
-pub fn run() -> Result<(), JsValue> {
-    let (bytes, at) = FILLING.with(|f| f.borrow_mut().take()).ok_or("run before pack_begin")?;
-    if at != bytes.len() {
-        return Err(format!("pack read {at} of {} bytes", bytes.len()).into());
-    }
-    // SAFETY: the parts filled every byte (checked just above)
-    hst_data::iso::mount(PACK, unsafe { bytes.assume_init() });
-    let mut argv = vec![PACK.to_string()];
-    // B453: the site's "Frame log" box (index.html), or `?fps` below
-    if web_sys::window().unwrap().local_storage().ok().flatten().and_then(|s| s.get_item("hst-fps").ok().flatten()).as_deref() == Some("1") {
-        crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    if let Ok(q) = web_sys::window().unwrap().location().search() {
-        for kv in q.trim_start_matches('?').split('&').filter(|s| !s.is_empty()) {
-            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-            // the page's own (`index.html`)
-            if k == "webgl2" {
-                continue;
-            }
-            // B469: `?log` turns `HST_FPS`'s logs on; only `info!` lines reach the console (the heap growth), not eprintln
-            // B453: `?fps` the same (frame rate, stalls, pipelines), with the page's own frame log (index.html)
-            if k == "log" || k == "fps" {
-                crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
-                continue;
-            }
-            if k == "code" {
-                paste(js_sys::decode_uri_component(v).map(String::from).unwrap_or_default());
-                continue;
-            }
-            argv.push(format!("--{k}"));
-            argv.extend(js_sys::decode_uri_component(&v.replace('+', " ")).map(String::from).unwrap_or_default().split_whitespace().map(String::from));
-        }
-    }
-    crate::start(argv);
-    Ok(())
 }
 
 /// The page's boot status (`index.html`) goes once the game has drawn its first frames.
@@ -357,7 +318,7 @@ pub fn frame_rate(time: Res<bevy::time::Time<bevy::time::Real>>, mut w: bevy::pr
 
 /// B324: the display's refresh rate (Hz) as the page measured it from requestAnimationFrame before the game was
 /// loaded (`hstRefresh`, index.html), when it could.
-pub(crate) fn refresh() -> Option<f64> {
+pub fn refresh() -> Option<f64> {
     js_sys::Reflect::get(&js_sys::global(), &"hstRefresh".into()).ok()?.as_f64().filter(|&hz| hz > 0.0)
 }
 
@@ -634,7 +595,7 @@ pub fn mod_loaded(dir: String) {
 /// Page: mod `id` is stored in OPFS: its big files out of memory again until it's wanted (B336: Download all's 40).
 #[wasm_bindgen]
 pub fn mod_saved(id: String) {
-    crate::modfs::unload(&crate::play::main_menu::mods_root().join(id));
+    crate::modfs::unload(&crate::modfs::root().join(id));
 }
 
 /// `b` copied once, straight into a shared buffer (B204: `to_vec().into()` held every mod file twice on the way).
@@ -649,7 +610,7 @@ fn shared(b: &js_sys::Uint8Array) -> Arc<[u8]> {
 /// `{id, name}`, or why it was refused (nothing of it kept).
 #[wasm_bindgen]
 pub async fn import_mod(zip: web_sys::Blob) -> Result<JsValue, JsValue> {
-    let root = crate::play::main_menu::mods_root();
+    let root = crate::modfs::root();
     let m = crate::modfs::install_with(zip.size() as u64, |at, n| read_blob(zip.clone(), at, n), root, None, None, false, false).await.map_err(JsValue::from)?;
     let o = js_sys::Object::new();
     js_sys::Reflect::set(&o, &"id".into(), &m.folder().into())?;
@@ -662,7 +623,7 @@ pub async fn import_mod(zip: web_sys::Blob) -> Result<JsValue, JsValue> {
 /// the whole mod at once).
 #[wasm_bindgen]
 pub fn mod_paths(id: String) -> Vec<String> {
-    let dir = crate::play::main_menu::mods_root().join(&id);
+    let dir = crate::modfs::root().join(&id);
     let pre = format!("{}/", crate::modfs::key(&dir));
     let mut files: Vec<String> = crate::modfs::files_under(&dir).into_iter().map(|(p, _)| p[pre.len()..].to_string()).collect();
     files.sort_by_key(|f| f == "mod.json");
@@ -672,7 +633,7 @@ pub fn mod_paths(id: String) -> Vec<String> {
 /// Page: file `path` of installed mod `id`.
 #[wasm_bindgen]
 pub fn mod_file(id: String, path: String) -> Option<js_sys::Uint8Array> {
-    let p = crate::play::main_menu::mods_root().join(id).join(path);
+    let p = crate::modfs::root().join(id).join(path);
     crate::modfs::read(&p).ok().map(|b| js_sys::Uint8Array::from(&b[..]))
 }
 
@@ -712,7 +673,7 @@ pub async fn breathe() {
 /// Page: mod `id` out of the game again (its save to OPFS failed).
 #[wasm_bindgen]
 pub fn drop_mod(id: String) {
-    crate::modfs::remove(&crate::play::main_menu::mods_root().join(id));
+    crate::modfs::remove(&crate::modfs::root().join(id));
 }
 
 /// Page: the Mods screen's description bar (an import checked, saved, or refused).

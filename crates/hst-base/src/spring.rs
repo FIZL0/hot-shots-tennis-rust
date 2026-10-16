@@ -12,7 +12,7 @@ use crate::character::{Joint, Rig};
 /// A spring joint: the joint, its parent (the one that turns) and its §3b parameters.
 pub struct Mass {
     joint: usize,
-    pub(crate) parent: usize,
+    pub parent: usize,
     limit: f32,
     stiffness: f32,
     gravity: f32,
@@ -115,7 +115,7 @@ fn turned(above: Mat4, turn: Quat, local: Quat) -> Quat {
     Quat::from_mat3(&(a.inverse() * Mat3::from_quat(turn) * a * Mat3::from_quat(local))).normalize()
 }
 
-pub(crate) fn swing(time: Res<Time>, mut rigs: Query<(&Rig, &GlobalTransform, &mut Spring, Has<crate::shadow::Minor>, Option<&Visibility>)>, mut joints: Query<&mut Transform>, mut locals: Local<Vec<Transform>>) {
+pub fn swing(time: Res<Time>, mut rigs: Query<(&Rig, &GlobalTransform, &mut Spring, Has<crate::shadow::Minor>, Option<&Visibility>)>, mut joints: Query<&mut Transform>, mut locals: Local<Vec<Transform>>) {
     for (rig, global, mut s, minor, shown) in &mut rigs {
         // not posed while put away (`character::animate`), so not swung on top of the last pose either
         if crate::character::put_away(minor, shown) {

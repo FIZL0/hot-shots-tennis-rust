@@ -9,7 +9,7 @@ import android.os.ParcelFileDescriptor;
 import android.view.WindowManager;
 
 /** The game's NativeActivity (`tools/apk.sh`), plus what the native side can't do on its own (M99): the system's file
- *  picker for the disc image, and a restart once the disc is imported. Called from `crates/hst/src/android.rs`. */
+ *  picker for the disc image, and a restart once the disc is imported. Called from `crates/hst-base/src/android.rs`. */
 public class HstActivity extends NativeActivity {
     private static final int PICK = 1;
     /** The picked document's file descriptor (the native side owns it), -1 when the picker was cancelled, -2 when

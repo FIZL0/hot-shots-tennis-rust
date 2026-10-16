@@ -110,7 +110,7 @@ pub fn mix(fade: Option<&Fade>, w: u8) -> Option<(u8, f32)> {
     fade.and_then(|f| f.0).filter(|&(to, t)| to != w && t > 0.0)
 }
 
-pub(crate) fn apply(
+pub fn apply(
     mut commands: Commands,
     weather: Option<Res<Weather>>,
     look: Option<ResMut<CourtLook>>,
@@ -172,4 +172,4 @@ pub(crate) fn apply(
     }
 }
 
-impl crate::play::snapshot::Wire for Weather {}
+impl crate::Wire for Weather {}

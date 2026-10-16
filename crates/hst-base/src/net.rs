@@ -873,7 +873,7 @@ impl Net {
     }
 
     /// A `Net` with no network behind it: what it's told to send comes out of the receiver (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn wired() -> (Net, amp::UnboundedReceiver<Cmd>) {
         let (cmd, rx) = amp::unbounded_channel();
         let (_, events) = mpsc::channel();
@@ -881,7 +881,7 @@ impl Net {
     }
 
     /// This test `Net` in a lobby (`in_room`), as a `Room` or `Hosting` event would put it.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn enter_room(&self) {
         self.in_room.store(true, std::sync::atomic::Ordering::Relaxed);
     }

@@ -12,7 +12,7 @@ rm -rf target/aarch64-apple-ios/ipa
 mkdir -p "$app"
 llvm-strip -o "$app/opentennis" target/aarch64-apple-ios/release/hst
 cp web/icon-180.png "$app/AppIcon60x60@3x.png"
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/hst/Cargo.toml | head -1)
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)  # [workspace.package]
 cat > "$app/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

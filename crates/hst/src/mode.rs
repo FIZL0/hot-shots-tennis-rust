@@ -636,7 +636,11 @@ fn unwarm(mut commands: Commands, mut q: Query<(Entity, &mut Visibility, &Warmin
     }
 }
 
-/// Drop the running mode: its entities (except windows, monitors and pads) and the resources of this crate it added.
+/// The game's crates, by their types' names (P60): a mode's resources are theirs.
+const OURS: [&str; 2] = ["hst::", "hst_base::"];
+
+/// Drop the running mode: its entities (except windows, monitors and pads) and the resources of the game's crates it
+/// added.
 fn teardown(world: &mut World) {
     world.remove_resource::<Running>();
     if let Some(s) = world.get_resource::<crate::audio::Sound>() {
@@ -658,8 +662,9 @@ fn teardown(world: &mut World) {
             e.despawn();
         }
     }
-    // this crate's only: Bevy inserts some of its own as they're first used (`AssetChanges`); names need Bevy's `debug`
-    let ours: Vec<ComponentId> = world.iter_resources().filter(|(i, _)| !base.resources.contains(&i.id()) && i.name().to_string().starts_with("hst::")).map(|(i, _)| i.id()).collect();
+    // the game's crates' only: Bevy inserts some of its own as they're first used (`AssetChanges`); names need Bevy's
+    // `debug`
+    let ours: Vec<ComponentId> = world.iter_resources().filter(|(i, _)| !base.resources.contains(&i.id()) && OURS.iter().any(|c| i.name().to_string().starts_with(c))).map(|(i, _)| i.id()).collect();
     for id in ours {
         world.remove_resource_by_id(id);
     }

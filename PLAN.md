@@ -35,13 +35,13 @@ iteration; don't merge or skip ahead. Too big → split it into sub-tasks (new `
 - **PS2 arithmetic**: EE FPU chops, masks the smaller addend to exponent diff − 1 guard bit; `madd.s` = that add of
   acc + truncated product. Use `hst_sim::ps2` / `hst_sim::vu0`.
 - **Game data from the user's disc at runtime**, never committed (`hst_data::iso`, `xb`, `exe` — only `exe` knows
-  retail data offsets, disc-ID checked). Characters too (`crates/hst/src/character.rs`).
+  retail data offsets, disc-ID checked). Characters too (`crates/hst-base/src/character.rs`).
 - **Same input, same result**: P0's replay harness (`hst_sim::replay`) is the acceptance test for gameplay.
 - **Handedness**: read it from character data (Carol, Will lefty); mirror forehand/backhand, reach, swing/serve,
   toss hand, racket.
 - **All UI at any aspect ratio** (user 2026-10-08): every HUD element, pop-up, menu, result/loading screen and
   new screen must lay out for any aspect ratio and resolution, pinned/scaled like B17's panels
-  (`play/widescreen.rs`), never locked to 4:3 or one resolution. Scale uniformly, never stretch (user 2026-10-13): an element keeps
+  (`hst-base/src/widescreen.rs`), never locked to 4:3 or one resolution. Scale uniformly, never stretch (user 2026-10-13): an element keeps
   its own aspect at any window size; extra space goes around it. Any UI task isn't done until it is.
 - **Look at the original too**: `tools/screenshot.sh` (PCSX2) vs `--shot out.png` at the same moment for anything
   visual; screenshots go in `context/`, not the journal.
@@ -98,12 +98,26 @@ README *Character mods* — links the mods repo (../opentennis-mods: standard, t
 `crates/hst-oracle` — test-only function oracle: `hst.rs` (disc check, `HstEe::game`/`from_ram`, `addr`) on our
 `ps2-oracle` interpreter (../ps2-oracle); tests compare ports to the game's own functions
 
-`crates/hst/src/` — the Bevy app
+`crates/hst-base/src/` — the Bevy app's lower layer (P60: its own crate, so an edit in the match or menus rebuilds
+and relinks only `hst`); `hst`'s `main.rs` re-exports it (`pub use hst_base::*`), so `crate::audio` etc. still resolve
+there. It never names `hst`: hooks the top fills in go through statics/generics (`graphics::SAVE`, `graphics::plugin::<Game>`)
 
-- `handshake.rs` online match seed (`MatchSeed`) and peer handshake check (M2e) · `mods_online.rs` mods in online lobbies: gameplay wire, looks packs, stand-ins (M2i) · `mods_umpire.rs` umpire mods: manifest, calls over the donor's bank (M8f3) · `main.rs` args, disc load, court models, orbit, auto_shot · `play.rs` (1.4k lines) the match: setup, input,
+- `lib.rs` `Args`, `Orbit`, `store` (settings file I/O), `Wire` (snapshot encoding) · `handshake.rs` online match seed
+  (`MatchSeed`) and peer handshake check (M2e) · `mods_online.rs` mods in online lobbies: gameplay wire, looks packs,
+  stand-ins (M2i) · `mods_umpire.rs` umpire mods: manifest, calls over the donor's bank (M8f3) · `mods.rs`/`mods/`
+  `modfs.rs` `modstore.rs` `mods_court.rs` `court_mod.rs` character/court mods, zips, store · `character.rs` disc
+  characters, rig, animate · `net.rs`/`net/` iroh transport, lobbies, codes · `audio.rs` · `graphics.rs` settings,
+  auto-tune · `gs.rs` `shade.rs` `shadow.rs` `textures.rs` `lod.rs` `cull.rs` rendering · `widescreen.rs` HUD
+  pinning (B17) · `seats.rs` pads → seats · `ui_pool.rs` overlay quad pools only while shown (P39) · `ui_census.rs`
+  `HST_UI_CENSUS=1` UI node counts/changes per root · `web.rs` `ios.rs` `android.rs` platform glue
+- test helpers `hst`'s tests use are `#[cfg(any(test, feature = "testing"))]` (hst's dev-dependency turns `testing` on)
+
+`crates/hst/src/` — the game on top: match, menus, modes
+
+- `main.rs` startup, disc load, court models, auto_shot, wasm entry `run` · `play.rs` the match: setup, input,
   strike/serve/locomote/advance_stroke, bot, simulate, react/next_point, camera, draw, motions, balloons, hud ·
-  `character.rs` disc characters, rig, animate · `sandbox.rs` · `ui_pool.rs` overlay quad pools only while shown (P39) ·
-  `ui_census.rs` `HST_UI_CENSUS=1` UI node counts/changes per root
+  `play/` match parts, netplay/rollback/snapshot, `main_menu/` the front-end · `mode.rs` mode switches/teardown ·
+  `loading.rs` `preload.rs` · `sandbox.rs` · `update.rs` self-updater
 - no `tests/` dir on purpose: any file there makes `cargo test -p hst` build the whole game a second time (as a binary for it); sim-only tests go in hst-sim
 
 `tools/` — `pcsx2-hst.sh` launch · `pine.py` RAM/states · `vpad.py` virtual pad · `screenshot.sh` ·

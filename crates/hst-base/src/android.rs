@@ -137,12 +137,12 @@ pub fn heartbeat(time: Res<Time<Real>>, mut frames: Local<u64>, mut last: Local<
 /// doesn't drop the peers (they see a stall: they go on waiting for a silent peer up to `recover::SILENT`).
 const GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 /// The activity is paused (home, recents, screen off, the file picker on top), and how many pauses there have been.
-static PAUSED: AtomicBool = AtomicBool::new(false);
-static PAUSES: AtomicU32 = AtomicU32::new(0);
+pub static PAUSED: AtomicBool = AtomicBool::new(false);
+pub static PAUSES: AtomicU32 = AtomicU32::new(0);
 /// The online match's leave while one is on (`play::background::leaver`, kept by `background`), and whether a
 /// pause has used it.
-static LEAVE: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
-static LEFT: AtomicBool = AtomicBool::new(false);
+pub static LEAVE: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
+pub static LEFT: AtomicBool = AtomicBool::new(false);
 
 /// M108: the activity's lifecycle (the patched winit's `lifecycle` hook, on the event loop's thread). Paused, the
 /// audio goes silent and stands still (the game's frames stop by themselves: winit draws nothing until it's resumed);
@@ -185,26 +185,6 @@ fn lifecycle(phase: winit::platform::android::lifecycle::Phase) {
 /// Hooks [`lifecycle`] up; call before the app runs.
 pub fn watch_lifecycle() {
     winit::platform::android::lifecycle::set_hook(lifecycle);
-}
-
-/// M108, each frame (`First`, before the match's ticks): keeps [`LEAVE`] up to date, and on the first frame after a
-/// pause, tells the match (`play::background::back`).
-pub fn background(w: &mut World, mut seen: Local<u32>) {
-    let pauses = PAUSES.load(Ordering::Relaxed);
-    if PAUSED.load(Ordering::Relaxed) {
-        return;
-    }
-    if *seen != pauses {
-        *seen = pauses;
-        crate::play::background::back(w, LEFT.swap(false, Ordering::Relaxed));
-    }
-    let leave = crate::play::background::leaver(w);
-    let mut l = LEAVE.lock().unwrap();
-    match leave {
-        Some(f) if l.is_none() => *l = Some(Box::new(f)),
-        None => *l = None,
-        _ => {}
-    }
 }
 
 /// P53: `Build.MODEL` (the Auto graphics preset's log).

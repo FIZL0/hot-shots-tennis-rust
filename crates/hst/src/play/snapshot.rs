@@ -111,11 +111,8 @@ pub struct Snapshot {
     modules: Vec<Box<dyn Fn(&mut World) + Send + Sync>>,
 }
 
-/// A `play/` module's tick state for a resync (`encode`): as bytes, then this machine's own entities and handles
-/// put back (`local`; the handles go as their defaults).
-pub(crate) trait Wire: Resource + Clone + serde::Serialize + serde::de::DeserializeOwned {
-    fn local(&mut self, _local: &Self) {}
-}
+// A `play/` module's tick state for a resync (`encode`), in hst-base beside `effects` and `weather`'s
+pub(crate) use hst_base::Wire;
 
 /// A walk over the `play/` modules' tick state, a resource at a time (`save` copies, `encode`/`decode` bytes).
 trait Each {

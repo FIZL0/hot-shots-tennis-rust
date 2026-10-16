@@ -2,6 +2,10 @@
 resolver = "2"
 members = ["crates/*"]
 
+# hst and hst-base share it (`net::BUILD` and the handshake read it): tools/release.sh bumps it here
+[workspace.package]
+version = "0.1.0"
+
 [profile.dev]
 debug = "line-tables-only"  # panics keep file:line; full debug info made every build and link of the game slower
 split-debuginfo = "unpacked"  # P59: debug info stays in the .o/.dwo files, not re-linked into every test binary
@@ -24,6 +28,8 @@ debug = "line-tables-only"  # ours (git dependency): keeps file:line past the "*
 opt-level = 3
 debug = "line-tables-only"  # ours (git dependency): keeps file:line past the "*" above
 [profile.dev.package.hst]
+opt-level = 1
+[profile.dev.package.hst-base]
 opt-level = 1
 
 # gilrs-core with a read-only fallback for gamepads whose device node isn't writable (third_party/gilrs-core).

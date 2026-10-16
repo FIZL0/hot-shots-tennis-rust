@@ -946,7 +946,7 @@ async fn upload(m: &Mod, stats: Option<(usize, [u8; 5])>, card: Option<Vec<u8>>,
 
 /// An HTTP client; natively the TLS provider goes in first (building one without it panics), and on Android its own
 /// certificate check (B454, `android::tls`).
-pub(crate) fn client() -> reqwest::Client {
+pub fn client() -> reqwest::Client {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(target_os = "android")]

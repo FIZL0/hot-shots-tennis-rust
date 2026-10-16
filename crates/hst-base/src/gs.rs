@@ -508,19 +508,19 @@ pub fn hole_triangles(test: Test, indices: &[u32], alpha: &[f32], uv: &[[f32; 2]
 
 impl Material for GsMaterial {
     fn vertex_shader() -> ShaderRef {
-        "embedded://hst/gs.wgsl".into()
+        "embedded://hst_base/gs.wgsl".into()
     }
 
     fn fragment_shader() -> ShaderRef {
-        "embedded://hst/gs.wgsl".into()
+        "embedded://hst_base/gs.wgsl".into()
     }
 
     fn prepass_vertex_shader() -> ShaderRef {
-        "embedded://hst/gs_prepass.wgsl".into()
+        "embedded://hst_base/gs_prepass.wgsl".into()
     }
 
     fn prepass_fragment_shader() -> ShaderRef {
-        "embedded://hst/gs_prepass.wgsl".into()
+        "embedded://hst_base/gs_prepass.wgsl".into()
     }
 
     fn depth_bias(&self) -> f32 {

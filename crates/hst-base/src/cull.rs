@@ -143,7 +143,7 @@ pub fn usage(usual: bevy::asset::RenderAssetUsages) -> bevy::asset::RenderAssetU
 }
 
 #[derive(Default)]
-pub(crate) struct Checked {
+pub struct Checked {
     frames: u32,
     parts: usize,
     drawn: usize,
@@ -152,7 +152,7 @@ pub(crate) struct Checked {
 }
 
 #[allow(clippy::type_complexity)]
-pub(crate) fn check(
+pub fn check(
     parts: Query<(&Mesh3d, &SkinnedMesh, &Aabb, &GlobalTransform, Option<&bevy::mesh::morph::MeshMorphWeights>, &ViewVisibility), With<DynamicSkinnedMeshBounds>>,
     joints: Query<&GlobalTransform>,
     weights: Query<&bevy::mesh::morph::MorphWeights>,

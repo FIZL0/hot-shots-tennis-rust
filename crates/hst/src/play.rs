@@ -94,7 +94,7 @@ mod umpire_mod;
 mod court_mod_match;
 mod replay_pace;
 mod weather;
-pub mod widescreen;
+pub use hst_base::widescreen;
 pub(crate) mod main_menu;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
@@ -308,7 +308,7 @@ enum Phase {
 }
 
 #[derive(Resource, Clone, Debug, serde::Serialize, serde::Deserialize)]
-struct Game {
+pub(crate) struct Game {
     rules: Rules,
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
@@ -4559,9 +4559,4 @@ fn serve_character(iso: &mut Iso, n: usize, aim: hst_sim::shot::AimStats, d: &mu
     );
     d.miss = serve::miss_of(hst_data::exe::Game::new(&cnf, &bin).expect("supported disc").serve_miss(), n);
     d.max_angle = aim.con[2] as f32;
-}
-
-/// P53: a match is on (`graphics::auto_tune` times its first seconds).
-pub(crate) fn match_on() -> impl bevy::ecs::schedule::SystemCondition<()> {
-    IntoSystem::into_system(resource_exists::<Game>)
 }

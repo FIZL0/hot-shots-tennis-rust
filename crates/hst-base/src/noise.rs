@@ -18,28 +18,28 @@ use crate::weather::Weather;
 static TABLE: LazyLock<[f32; 32]> = LazyLock::new(noise::table);
 
 /// A position entry a deformer moves: its bone-space position, its share of the noise and its bone (joint).
-pub(crate) struct Entry {
-    pub(crate) deformer: usize,
-    pub(crate) p: [f32; 3],
-    pub(crate) weight: f32,
-    pub(crate) node: usize,
+pub struct Entry {
+    pub deformer: usize,
+    pub p: [f32; 3],
+    pub weight: f32,
+    pub node: usize,
 }
 
 /// A moved drawn vertex: its index in the part's mesh, its bind-pose position, its skin (joints and weights as the
 /// mesh carries them) and its position entries.
-pub(crate) struct Moved {
-    pub(crate) v: usize,
-    pub(crate) base: [f32; 3],
-    pub(crate) skin: [(usize, f32); 4],
-    pub(crate) entries: Vec<Entry>,
+pub struct Moved {
+    pub v: usize,
+    pub base: [f32; 3],
+    pub skin: [(usize, f32); 4],
+    pub entries: Vec<Entry>,
 }
 
 /// A costume's deformers, and per swaying part (index into `CharacterData::parts`) its moved drawn vertices.
 pub struct Costume {
-    pub(crate) deformers: Vec<noi::Deformer>,
-    pub(crate) parts: Vec<(usize, Vec<Moved>)>,
+    pub deformers: Vec<noi::Deformer>,
+    pub parts: Vec<(usize, Vec<Moved>)>,
     /// A mod's spring joints (standard §3b, `crate::spring`); none on the disc.
-    pub(crate) springs: Vec<crate::spring::Mass>,
+    pub springs: Vec<crate::spring::Mass>,
 }
 
 /// The costume's deformers over the parts `character::skinned_parts` built from `model` (one per material with
@@ -124,7 +124,7 @@ pub fn plugin(app: &mut App) {
 }
 
 /// A new rig with a costume deformer swaps its swaying parts for copies of its own.
-pub(crate) fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Children), Added<Rig>>, mut parts: Query<&mut Mesh3d>, mut meshes: ResMut<Assets<Mesh>>) {
+pub fn attach(mut commands: Commands, rigs: Query<(Entity, &Rig, &Children), Added<Rig>>, mut parts: Query<&mut Mesh3d>, mut meshes: ResMut<Assets<Mesh>>) {
     for (root, rig, children) in &rigs {
         let Some(c) = &rig.data.noise else { continue };
         let mut own = Vec::new();
@@ -169,7 +169,7 @@ fn step(weather: Option<Res<Weather>>, mut rigs: Query<(&Rig, &Motion, &mut Sway
 
 /// Every drawn frame, after the pose: each moved vertex from the previous phase, its entries' offsets carried
 /// through their bones as posed.
-pub(crate) fn draw(mut rigs: Query<(&Rig, Ref<Motion>, &mut Sway)>, joints: Query<&Transform>, mut queued: ResMut<Queued>) {
+pub fn draw(mut rigs: Query<(&Rig, Ref<Motion>, &mut Sway)>, joints: Query<&Transform>, mut queued: ResMut<Queued>) {
     let mut changed = Vec::new();
     for (rig, motion, mut s) in &mut rigs {
         let Some(c) = &rig.data.noise else { continue };
