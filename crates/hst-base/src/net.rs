@@ -68,8 +68,15 @@ const REPUBLISH: Duration = Duration::from_secs(30);
 const STALE: u64 = 90;
 /// B518: the shortest gap between two of a host's lobby listings outside a republish.
 const LIST_GAP: Duration = Duration::from_secs(10);
-/// The build peers must share (M2e will add the disc pack, rules and mods).
-pub const BUILD: &str = concat!("hst ", env!("CARGO_PKG_VERSION"));
+/// The build peers must share (M22: the handshake's, version and commit; M2e checks the disc pack, rules and mods).
+fn our_build() -> &'static str {
+    crate::handshake::build()
+}
+
+/// M22: why a guest of another build is turned away (at its Hello, before any seat or pick), for the guest to read.
+pub fn version_differs(host: &str, you: &str) -> String {
+    format!("a different version of the game (host {host}, you {you}). Update so you both have the same one.")
+}
 
 // ---------------------------------------------------------------- settings
 
@@ -506,12 +513,20 @@ pub struct Listing {
     /// it's joined by the code); empty where the ID is dialled.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub code: String,
+    /// M22: the host's build id (`handshake::build`); empty from a build before it. Find greys out the others.
+    #[serde(default)]
+    pub build: String,
 }
 
 impl Listing {
     fn of(id: EndpointId, room: &Room) -> Listing {
         let seats = room.seats.len();
-        Listing { id: id.to_string(), name: room.name.clone(), doubles: room.doubles, court: room.court, taken: seats - room.open(), seats, time: now(), code: String::new() }
+        Listing { id: id.to_string(), name: room.name.clone(), doubles: room.doubles, court: room.court, taken: seats - room.open(), seats, time: now(), code: String::new(), build: our_build().into() }
+    }
+
+    /// M22: hosted by this same build, so joining it can work (else the host refuses at the Hello).
+    pub fn same_build(&self) -> bool {
+        self.build == our_build()
     }
 
     pub fn open(&self) -> usize {
@@ -526,7 +541,7 @@ impl Listing {
 
 /// The Quickplay rule (the Halo CE port's Quick Match): the busiest open lobby that fits, newest first on a tie.
 pub fn quick_pick(list: &[Listing], doubles: bool, need: usize) -> Vec<Listing> {
-    let mut fit: Vec<_> = list.iter().filter(|l| l.doubles == doubles && l.open() >= need).cloned().collect();
+    let mut fit: Vec<_> = list.iter().filter(|l| l.doubles == doubles && l.open() >= need && l.same_build()).cloned().collect();
     fit.sort_by_key(|l| (std::cmp::Reverse(l.taken), std::cmp::Reverse(l.time)));
     fit
 }
@@ -1778,8 +1793,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             Some(g) = guests.recv() => match g {
                 Guest::In { peer, name, picks, build, link, conn, courts, device } => {
-                    let why = if build != BUILD {
-                        Some(format!("different version (host {BUILD}, you {build})"))
+                    let why = if build != our_build() {
+                        Some(version_differs(our_build(), &build))
                     } else if let Err(e) = picks_ok(&picks) {
                         Some(e)
                     } else if starting.is_some() || !room.take(&peer, &picks) {
@@ -2116,7 +2131,8 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
                     // ponytail: the rejoiner plays the seat's old picks (a mod pick it lacks shows its stand-in)
                     let back = away.iter().find(|p| room.names.get(*p).is_some_and(|n| *n == name)).or(away.first()).cloned();
                     match back {
-                        Some(old) if build == BUILD => {
+                        Some(_) if build != our_build() => refuse(&link, conn, version_differs(our_build(), &build)),
+                        Some(old) => {
                             bevy::log::info!("{name} ({}) rejoins for {}", short(&peer), short(&old));
                             away.retain(|p| *p != old);
                             if let Some(i) = joined.iter().position(|(p, ..)| *p == old) {
@@ -2396,13 +2412,18 @@ fn picks_ok(p: &[Pick]) -> Result<(), String> {
 }
 
 /// Join by code; true once seated (the lobby then runs until it starts or someone leaves).
-async fn join(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> bool {
+async fn join(cx: &Ctx, code: &str, picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>) -> bool {
+    join_as(cx, code, picks, cmds, our_build()).await
+}
+
+/// `join`, saying it is build `build` (M22's test plays another build).
+async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::UnboundedReceiver<Cmd>, build: &str) -> bool {
     // a home relay first, as when bind waited for it (B224 moved that here; bounded: a dead relay still leaves LAN)
     if let Some(ep) = cx.ep.as_ref().filter(|_| cx.relays) {
         let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
     let Some((conn, link, mut inbox, me)) = connect(cx, code, cmds).await else { return false };
-    link.send(&Msg::Hello { build: BUILD.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap() });
+    link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap() });
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
     let ev = cx.ev.clone();
@@ -3249,7 +3270,7 @@ mod tests {
 
     #[test]
     fn quickplay_takes_the_busiest_that_fits() {
-        let l = |id: &str, taken, seats, time| Listing { id: id.into(), name: String::new(), doubles: seats == 4, court: 0, taken, seats, time, code: String::new() };
+        let l = |id: &str, taken, seats, time| Listing { id: id.into(), name: String::new(), doubles: seats == 4, court: 0, taken, seats, time, code: String::new(), build: our_build().into() };
         let list = [l("a", 1, 4, 5), l("b", 2, 4, 1), l("c", 3, 4, 9), l("d", 1, 2, 9)];
         assert_eq!(quick_pick(&list, true, 2).iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         assert_eq!(quick_pick(&list, true, 1)[0].id, "c");
@@ -3258,7 +3279,7 @@ mod tests {
 
     #[test]
     fn find_never_lists_our_own_lobby() {
-        let l = |id: &str| Listing { id: id.into(), name: String::new(), doubles: false, court: 0, taken: 1, seats: 2, time: 0, code: String::new() };
+        let l = |id: &str| Listing { id: id.into(), name: String::new(), doubles: false, court: 0, taken: 1, seats: 2, time: 0, code: String::new(), build: our_build().into() };
         let ids = |v: Vec<Listing>| v.into_iter().map(|l| l.id).collect::<Vec<_>>();
         assert_eq!(ids(not_mine(vec![l("me"), l("a"), l("b")], Some("me".into()))), ["a", "b"]);
         // B332: Quickplay would otherwise dial itself
@@ -3480,7 +3501,8 @@ mod tests {
         r.name = "🎾".repeat(24);
         r.take("host", &[Pick::disc(0, 0)]);
         let id = SecretKey::generate().public();
-        let data = lan_data(&Listing::of(id, &r)).expect("fits in 245 bytes");
+        // M22: with a long build id (a pre-release's version, a dirty build's commit)
+        let data = lan_data(&Listing { build: "10.10.10-rc.10 2e28939+".into(), ..Listing::of(id, &r) }).expect("fits in 245 bytes");
         let l = lan_listing(id, Some(&data)).unwrap();
         assert_eq!((l.id, l.name, l.taken, l.seats), (id.to_string(), r.name, 1, 4));
         assert_eq!(lan_listing(id, Some(&"other app".parse().unwrap())), None);
@@ -3583,6 +3605,51 @@ mod tests {
             next(&hev, |e| matches!(e, Event::Status(s) if s.contains("pick was refused"))).await;
             next(&gev, |e| matches!(e, Event::Chat { text, .. } if text.starts_with("Your pick was refused"))).await;
         });
+    }
+
+    /// M22: a guest of another build is refused at its Hello, saying both builds, before any seat; Find greys out
+    /// such a host's lobby and Quickplay passes it by.
+    #[test]
+    fn another_build_is_refused_at_the_door() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = || async {
+                let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+            };
+            let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
+            let (_hcmd, mut hrx) = amp::unbounded_channel();
+            let (_gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(3, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let code = loop {
+                if let Ok(Event::Code(c)) = hev.try_recv() {
+                    break c;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            };
+            let seated = tokio::spawn(async move { join_as(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx, "0.0.0 1a2b3c4").await });
+            let why = loop {
+                match gev.try_recv() {
+                    Ok(Event::Failed(w)) => break w,
+                    Ok(Event::Room(_)) => panic!("seated in another build's lobby"),
+                    _ => tokio::time::sleep(Duration::from_millis(20)).await,
+                }
+            };
+            assert!(why.starts_with("Refused: a different version"), "{why}");
+            assert!(why.contains(&format!("host {}, you 0.0.0 1a2b3c4", our_build())) && why.contains("Update"), "{why}");
+            assert!(!seated.await.unwrap(), "never seated");
+        });
+        let l = |build: &str| Listing { id: build.into(), name: String::new(), doubles: false, court: 0, taken: 1, seats: 2, time: 0, code: String::new(), build: build.into() };
+        let (ours, other, old) = (l(our_build()), l("0.0.0 1a2b3c4"), l(""));
+        assert!(ours.same_build() && !other.same_build() && !old.same_build());
+        assert_eq!(quick_pick(&[other, old, ours], false, 1).iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), [our_build()]);
+        // a listing from before M22 has no build: read as another build's
+        let before: Listing = serde_json::from_str(r#"{"id":"x","name":"","doubles":false,"court":0,"taken":1,"seats":2,"time":0}"#).unwrap();
+        assert!(!before.same_build());
     }
 
     /// M2i on loopback: the host brings a mod (and a court mod); the guest sees its wire, asks for its looks and gets
