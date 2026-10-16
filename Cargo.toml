@@ -57,6 +57,8 @@ wgpu = { path = "third_party/wgpu" }
 # (render_phase/mod.rs `dirty`, batching/gpu_preprocessing.rs write_binned_instance_buffers)
 # P47: where pipelines compile on the render thread (browser, macOS), a queue pass stops after a time budget
 # (render_resource/pipeline_cache.rs `compile_budget`, set by hst's mode.rs)
+# P55: queueing a render pipeline equal to one already cached returns its id; pre-warmed ones (`prewarm_render_pipeline`,
+# hst-base's pipelines.rs) aren't `requested` until the game asks for them (render_resource/pipeline_cache.rs `dedup`)
 bevy_render = { path = "third_party/bevy_render" }
 # P37: the mesh-preprocess bind groups kept while their buffers stay the same, instead of rebuilt for every view and
 # phase each frame (src/render/gpu_preprocess.rs); B468: CPU clustering reuses each view's cluster buffers instead of

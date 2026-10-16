@@ -3683,6 +3683,7 @@ dependencies = [
  "web-time",
  "webpki-roots",
  "wgpu",
+ "wgpu-types",
  "winit",
 ]
 
