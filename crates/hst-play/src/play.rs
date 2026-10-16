@@ -1029,7 +1029,6 @@ fn reach(iso: &mut Iso) -> Reach {
             .expect("TParam slash cell")
     };
     let right = cols[6].starts_with(&[0x89, 0x45]); // 右 (right) in Shift-JIS
-    
     Reach {
         base: num(55),
         reach: (num(56) + num(57)) / 100.0,
@@ -1930,7 +1929,8 @@ fn strike(
         },
     };
     // the ball launch's two uniforms (kept on the ball; nothing ported reads them)
-    g.rng.shared.next(); g.rng.shared.next();
+    g.rng.shared.next();
+    g.rng.shared.next();
     g.flight = Flight::struck(Ball { pos: at, vel, spin }, launched.frame, launched.frame);
     ai_heard_hit(g, who, branch, vel);
     // ponytail: practice's (one player) side pick between candidates and its red-marker timeout aren't ported
@@ -2246,7 +2246,8 @@ fn pads_aim(g: &Game, i: usize) -> bool {
 /// The toss's ball launch draws the ball's two shared uniforms, as every launch does (kept on the ball; nothing
 /// ported reads them).
 fn toss_draws(g: &mut Game) {
-    g.rng.shared.next(); g.rng.shared.next();
+    g.rng.shared.next();
+    g.rng.shared.next();
 }
 
 /// A new point's placement message: one shared draw per player, right after the reseed.
@@ -3604,7 +3605,6 @@ fn ai_aim(g: &mut Game, i: usize) -> Vec2 {
     };
     let rng = &mut g.rng;
     let stick = if g.players.len() == 4 {
-        let _human_mate = g.humans.get(i ^ 2) == Some(&true);
         let l = Pair {
             me: at(i),
             mate: at(i ^ 2),

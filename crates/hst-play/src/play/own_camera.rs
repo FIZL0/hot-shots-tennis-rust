@@ -187,7 +187,6 @@ mod tests {
     use super::cam_of;
     use super::super::*;
     use crate::{Args, GameSpace};
-    
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");

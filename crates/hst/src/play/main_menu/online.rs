@@ -2123,7 +2123,7 @@ pub(super) fn linked(m: &mut Menu) {
     let text = std::env::var("HST_CODE").ok();
     let Some(code) = text.as_deref().and_then(crate::net::code_in) else { return };
     let net = View { paste: code, go: Some(Go::Code), ..default() };
-    *m = Menu { screen: Screen::Assign, doubles: true, net, settings: m.settings.clone(), mods: std::mem::take(&mut m.mods), ..default() };
+    *m = Menu { screen: Screen::Assign, doubles: true, net, settings: m.settings, mods: std::mem::take(&mut m.mods), ..default() };
 }
 
 /// Join by Code's keyboard: typed symbols, Backspace and Enter (finish) go into the code, not to the menu's key bindings (the

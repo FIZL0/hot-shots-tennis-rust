@@ -458,7 +458,10 @@ fn receive(mut loader: ResMut<Loader>, mut menu: Option<ResMut<Menu>>, mut asset
     for (key, r) in loader.done.get_mut().unwrap().try_iter() {
         let loaded = match r {
             Ok((d, hand, m, t, i, b)) => {
-                (m.insert(meshes), t.insert(materials), i.insert(images), b.insert(binds));
+                m.insert(meshes);
+                t.insert(materials);
+                i.insert(images);
+                b.insert(binds);
                 Some((Arc::new(d), hand))
             }
             Err(e) if e.is_empty() => {
@@ -837,7 +840,7 @@ fn bake(
         } else if job.drawn {
             // Z1: the PNG encodes (~20 ms) run on the IO pool; the next job waits for the files
             if job.saving.iter().all(|t| t.is_finished()) {
-                let ok: Vec<bool> = job.saving.drain(..).map(|t| bevy::tasks::block_on(t)).collect();
+                let ok: Vec<bool> = job.saving.drain(..).map(bevy::tasks::block_on).collect();
                 if ok.first() == Some(&true) {
                     info!("baked {}", job.path.display());
                 } else {
@@ -980,7 +983,7 @@ fn straight(data: &[u8], size: UVec2) -> Vec<u8> {
     };
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let mut rgba = Vec::with_capacity((size.x * size.y * 4) as usize);
-    for px in data.chunks_exact(8).take((size.x * size.y) as usize) {
+    for px in data.as_chunks::<8>().0.iter().take((size.x * size.y) as usize) {
         rgba.extend([byte(half(&px[0..])), byte(half(&px[2..])), byte(half(&px[4..])), byte(half(&px[6..]) + 1.0)]);
     }
     rgba
@@ -988,7 +991,7 @@ fn straight(data: &[u8], size: UVec2) -> Vec<u8> {
 
 /// [`straight`]'s bytes as a PNG at `path`. False if nothing drew.
 fn save(rgba: Vec<u8>, size: UVec2, path: &Path) -> bool {
-    if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
+    if !rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0) {
         warn!("{}: the preview drew nothing", path.display());
         return false;
     }
@@ -1402,7 +1405,7 @@ mod tests {
         assert!(voice(Act::Pose, Who::Disc(2), 0, &mods, &mut HashMap::new(), iso).is_none(), "△ is the stats, no voice");
         // the mod: its own R2 take; L2 silent (B181: it lacks that take, never its donor's); no voice → silent
         assert_eq!(tail(go(Act::Win, Who::Mod(0), 7)), (0x16, 9, 0));
-        let mut none = |act, who| voice(act, who, 7, &mods, &mut HashMap::new(), iso).is_none();
+        let none = |act, who| voice(act, who, 7, &mods, &mut HashMap::new(), iso).is_none();
         assert!(none(Act::Loss, Who::Mod(0)));
         assert!(none(Act::Pose, Who::Mod(0)));
         assert!(none(Act::Win, Who::Mod(1)) && none(Act::Loss, Who::Mod(1)));

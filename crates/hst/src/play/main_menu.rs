@@ -3352,7 +3352,7 @@ fn draw(
         ticker.0 = said;
     }
     let quads = slide.step(menu.screen, quads, time.delta_secs() * 60.0);
-    let scale = window.single().map_or(1.0, |w| super::widescreen::unit_px(w)) * super::widescreen::menu_scale();
+    let scale = window.single().map_or(1.0, super::widescreen::unit_px) * super::widescreen::menu_scale();
     let (share, vshare) = super::widescreen::window_menu_shares(&window);
     // the quads' parent (the view) in physical pixels
     let px = window.single().map_or(Vec2::ZERO, |w| super::widescreen::view_size(w) * w.scale_factor());
@@ -4380,7 +4380,7 @@ mod tests {
                     let lines = tabs::lines(&secs, c.cols);
                     let v = roster::View { end: c.fit(&lines, 0), secs, lines, top: 0 };
                     let (heads, tiles) = c.laid(p, &v);
-                    assert!(!tiles.is_empty() && heads.len() >= 1, "{a} {n} {p}");
+                    assert!(!tiles.is_empty() && !heads.is_empty(), "{a} {n} {p}");
                     for r in heads.iter().map(|h| h.1).chain(tiles.iter().map(|t| t.2)) {
                         assert!(inside(r, at.grid), "{a} {n} {p}: {r:?} in {:?}", at.grid);
                     }

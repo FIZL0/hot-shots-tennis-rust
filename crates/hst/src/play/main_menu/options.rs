@@ -206,7 +206,7 @@ fn vibration_about() -> &'static str {
     let can = crate::web::vibration();
     #[cfg(not(target_arch = "wasm32"))]
     let can = if cfg!(any(target_os = "ios", target_os = "android")) { "haptic" } else { "vibrate" };
-    match &*can {
+    match can {
         "haptic" => "A light haptic tick on each press of the on-screen controls.",
         "vibrate" => "Buzz briefly on each press of the on-screen controls. Android: not while the phone's ringer is on Silent.",
         "firefox" => "Firefox for Android doesn't let web pages vibrate, so this does nothing here. Chrome on Android buzzes.",
@@ -1587,7 +1587,7 @@ mod tests {
         assert_eq!(s.value(Aspect), ASPECTS[aspect_choices() - 1]);
         // B421: Stretch is the phone apps' only; a settings.txt's Stretch reads back there (elsewhere as the default)
         assert_eq!(choices(Aspect).len(), aspect_choices());
-        let mut t = s.clone();
+        let mut t = s;
         t.3 = crate::play::widescreen::STRETCH;
         let stretch = aspect_choices() == ASPECTS.len();
         assert!(t.text().contains("aspect = Stretch") && (Settings::parse(&t.text()) == t) == stretch);

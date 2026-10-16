@@ -37,7 +37,7 @@ fn press(mut commands: Commands, mut m: ResMut<Mash>, mut keys: ResMut<ButtonInp
         return;
     }
     m.frame += 1;
-    if m.frame % m.every != 0 {
+    if !m.frame.is_multiple_of(m.every) {
         return;
     }
     // xorshift64

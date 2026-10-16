@@ -851,10 +851,10 @@ fn load(
         if envir.is_some() {
             commands.insert_resource(look);
         }
-        if let (Some((frame, hole)), Some(_)) = (shade_frame, sun) {
-            if let Some((model, mats)) = raw_models.get(&hole) {
-                commands.insert_resource(shade::build(frame, &shade_casters, model, mats, hst_sim::court::world(&mut iso, n)));
-            }
+        if let (Some((frame, hole)), Some(_)) = (shade_frame, sun)
+            && let Some((model, mats)) = raw_models.get(&hole)
+        {
+            commands.insert_resource(shade::build(frame, &shade_casters, model, mats, hst_sim::court::world(&mut iso, n)));
         }
         // clouds: singles only (the game makes them in doubles too but neither moves nor draws them)
         if args.singles {
@@ -1427,7 +1427,7 @@ fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut
         }
         _ => {
             if let Some(path) = what.strip_prefix("shot=") {
-                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.to_string()));
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(std::path::PathBuf::from(path)));
             }
             return;
         }

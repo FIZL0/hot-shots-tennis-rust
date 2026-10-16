@@ -323,7 +323,7 @@ fn notice_setup(mut commands: Commands) {
 fn notice_pool(mut commands: Commands, n: Res<OnlineNotice>, root: Query<Entity, With<NoticeRoot>>, slots: Query<Entity, With<NoticeSlot>>, mut env: Local<Option<bool>>) {
     let env = *env.get_or_insert_with(|| std::env::var_os("HST_NOTICE").is_some());
     for r in &root {
-        crate::ui_pool::keep(&mut commands, r, env || !n.text.is_empty(), &slots, NOTICE_POOL, |i| (NoticeSlot(i), crate::ui_pool::quad()));
+        crate::ui_pool::keep(&mut commands, r, env || !n.text.is_empty(), slots, NOTICE_POOL, |i| (NoticeSlot(i), crate::ui_pool::quad()));
     }
 }
 

@@ -459,7 +459,7 @@ pub(super) fn device_icons(d: &mut Draw, dev: crate::device::Device, right: f32,
     let x0 = right - (2.0 * W + GAP) * sx;
     for (k, box_x) in [x0, x0 + (W + GAP) * sx].into_iter().enumerate() {
         let at = |x: f32, y: f32, w: f32, h: f32| [box_x + x * sx, cy + (y - 7.0) * sy, w * sx, h * sy];
-        let mut solid = |d: &mut Draw, r: [f32; 4], round: f32, rgb: [f32; 3]| rounded(d, r, round * sx, rgb, 128.0);
+        let solid = |d: &mut Draw, r: [f32; 4], round: f32, rgb: [f32; 3]| rounded(d, r, round * sx, rgb, 128.0);
         let ring = |d: &mut Draw, r: [f32; 4], round: f32, t: f32| ringed(d, r, round * sx, t * sx, ink, Some(bg));
         if k == 0 {
             match dev.platform {
