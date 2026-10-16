@@ -672,6 +672,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **P53** Auto graphics preset so phones hold 60 fps (iPhone 13 web app ran ~30): first run picks a preset from the device (iOS Safari hides the model and GPU name, so use screen size/DPR, hardwareConcurrency, WebGPU limits, native iOS/Android device model) and then confirms it by timing the first seconds of play, dropping render scale and shadows until 60 is held; the player can still override it in Settings — crates/hst/src/graphics.rs, crates/hst/src/web.rs — Never pick or default to a 30 fps cap (user 2026-10-15: unplayable); every preset is 60, step down scale/shadows instead
 - [x] **B469** iPhone 13 web app: the page reset when he hit a smash, probably a memory spike (smash effect/SFX/voice/replay buffer loaded on first use); find what allocates on the first smash and preload or cap it — same likely cause as B468 — crates/hst/src/play.rs, crates/hst/src/web.rs
 - [x] **B464** iOS Safari web app: Copy link in the online lobby does nothing (bevy clipboard set_text on iOS needs a user-gesture-bound navigator.clipboard.writeText, or fall back to the share sheet / a selectable text field) — crates/hst/src/play/main_menu/online.rs (apply, Copy link), crates/hst/src/web.rs
+- [x] **B465** beta.opentennis.dev: Add to Home Screen on iOS shows no icon (check apple-touch-icon/manifest icon paths resolve on the beta deploy; pages.yml beta build may drop icon-180.png or use a wrong base path) — web/index.html, web/manifest.webmanifest, .github/workflows/pages.yml
 
 
 ### Shots

@@ -4,7 +4,7 @@
 // (B317), the game's main menu shows Refresh, and the reload (any navigation) switches to it. The disc pack is in
 // OPFS, never in these caches: nothing from the disc is hosted.
 const META = 'hst-meta';
-const SHELL = ['./', 'site.js', 'site.css', 'logo.svg', 'touch.js', 'worker.js', 'opfs.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png'];
+const SHELL = ['./', 'site.js', 'site.css', 'logo.svg', 'touch.js', 'worker.js', 'opfs.js', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 const scope = new URL(self.registration.scope);
 const local = path => new URL(path, scope).href;
 
