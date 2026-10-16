@@ -433,31 +433,57 @@ const OPTION_00: &[Label<'static>] = &[
 pub fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
     // match_stats names `info` by its folder ("/2d/info.tm2")
     let name = name.trim_end_matches(".tm2").rsplit('/').next().unwrap_or_default().to_ascii_lowercase();
-    if name.starts_with("wall_") && !OFF.load(Ordering::Relaxed) {
-        let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
-        let (w, h) = (pic.width as usize, pic.height as usize);
-        let rgba = grid(&pic.rgba, w, h);
-        let img = Image::new(Extent3d { width: w as u32 * K, height: h as u32 * K, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-        let handle = images.add(img);
-        crate::textures::ours(handle.id(), Vec2::splat(K as f32));
-        return handle;
-    }
-    let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !OFF.load(Ordering::Relaxed));
-    let Some(sheet) = sheet else { return super::panel::image(images, data) };
-    // P50: while a mode starts, handed off (`crate::jobs`; `land` puts it in when it's done)
-    if DEFER.get() {
-        // B409: a step at a time, so the browser draws frames in between
-        let mut steps = Steps::new(data, &name, sheet);
-        if let Some(job) = crate::jobs::spawn_steps(move || steps.step()) {
+    let off = OFF.load(Ordering::Relaxed);
+    let wall = name.starts_with("wall_") && !off;
+    let sheet = SHEETS.iter().find(|s| s.name == name).filter(|_| !off);
+    // P50: while a mode starts, handed off (`crate::jobs`; `land` puts it in when it's done); P57: the disc's own
+    // sheets and the walls too, and the decode with them (a menu start's ~50 decodes were ~50 ms of one frame on
+    // desktop, more in the browser), unless a texture replacement may stand in for a disc sheet (`textures::add`)
+    if DEFER.get() && (wall || sheet.is_some() || !crate::textures::on()) {
+        let data = data.to_vec();
+        let job = match sheet {
+            // B409: a step at a time, so the browser draws frames in between
+            Some(sheet) => {
+                let (name, mut steps) = (name.clone(), None);
+                crate::jobs::spawn_steps(move || steps.get_or_insert_with(|| Steps::new(&data, &name, sheet)).step())
+            }
+            None if wall => crate::jobs::spawn(move || wall_image(&data)),
+            None => crate::jobs::spawn(move || disc_image(&data)),
+        };
+        if let Some(job) = job {
             let handle = images.reserve_handle();
             BUILDING.lock().unwrap().push((handle.clone(), job));
-            crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+            if wall || sheet.is_some() {
+                crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+            }
             return handle;
         }
     }
+    let Some(sheet) = sheet else {
+        if wall {
+            let handle = images.add(wall_image(data));
+            crate::textures::ours(handle.id(), Vec2::splat(K as f32));
+            return handle;
+        }
+        return super::panel::image(images, data);
+    };
     let handle = images.add(rebuilt(data, &name, sheet));
     crate::textures::ours(handle.id(), Vec2::splat(K as f32));
     handle
+}
+
+/// A menu wall drawn again at `K`× ([`grid`]).
+fn wall_image(data: &[u8]) -> Image {
+    let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
+    let (w, h) = (pic.width as usize, pic.height as usize);
+    let rgba = grid(&pic.rgba, w, h);
+    Image::new(Extent3d { width: w as u32 * K, height: h as u32 * K, depth_or_array_layers: 1 }, TextureDimension::D2, rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)
+}
+
+/// A disc sheet as it is ([`super::panel::image`] with no replacement to look up).
+fn disc_image(data: &[u8]) -> Image {
+    let pic = tim2::decode_alpha8(data).expect("TIM2").remove(0);
+    Image::new(Extent3d { width: pic.width, height: pic.height, depth_or_array_layers: 1 }, TextureDimension::D2, pic.rgba, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD)
 }
 
 thread_local! {
@@ -567,7 +593,14 @@ impl Steps {
         let all = out.pixels();
         let at = px.len() / 4;
         let to = (at + BAND).min(all.len());
-        px.extend(all[at..to].iter().map(|c| c.demultiply()).flat_map(|c| [c.red(), c.green(), c.blue(), c.alpha()]));
+        // P57: a clear pixel (most of a sheet) is clear either way, without demultiply's divisions
+        px.extend(all[at..to].iter().flat_map(|c| match c.alpha() {
+            0 => [0; 4],
+            _ => {
+                let c = c.demultiply();
+                [c.red(), c.green(), c.blue(), c.alpha()]
+            }
+        }));
         if to < all.len() {
             return None;
         }
@@ -1130,7 +1163,60 @@ fn glyph_boxes(rgba: &[u8], w: usize) -> Vec<(u16, u16, u16, u16, String)> {
 }
 
 /// `K`× bilinear, then wherever the four disc pixels under it differ a lot, the edge between them snapped to a pixel.
+/// P57: what depends only on the four disc pixels (their extremes, whether they're all one colour) is worked out once
+/// per run of output pixels over the same four, and a fully transparent four is left clear: the same pixels as
+/// working each one out from scratch, in a third of the time (most of a sheet is clear or flat; it was ~70% of a
+/// sheet's rebuild, the browser's menu start waited seconds on it).
 fn upscale(pm: &[[f32; 4]], w: usize, h: usize, out: &mut Pixmap, rows: std::ops::Range<usize>) {
+    let ow = w * K as usize;
+    let at = |x: isize, y: isize| pm[(y.clamp(0, h as isize - 1) as usize) * w + x.clamp(0, w as isize - 1) as usize];
+    // the quad's two extremes by "ink" (alpha, then brightness): a hard edge between them is drawn hard
+    let key = |p: &[f32; 4]| p[3] * 2.0 + luma(p);
+    let data = out.pixels_mut();
+    for oy in rows {
+        let fy = (oy as f32 + 0.5) / K as f32 - 0.5;
+        let (y0, ty) = (fy.floor() as isize, fy - fy.floor());
+        // the four under the last pixel: their x, and (for a quad not all one colour) the extremes and their spread
+        let mut last = None;
+        let (mut q, mut lo, mut hi, mut range, mut flat) = ([[0.0f32; 4]; 4], [0.0f32; 4], [0.0f32; 4], 0.0, false);
+        for ox in 0..ow {
+            let fx = (ox as f32 + 0.5) / K as f32 - 0.5;
+            let (x0, tx) = (fx.floor() as isize, fx - fx.floor());
+            if last != Some(x0) {
+                last = Some(x0);
+                q = [at(x0, y0), at(x0 + 1, y0), at(x0, y0 + 1), at(x0 + 1, y0 + 1)];
+                flat = q[1] == q[0] && q[2] == q[0] && q[3] == q[0];
+                if !flat {
+                    (lo, hi) = q.iter().fold((q[0], q[0]), |(a, b), p| (if key(p) < key(&a) { *p } else { a }, if key(p) > key(&b) { *p } else { b }));
+                    range = key(&hi) - key(&lo);
+                }
+            }
+            if flat && q[0] == [0.0; 4] {
+                data[oy * ow + ox] = tiny_skia::PremultipliedColorU8::TRANSPARENT;
+                continue;
+            }
+            let wt = [(1.0 - tx) * (1.0 - ty), tx * (1.0 - ty), (1.0 - tx) * ty, tx * ty];
+            let mut c = [0.0f32; 4];
+            for (p, k) in q.iter().zip(wt) {
+                (0..4).for_each(|i| c[i] += p[i] * k);
+            }
+            if !flat && range > 0.6 {
+                let t = ((key(&c) - key(&lo)) / range).clamp(0.0, 1.0);
+                // a ramp one output pixel wide across the iso-line
+                let s = ((t - 0.5) * K as f32 * range.min(1.5) + 0.5).clamp(0.0, 1.0);
+                let s = s * s * (3.0 - 2.0 * s);
+                (0..4).for_each(|i| c[i] = lo[i] + (hi[i] - lo[i]) * s);
+            }
+            let a = c[3].clamp(0.0, 1.0);
+            let u = |v: f32| (v.clamp(0.0, a) * 255.0 + 0.5) as u8;
+            data[oy * ow + ox] = tiny_skia::PremultipliedColorU8::from_rgba(u(c[0]), u(c[1]), u(c[2]), (a * 255.0 + 0.5) as u8).expect("premultiplied");
+        }
+    }
+}
+
+/// [`upscale`] working every output pixel out from scratch (before P57), to check it against.
+#[cfg(test)]
+fn plain_upscale(pm: &[[f32; 4]], w: usize, h: usize, out: &mut Pixmap, rows: std::ops::Range<usize>) {
     let ow = w * K as usize;
     let at = |x: isize, y: isize| pm[(y.clamp(0, h as isize - 1) as usize) * w + x.clamp(0, w as isize - 1) as usize];
     let data = out.pixels_mut();
@@ -1278,6 +1364,37 @@ mod tests {
         }
         let images = world.resource::<Assets<Image>>();
         assert_eq!(images.get(&later).expect("landed").data, images.get(&now).unwrap().data);
+    }
+
+    /// P57: the upscale that works each run of output pixels over the same four disc pixels out once gives the same
+    /// pixels as working every one out from scratch, over clear, flat, soft and hard-edged patches.
+    #[test]
+    fn upscale_matches_the_plain_one() {
+        let (w, h) = (37, 23);
+        let mut seed = 7u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            (seed >> 16) as f32 / 65536.0
+        };
+        let pm: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| match (i % w / 9, i / w / 6) {
+                (0, _) => [0.0; 4],
+                (1, _) => [0.25, 0.5, 0.125, 0.5],
+                (2, y) if y % 2 == 0 => [0.9, 0.1, 0.1, 1.0],
+                _ => {
+                    let a = if next() < 0.3 { 0.0 } else { next() };
+                    [next() * a, next() * a, next() * a, a]
+                }
+            })
+            .collect();
+        let (ow, oh) = (w as u32 * K, h as u32 * K);
+        let [mut a, mut b] = [(); 2].map(|_| Pixmap::new(ow, oh).unwrap());
+        upscale(&pm, w, h, &mut a, 0..oh as usize);
+        // in bands, as the steps do
+        for r in (0..oh as usize).step_by(13) {
+            plain_upscale(&pm, w, h, &mut b, r..(r + 13).min(oh as usize));
+        }
+        assert!(a.data() == b.data());
     }
 
     #[test]

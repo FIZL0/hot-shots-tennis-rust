@@ -149,6 +149,10 @@ pub fn prefetch(mats: &mtl::Mtl) -> Prefetch {
 
 /// [`prefetch`] for TIM2 sheets added through [`add_tim2`] (the menu's ~50 sheets, Z1).
 pub fn prefetch_tim2<'a>(sheets: impl IntoIterator<Item = &'a [u8]>) -> Prefetch {
+    // P57: no replacements (always so in the browser): nothing to look up, so nothing to decode for it
+    if !on() {
+        return Prefetch(vec![]);
+    }
     let pics: Vec<tim2::Picture> = sheets.into_iter().filter_map(|d| tim2::decode_alpha8(d).ok()?.into_iter().next()).collect();
     let want = {
         let s = STATE.lock().unwrap();
