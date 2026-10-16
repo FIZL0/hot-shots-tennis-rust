@@ -1477,12 +1477,13 @@ impl Menu {
         all[(self.roll % all.len() as u64) as usize]
     }
 
-    /// The umpire value the match gets: Random drawn by `roll` from the disc umpires and the umpire mods.
+    /// The umpire value the match gets: Random drawn by `roll` from the disc umpires and the umpire mods (B432: online
+    /// only the disc ones, the umpires every peer has; peers don't announce their umpire mods as they do courts).
     fn umpire_pick(&self) -> usize {
         if self.umpire as usize != UMPIRES {
             return self.umpire as usize;
         }
-        let all: Vec<usize> = (0..UMPIRES).chain(umpire_mods::values(self)).collect();
+        let all: Vec<usize> = (0..UMPIRES).chain(umpire_mods::values(self).filter(|_| !self.online())).collect();
         all[(self.roll / 0x1_0000 % all.len() as u64) as usize]
     }
 

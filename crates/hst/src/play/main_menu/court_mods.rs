@@ -247,6 +247,17 @@ mod tests {
         m.net.room.as_mut().unwrap().vanilla = true;
         m.sel = 1;
         assert!(court_picker::rows(&m)[1].is_empty(), "a vanilla lobby: none");
+        // B432: Random draws only the mods every peer has: the guest has gag_c01, not gag_c03 (roll 12 wraps to 0)
+        let r = m.net.room.as_mut().unwrap();
+        r.vanilla = false;
+        r.names = [("host".to_string(), "H".to_string()), ("g".to_string(), "G".to_string())].into();
+        r.courts = [("host".to_string(), vec!["gag_c01".to_string(), "gag_c03".to_string()]), ("g".to_string(), vec!["gag_c01".to_string()])].into();
+        m.court = COURTS;
+        m.roll = COURTS as u64;
+        assert_eq!(m.court_pick(), COURTS + 1);
+        m.roll = COURTS as u64 + 1;
+        assert_eq!(m.court_pick(), 0);
+        m.net.room.as_mut().unwrap().vanilla = true;
         // a guest: the room's mod by name if it's installed here, else its layout's disc name
         let t = Text { msg: (0..300).map(|i| format!("msg{i}")).collect(), glyphs: default(), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
         let mut r = Room { court: 9, court_mod: Some(("gag_c03".into(), "Court 03".into())), ..default() };
