@@ -6,7 +6,7 @@
 //! until it lands.
 
 use super::look;
-use super::roster::{self, PX, PY, Seat};
+use super::roster::{PX, PY};
 use super::{Draw, pointer};
 use crate::modstore::Kind;
 
@@ -61,8 +61,8 @@ pub(super) fn ends(at: Kind, shown: &[Kind]) -> [bool; 2] {
     [step(at, true, shown) == at, step(at, false, shown) == at]
 }
 
-/// B448: each kind's colour set, a seat's of the character select (`roster::seat`): Characters red, Courts green,
-/// Umpires blue, Texture packs gold.
+/// B448: each kind's colour, by the character select's seats (`roster::seat`): Characters red, Courts green, Umpires
+/// blue, Texture packs gold; B471: its accent (`look::accent`).
 pub(super) fn seat_of(k: Kind) -> usize {
     match k {
         Kind::Character | Kind::Other => 0,
@@ -72,27 +72,26 @@ pub(super) fn seat_of(k: Kind) -> usize {
     }
 }
 
-/// B383: the page's one tab row, in the top bar from `x` (`top` its top, `room` wide): the L2 / R2 buttons in the
-/// legend's art (the device last used: a pad's, or the keyboard's 1 / 3 keys) round the `shown` kinds' tabs, each
-/// with its count (`counts`, by [`KINDS`]; a tap on one is `Act::Kind(i)`). B448: each tab a ring pill in its kind's
-/// colours (`seat_of`), the current one filled; B462: on the first tab L2's dims, on the last R2's. The buttons go while there's only one kind to show. The row shrinks
-/// as one where it doesn't fit.
-pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind]) {
+/// B383: the page's kind tab row from `x` (`top` its top, `room` wide): the L2 / R2 buttons in the legend's art (the
+/// device last used: a pad's, or the keyboard's 1 / 3 keys) round the `shown` kinds' tabs, each with its count
+/// (`counts`, by [`KINDS`]; a tap on one is `Act::Kind(i)`). B471: in the grid panel's header strip (the current
+/// kind's colour): the current tab a white pill in a dark outline, the others translucent dark; B462: on the first
+/// tab L2's dims, on the last R2's. The buttons go while there's only one kind to show. The row shrinks as one where
+/// it doesn't fit; returns its right end.
+pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind]) -> f32 {
     let idx: Vec<usize> = shown.iter().filter_map(|k| KINDS.iter().position(|q| q == k)).collect();
     let words: Vec<String> = idx.iter().map(|&i| format!("{} {}", name(KINDS[i]), counts[i])).collect();
-    let seats: Vec<Seat> = idx.iter().map(|&i| roster::seat(seat_of(KINDS[i]))).collect();
     let on = idx.iter().position(|&i| KINDS[i] == at);
-    look::tabs(d, [x, top, room], &words, &seats, on, Some((0, 1)), ends(at, shown), |j| pointer::Act::Kind(idx[j]));
+    look::tabs(d, [x, top, room], &words, look::Tabs::Strip, on, None, Some((0, 1)), ends(at, shown), |j| pointer::Act::Kind(idx[j]))
 }
 
 /// The empty state of a kind the store doesn't carry yet, in the page's column `[x, y, w, h]`.
 pub(super) fn empty(d: &mut Draw, k: Kind, [x, y, w, h]: [f32; 4]) {
     let Some(say) = coming(k) else { return };
-    let s = roster::seat(seat_of(k));
-    d.label(name(k), x + w / 2.0, y + h * 0.3, 26.0 * PY, w - 40.0 * PX, s.ring);
+    d.label(name(k), x + w / 2.0, y + h * 0.3, 26.0 * PY, w - 40.0 * PX, look::c(look::INK));
     let size = 16.0 * PY;
     let lw = (w - 60.0 * PX).min(420.0 * PX);
-    look::para(d, say, [x + (w - lw) / 2.0, y + h * 0.3 + 42.0 * PY], lw, size, 22.0 * PY, 6, s.soft);
+    look::para(d, say, [x + (w - lw) / 2.0, y + h * 0.3 + 42.0 * PY], lw, size, 22.0 * PY, 6, look::c(look::MUTED));
 }
 
 #[cfg(test)]

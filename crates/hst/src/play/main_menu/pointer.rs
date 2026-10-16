@@ -49,6 +49,8 @@ pub(super) enum Act {
     /// B372: a Browse tile (cursor slot `i`): the mouse over it selects it; a tap selects it, a tap on the one a tap
     /// chose presses ✕ (a finger going down only, not hovering, so a drag scrolls without choosing).
     Tile(usize),
+    /// B471: the Mods pages' Show tab `i` (`grid::SHOWS`) in the top bar: a tap opens it.
+    Show(usize),
 }
 
 /// ✕.
@@ -221,6 +223,8 @@ impl Menu {
             Act::Name(p, i) => out = self.name_point(p, i, tap),
             Act::Kind(i) if tap && self.screen == Screen::Mods => self.mods_kind(super::mods_kind::KINDS[i], &mut out),
             Act::Kind(_) => {}
+            Act::Show(i) if tap && self.screen == Screen::Mods => self.show_tap(i, &mut out),
+            Act::Show(_) => {}
             Act::Tile(i) if tap => {
                 if self.add.tile_tap(i) && self.sel == i {
                     out = self.step(dev, OK);

@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use super::super::controls::Bindings;
 use super::tabs::{self, Line, Section};
-use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, pointer, shirt, tile_face};
+use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, look, pointer, shirt, tile_face};
 
 /// One mockup pixel in the menu's units: down, and across (a unit across is 14/15 of one down on screen: 640 across
 /// a 4:3 screen 448 high).
@@ -48,10 +48,10 @@ pub(super) fn hex(c: u32) -> [f32; 3] {
 /// The screen's background.
 pub(super) const BG: u32 = 0x0e1a2e;
 
-/// A seat's colours (B422's "Players" board): its own colour (the header band, the card's rim, the cursor's tile) and the
-/// words on it, the same character's other tile, the column's tint, the pills' well, a tile, soft words. The four
-/// differ in lightness too, not just hue (yellow, green, red, blue from light to dark), so they tell apart side by
-/// side for anyone.
+/// A seat's colours (B422's "Players" board): its own colour (the header band, the cursor's tile) and the words on it,
+/// the same character's other tile, the column's body, a light well (counts, the scroll bar's track), a tile, soft
+/// words. The four differ in lightness too, not just hue (yellow, green, red, blue from light to dark), so they tell
+/// apart side by side for anyone. B471: on the main menu's off-white panel (`look`), the seat's colour its accent.
 pub(super) struct Seat {
     pub ring: [f32; 3],
     pub ink: [f32; 3],
@@ -64,10 +64,10 @@ pub(super) struct Seat {
 
 pub(super) fn seat(p: usize) -> Seat {
     const C: [[u32; 7]; 4] = [
-        [0xdc3c44, 0xffffff, 0x8e2a30, 0x3e171c, 0x5a1d24, 0x6a2730, 0xffd0d0],
-        [0xffd84a, 0x2a2008, 0x8a6a1a, 0x3a2f0c, 0x4e3c0c, 0x5e4810, 0xfff0b8],
-        [0x2a5bc4, 0xffffff, 0x1f4a99, 0x111f40, 0x172c5a, 0x1f3a70, 0xcfe0ff],
-        [0x3fb86a, 0x0c2414, 0x2f6b44, 0x14301e, 0x183b26, 0x204a30, 0xc9f2d4],
+        [0xe0404c, 0xffffff, 0xf4b9be, 0xfbf9fd, 0xe2d9ea, 0xefe8f5, 0x6b6478],
+        [0xffd84a, 0x2a2008, 0xf7dd8a, 0xfbf9fd, 0xe2d9ea, 0xefe8f5, 0x6b6478],
+        [0x3a6fd8, 0xffffff, 0xb9cbf3, 0xfbf9fd, 0xe2d9ea, 0xefe8f5, 0x6b6478],
+        [0x3aa45a, 0xffffff, 0xb6e2c2, 0xfbf9fd, 0xe2d9ea, 0xefe8f5, 0x6b6478],
     ];
     let [ring, ink, sel, bg, well, tile, soft] = C[p % 4].map(hex);
     Seat { ring, ink, sel, bg, well, tile, soft }
@@ -432,8 +432,8 @@ fn is_active(m: &Menu, n: usize, p: usize) -> bool {
 /// the keyboard being 1P's if anyone's), else "Waiting for a player".
 fn open_seat(d: &mut Draw, s: &Seat, card: [f32; 4], p: usize, join: bool) {
     let [x, y, w, h] = card;
-    rounded(d, card, 14.0, hex(BG), 128.0);
-    dashed(d, card, 14.0, 2.0, s.soft.map(|c| c * 0.6), hex(BG));
+    rounded(d, card, 14.0, s.tile, 100.0);
+    dashed(d, card, 14.0, 2.0, s.soft, s.tile);
     let big = (64.0 * PY).min(w * 0.4);
     let cy = y + h / 2.0;
     let start = d.out.len();
@@ -441,11 +441,11 @@ fn open_seat(d: &mut Draw, s: &Seat, card: [f32; 4], p: usize, join: bool) {
     d.out[start..].iter_mut().for_each(|q| q.alpha = 45.0);
     let start = d.out.len();
     if join {
-        home::press_hint(d, " to join", x + w / 2.0, cy + 8.0 * PY, 17.0 * PY, w - 24.0 * PX, WHITE);
+        home::press_hint(d, " to join", x + w / 2.0, cy + 8.0 * PY, 17.0 * PY, w - 24.0 * PX, hex(look::INK));
     } else {
-        d.label("Waiting for a player", x + w / 2.0, cy + 8.0 * PY, 17.0 * PY, w - 24.0 * PX, WHITE);
+        d.label("Waiting for a player", x + w / 2.0, cy + 8.0 * PY, 17.0 * PY, w - 24.0 * PX, hex(look::INK));
     }
-    d.out[start..].iter_mut().for_each(|q| q.alpha = 100.0);
+    d.out[start..].iter_mut().for_each(|q| q.alpha = 110.0);
 }
 
 /// Player `p`'s column; `mine`: the pointer's device picks for it (its pills take taps).
@@ -464,13 +464,13 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         open_seat(d, &s, at.card, p, !online || m.seats[p] == Some(Dev::Open));
         return;
     }
-    // the card: a rim in the seat's colour, dashed for a computer player
+    // the card: the main menu's panel (B471: off-white in a dark outline), the outline dashed for a computer player
     let [x, y, w, _] = at.card;
     if human || m.seats[p] == Some(Dev::Open) {
-        ringed(d, at.card, 14.0, 3.0, s.ring, s.bg);
+        ringed(d, at.card, 14.0, look::RIM, hex(look::INK), s.bg);
     } else {
         rounded(d, at.card, 14.0, s.bg, 128.0);
-        dashed(d, at.card, 14.0, 3.0, s.ring, s.bg);
+        dashed(d, at.card, 14.0, look::RIM, hex(look::INK), s.bg);
     }
     if mine {
         d.hit(at.card, pointer::Act::Grid(p));
@@ -545,7 +545,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     };
     let hidden = pl.random || !active;
     let sh = 24.0 * PY;
-    rounded(d, [sx, py, sw, sh], 8.0, s.well, 128.0);
+    rounded(d, [sx, py, sw, sh], 8.0, hex(look::INK), 128.0);
     let style = if hidden { "?" } else { STYLE_NAMES[style_of(m.who(p)).min(3)] };
     d.label(style, sx + sw / 2.0, py + 5.0 * PY, 14.0 * PY, sw - 10.0 * PX, hex(0xffd23f));
     stats(d, if hidden { None } else { Some(grades_of(text, m.who(p))) }, [sx, py + sh + 4.0 * PY, sw, ph - sh - 4.0 * PY]);
@@ -694,7 +694,7 @@ fn peek(d: &mut Draw, v: &View, cols: usize, s: &Seat, [x, y, w, h]: [f32; 4], p
         let py = if down { y + h - ph - 3.0 * PY } else { y + 3.0 * PY };
         ringed(d, [px, py, pw, ph], PEEK_PILL / 2.0, 1.5, s.ring, s.well);
         triangle(d, [px + 10.0 * PX, py + (ph - tri * PY / PX) / 2.0, tri, tri * PY / PX], down, s.ring);
-        d.text(&words, px + 10.0 * PX + lead, py + (ph - size) / 2.0, size, WHITE);
+        d.text(&words, px + 10.0 * PX + lead, py + (ph - size) / 2.0, size, hex(look::INK));
         d.hit([px, py, pw, ph], pointer::Act::Page(p, if down { 1 } else { -1 }));
     };
     if !above.is_empty() {
@@ -742,13 +742,13 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
     let cs = 12.0 * PY;
     let cw = d.width(&count, cs) + 10.0 * PX;
     let name = ellipsis(d, &sec.name, size, (x + w - tx - cw - 16.0 * PX).max(10.0));
-    d.text(&name, tx, ty, size, WHITE);
+    d.text(&name, tx, ty, size, hex(look::INK));
     tx += d.width(&name, size) + 6.0 * PX;
     rounded(d, [tx, y + (h - cs - 4.0 * PY) / 2.0, cw, cs + 4.0 * PY], (cs + 4.0) / 2.0, s.well, 128.0);
     d.centred(&count, tx + cw / 2.0, y + (h - cs) / 2.0, cs, s.soft);
     tx += cw + 8.0 * PX;
     if tx < x + w {
-        d.q(Tex::Solid, [0.0; 4], [tx, y + h / 2.0 - 1.0 * PY, x + w - tx, 2.0 * PY], s.well, 128.0);
+        d.q(Tex::Solid, [0.0; 4], [tx, y + h / 2.0 - 1.0 * PY, x + w - tx, 2.0 * PY], hex(look::RULE), 128.0);
     }
 }
 
@@ -758,9 +758,13 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 /// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
 fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
-    let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.well, s.ring) };
-    rounded(d, [x, y, w, h], 14.0, fill, 128.0);
-    d.out.last_mut().unwrap().round = [14.0 * PX, 14.0 * PX, 0.0, 0.0];
+    // B471: the panel's header strip inside the card's outline, a dark rule under it; a computer player's in the
+    // seat's light tint with dark words
+    let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.sel, hex(look::INK)) };
+    let t = look::RIM;
+    d.q(Tex::Solid, [0.0; 4], [x + t * PX, y + t * PY, w - 2.0 * t * PX, h - t * PY], fill, 128.0);
+    d.out.last_mut().unwrap().round = [(14.0 - t) * PX, (14.0 - t) * PX, 0.0, 0.0];
+    d.q(Tex::Solid, [0.0; 4], [x + t * PX, y + h, w - 2.0 * t * PX, 2.5 * PY], hex(look::INK), 128.0);
     let big = 36.0 * PY;
     let tag = format!("{}P", p + 1);
     let tx = x + 12.0 * PX;
@@ -871,7 +875,7 @@ fn rail(d: &mut Draw, secs: &[Section], cur: usize, active: bool, s: &Seat, [x, 
             } else {
                 ringed(d, [cx, y, cw, h], h / PY / 2.0, 1.5, if k == cur { s.ring } else { s.sel }, s.bg);
             }
-            let (words, soft) = if filled { (s.ink, s.ink) } else { (WHITE, s.soft) };
+            let (words, soft) = if filled { (s.ink, s.ink) } else { (hex(look::INK), s.soft) };
             let mut tx = cx + pad;
             if sec.id == tabs::FAVORITES {
                 d.outlined(|d| d.text("*", tx, y + (h - star) / 2.0 + 1.0 * PY, star, GOLD));
@@ -985,23 +989,25 @@ fn pills(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, p: usiz
     let fits = |nat: f32, real: f32, words: f32| (words - (nat - real)).max(10.0);
     // the costume pill
     let cb = [x, cy, cw, ph];
-    rounded(d, cb, PILL / 2.0, s.well, 128.0);
+    // B471: the main menu's grey buttons, white key caps
+    let grey = hex(look::GREY);
+    look::outlined_pill(d, cb, grey, 2.0);
     let mut cx = x + pad;
-    shirt(d, [cx, cy + 5.0 * PY, icon, 16.0 * PY], s.ring, s.well);
+    shirt(d, [cx, cy + 5.0 * PY, icon, 16.0 * PY], s.ring, grey);
     cx += icon + gap;
     if keys && !l1.is_empty() {
-        cx += chip(d, &l1, [cx, cy + (ph - gh) / 2.0], gh, s.ring) + gap;
+        cx += chip(d, &l1, [cx, cy + (ph - gh) / 2.0], gh, WHITE) + gap;
     }
     let words = fits(cw_nat, cw, d.width(&costume, ts));
     d.label(&costume, cx + words / 2.0, cy + (ph - ts) / 2.0, ts, words, if m.blocked(p) && !pl.random { [70.0; 3] } else { WHITE });
     cx += words + gap;
     if keys && !r1.is_empty() {
-        chip(d, &r1, [cx, cy + (ph - gh) / 2.0], gh, s.ring);
+        chip(d, &r1, [cx, cy + (ph - gh) / 2.0], gh, WHITE);
     }
     // the hand pill, at the right end
     let hx = x + w - hw;
     let hb = [hx, hy, hw, ph];
-    rounded(d, hb, PILL / 2.0, s.well, 128.0);
+    look::outlined_pill(d, hb, grey, 2.0);
     let mut cx = hx + pad;
     d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [cx - 4.0 * PX, hy + 6.0 * PY, icon + 6.0 * PX, 14.0 * PY], WHITE, 128.0);
     cx += icon + gap;
@@ -1009,7 +1015,7 @@ fn pills(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, p: usiz
     d.label(hand, cx + words / 2.0, hy + (ph - ts) / 2.0, ts, words, WHITE);
     cx += words + gap;
     if keys && !sel.is_empty() {
-        chip(d, &sel, [cx, hy + (ph - gh) / 2.0], gh, s.ring);
+        chip(d, &sel, [cx, hy + (ph - gh) / 2.0], gh, WHITE);
     }
     if mine && !pl.ready && !pl.random {
         d.hit([cb[0], cb[1], cb[2] / 2.0, ph], pointer::press(|k| k.prev = true));
