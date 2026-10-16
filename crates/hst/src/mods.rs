@@ -1037,7 +1037,7 @@ pub fn load_with(
         Some(f) => own_motions(&m.dir.join(f), &skeleton, &motions, only)?,
         None => HashMap::new(),
     };
-    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
+    let binds = crate::character::part_skins(&joints, &parts, meshes, bindposes);
     let springs = crate::spring::masses(&nodes, &joints);
     let noise = (!swaying.is_empty() || !springs.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying, springs }));
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: names, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual })
@@ -1271,10 +1271,11 @@ mod tests {
                 let (head, neck) = (c.joint("Bip01Head").unwrap(), c.joint("Bip01Neck").unwrap());
                 let rest = model(&c.skeleton, &c.skeleton.rest);
                 // game space is Y down: the head's vertices sit above (below in y) the neck joint
-                let top = c.parts.iter().filter_map(|p| s.0.get(&p.0)).flat_map(|mesh| {
+                // a part's joint indices are its own skin's (P51)
+                let top = c.parts.iter().zip(&c.binds).filter_map(|(p, b)| Some((s.0.get(&p.0)?, b))).flat_map(|(mesh, b)| {
                     let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return Vec::new() };
                     let Some(VertexAttributeValues::Uint16x4(j)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX) else { return Vec::new() };
-                    pos.iter().zip(j).filter(|(_, j)| j[0] as usize == head).map(|(p, _)| p[1]).collect()
+                    pos.iter().zip(j).filter(|(_, j)| b.joints[j[0] as usize] == head).map(|(p, _)| p[1]).collect()
                 });
                 let top = top.fold(f32::INFINITY, f32::min);
                 assert!(top < rest[neck][3][1], "{} costume {k}: no head (top {top}, neck {})", m.id, rest[neck][3][1]);

@@ -327,3 +327,25 @@ One unpacking dispatch per batch set, and every non-bindless `GsMaterial` is a b
 of ~1.3 meshes each per frame. The 3D cameras now draw directly (`NoIndirectDrawing`; `HST_INDIRECT=1` = old).
 GPU frame on the 9070 XT ~1.3 → ~0.6 ms, iGPU −0.4–0.5 ms, Phone preset on the iGPU stand-in 131 → 139 fps.
 Details: `p48-bin-unpacking.md`.
+
+## P51 — compact skin joint lists (2026-10-15)
+Every skinned part's `SkinnedMesh` listed the whole rig (~50–80 joints), so Bevy's `extract_skins` computed and
+`prepare_skins` uploaded a matrix per rig joint per part per frame.
+- `character::part_skins` (run once per freshly built part, at each load site: disc characters, court NPCs, character
+  mods, umpire mods): renumbers the mesh's `ATTRIBUTE_JOINT_INDEX` to the joints it weights (non-zero, rig order;
+  zero-weight slots → 0), remaps its `SkinnedMeshBounds` joint indices the same way, and gives the part its own
+  inverse bindposes. `CharacterData::binds` is now one `PartSkin` per part; `spawn` builds each part's skin from it.
+- Consumers: `cull::bound` runs before the remap and is index-agnostic (the bounds get remapped); `cull::check` and
+  `lod::detail` read indices relative to the part's own skin; `shade.rs` clones the part's `SkinnedMesh` (now the
+  compact one); `noise.rs` works from the model's rig indices, not the mesh's; the mods head test now maps through
+  the part's list. Effects and court mods build their own skins (untouched).
+- Test `character::tests::parts_list_only_their_own_joints`: all 14 disc characters, every weighted vertex slot and
+  every bounds joint resolve to the same rig joint as the uncompacted mesh, bindposes match; joints listed over all
+  parts 10929 → 1102.
+- `tools/profile.sh` (4-bot doubles, 20 s): prepare_skins 105 → 22.5 µs/frame, extract_skins 78 → 20.2 µs/frame
+  (before = P43's run). Match shot (`context/p51/match.png`): characters, umpire, spectators drawn correctly.
+
+### Not verified / not 1:1
+- Perf "before" numbers are from P43's profile run, not a same-session A/B (machine shared with other agents).
+- Mod characters checked by the existing mods tests (load, heads, LOD) only, no screenshot of a mod in a match.
+- Rendering only: no gameplay/sim effect, nothing to check against the original.

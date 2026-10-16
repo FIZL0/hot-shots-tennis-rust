@@ -93,8 +93,8 @@ pub struct CharacterData {
     /// dive (`receive_f` from `*_receive_f_dummy`); the serve's and smash's jump heights (0x25 from
     /// `*_serve_t_dummy`, 0x1f from `*_s_n_dummy`).
     pub paths: HashMap<usize, Path>,
-    /// Every joint's inverse bind matrix, for the skinned parts.
-    pub binds: Handle<SkinnedMeshInverseBindposes>,
+    /// Per part (as `parts`): its own skin, the joints its vertices use ([`part_skins`]).
+    pub binds: Vec<PartSkin>,
     /// Per motion number (0..48): the forward row (x, z) of `Bip01Pelvis`'s model matrix at the motion's first
     /// frame — what the game's body turn compares (`hst_sim::player::turn`).
     pub pelvis: Vec<[f32; 2]>,
@@ -449,6 +449,58 @@ fn parts_at<M: Asset>(model: &mdl::Model, handles: &[Handle<M>], meshes: &mut im
 
 }
 
+/// One skinned part's skin (P51): the rig joints its vertices use, in its mesh's joint-index order, and their inverse
+/// binds. Bevy extracts and uploads one matrix per listed joint per part each frame, so a part lists only its own.
+pub struct PartSkin {
+    pub joints: Vec<usize>,
+    pub binds: Handle<SkinnedMeshInverseBindposes>,
+}
+
+/// Each freshly built part's skin over `joints` (the rig's): its mesh's joint indices (and per-joint bounds) are
+/// renumbered in place into its own list. Run once per mesh, right after it's built.
+pub fn part_skins<M: Asset>(
+    joints: &[Joint],
+    parts: &[(Handle<Mesh>, Handle<M>, bool)],
+    meshes: &mut impl Store<Mesh>,
+    bindposes: &mut impl Store<SkinnedMeshInverseBindposes>,
+) -> Vec<PartSkin> {
+    parts
+        .iter()
+        .map(|(h, _, _)| {
+            let list = meshes.get_mut(h).and_then(|m| compact(m, joints.len())).unwrap_or_else(|| (0..joints.len()).collect());
+            let binds = bindposes.add(SkinnedMeshInverseBindposes::from(list.iter().map(|&j| joints[j].inverse_bind).collect::<Vec<_>>()));
+            PartSkin { joints: list, binds }
+        })
+        .collect()
+}
+
+/// Renumber `mesh`'s joint indices to the joints it weights (non-zero, below `n`), in rig order; returns them. A
+/// zero-weight slot points at the first (the shader still reads its matrix). None without a skin.
+fn compact(mesh: &mut Mesh, n: usize) -> Option<Vec<usize>> {
+    use bevy::mesh::VertexAttributeValues as V;
+    let Some(V::Float32x4(ws)) = mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT) else { return None };
+    let ws = ws.clone();
+    let Some(V::Uint16x4(js)) = mesh.attribute_mut(Mesh::ATTRIBUTE_JOINT_INDEX) else { return None };
+    let mut used = vec![false; n];
+    for (j, w) in js.iter().zip(&ws) {
+        (0..4).filter(|&k| w[k] != 0.0 && (j[k] as usize) < n).for_each(|k| used[j[k] as usize] = true);
+    }
+    let list: Vec<usize> = (0..n).filter(|&j| used[j]).collect();
+    if list.is_empty() {
+        return None;
+    }
+    let mut to = vec![0u16; n];
+    list.iter().enumerate().for_each(|(i, &j)| to[j] = i as u16);
+    for (j, w) in js.iter_mut().zip(&ws) {
+        (0..4).for_each(|k| j[k] = if w[k] != 0.0 && (j[k] as usize) < n { to[j[k] as usize] } else { 0 });
+    }
+    if let Some(mut b) = mesh.skinned_mesh_bounds().cloned() {
+        b.aabb_index_to_joint_index.iter_mut().for_each(|j| j.0 = to.get(j.0 as usize).copied().unwrap_or(0));
+        mesh.set_skinned_mesh_bounds(Some(b));
+    }
+    Some(list)
+}
+
 /// Build a character from the disc: character `n` (0..9) in costume `costume`.
 pub fn load_disc(
     iso: &mut Iso,
@@ -520,7 +572,7 @@ pub fn load_disc_with(
     let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
     // the game binds a face track to the target of the same name; others are dropped
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions_with(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name), only)?;
-    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
+    let binds = part_skins(&joints, &parts, meshes, bindposes);
     Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: model.morph_names.clone(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new() })
 }
 
@@ -741,9 +793,10 @@ pub fn load_npc(
         .enumerate()
         .filter_map(|(k, a)| Some((k, Clip::new(&skeleton, &ani::parse(&find(a)?).ok()?))))
         .collect();
-    let binds = bindposes.add(SkinnedMeshInverseBindposes::from(joints.iter().map(|j| j.inverse_bind).collect::<Vec<_>>()));
+    let parts = skinned_parts(&model, &handles, meshes);
+    let binds = part_skins(&joints, &parts, meshes, bindposes);
     Some(CharacterData {
-        parts: skinned_parts(&model, &handles, meshes),
+        parts,
         joints,
         racket: Vec::new(),
         motions,
@@ -782,11 +835,11 @@ pub fn spawn(commands: &mut Commands, data: &Arc<CharacterData>, parent: Entity)
         let up = j.parent.map_or(root, |p| joints[p]);
         commands.entity(up).add_child(joints[i]);
     }
-    let skin = SkinnedMesh { inverse_bindposes: data.binds.clone(), joints: joints.clone() };
     // a skinned part's bind-pose bounds don't follow it posed (the eyes, on the `eye` joint alone, were culled in
     // close-ups): culled by bounds that follow its joints (B345, `cull.rs`), or not at all with the setting off
-    for (mesh, material, morphed) in &data.parts {
-        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), skin.clone(), Transform::default(), crate::cull::Cullable)).id();
+    for ((mesh, material, morphed), b) in data.parts.iter().zip(&data.binds) {
+        let skin = SkinnedMesh { inverse_bindposes: b.binds.clone(), joints: b.joints.iter().map(|&j| joints[j]).collect() };
+        let part = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), skin, Transform::default(), crate::cull::Cullable)).id();
         if *morphed {
             commands.entity(part).insert(bevy::mesh::morph::MeshMorphWeights::Reference(root));
         }
@@ -1081,6 +1134,49 @@ mod tests {
     }
 
     const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    /// P51: each disc character's parts list only the joints they weight, and skin every vertex (and its per-joint
+    /// bounds) to the same rig joints and inverse binds as the whole skeleton's list did. Prints the joints listed.
+    #[test]
+    fn parts_list_only_their_own_joints() {
+        use bevy::mesh::VertexAttributeValues as V;
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let (mut m, mut t, mut i, mut b) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default(), Assets::<SkinnedMeshInverseBindposes>::default());
+        let (mut whole, mut own) = (0, 0);
+        for n in 0..14 {
+            let c = load_disc_with(&mut iso, n, 0, &mut m, &mut t, &mut i, &mut b, Some(&[0])).unwrap();
+            // the same parts uncompacted, from the same model
+            let data = iso.read(&format!("PC/PC{n:02}C00.XB")).unwrap();
+            let arc = Archive::parse(&data).unwrap();
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).unwrap();
+            let model = mdl::parse(&arc.read(e).unwrap()).unwrap();
+            let mut full = Assets::<Mesh>::default();
+            let raw = skinned_parts(&model, &(0..model.materials.len()).map(|_| Handle::default()).collect::<Vec<Handle<StandardMaterial>>>(), &mut full);
+            assert_eq!((raw.len(), c.binds.len()), (c.parts.len(), c.parts.len()), "character {n}");
+            for (k, ((p, skin), r)) in c.parts.iter().zip(&c.binds).zip(&raw).enumerate() {
+                let (a, z) = (m.get(&p.0).unwrap(), full.get(&r.0).unwrap());
+                let (Some(V::Uint16x4(ja)), Some(V::Uint16x4(jz)), Some(V::Float32x4(w))) =
+                    (a.attribute(Mesh::ATTRIBUTE_JOINT_INDEX), z.attribute(Mesh::ATTRIBUTE_JOINT_INDEX), a.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT))
+                else {
+                    panic!()
+                };
+                assert_eq!(ja.len(), jz.len());
+                for v in 0..ja.len() {
+                    for s in (0..4).filter(|&s| w[v][s] != 0.0) {
+                        assert_eq!(skin.joints[ja[v][s] as usize], jz[v][s] as usize, "character {n} part {k} vertex {v}");
+                    }
+                }
+                let binds = b.get(&skin.binds).unwrap();
+                assert!(skin.joints.iter().enumerate().all(|(x, &j)| binds[x] == c.joints[j].inverse_bind));
+                let (ba, bz) = (a.skinned_mesh_bounds().unwrap(), z.skinned_mesh_bounds().unwrap());
+                assert_eq!(ba.aabbs, bz.aabbs);
+                assert!(ba.aabb_index_to_joint_index.iter().zip(&bz.aabb_index_to_joint_index).all(|(x, y)| skin.joints[x.0 as usize] == y.0 as usize));
+                (whole, own) = (whole + c.joints.len(), own + skin.joints.len());
+            }
+        }
+        eprintln!("joints listed over every part: {whole} → {own}");
+        assert!(own * 2 < whole);
+    }
 
     /// Every character's inspect pose (and its eyes' `.UVA`) binds to its skeleton, and the held frames are the ones the game's inspect
     /// screen held (read live in its motion player for characters 0..7, 12 and 13).
