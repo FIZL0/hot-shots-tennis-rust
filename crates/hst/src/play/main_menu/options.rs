@@ -85,7 +85,7 @@ const DISPLAY: &[Opt] = if cfg!(target_arch = "wasm32") { &[Renderer, Aspect, Me
 const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, Upscaled, Advanced];
 /// B411: Graphics → Advanced, the speed-up switches for a slow device.
 const ADVANCED: &[Opt] = &[Mesh, FewerShadows, Cull];
-const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), MenuMusic, MatchMusic];
+const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), Volume(4), MenuMusic, MatchMusic];
 const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
 const MOBILE: &[Opt] = &[Vibration];
@@ -128,7 +128,7 @@ fn label(o: Opt) -> &'static str {
         Original => "Original Mode",
         Upscaled => "Upscaled Textures",
         Cull => "Skip Off-Screen",
-        Volume(i) => ["Master", "Music", "Sound Effects", "Voices"][i],
+        Volume(i) => ["Master", "Music", "Sound Effects", "Voices", "Ambience"][i],
         MenuMusic => "Menu Music",
         MatchMusic => "Match Music",
         Downloads => "Upscaled Downloads",
@@ -165,8 +165,9 @@ fn about(o: Opt) -> &'static str {
         Cull => "Don't draw players, figures and effects that are out of view (or their shadows out of the light's). Looks the same; turn it off if it makes this device slower.",
         Volume(0) => "The volume of everything.",
         Volume(1) => "The menu and match music and the jingles.",
-        Volume(2) => "The court, the crowd, the weather and the menu sounds.",
-        Volume(_) => "The players' and the umpire's voices.",
+        Volume(2) => "The ball, the crowd, the weather and the menu sounds.",
+        Volume(3) => "The players' and the umpire's voices.",
+        Volume(_) => "The court's surroundings: birds, surf, chimes and court mods' ambience.",
         MenuMusic => "Play music in the menus.",
         MatchMusic => "Play each court's music during a match.",
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
@@ -996,9 +997,16 @@ mod tests {
         let mut m = Menu { screen: Screen::Sound, sel: 1, ..default() };
         m.step(Dev::Keys, press(|k| &mut k.ok));
         assert!(m.step(Dev::Keys, press(|k| &mut k.right)).is_empty(), "at its end: no sound, no save");
-        assert_eq!(m.settings.2, Volumes([10, 10, 10, 10]));
+        assert_eq!(m.settings.2, Volumes([10, 10, 10, 10, 10]));
         (0..12).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.left)));
-        assert_eq!(m.settings.2, Volumes([10, 0, 10, 10]));
+        assert_eq!(m.settings.2, Volumes([10, 0, 10, 10, 10]));
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        // M111: the ambience slider, under the voices'
+        (0..3).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.down)));
+        assert_eq!(page(m.screen)[m.sel], Volume(4));
+        m.step(Dev::Keys, press(|k| &mut k.ok));
+        (0..3).for_each(|_| _ = m.step(Dev::Keys, press(|k| &mut k.left)));
+        assert_eq!(m.settings.2, Volumes([10, 0, 10, 10, 7]));
         m.step(Dev::Keys, press(|k| &mut k.ok));
         assert_eq!(Settings::parse(&m.settings.text()), m.settings);
     }
