@@ -10,6 +10,11 @@
 //! is the sender's) so every machine plays it on that seat's card. It is the menu's only: never the match's input,
 //! nothing from the match's generators.
 //!
+//! B463: the character select too (`Screen::Chars`, `roster.rs`), on each seat's 3D preview: the keyboard's 1–4 all
+//! four, a pad's right stick left / right the last two (its up / down stay B422's win / loss, `previews::buttons`,
+//! the same two motions); the touch pad's L1 / R1 stay the costume there. Not for Random (no figure) or while that
+//! seat names itself.
+//!
 //! `HST_EMOTE=0..3` (for `--shot`s): every card plays that emote as the screen opens.
 
 use std::collections::HashMap;
@@ -49,7 +54,12 @@ pub(super) fn plugin(app: &mut App) {
 }
 
 fn on(menu: &Menu) -> bool {
-    matches!(menu.screen, Screen::Lobby | Screen::Confirm)
+    matches!(menu.screen, Screen::Lobby | Screen::Confirm | Screen::Chars)
+}
+
+/// The screens whose emotes go to (and come from) the other peers.
+fn shared(menu: &Menu) -> bool {
+    menu.screen == Screen::Lobby || menu.screen == Screen::Chars && menu.online()
 }
 
 /// This machine's seats' flicks, and (online) the other peers'.
@@ -72,11 +82,13 @@ fn input(
     let mut flicks = Vec::new();
     // a picker over the cards (the court's or umpire's: its L1 / R1 page), the lobby's question or big QR: no flicks
     let covered = menu.picking.is_some() || menu.net.ask.is_some() || menu.net.qr_big;
+    let select = menu.screen == Screen::Chars;
     for (e, mut g, name) in pads.iter_mut().filter(|_| !covered) {
         let touch = name.is_some_and(|n| emote::is_touch(n));
-        let d = emote::flick(g.right_stick()).or(emote::touch(&g, name));
+        // B463: on the select only the stick's left / right (up / down are the preview's win / loss), no touch L1 / R1
+        let d = if select { emote::flick(g.right_stick()).filter(|d| *d >= 2) } else { emote::flick(g.right_stick()).or(emote::touch(&g, name)) };
         let was = plates.held.insert(e, d).flatten();
-        if touch {
+        if touch && !select {
             // the touch pad's L1 / R1 are the emotes here, not the costume step (`step` reads them after this)
             let b = g.digital_mut();
             b.clear_just_pressed(GamepadButton::LeftTrigger);
@@ -94,8 +106,10 @@ fn input(
         flicks.push((Dev::Keys, d as u8));
     }
     for (dev, d) in flicks {
-        for p in (0..4).filter(|&p| menu.seats[p] == Some(dev)) {
-            if start(&mut plates, p, d, now) && menu.screen == Screen::Lobby
+        // B463: the select's Random has no figure to play it, a seat naming itself takes its presses
+        let idle = |p: usize| !select || !menu.players[p].random && !menu.naming(p);
+        for p in (0..4).filter(|&p| menu.seats[p] == Some(dev) && idle(p)) {
+            if start(&mut plates, p, d, now) && shared(&menu)
                 && let Some(net) = &net
             {
                 net.send(Cmd::Emote(p as u8, d));
@@ -110,7 +124,7 @@ fn input(
     }
     for (seat, d) in heard {
         let p = seat as usize;
-        if menu.screen == Screen::Lobby && p < 4 && d < 4 && menu.seats[p].is_none() {
+        if shared(&menu) && p < 4 && d < 4 && menu.seats[p].is_none() {
             start(&mut plates, p, d, now);
         }
     }
@@ -226,11 +240,56 @@ mod tests {
         assert_eq!(press(&mut app, KeyCode::Digit1)[1], None, "while it plays");
         app.world_mut().resource_mut::<Plates>().until[1] = Some(-1.0);
         assert_eq!(press(&mut app, KeyCode::Digit1)[1].map(|q| q.0), Some(0));
-        app.world_mut().resource_mut::<Menu>().screen = Screen::Chars;
-        assert_eq!(press(&mut app, KeyCode::Digit2), [None; 4], "not on the select");
+        app.world_mut().resource_mut::<Menu>().screen = Screen::Mods;
+        assert_eq!(press(&mut app, KeyCode::Digit2), [None; 4], "not on the Mods page");
         app.world_mut().resource_mut::<Menu>().screen = Screen::Lobby;
         app.world_mut().resource_mut::<Menu>().picking = Some(0);
         assert_eq!(press(&mut app, KeyCode::Digit2), [None; 4], "not under the court picker");
+    }
+
+    /// B463: on the select the keyboard's 1–4 play on its seat's preview (not Random's, not while it names itself), a
+    /// pad's right stick only left / right (up / down are the preview's win / loss); the touch pad's L1 stays the
+    /// costume's.
+    #[test]
+    fn the_selects_emote_keys() {
+        let mut app = App::new();
+        app.init_resource::<Plates>().init_resource::<ButtonInput<KeyCode>>().init_resource::<Bindings>().init_resource::<Time>();
+        let pad = app.world_mut().spawn((Gamepad::default(), Name::new("Xbox Controller"))).id();
+        let touch = app.world_mut().spawn((Gamepad::default(), Name::new("Touch controls (STANDARD GAMEPAD)"))).id();
+        app.insert_resource(Menu { screen: Screen::Chars, doubles: true, seats: [Some(Dev::Keys), Some(Dev::Pad(pad)), Some(Dev::Pad(touch)), None], ..default() });
+        app.add_systems(Update, input);
+        let queued = |app: &mut App| std::mem::take(&mut app.world_mut().resource_mut::<Plates>().queued).map(|q| q.map(|q| q.0));
+        let mut keys = |app: &mut App, k: KeyCode| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(k);
+            app.update();
+            queued(app)
+        };
+        for (k, d) in [(KeyCode::Digit1, 0), (KeyCode::Digit2, 1), (KeyCode::Digit3, 2), (KeyCode::Digit4, 3)] {
+            assert_eq!(keys(&mut app, k), [Some(d), None, None, None], "{k:?}");
+        }
+        app.world_mut().resource_mut::<Menu>().players[0].random = true;
+        assert_eq!(keys(&mut app, KeyCode::Digit1), [None; 4], "Random has no figure");
+        app.world_mut().resource_mut::<Menu>().players[0].random = false;
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        let stick = |app: &mut App, e: Entity, x: f32, y: f32| {
+            let mut g = app.world_mut().get_mut::<Gamepad>(e).unwrap();
+            let a = g.analog_mut();
+            a.set(GamepadAxis::RightStickX, x);
+            a.set(GamepadAxis::RightStickY, y);
+            app.update();
+            queued(app)
+        };
+        assert_eq!(stick(&mut app, pad, 0.0, 1.0), [None; 4], "up is the preview's win");
+        assert_eq!(stick(&mut app, pad, 0.0, 0.0), [None; 4]);
+        assert_eq!(stick(&mut app, pad, -1.0, 0.0), [None, Some(2), None, None]);
+        assert_eq!(stick(&mut app, pad, 0.0, 0.0), [None; 4]);
+        assert_eq!(stick(&mut app, pad, 1.0, 0.0), [None, Some(3), None, None]);
+        app.world_mut().get_mut::<Gamepad>(touch).unwrap().digital_mut().press(GamepadButton::LeftTrigger);
+        app.update();
+        assert_eq!(queued(&mut app), [None; 4], "the touch pad's L1 is the costume");
+        assert!(app.world().get::<Gamepad>(touch).unwrap().just_pressed(GamepadButton::LeftTrigger));
     }
 
     /// B271's touch pad: its L1 is the left flick here, and the menu's costume step no longer sees the press; a real
