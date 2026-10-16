@@ -93,7 +93,8 @@ pub enum Relay {
 }
 
 /// `online.txt` beside the disc image: `name = …` (this player's name, shown on their lobby seats; a host's lobby is
-/// listed under it), `relay = n0 | own | off`, `relay_url = https://…`, `private = yes | no` (B213: Host's last choice).
+/// listed under it), `relay = n0 | own | off`, `relay_url = https://…`, `private = yes | no` (B213: Host's last choice),
+/// `code_server = https://…` (B529: own pkarr relay for short codes, empty = [`OWN`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Online {
     pub name: String,
@@ -101,11 +102,12 @@ pub struct Online {
     pub relay_url: String,
     /// B213: the host's last Public/Private choice (Host opens the lobby with it).
     pub private: bool,
+    pub code_server: String,
 }
 
 impl Default for Online {
     fn default() -> Self {
-        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new(), private: false }
+        Online { name: "Player".into(), relay: Relay::N0, relay_url: String::new(), private: false, code_server: String::new() }
     }
 }
 
@@ -115,7 +117,9 @@ impl Online {
     }
 
     pub fn load(iso: &str) -> Online {
-        Online::parse(&crate::store::read_to_string(Online::path(iso)).unwrap_or_default())
+        let o = Online::parse(&crate::store::read_to_string(Online::path(iso)).unwrap_or_default());
+        *CODE_SERVER.write().unwrap() = o.code_server.trim_end_matches('/').to_string();
+        o
     }
 
     pub fn parse(text: &str) -> Online {
@@ -128,6 +132,7 @@ impl Online {
                 "relay" => relay = v,
                 "relay_url" => o.relay_url = v,
                 "private" => o.private = v == "yes",
+                "code_server" => o.code_server = v,
                 _ => {}
             }
         }
@@ -145,7 +150,8 @@ impl Online {
             Relay::Own(_) => "own",
             Relay::Off => "off",
         };
-        format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\n", self.name, self.relay_url, if self.private { "yes" } else { "no" })
+        let code = if self.code_server.is_empty() { String::new() } else { format!("code_server = {}\n", self.code_server) };
+        format!("name = {}\nrelay = {relay}\nrelay_url = {}\nprivate = {}\n{code}", self.name, self.relay_url, if self.private { "yes" } else { "no" })
     }
 
     /// The next relay choice: n0, Off, then own only once a `relay_url` is set (the menu's Custom... comes after the
@@ -2650,6 +2656,11 @@ const PKARR: &str = "https://relay.pkarr.org";
 /// once per network, then ~2 a second) is shared by everyone behind the same address. Down or slow, the public one is
 /// used for [`OWN_PAUSE`]; both put to the same DHT, so a record written through either is read through the other.
 const OWN: &str = "https://pkarr.opentennis.dev";
+/// B529: `code_server` from `online.txt`, asked instead of [`OWN`] when set.
+static CODE_SERVER: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+fn own_url() -> String {
+    Some(CODE_SERVER.read().unwrap().clone()).filter(|u| !u.is_empty()).unwrap_or_else(|| OWN.into())
+}
 const OWN_PAUSE: i64 = 60_000_000;
 static OWN_DOWN_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
@@ -2665,7 +2676,7 @@ async fn own<T>(secs: u64, ask: impl std::future::Future<Output = Result<T, Stri
         Ok(Err(e)) => e,
         Err(_) => format!("no answer in {secs} s"),
     };
-    bevy::log::warn!("{OWN}: {why}; {PKARR} for a minute");
+    bevy::log::warn!("{}: {why}; {PKARR} for a minute", own_url());
     OWN_DOWN_UNTIL.store(unix_micros() + OWN_PAUSE, Relaxed);
     None
 }
@@ -2782,7 +2793,7 @@ async fn relay_get(code: &str) -> Result<Option<(String, i64)>, String> {
     // (the callers' timeouts end it sooner). In the browser a refusal is a failed fetch (`relay_trouble`): those too.
     let path = format!("{}?t={}", code_key(code).public().to_z32(), unix_micros());
     let ours = own(8, async {
-        let r = crate::modstore::client().get(format!("{OWN}/{path}")).send().await.map_err(|e| e.to_string())?;
+        let r = crate::modstore::client().get(format!("{}/{path}", own_url())).send().await.map_err(|e| e.to_string())?;
         match r.status().as_u16() {
             404 => Ok(None),
             s if (200..300).contains(&s) => Ok(relay_record(&r.bytes().await.map_err(|e| e.to_string())?)),
@@ -2858,7 +2869,7 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
     let sig = key.sign(&[format!("3:seqi{seq}e1:v{}:", v.len()).into_bytes(), v.clone()].concat());
     let body = [sig.to_bytes().to_vec(), seq.to_be_bytes().to_vec(), v].concat();
     let ours = own(25, async {
-        let r = crate::modstore::client().put(format!("{OWN}/{}", key.public().to_z32())).body(body.clone()).send().await.map_err(|e| e.to_string())?;
+        let r = crate::modstore::client().put(format!("{}/{}", own_url(), key.public().to_z32())).body(body.clone()).send().await.map_err(|e| e.to_string())?;
         let s = r.status().as_u16();
         if (200..300).contains(&s) { Ok(()) } else { Err(format!("HTTP {s}")) }
     });
@@ -3391,6 +3402,8 @@ mod tests {
         assert_eq!(o.relay, Relay::Own("https://relay.example.org".into()));
         assert_eq!(Online::parse(&o.text()), o);
         assert_eq!(Online::parse("").relay, Relay::N0);
+        let o = Online::parse("code_server = https://codes.example.org\n");
+        assert!(o.code_server == "https://codes.example.org" && Online::parse(&o.text()) == o);
         let o = Online::parse("private = yes\n");
         assert!(o.private && Online::parse(&o.text()) == o);
     }

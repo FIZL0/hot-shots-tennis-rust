@@ -1,5 +1,6 @@
-# B528: our own pkarr relay (the game tries https://pkarr.opentennis.dev first, relay.pkarr.org if it's down).
-# TrueNAS: Apps → Discover → ⋮ → Install via YAML, paste this. nginx (nginx.conf here) terminates TLS in front.
+# B528: a pkarr relay, the code server for short codes (the game asks https://pkarr.opentennis.dev, or online.txt's
+# code_server, first and relay.pkarr.org if it's down). `docker compose up -d`, or on TrueNAS: Apps → Discover → ⋮ →
+# Install via YAML, paste this. Put nginx (nginx.conf here) in front for HTTPS. Forward UDP 6881 for a healthier DHT.
 name: pkarr-relay
 services:
   relay:

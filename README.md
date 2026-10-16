@@ -83,14 +83,34 @@ mods can carry upscaled textures of their own (the "Texture Replacements" settin
 
 ## Online play
 
-Main menu → Online.
+Main menu → Online. Up to four players, singles or doubles; the computer plays any open seat. Browser, desktop and
+phone players can all play together.
 
-- **Host**, **Find**, **Quick play**, or **Join** with a code or the host's copied link.
-- Open seats are played by the computer.
-- Browser and desktop players can play together (Find is desktop only).
-- No internet? Set Relay to Off on the same network (LAN, or browsers via the copied link).
+- **Host** opens a lobby with a 4-letter code. Public lobbies are listed in **Find** and picked up by **Quick play**;
+  Private ones only take the code or link.
+- **Join** takes the code, or the host's copied link (opening the link joins too).
+- Players connect directly where they can; otherwise traffic goes through a relay (iroh's public ones by default, or
+  your own: Online → Relay → Custom...).
+- Codes are looked up through our code server, `pkarr.opentennis.dev`. If it's down the game switches to the public
+  `relay.pkarr.org` by itself; that one is rate-limited per network, so a house full of players can hit "no answer".
 
-More (own relay, settings file): [docs/DEVELOPING.md](docs/DEVELOPING.md).
+**Same network, no internet** (Relay → Off):
+
+- Desktop and phone apps find each other's lobbies in Find.
+- Browsers can't see the local network, so there's no code: the host copies their link (Copy link) and sends it;
+  the guest opens it or taps **Paste** in Join by Code, then copies their own link back, and the host taps **Paste**
+  in the lobby. On iOS Safari, tap Paste a second time if it asks.
+
+**Host your own servers.** Nothing is required, but you can run both servers yourself:
+
+- *Code server* (short codes, Find): [tools/pkarr-relay/](tools/pkarr-relay/) has a Docker Compose file (works as a
+  TrueNAS custom app) and an nginx config. Put it behind HTTPS on your domain, then add
+  `code_server = https://your.domain` to `online.txt` beside the ISO on each player. Codes go into the same public
+  DHT either way, so players on different code servers still find each other.
+- *Relay* (traffic when a direct path fails): `iroh-relay`, see [docs/DEVELOPING.md](docs/DEVELOPING.md). Every
+  player in a lobby needs the same relay.
+
+More (settings file, terminal client): [docs/DEVELOPING.md](docs/DEVELOPING.md).
 
 ## License
 
