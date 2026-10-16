@@ -279,3 +279,32 @@ fn prediction_s05() {
     eprintln!("{checked} predicted subjects match, {game_ends} game-ending cut-aways");
     assert!(checked > 15 && game_ends > 0);
 }
+
+/// B367: shot 0x64 films the shown player from the ground 2 m in front (its eye sits on its basis). Its
+/// ground clear tilts toward the subject frame's spot, so the view stays finite, 0.1 m up, with the player's head
+/// in the picture (it used to take the asin of a zero-length look, and the view's axes blew up to ~1e38).
+#[test]
+fn low_angle_shot_stays_finite() {
+    let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else {
+        return eprintln!("ISO absent, skipped");
+    };
+    let (cnf, bin) = (iso.read("SYSTEM.CNF").unwrap(), iso.read("ZZBIN/GAME.BIN").unwrap());
+    let shots = Game::new(&cnf, &bin).unwrap().camera_shots();
+    // a stock character standing at the near baseline, facing the net (−z), as the motions pose its head and Spine2
+    let head: M4 = [[-0.01, 0.97, -0.22, 0.0], [1.0, 0.01, 0.0, 0.0], [0.0, -0.22, -0.97, 0.0], [0.0, -1.05, 11.0, 1.0]];
+    let spine: M4 = [[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [0.0, -0.6, 11.0, 1.0]];
+    let s = hst_sim::cutaway::subject_frames(&head, &spine);
+    let frames = hst_sim::cutaway::Frames { corner: s[0], shown: [s, s], head: hst_sim::cutaway::head_frame(&head, false), spot: s[0][3] };
+    for mirror in [false, true] {
+        let mut sh = Shot::new(&shots, 0x64, mirror);
+        for t in 0..120 {
+            sh.step(|i| frames.get(i));
+            let v = sh.view();
+            assert!(v.rot.iter().flatten().chain(&v.eye).all(|x| x.is_finite() && x.abs() < 100.0), "frame {t}: {v:?}");
+            assert!((v.eye[1] + 0.1).abs() < 1e-3, "frame {t}: eye {:?} not 0.1 m up", v.eye);
+            let d = [0.0 - v.eye[0], -1.05 - v.eye[1], 11.0 - v.eye[2]];
+            let l = v.rot.map(|r| r[0] * d[0] + r[1] * d[1] + r[2] * d[2]);
+            assert!(l[2] > 0.0 && (l[0] / l[2]).abs() < v.fov.tan() && (l[1] / l[2]).abs() < v.fov.tan(), "frame {t}: head out of the picture {l:?}");
+        }
+    }
+}

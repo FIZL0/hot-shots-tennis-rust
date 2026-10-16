@@ -488,6 +488,26 @@ fn free_racket(d: &crate::character::CharacterData, a: &ani::Anim) -> Option<(Cl
     Some((Clip::new(&sk, a), parent))
 }
 
+/// Whether character `c`'s ceremony files are the `_n` ones (Carol's and Will's), made for a model turned π.
+fn turned_files(c: i32) -> bool {
+    matches!(c.clamp(0, 13), 6 | 11)
+}
+
+/// A ceremony figure's turn and scale on its mark (`far`: the far end, turned π). A left-hander on the `_n` files
+/// is mirrored in x and turned π (the original's ceremony setup, the only left-handers on the disc): a mirror in z.
+/// Any other left-hander (a left-handed mod over a right-handed donor's files) is only mirrored in x, as in the
+/// match: the z mirror would show its back to the camera (B367). A right-hander on `_n` files (a mod over Carol or
+/// Will) takes the π turn the files are made for, unmirrored.
+fn stance(far: bool, hand: f32, turned: bool) -> (Quat, Vec3) {
+    let end = if far { Quat::from_rotation_y(std::f32::consts::PI) } else { Quat::IDENTITY };
+    match (turned, hand < 0.0) {
+        (true, true) => (end, Vec3::new(1.0, 1.0, -1.0)),
+        (true, false) => (end * Quat::from_rotation_y(std::f32::consts::PI), Vec3::ONE),
+        (false, true) => (end, Vec3::new(-1.0, 1.0, 1.0)),
+        (false, false) => (end, Vec3::ONE),
+    }
+}
+
 fn wrap(v: f32, half: f32) -> f32 {
     (v + half).rem_euclid(2.0 * half) - half
 }
@@ -520,17 +540,18 @@ pub(super) fn pose(
         let i = f.0;
         let Some((at, far)) = c.plan.marks.get(i) else { continue };
         tf.translation = Vec3::from(*at);
-        tf.rotation = if *far { Quat::from_rotation_y(std::f32::consts::PI) } else { Quat::IDENTITY };
-        // a left-hander is mirrored in x and turned π (the original's ceremony setup): a mirror in z, not the
-        // match's x mirror. Carol's and Will's `_n` motions are made for it. Left-handed is the character's own
-        // hand (TParam), not the one played: the select's hand toggle doesn't reach the ceremony
+        // Left-handed is the character's own hand (TParam, or a mod's), not the one played: the select's hand
+        // toggle doesn't reach the ceremony
         let hand = g.strong_hand[i];
-        tf.scale = Vec3::new(1.0, 1.0, hand);
+        let turned = turned_files(g.chars[i]);
+        (tf.rotation, tf.scale) = stance(*far, hand, turned);
         // the racket is its own model, placed at the racket joint with its x row times that hand: mirrored back
+        // (an x-mirrored left-hander keeps the match's racket, mirrored with the body)
+        let racket = if turned { hand } else { 1.0 };
         if let Some(r) = rig.data.joint("Racket") {
             for &part in kids.get(rig.joints[r]).into_iter().flatten() {
                 if let Ok(mut pt) = joints.get_mut(part) {
-                    pt.scale.x = hand;
+                    pt.scale.x = racket;
                 }
             }
         }
@@ -638,6 +659,25 @@ mod tests {
         assert_eq!([&p.files[1][2], &p.files[3][2], &p.files[2][2]], ["lost/lost_04b", "lost/lost_00a", "lost/lost_01b"]);
         // a 7 among the winners lowers the camera
         assert_eq!(plan(&[false; 4], &[7, 4, 5, 9], 0, false, 90.0).offset[1], -0.4);
+    }
+
+    /// B367: every figure faces the camera's side as a stock right-hander does: a stock left-hander (Carol, Will:
+    /// `_n` files) as before, mirrored in z; a left-handed mod over a right-handed donor mirrored in x only; a
+    /// right-handed mod over Carol or Will turned π. Its forward (+z) row's z sign is what the camera sees.
+    #[test]
+    fn mods_face_the_camera() {
+        let forward = |(q, s): (Quat, Vec3)| (Mat4::from_scale_rotation_translation(s, q, Vec3::ZERO) * Vec4::Z).z;
+        for far in [false, true] {
+            let right = forward(stance(far, 1.0, false));
+            // a stock left-hander's `_n` files face the other way: the z mirror turns them round as the original does
+            assert_eq!(stance(far, -1.0, true), (if far { Quat::from_rotation_y(std::f32::consts::PI) } else { Quat::IDENTITY }, Vec3::new(1.0, 1.0, -1.0)));
+            assert!(forward(stance(far, -1.0, true)) * right < 0.0);
+            assert!(forward(stance(far, -1.0, false)) * right > 0.0, "a left-handed mod on a right-hander's files turned its back");
+            assert!(forward(stance(far, 1.0, true)) * right < 0.0, "a right-handed mod on `_n` files isn't turned like them");
+            // and it is mirrored exactly when left-handed
+            assert!(stance(far, -1.0, false).1.x < 0.0 && stance(far, 1.0, true).1 == Vec3::ONE);
+        }
+        assert!(turned_files(6) && turned_files(11) && !turned_files(1) && !turned_files(5));
     }
 
     /// Singles, a human beaten by the COM at the far end: the human's side shown, the lost clip lowered, turned
