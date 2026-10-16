@@ -257,6 +257,18 @@ async fn pulls() -> Result<Vec<(u32, String)>, String> {
     Ok(out)
 }
 
+/// Every PR's head commit (open or not), one request: a PR the index lists at another commit was pushed onto since
+/// (a new version), so it's read from the store, not the index.
+async fn heads() -> Result<std::collections::BTreeMap<u32, String>, String> {
+    Ok(heads_in(&get(&format!("{HF}/api/datasets/{REPO}/refs?include_prs=1"), 4 << 20).await?))
+}
+
+fn heads_in(b: &[u8]) -> std::collections::BTreeMap<u32, String> {
+    let v: serde_json::Value = serde_json::from_slice(b).unwrap_or_default();
+    let prs = v["pullRequests"].as_array().cloned().unwrap_or_default();
+    prs.iter().filter_map(|r| Some((r["name"].as_str()?.parse().ok()?, r["targetCommit"].as_str()?.to_string()))).collect()
+}
+
 /// A discussions page: its open PRs, how many items it had, and the reply's `count` of all of them.
 fn pulls_in(page: &[u8]) -> (Vec<(u32, String)>, usize, usize) {
     let v: serde_json::Value = serde_json::from_slice(page).unwrap_or_default();
@@ -319,15 +331,21 @@ async fn get_meta(rev: &str, id: &str) -> Result<Option<Meta>, String> {
 }
 
 /// M116: `index.json` on the store's `main`, kept by the mods repo's `tools/store_index` (rebuilt within a minute of
-/// any change to the store by a Hugging Face webhook, and hourly): every mod on `main` and on each PR open when it
+/// any change by the hourly-and-every-5-minutes Action; Docker Spaces need HF PRO, so there's no webhook): every mod on `main` and on each PR open when it
 /// was built, so a listing is this, the open PR list, and the trees of only the PRs opened since.
 #[derive(Deserialize)]
 struct Index {
     version: u32,
-    /// The PRs open when it was built (their author and head commit, which the game doesn't need).
-    pulls: std::collections::BTreeMap<u32, serde::de::IgnoredAny>,
+    /// The PRs open when it was built, at the head commit it read.
+    pulls: std::collections::BTreeMap<u32, Pull>,
     /// `main`'s mods, then each PR's.
     entries: Vec<Entry>,
+}
+
+#[derive(Deserialize)]
+struct Pull {
+    #[serde(default)]
+    commit: String,
 }
 
 /// The store's index, or None when it isn't there or can't be read (the listing crawls the store instead).
@@ -347,8 +365,8 @@ enum Part {
 }
 
 /// `main`, then each open PR newest first: the index's copy, re-checked, where it has one (a PR only if still open,
-/// as its author); without an index, every rev read from the store.
-fn parts(ix: Option<Index>, open: Vec<(u32, String)>) -> Vec<Part> {
+/// as its author, and only at the commit it read: `heads`); without an index, every rev read from the store.
+fn parts(ix: Option<Index>, open: Vec<(u32, String)>, heads: &std::collections::BTreeMap<u32, String>) -> Vec<Part> {
     let Some(ix) = ix else {
         return std::iter::once(Part::Read("main".into(), None)).chain(open.into_iter().map(|(n, who)| Part::Read(format!("refs/pr/{n}"), Some(who)))).collect();
     };
@@ -360,7 +378,8 @@ fn parts(ix: Option<Index>, open: Vec<(u32, String)>) -> Vec<Part> {
     let mut out = vec![Part::Have(at("main", None))];
     for (n, who) in open {
         let rev = format!("refs/pr/{n}");
-        out.push(if ix.pulls.contains_key(&n) { Part::Have(at(&rev, Some(&who))) } else { Part::Read(rev, Some(who)) });
+        let same = ix.pulls.get(&n).is_some_and(|p| heads.get(&n) == Some(&p.commit));
+        out.push(if same { Part::Have(at(&rev, Some(&who))) } else { Part::Read(rev, Some(who)) });
     }
     out
 }
@@ -368,8 +387,8 @@ fn parts(ix: Option<Index>, open: Vec<(u32, String)>) -> Vec<Part> {
 /// The store's mods, unmerged: `main`'s, then each open PR's, newest first. M116: from the index plus the PRs opened
 /// since it was built (3 requests for 70+ open PRs), else the whole store (a tree and every meta.json per rev).
 async fn lists() -> Result<Vec<Vec<Entry>>, String> {
-    let (ix, open) = n0_future::future::zip(index(), pulls()).await;
-    let parts = parts(ix?, open?);
+    let ((ix, open), heads) = n0_future::future::zip(n0_future::future::zip(index(), pulls()), heads()).await;
+    let parts = parts(ix?, open?, &heads?);
     let got = n0_future::join_all(parts.into_iter().map(|p| async move {
         match p {
             Part::Have(l) => Ok(l),
@@ -1238,16 +1257,18 @@ mod tests {
     fn index_then_new_pulls() {
         let e = |id: &str, rev: &str| Entry { meta: Meta { author: "someone".into(), ..meta(id, b"zip") }, rev: rev.into(), verified: rev == "main" };
         let bad = Entry { meta: Meta { sha256: "nope".into(), ..e("broken", "main").meta }, ..e("broken", "main") };
-        let j = serde_json::json!({ "version": 1, "built": 1, "pulls": { "5": { "author": "ann", "commit": "c5" }, "3": {}, "2": {} },
-            "entries": [e("a", "main"), bad, e("b", "refs/pr/5"), e("c", "refs/pr/3"), e("d", "refs/pr/2")], "extra": 0 });
+        let j = serde_json::json!({ "version": 1, "built": 1, "pulls": { "5": { "author": "ann", "commit": "c5" }, "3": { "commit": "c3" }, "4": { "commit": "c4" }, "2": {} },
+            "entries": [e("a", "main"), bad, e("b", "refs/pr/5"), e("c", "refs/pr/3"), e("x", "refs/pr/4"), e("d", "refs/pr/2")], "extra": 0 });
         let ix: Index = serde_json::from_value(j).unwrap();
-        let open = vec![(7, "bo".to_string()), (5, "ann".to_string()), (3, "cy".to_string())];
-        let got = parts(Some(ix), open.clone());
+        let open = vec![(7, "bo".to_string()), (5, "ann".to_string()), (4, "di".to_string()), (3, "cy".to_string())];
+        // PR 4 was pushed onto since the index (a new version): read again.
+        let heads = heads_in(br#"{"branches":[],"pullRequests":[{"name":"5","targetCommit":"c5"},{"name":"4","targetCommit":"new"},{"name":"3","targetCommit":"c3"}]}"#);
+        let got = parts(Some(ix), open.clone(), &heads);
         let by = |id: &str, rev: &str, who: &str| Entry { meta: Meta { author: who.into(), ..e(id, rev).meta }, ..e(id, rev) };
-        assert_eq!(got, [Part::Have(vec![e("a", "main")]), Part::Read("refs/pr/7".into(), Some("bo".into())), Part::Have(vec![by("b", "refs/pr/5", "ann")]), Part::Have(vec![by("c", "refs/pr/3", "cy")])]);
-        let crawl = parts(None, open);
+        assert_eq!(got, [Part::Have(vec![e("a", "main")]), Part::Read("refs/pr/7".into(), Some("bo".into())), Part::Have(vec![by("b", "refs/pr/5", "ann")]), Part::Read("refs/pr/4".into(), Some("di".into())), Part::Have(vec![by("c", "refs/pr/3", "cy")])]);
+        let crawl = parts(None, open, &heads);
         assert_eq!(crawl[0], Part::Read("main".into(), None));
-        assert_eq!(crawl[3], Part::Read("refs/pr/3".into(), Some("cy".into())));
+        assert_eq!(crawl[4], Part::Read("refs/pr/3".into(), Some("cy".into())));
         assert!(serde_json::from_slice::<Index>(b"{\"version\":1}").is_err());
     }
 
@@ -1541,8 +1562,8 @@ mod tests {
         std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| if e.path().is_dir() { walk_len(&e.path()) } else { 1 }).sum()
     }
 
-    /// M116 against the real store (`HST_LIVE=1`): a cold listing costs at most 3 requests (index.json and the open
-    /// PR list's pages) with up to 100 open PRs, plus a tree and the meta.json files of each PR opened since the index.
+    /// M116 against the real store (`HST_LIVE=1`): a cold listing costs at most 4 requests (index.json, the PR heads
+    /// and the open PR list's pages) with up to 100 open PRs, plus a tree and the meta.json files of each PR opened since the index.
     #[test]
     fn live_listing_cost() {
         if std::env::var("HST_LIVE").is_err() {
@@ -1550,12 +1571,12 @@ mod tests {
         }
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let before = REQUESTS.load(std::sync::atomic::Ordering::Relaxed);
-        let (ix, open) = rt.block_on(n0_future::future::zip(index(), pulls()));
-        let (ix, open) = (ix.unwrap().expect("no index.json on the store"), open.unwrap());
-        let new = open.iter().filter(|p| !ix.pulls.contains_key(&p.0)).count();
+        let ((ix, open), heads) = rt.block_on(n0_future::future::zip(n0_future::future::zip(index(), pulls()), heads()));
+        let (ix, open, heads) = (ix.unwrap().expect("no index.json on the store"), open.unwrap(), heads.unwrap());
+        let new = open.iter().filter(|p| ix.pulls.get(&p.0).is_none_or(|q| heads.get(&p.0) != Some(&q.commit))).count();
         let cost = REQUESTS.load(std::sync::atomic::Ordering::Relaxed) - before;
         eprintln!("{} open PRs, {new} newer than the index, {} entries in it: {cost} requests", open.len(), ix.entries.len());
-        assert!(cost <= 3 && open.len() <= 100 || cost <= 1 + open.len().div_ceil(50), "{cost}");
+        assert!(cost <= 4 && open.len() <= 100 || cost <= 2 + open.len().div_ceil(50), "{cost}");
         let l = rt.block_on(lists()).unwrap();
         assert_eq!(l.len(), 1 + open.len());
     }
