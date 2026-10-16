@@ -105,7 +105,7 @@ jobs:
           HST_SITE: ${{ vars.SITE_FROM == 'release' && 'https://beta.opentennis.dev/' || '' }}
         # M22: the container's checkout may have no usable git: the commit for the online build id from Actions
         run: |
-          export HST_COMMIT=${GITHUB_SHA::7}
+          export HST_COMMIT=$(echo "$GITHUB_SHA" | cut -c1-7)
           cargo build --release -p hst --features ship
           mkdir -p dist/linux
           strip -o dist/linux/opentennis target/release/hst
