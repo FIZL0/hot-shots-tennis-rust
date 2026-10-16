@@ -48,8 +48,21 @@
 #disc .pill.gold { background: var(--gold-hi); }
 #disc .pill.gold:hover { background: #ffe57a; }
 #disc .playnow { margin-top: clamp(18px, 3vw, 28px); display: flex; flex-direction: column; align-items: center; gap: 14px; }
-#disc .playnow label { display: flex; align-items: center; gap: .5em; cursor: pointer; }
-#disc .playnow input { width: 1.2em; height: 1.2em; }
+/* the autoplay box as a pill with a switch; the ?site way back only shows once it's on */
+#disc .autoplay { display: inline-flex; align-items: center; gap: .6em; border: 3px solid var(--ink); border-radius: 999px;
+  background: #fff; padding: .25em .9em .25em .35em; font-weight: 800; font-size: 15px; cursor: pointer; box-shadow: 0 3px 0 var(--ink); }
+#disc .autoplay input { position: absolute; opacity: 0; pointer-events: none; }
+#disc .autoplay:focus-within { outline: 3px solid var(--sky); outline-offset: 3px; }
+#disc .sw { width: 2.4em; height: 1.4em; border: 3px solid var(--ink); border-radius: 999px; background: var(--line);
+  position: relative; transition: background .15s; flex: none; }
+#disc .sw::after { content: ""; position: absolute; top: 50%; left: .12em; width: .95em; height: .95em; border-radius: 50%;
+  background: #fff; border: 2px solid var(--ink); transform: translateY(-50%); transition: left .15s; }
+#disc .autoplay input:checked + .sw { background: var(--green); }
+#disc .autoplay input:checked + .sw::after { left: calc(100% - 1.1em); }
+#disc .playnow .hint { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
+#disc .playnow .hint code { font-weight: 800; font-size: 13px; font-family: inherit; background: var(--line); border-radius: 6px; padding: 0 .35em; }
+#disc .autoplay:not(:has(input:checked)) + .hint { display: none; }
+@media (prefers-reduced-motion: reduce) { #disc .sw, #disc .sw::after { transition: none; } }
 #disc .pill.huge { font-size: clamp(28px, 6vw, 56px); padding: .5em 2.4em; border-radius: 999px; }
 #disc .pill.big { font-size: clamp(18px, 2.4vw, 24px); padding: .6em 1.6em; }
 #disc .pill.small { font-size: 14px; padding: .3em .9em; box-shadow: 0 3px 0 var(--ink); }
