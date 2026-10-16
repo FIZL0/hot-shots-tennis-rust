@@ -198,6 +198,28 @@ pub fn model() -> Option<String> {
     Some(s)
 }
 
+/// B501: opens `url` in the phone's browser (an `ACTION_VIEW` intent from the activity; there's no `xdg-open`).
+pub fn open_url(url: &str) {
+    let Some(app) = bevy::android::ANDROID_APP.get() else { return };
+    // SAFETY: as `invoke`
+    let Ok(vm) = (unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }) else { return };
+    let Ok(mut env) = vm.attach_current_thread_permanently() else { return };
+    let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
+    let r = (|| -> jni::errors::Result<()> {
+        let s = env.new_string(url)?;
+        let uri = env.call_static_method("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", &[JValue::Object(&s)])?.l()?;
+        let action = env.new_string("android.intent.action.VIEW")?;
+        let intent = env.new_object("android/content/Intent", "(Ljava/lang/String;Landroid/net/Uri;)V", &[JValue::Object(&action), JValue::Object(&uri)])?;
+        env.call_method(&activity, "startActivity", "(Landroid/content/Intent;)V", &[JValue::Object(&intent)])?;
+        Ok(())
+    })();
+    if let Err(e) = r {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+        warn!("opening {url}: {e}");
+    }
+}
+
 /// A method of the running `HstActivity` (no arguments, returns `int` or `void`: 0), on the calling thread (attached to
 /// the VM for good). `None` if the call failed.
 fn call(name: &str, sig: &str) -> Option<i32> {

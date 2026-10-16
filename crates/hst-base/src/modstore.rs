@@ -1328,6 +1328,11 @@ async fn lfs_put(c: &reqwest::Client, token: &str, oid: &str, b: &[u8]) -> Resul
 /// Opens `what` (a URL or folder) in the player's browser / file manager.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open(what: &str) {
+    #[cfg(target_os = "android")]
+    return crate::android::open_url(what);
+    #[cfg(target_os = "ios")]
+    return crate::ios::open_url(what);
+    #[allow(unreachable_code)]
     let mut c = if cfg!(target_os = "windows") {
         let mut c = std::process::Command::new("cmd");
         c.args(["/C", "start", ""]);

@@ -168,6 +168,32 @@ extern "C" fn tick(_: *mut std::ffi::c_void) {
     }
 }
 
+/// B501: opens `url` in Safari (`UIApplication.openURL`, on the main thread; there's no `xdg-open`).
+pub fn open_url(url: &str) {
+    let ctx = Box::into_raw(Box::new(url.to_owned())).cast();
+    // SAFETY: the main queue lives for the process; `open_on_main` takes the box back
+    unsafe { dispatch_async_f(&raw const _dispatch_main_q, ctx, open_on_main) };
+}
+
+extern "C" fn open_on_main(ctx: *mut std::ffi::c_void) {
+    type Id = *mut std::ffi::c_void;
+    // SAFETY: `ctx` is the `Box<String>` `open_url` leaked; the selectors' signatures as UIKit/Foundation declare them
+    unsafe {
+        let url = Box::from_raw(ctx.cast::<String>());
+        let obj: extern "C" fn(Id, Id) -> Id = std::mem::transmute(objc_msgSend as *const ());
+        let with: extern "C" fn(Id, Id, Id) -> Id = std::mem::transmute(objc_msgSend as *const ());
+        let open: extern "C" fn(Id, Id, Id, Id, Id) = std::mem::transmute(objc_msgSend as *const ());
+        let s = objc2_foundation::NSString::from_str(&url);
+        let u = with(objc_getClass(c"NSURL".as_ptr()), sel_registerName(c"URLWithString:".as_ptr()), objc2::rc::Retained::as_ptr(&s) as Id);
+        if u.is_null() {
+            return bevy::log::warn!("opening {url}: not a URL");
+        }
+        let app = obj(objc_getClass(c"UIApplication".as_ptr()), sel_registerName(c"sharedApplication".as_ptr()));
+        let options = obj(objc_getClass(c"NSDictionary".as_ptr()), sel_registerName(c"dictionary".as_ptr()));
+        open(app, sel_registerName(c"openURL:options:completionHandler:".as_ptr()), u, options, std::ptr::null_mut());
+    }
+}
+
 /// UIKit's `UIEdgeInsets`.
 #[repr(C)]
 #[derive(Clone, Copy)]
