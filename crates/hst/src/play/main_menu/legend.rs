@@ -588,7 +588,8 @@ pub(super) fn last_style() -> Style {
 }
 
 /// B383: the Mods page's button art, as the legend draws it in `style`: 0 / 1 the kind switch (L2 / R2, ZL / ZR,
-/// LT / RT; the keyboard's 1 / 3), 2 ✕ (Enter), 3 △ and 4 □ (their keys) for the detail panel's buttons.
+/// LT / RT; the keyboard's 1 / 3), 2 ✕ (Enter), 3 △ and 4 □ (their keys) for the detail panel's buttons; B448: 5 / 6
+/// L1 / R1 (Q / E) round the Settings tabs and a stepped pill, 7 Select (C) on the Mods filter pill.
 fn page_glyphs(style: Style) -> Vec<Glyph> {
     let it = |a: Act| Item { keys: menu_keys(a, &Bindings::default()), ..item(a, "", &[]) };
     let mut v = glyphs(style, &it(Act::Kind));
@@ -596,11 +597,15 @@ fn page_glyphs(style: Style) -> Vec<Glyph> {
     for a in [Act::Ok, Act::Card, Act::Page] {
         v.extend(glyphs(style, &it(a)).into_iter().take(1));
     }
+    let mut lr = glyphs(style, &it(Act::Costume));
+    lr.truncate(2);
+    v.extend(lr);
+    v.extend(glyphs(style, &it(Act::Hand)).into_iter().take(1));
     v
 }
 
 /// The number of [`page_glyphs`] (`Tex::Glyph(style, i)` for `i` below it).
-pub(crate) const PAGE_GLYPHS: usize = 5;
+pub(crate) const PAGE_GLYPHS: usize = 8;
 
 /// B383: [`page_glyphs`]' `i`th one's width / height (`Tex::Glyph(style, i)`'s art).
 pub(crate) fn glyph_aspect(style: Style, i: u8) -> f32 {

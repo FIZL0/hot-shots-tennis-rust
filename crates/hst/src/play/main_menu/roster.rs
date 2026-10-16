@@ -42,28 +42,28 @@ const PEEK: f32 = 12.0;
 const PILLS_W: f32 = 290.0;
 
 /// `#rrggbb` in the menus' 0–128 colour.
-fn hex(c: u32) -> [f32; 3] {
+pub(super) fn hex(c: u32) -> [f32; 3] {
     [(c >> 16) & 255, (c >> 8) & 255, c & 255].map(|v| v as f32 * 128.0 / 255.0)
 }
 
 /// The screen's background.
-const BG: u32 = 0x0e1a2e;
+pub(super) const BG: u32 = 0x0e1a2e;
 
 /// A seat's colours (B422's "Players" board): its own colour (the header band, the card's rim, the cursor's tile) and the
 /// words on it, the same character's other tile, the column's tint, the pills' well, a tile, soft words. The four
 /// differ in lightness too, not just hue (yellow, green, red, blue from light to dark), so they tell apart side by
 /// side for anyone.
-struct Seat {
-    ring: [f32; 3],
-    ink: [f32; 3],
-    sel: [f32; 3],
-    bg: [f32; 3],
-    well: [f32; 3],
-    tile: [f32; 3],
-    soft: [f32; 3],
+pub(super) struct Seat {
+    pub ring: [f32; 3],
+    pub ink: [f32; 3],
+    pub sel: [f32; 3],
+    pub bg: [f32; 3],
+    pub well: [f32; 3],
+    pub tile: [f32; 3],
+    pub soft: [f32; 3],
 }
 
-fn seat(p: usize) -> Seat {
+pub(super) fn seat(p: usize) -> Seat {
     const C: [[u32; 7]; 4] = [
         [0xdc3c44, 0xffffff, 0x8e2a30, 0x3e171c, 0x5a1d24, 0x6a2730, 0xffd0d0],
         [0xffd84a, 0x2a2008, 0x8a6a1a, 0x3a2f0c, 0x4e3c0c, 0x5e4810, 0xfff0b8],
@@ -260,7 +260,7 @@ impl Menu {
 
 /// B426: the quads from `from` on cut off at `foot` (down the menu's units), their pictures with them; the corners
 /// on the cut square.
-fn cut(d: &mut Draw, from: usize, foot: f32) {
+pub(super) fn cut(d: &mut Draw, from: usize, foot: f32) {
     let mut rest = d.out.split_off(from);
     rest.retain_mut(|q| {
         let [_, y, _, h] = q.dst;
@@ -281,13 +281,13 @@ fn cut(d: &mut Draw, from: usize, foot: f32) {
 }
 
 /// A box `[x, y, w, h]` filled `rgb`, its corners rounded `r` mockup px.
-fn rounded(d: &mut Draw, rect: [f32; 4], r: f32, rgb: [f32; 3], alpha: f32) {
+pub(super) fn rounded(d: &mut Draw, rect: [f32; 4], r: f32, rgb: [f32; 3], alpha: f32) {
     d.q(Tex::Solid, [0.0; 4], rect, rgb, alpha);
     d.out.last_mut().unwrap().round = [r * PX; 4];
 }
 
 /// A box with a `t`-px rim in `rim` round a `fill`, corners `r` px.
-fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: [f32; 3], fill: [f32; 3]) {
+pub(super) fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: [f32; 3], fill: [f32; 3]) {
     rounded(d, [x, y, w, h], r, rim, 128.0);
     rounded(d, [x + t * PX, y + t * PY, w - 2.0 * t * PX, h - 2.0 * t * PY], (r - t).max(0.0), fill, 128.0);
 }
@@ -329,7 +329,7 @@ fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rgb: [f32; 3], f
 }
 
 /// `s` cut to fit `max` wide at `size`, "..." where it was cut.
-fn ellipsis(d: &Draw, s: &str, size: f32, max: f32) -> String {
+pub(super) fn ellipsis(d: &Draw, s: &str, size: f32, max: f32) -> String {
     if d.width(s, size) <= max {
         return s.to_string();
     }
@@ -353,7 +353,7 @@ const MODE_GLYPH: u8 = 4;
 
 /// A button's name as a small chip in `rgb` with dark words (the legend's L1 / R1, Q / E, Select…), `h` high from
 /// `[x, y]`; its width.
-fn chip(d: &mut Draw, s: &str, [x, y]: [f32; 2], h: f32, rgb: [f32; 3]) -> f32 {
+pub(super) fn chip(d: &mut Draw, s: &str, [x, y]: [f32; 2], h: f32, rgb: [f32; 3]) -> f32 {
     let size = h * 0.72;
     let w = d.width(s, size) + 8.0 * PX;
     rounded(d, [x, y, w, h], 5.0, rgb, 128.0);
@@ -362,7 +362,7 @@ fn chip(d: &mut Draw, s: &str, [x, y]: [f32; 2], h: f32, rgb: [f32; 3]) -> f32 {
 }
 
 /// The width of a [`chip`] for `s`.
-fn chip_w(d: &Draw, s: &str, h: f32) -> f32 {
+pub(super) fn chip_w(d: &Draw, s: &str, h: f32) -> f32 {
     d.width(s, h * 0.72) + 8.0 * PX
 }
 
@@ -849,7 +849,7 @@ fn rail(d: &mut Draw, secs: &[Section], cur: usize, active: bool, s: &Seat, [x, 
 
 /// The quads drawn since `start` cut to `l..r` across: a picture's source with its box, rounded corners squared on a
 /// cut side, those wholly outside dropped.
-fn clip_x(d: &mut Draw, start: usize, l: f32, r: f32) {
+pub(super) fn clip_x(d: &mut Draw, start: usize, l: f32, r: f32) {
     let mut kept = Vec::new();
     for mut q in d.out.drain(start..) {
         let [qx, _, qw, _] = q.dst;

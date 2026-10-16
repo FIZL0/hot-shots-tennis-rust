@@ -1,11 +1,13 @@
 //! B373: the Mods page's kind tabs (spec `plan/B372.md` § Kinds); B383: the page's one tab row, in the title band
 //! between the L2 / R2 buttons (keyboard 1 / 3) in the legend's art: Characters · Courts · Umpires · Texture packs,
-//! each with its count (a kind with none hidden until it has some), the current one gold; how the kind behaves online
+//! each with its count (a kind with none hidden until it has some), the current one filled in its colours (B448); how the kind behaves online
 //! is the footer's line. Every Show (Everything, Installed, My uploads, …) and Upload lists only the chosen kind (`modstore::Meta::kind`; an installed mod's from its `mod.json`). The store
 //! carries characters, courts and umpires (M8f9); the Texture packs tab shows what is coming and from which task (M5)
 //! until it lands.
 
-use super::{BROWN, CELL_FILL, Draw, GOLD, INK, Tex, WHITE, legend, pointer};
+use super::look;
+use super::roster::{self, PX, PY, Seat};
+use super::{Draw, pointer};
 use crate::modstore::Kind;
 
 /// The tabs, in L2 / R2 order.
@@ -59,58 +61,38 @@ pub(super) fn ends(at: Kind, shown: &[Kind]) -> [bool; 2] {
     [step(at, true, shown) == at, step(at, false, shown) == at]
 }
 
-/// B383: the page's one tab row, in the title band from `x` (`top` its top, `room` wide): the L2 / R2 buttons in the
-/// legend's art (the device last used: a pad's, or the keyboard's 1 / 3 keys) round the `shown` kinds' tabs, each
-/// with its count (`counts`, by [`KINDS`]; a tap on one is `Act::Kind(i)`), the current one gold. The buttons go
-/// while there's only one kind to show; B462: on the first tab L2's dims, on the last R2's. The row shrinks as one
-/// where it doesn't fit.
-pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind]) {
-    let style = legend::last_style();
-    let (size, th, gh) = (15.0, 24.0, 21.0);
-    let caps = shown.len() > 1;
-    let dim = ends(at, shown);
-    let gw = |i: u8| if caps { gh * legend::glyph_aspect(style, i) } else { 0.0 };
-    let words: Vec<(usize, String)> =
-        shown.iter().filter_map(|k| KINDS.iter().position(|q| q == k)).map(|i| (i, format!("{} {}", name(KINDS[i]), counts[i]))).collect();
-    let ws: Vec<f32> = words.iter().map(|(_, s)| d.width(s, size) + 22.0).collect();
-    let natural = gw(0) + gw(1) + ws.iter().sum::<f32>() + 6.0 * (ws.len() + 1) as f32;
-    let k = (room / natural).min(1.0);
-    let mut cx = x;
-    let cap = |d: &mut Draw, i: u8, cx: &mut f32| {
-        if caps {
-            let (w, h) = (gw(i) * k, gh * k);
-            d.q(Tex::Glyph(style, i), [0.0; 4], [*cx, top + 3.0 + (th - h) / 2.0, w, h], WHITE, if dim[i as usize] { legend::DIM_ALPHA } else { 128.0 });
-            *cx += w + 6.0 * k;
-        }
-    };
-    cap(d, 0, &mut cx);
-    for ((i, s), tw) in words.iter().zip(&ws) {
-        let on = KINDS[*i] == at;
-        let b = [cx, top + 3.0, tw * k, th];
-        d.pill_at(b, [INK, if on { INK } else { [90.0; 3] }, if on { GOLD } else { CELL_FILL }], 128.0);
-        d.label(s, cx + tw * k / 2.0, top + 3.0 + (th - size * k) / 2.0, size * k, (tw - 16.0) * k, if on { INK } else { BROWN });
-        d.hit(b, pointer::Act::Kind(*i));
-        cx += (tw + 6.0) * k;
+/// B448: each kind's colour set, a seat's of the character select (`roster::seat`): Characters red, Courts green,
+/// Umpires blue, Texture packs gold.
+pub(super) fn seat_of(k: Kind) -> usize {
+    match k {
+        Kind::Character | Kind::Other => 0,
+        Kind::Court => 3,
+        Kind::Umpire => 2,
+        Kind::Textures => 1,
     }
-    cap(d, 1, &mut cx);
 }
 
-/// The empty state of a kind the store doesn't carry yet, in the page's list box `[x, y, w, h]`.
+/// B383: the page's one tab row, in the top bar from `x` (`top` its top, `room` wide): the L2 / R2 buttons in the
+/// legend's art (the device last used: a pad's, or the keyboard's 1 / 3 keys) round the `shown` kinds' tabs, each
+/// with its count (`counts`, by [`KINDS`]; a tap on one is `Act::Kind(i)`). B448: each tab a ring pill in its kind's
+/// colours (`seat_of`), the current one filled; B462: on the first tab L2's dims, on the last R2's. The buttons go while there's only one kind to show. The row shrinks
+/// as one where it doesn't fit.
+pub(super) fn row(d: &mut Draw, [x, top, room]: [f32; 3], at: Kind, counts: [usize; 4], shown: &[Kind]) {
+    let idx: Vec<usize> = shown.iter().filter_map(|k| KINDS.iter().position(|q| q == k)).collect();
+    let words: Vec<String> = idx.iter().map(|&i| format!("{} {}", name(KINDS[i]), counts[i])).collect();
+    let seats: Vec<Seat> = idx.iter().map(|&i| roster::seat(seat_of(KINDS[i]))).collect();
+    let on = idx.iter().position(|&i| KINDS[i] == at);
+    look::tabs(d, [x, top, room], &words, &seats, on, Some((0, 1)), ends(at, shown), |j| pointer::Act::Kind(idx[j]));
+}
+
+/// The empty state of a kind the store doesn't carry yet, in the page's column `[x, y, w, h]`.
 pub(super) fn empty(d: &mut Draw, k: Kind, [x, y, w, h]: [f32; 4]) {
     let Some(say) = coming(k) else { return };
-    let size = 17.0;
-    let title = name(k);
-    d.label(title, x + w / 2.0, y + h * 0.32, 26.0, w - 40.0, BROWN);
-    let mut lines: Vec<String> = Vec::new();
-    for word in say.split_whitespace() {
-        match lines.last_mut() {
-            Some(l) if d.width(&format!("{l} {word}"), size) <= w - 60.0 => *l = format!("{l} {word}"),
-            _ => lines.push(word.into()),
-        }
-    }
-    for (i, l) in lines.iter().enumerate() {
-        d.label(l, x + w / 2.0, y + h * 0.32 + 40.0 + 22.0 * i as f32, size, w - 40.0, super::options::MUTED);
-    }
+    let s = roster::seat(seat_of(k));
+    d.label(name(k), x + w / 2.0, y + h * 0.3, 26.0 * PY, w - 40.0 * PX, s.ring);
+    let size = 16.0 * PY;
+    let lw = (w - 60.0 * PX).min(420.0 * PX);
+    look::para(d, say, [x + (w - lw) / 2.0, y + h * 0.3 + 42.0 * PY], lw, size, 22.0 * PY, 6, s.soft);
 }
 
 #[cfg(test)]
