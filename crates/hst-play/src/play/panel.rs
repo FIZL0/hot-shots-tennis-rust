@@ -528,13 +528,17 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
         let o = args.outfits.get(i).copied().unwrap_or(0);
         front.as_ref().and_then(|f| (f.face)(&args.iso, mods.as_ref().and_then(|m| m.get(i)), c as usize, o))
     }).collect();
+    // Z2: the disc face is only made where there's no own one (it was made and never drawn)
     let mut drawn = Vec::new();
     for (i, (&c, own)) in g.chars.iter().zip(own).enumerate() {
         let o = args.outfits.get(i).copied().unwrap_or(0);
-        if let Some(img) = own {
-            drawn.push((art.len(), img));
+        match own {
+            Some(img) => {
+                drawn.push((art.len(), img));
+                art.push(Handle::default());
+            }
+            None => art.push(get(format!("face/face_{c:02}_{o:02}.tm2"))),
         }
-        art.push(get(format!("face/face_{c:02}_{o:02}.tm2")));
     }
     for (k, img) in drawn {
         art[k] = images.add(img);
