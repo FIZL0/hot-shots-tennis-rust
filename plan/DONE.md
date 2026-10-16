@@ -763,6 +763,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **N3c7** the lob sound seems to reverb weirdly after it should be done. might just be because we're missing other audio sounds so just verify it is correct
 - [x] **B502** Post-point cut-aways frame a mod character's donor reaction, not the drawn one (found in B366): `play/cutaway.rs` `bone`/`predicted` read `data.motions`; a mod's own 0x2c..0x2f clips (`CharacterData::visual`) face up to 180° away, so read `data.drawn` on the drawn clock like `replay_camera::drawn_bone`; stock unchanged → play/cutaway.rs · play/replay_camera.rs
 - [x] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
+- [x] **B92** Stage 7 draws as a brown screen (found in B80, 2026-10-11): `--stage 7 --play --shot …` at 4 s shows only a dark brown sky-like texture over the whole view, on main too (e327d14, `context/b80/s7_main.png`); other courts are fine. Find which model covers the camera (likely the B74 sky/bg follow on this court) and match the original → `main.rs` load · `weather.rs` · j: 2026-10-11-b80-court-grass BLOCKED: exact VU1 clip-pass triangle rule for clip-state (0x300) nodes unknown; needs a VU1 interpreter run on w-house2's packet or a PCSX2 GS dump of a court-7 frame (j: 2026-10-11-b92-stage7-brown) — user 2026-10-16: closed — all courts play fine now
 
 
 ### Shots
