@@ -2112,6 +2112,25 @@ pub(super) fn sample(m: &mut Menu) {
     }
 }
 
+/// The mods this match's lobby downloaded (`mods_online::cache`) when Keep Online Downloads is on.
+fn fetched(menu: &Menu, iso: &str) -> Vec<PathBuf> {
+    let cache = mo::cache(iso);
+    let on = menu.settings.0[super::KEEP_DOWNLOADS];
+    menu.net.looks.values().flatten().filter(|d| on && d.starts_with(&cache)).cloned().collect()
+}
+
+/// `fetched` copied into the installed mods (`modfs::keep`); what came of it for the lobby's status line.
+fn keep_downloads(fetched: &[PathBuf]) -> Option<String> {
+    let (mut kept, mut failed) = (Vec::new(), None);
+    for d in fetched {
+        match crate::modfs::keep(d, crate::modfs::root()) {
+            Ok(m) => kept.push(m.name),
+            Err(e) => failed = Some(format!("Couldn't keep a downloaded mod: {e}")),
+        }
+    }
+    failed.or_else(|| (!kept.is_empty()).then(|| format!("Kept {} in your mods (in the menus after a reload).", kept.join(", "))))
+}
+
 /// Everyone's in: the online match (`netplay`), this machine's players on their devices; it ends back in the menu.
 fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepad)>, args: &crate::Args, commands: &mut Commands) {
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| super::controls::readable(g)).map(|(e, _)| e).collect();
@@ -2141,10 +2160,13 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
     }
     info!("starting the online match: {}", flags.join(" "));
     let (base, kept) = (args.clone(), menu.clone());
+    let fetched = fetched(menu, &args.iso);
     commands.queue(move |w: &mut World| {
         let Some(net) = w.remove_resource::<Net>() else { return };
         let back = crate::mode::Mode::new(move |app| {
             app.insert_resource(base);
+            // the match is over: only now are the downloads kept, nothing is written during it
+            let saved = keep_downloads(&fetched);
             // B196: the match ended for a player who didn't come back: this lobby again, with whoever is still in
             if let Some((net, room, wait)) = crate::play::netplay::LOBBY.lock().unwrap().take() {
                 let mut m = kept;
@@ -2152,6 +2174,9 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
                 // B279: a guest ahead of its host holds as started (only Leave) until the host's `Msg::Lobby`
                 (m.net.room, m.net.started, m.net.prepared, m.net.ready, m.net.sent) = (Some(room), wait, false, None, None);
                 m.net.status = if wait { "Waiting for the host to leave the results..." } else { "Back in the lobby." }.into();
+                if let Some(n) = saved {
+                    m.net.status = n;
+                }
                 app.insert_resource(net).insert_resource(super::Kept(m));
             }
             crate::menu_mode(app);

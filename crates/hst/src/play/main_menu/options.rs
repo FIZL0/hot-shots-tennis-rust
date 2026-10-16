@@ -6,7 +6,7 @@
 
 use super::super::widescreen::{ASPECTS, aspect_choices};
 use super::roster::{self, PX, PY, rounded};
-use super::{legend, look, CHAT, EMOTE_VOICES, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
+use super::{legend, look, CHAT, EMOTE_VOICES, KEEP_DOWNLOADS, UPDATE_CHECK, VIBRATION, Draw, Effect, Grid, INK, KEY_HINTS, MENU_SIZES, Menu, Press, RENDERERS, Screen, Settings, Tex, UPSCALED_DOWNLOADS, WHITE, controls, pointer};
 use crate::mods_online::Ask;
 use crate::graphics::{FPS, Graphics, MESHES, MSAA, SCALES, SHADOWS};
 use bevy::prelude::{KeyCode, default};
@@ -44,6 +44,7 @@ pub(super) enum Opt {
     AtOnce,
     /// B289: what to do with an online lobby's mods.
     OnlineMods,
+    KeepDownloads,
     /// M20: online chat shown.
     Chat,
     /// B273: the browser build's renderer.
@@ -88,7 +89,7 @@ const GRAPHICS: &[Opt] = &[Preset, Scale, Shadows, Msaa, Fps, Vsync, Original, U
 /// B411: Graphics → Advanced, the speed-up switches for a slow device.
 const ADVANCED: &[Opt] = &[Mesh, FewerShadows, Cull];
 const SOUND: &[Opt] = &[Volume(0), Volume(1), Volume(2), Volume(3), Volume(4), MenuMusic, MatchMusic, EmoteVoices];
-const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, Chat] } else { &[Downloads, AtOnce, OnlineMods, Chat, UpdateCheck] };
+const MODS: &[Opt] = if cfg!(target_arch = "wasm32") { &[Downloads, AtOnce, OnlineMods, KeepDownloads, Chat] } else { &[Downloads, AtOnce, OnlineMods, KeepDownloads, Chat, UpdateCheck] };
 /// B118: phone-only options (later: control size and opacity).
 const MOBILE: &[Opt] = &[Vibration];
 /// B289: Online Mod Downloads' values.
@@ -137,6 +138,7 @@ fn label(o: Opt) -> &'static str {
         Downloads => "Upscaled Downloads",
         AtOnce => "Downloads at Once",
         OnlineMods => "Online Mod Downloads",
+        KeepDownloads => "Keep Online Downloads",
         Chat => "Chat",
         Renderer => "Renderer",
         Vibration => "Vibration",
@@ -179,6 +181,7 @@ fn about(o: Opt) -> &'static str {
         Downloads => "Download mods' upscaled textures from the mod store (most of a mod's size).",
         AtOnce => "How many mods the mod store downloads side by side (Download all, or several installs). Auto: 3 on a computer, 2 in a browser, 1 on a phone; a browser keeps each one in memory until it's saved, so it allows fewer.",
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
+        KeepDownloads => "Save the mods you downloaded in an online lobby to your installed mods once the match is over (nothing is saved during it).",
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
         Renderer => "Auto: WebGPU when the browser has it, else WebGL2. A change asks first: the page reloads into it.",
         Vibration => vibration_about(),
@@ -333,6 +336,7 @@ impl Settings {
             }
             Downloads => self.0[UPSCALED_DOWNLOADS] = !self.0[UPSCALED_DOWNLOADS],
             AtOnce => self.8 = (self.8 as isize + d).rem_euclid(super::max_downloads() as isize + 1) as u8,
+            KeepDownloads => self.0[KEEP_DOWNLOADS] = !self.0[KEEP_DOWNLOADS],
             OnlineMods => self.4 = cycle(&ASK_VALUES.map(|(a, _)| a), self.4, d),
             Chat => {
                 self.0[CHAT] = !self.0[CHAT];
@@ -406,6 +410,7 @@ impl Settings {
             MenuMusic => on_off(self.0[1]),
             MatchMusic => on_off(self.0[2]),
             EmoteVoices => on_off(self.0[EMOTE_VOICES]),
+            KeepDownloads => on_off(self.0[KEEP_DOWNLOADS]),
             Downloads => on_off(self.0[UPSCALED_DOWNLOADS]),
             AtOnce => at_once_name(self.8 as usize),
             OnlineMods => ASK_VALUES.iter().find(|(a, _)| *a == self.4).unwrap().1.into(),

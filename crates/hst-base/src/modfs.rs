@@ -461,6 +461,36 @@ pub fn folder_for(root: &Path, id: &str, stage: &Path, owner: Option<&str>) -> P
     (1..).map(|n| root.join(if n == 1 { id.to_string() } else { format!("{id}-{n}") })).find(|d| !is_file(&d.join("mod.json")) || same(d)).unwrap()
 }
 
+/// A mod fetched from an online peer (`mods_online`'s cache, checked there) copied into `root` as an installed one, in
+/// the folder Install would pick ([`folder_for`]: kept before, it's that folder again, left as it is); the browser's
+/// page then stores it, as Install's.
+pub fn keep(from: &Path, root: &Path) -> Result<Mod, String> {
+    fn copy(from: &Path, to: &Path) -> Result<(), String> {
+        for p in read_dir(from) {
+            let t = to.join(p.file_name().unwrap_or_default());
+            if !is_file(&p) {
+                copy(&p, &t)?;
+                continue;
+            }
+            if !cfg!(target_arch = "wasm32") {
+                std::fs::create_dir_all(to).map_err(|e| format!("can't write {}: {e}", to.display()))?;
+            }
+            write(&t, read(&p).map_err(|e| format!("{}: {e}", p.display()))?)?;
+        }
+        Ok(())
+    }
+    let id = mods::read_any(from)?.id;
+    let dir = folder_for(root, &id, from, None);
+    if is_file(&dir.join("mod.json")) {
+        return mods::read_any(&dir);
+    }
+    copy(from, &dir)?;
+    let m = mods::read_any(&dir)?;
+    #[cfg(target_arch = "wasm32")]
+    crate::web::mod_save(&m.folder(), &m.name);
+    Ok(m)
+}
+
 /// Whether `dir` is a folder Install made under `root` (`<id>` or `<id>-<n>`, [`folder_for`]), not one put in by hand.
 pub fn installed_by_game(root: &Path, dir: &Path, id: &str) -> bool {
     let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -665,6 +695,21 @@ pub mod tests {
             assert_eq!(f.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["mod.json", "c.glb", "voice/0_0.wav"]);
             assert_eq!(f[0].1, MANIFEST);
         }
+    }
+
+    #[test]
+    fn keeps_a_downloaded_mod_once() {
+        let t = std::env::temp_dir().join(format!("hst-keep-{}", std::process::id()));
+        let (from, root) = (t.join("cache/abc"), t.join("mods"));
+        std::fs::create_dir_all(from.join("voice")).unwrap();
+        std::fs::write(from.join("mod.json"), MANIFEST).unwrap();
+        std::fs::write(from.join("c.glb"), b"glTF").unwrap();
+        std::fs::write(from.join("voice/0_0.wav"), b"RIFF").unwrap();
+        let m = keep(&from, &root).unwrap();
+        assert_eq!((m.id.as_str(), std::fs::read(root.join("x/voice/0_0.wav")).unwrap()), ("x", b"RIFF".to_vec()));
+        keep(&from, &root).unwrap();
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "the same mod again isn't a second copy");
+        std::fs::remove_dir_all(&t).unwrap();
     }
 
     /// The bad-archive half of the bad-mod set (`plan/M17.md`): each one is refused with a message, nothing kept.

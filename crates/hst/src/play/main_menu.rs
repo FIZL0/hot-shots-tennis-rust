@@ -221,7 +221,7 @@ pub(crate) fn save_graphics(iso: &str, g: Graphics) {
 /// else tenths) and how many store downloads run at once (B339: 0 Auto, [`Settings::downloads_at_once`]) and the
 /// pads' button icons (B362: a `legend::LAYOUTS` index, 0 Auto), saved in `settings.txt`.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Settings([bool; 9], Graphics, Volumes, u8, Ask, u8, u8, u8, u8, u8);
+pub struct Settings([bool; 10], Graphics, Volumes, u8, Ask, u8, u8, u8, u8, u8);
 /// B273: the browser's renderer setting, each as its settings.txt / web/index.html word and its Settings row's word
 /// (B316: the row's value and choices both come from here): Auto (WebGPU when the browser has an adapter), WebGPU,
 /// WebGL2.
@@ -230,7 +230,7 @@ const RENDERERS: [(&str, &str); 3] = [("auto", "Auto"), ("webgpu", "WebGPU"), ("
 const MENU_SIZES: [u8; 12] = [0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 /// `music` is the match's (an older `settings.txt`'s one Music switch keeps meaning the match). Their rows are on the
 /// Settings screen's pages (`options.rs`).
-const SETTING_NAMES: [&str; 9] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat", "vibration", "update_check", "emote_voices"];
+const SETTING_NAMES: [&str; 10] = ["upscaled_textures", "menu_music", "music", "upscaled_downloads", "key_hints", "chat", "vibration", "update_check", "emote_voices", "keep_downloads"];
 /// Upscaled Downloads (B227): the mod store downloads mods' `textures/upscaled/` sets (≈ 90% of a mod's size). It
 /// follows Texture Replacements (when settings.txt lacks it, and when that switch is flipped) unless switched itself.
 const UPSCALED_DOWNLOADS: usize = 3;
@@ -244,10 +244,12 @@ const VIBRATION: usize = 6;
 const UPDATE_CHECK: usize = 7;
 /// B474: the emotes' voice lines heard (`audio::EMOTE_VOICES`).
 const EMOTE_VOICES: usize = 8;
+/// Mods downloaded from online peers kept as installed mods once the match is over (`online::keep_downloads`).
+const KEEP_DOWNLOADS: usize = 9;
 
 /// Texture replacements and menu music on, match music off (user 2026-10-12); key hints on (B301); chat on (M20);
-/// vibration on (B118); update check on (B374); emote voices on (B474).
-const SETTING_DEFAULTS: [bool; 9] = [true, true, false, true, true, true, true, true, true];
+/// vibration on (B118); update check on (B374); emote voices on (B474); online downloads not kept.
+const SETTING_DEFAULTS: [bool; 10] = [true, true, false, true, true, true, true, true, true, false];
 
 /// B339: the most store downloads the Downloads at Once setting allows: 8 on desktop, 4 in a browser, 2 on a phone.
 fn max_downloads() -> usize {
@@ -3607,16 +3609,16 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let s = Settings([true, false, false, true, true, true, true, true, true], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8, 0, 4, 0);
+        let s = Settings([true, false, false, true, true, true, true, true, true, false], Graphics::LOW, Volumes::default(), 3, Ask::Each, 0, UMPIRES as u8, 0, 4, 0);
         assert_eq!(Settings::parse(&s.text()), s);
         // B339: Downloads at Once: Auto (3 on desktop) unless set, at most 8
         assert_eq!((s.downloads_at_once(), Settings::default().downloads_at_once()), (4, 3));
         assert_eq!((Settings::parse("downloads_at_once = 8\n").8, Settings::parse("downloads_at_once = 9\n").8), (8, 0));
         let d = Graphics::default();
-        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse("music = off\nbogus = off\n"), Settings([true, true, false, true, true, true, true, true, true, false], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         // a fresh file: menu music on, court music off; an old file's `music` is the match's
-        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
-        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse(""), Settings([true, true, false, true, true, true, true, true, true, false], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse("music = on\n"), Settings([true, true, true, true, true, true, true, true, true, false], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         // B117: an old file's widescreen on is Auto, off 4:3; `aspect` wins
         assert_eq!(Settings::parse("widescreen = on\n").3, 0);
         assert_eq!(Settings::parse("widescreen = off\n").3, 1);
@@ -3624,10 +3626,10 @@ mod tests {
         // Upscaled Downloads follows Upscaled Textures unless it's set itself
         assert!(!Settings::parse("upscaled_textures = off\n").0[UPSCALED_DOWNLOADS]);
         assert!(Settings::parse("upscaled_textures = off\nupscaled_downloads = on\n").0[UPSCALED_DOWNLOADS]);
-        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
+        assert_eq!(Settings::parse("menu_music = off\n"), Settings([true, false, false, true, true, true, true, true, true, false], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0));
         assert!(!Settings::default().flags().contains(&"--music".to_string()));
-        assert!(!Settings([true, true, false, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
-        assert!(Settings([true, false, true, true, true, true, true, true, true], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
+        assert!(!Settings([true, true, false, true, true, true, true, true, true, false], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
+        assert!(Settings([true, false, true, true, true, true, true, true, true, false], d, Volumes::default(), 0, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags().contains(&"--music".to_string()));
         // B289: the online mod answer round-trips; an unknown word keeps Ask
         let mut a = Settings::default();
         a.4 = Ask::Never;
@@ -3640,7 +3642,7 @@ mod tests {
         assert!(!e.0[EMOTE_VOICES] && Settings::parse("").0[EMOTE_VOICES] && !Settings::parse(&e.text()).0[EMOTE_VOICES]);
         assert_eq!(Settings::parse("uncapped_fps = off\n").1, Graphics { vsync: true, ..d });
         assert_eq!(s.flags()[..1], ["--fps"]);
-        assert_eq!(Settings([false, false, true, false, true, true, true, true, true], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags()[..2], ["--no-upscale", "--music"]);
+        assert_eq!(Settings([false, false, true, false, true, true, true, true, true, false], d, Volumes::default(), 1, Ask::Each, 0, UMPIRES as u8, 0, 0, 0).flags()[..2], ["--no-upscale", "--music"]);
     }
 
     #[test]
