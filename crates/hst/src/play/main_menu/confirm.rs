@@ -1,6 +1,6 @@
 //! B449: the confirm screen, v4 (ours, the approved board "Concept v4: Ready to play?", the lobby's frame,
 //! `frame.rs`). The title and the Singles / Doubles button (□ switches, 1P's device or a tap) along the top; the
-//! players' plates on the court, a team each side of the net (singles: near side, far side); the scoreboard strip
+//! players' plates on the court, a team each side of the net (singles: near side, far side; online, no side names, B490); the scoreboard strip
 //! under it: Court (its picture; ✕ opens the court select), Umpire (her face; ✕ opens the umpire select), Sets and
 //! Games (✕, then ←→, as before, B212); Handicap is hidden until the original's handicaps are in (B482, B40g1); along the bottom
 //! ‹ Back and the big Start the match!. The arrows go about the screen as its parts lie; ✕ on a plate sends that
@@ -53,7 +53,8 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], _hand_x
     // the top bar: the title (Back for the pointer), Singles / Doubles (1P's □ or a tap)
     frame::bar(d, &g, "Ready to play?", m.doubles, !m.online(), false);
     d.hit(g.title, pointer::press(|k| k.back = true));
-    frame::stage(d, &g, if m.doubles { ["TEAM 1", "TEAM 2"] } else { ["NEAR SIDE", "FAR SIDE"] });
+    // online singles names no sides: each client keeps its own player on the near side (B490)
+    frame::stage(d, &g, if m.doubles { ["TEAM 1", "TEAM 2"] } else if m.online() { ["", ""] } else { ["NEAR SIDE", "FAR SIDE"] });
     let s = g.k * g.s;
     for (p, &rect) in g.plates.iter().enumerate() {
         plate(d, m, text, pads, p, rect, s, on(CONFIRM_ROWS + p));
