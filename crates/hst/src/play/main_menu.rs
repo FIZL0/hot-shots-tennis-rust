@@ -804,7 +804,7 @@ impl Menu {
 
     /// B368: the select's player columns on this window.
     fn columns(&self) -> roster::Columns {
-        roster::columns(self.grid.view, self.players())
+        roster::columns_mixed(self.grid.view, self.players(), std::array::from_fn(|p| self.compact(p)))
     }
 
     /// B201: the select of an online room not started yet.
@@ -2002,7 +2002,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "controls" | "controls-keys" | "controls-bind" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" | "assign-moved" => Screen::Assign,
-        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-random" | "names" | "names-type" => Screen::Chars,
+        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-hosting" | "chars-random" | "names" | "names-type" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" | "online-unread" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
@@ -2158,7 +2158,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         if screen.starts_with("mods") && menu.screen == Screen::Chars && menu.own_mods() > 0 {
             menu.put(0, Some(Who::Mod(0)));
         }
-        if matches!(menu.screen, Screen::Online | Screen::Lobby | Screen::Lobbies | Screen::Code) || screen == "chars-online" {
+        if matches!(menu.screen, Screen::Online | Screen::Lobby | Screen::Lobbies | Screen::Code) || screen == "chars-online" || screen == "chars-hosting" {
             online::sample(&mut menu);
         }
     }

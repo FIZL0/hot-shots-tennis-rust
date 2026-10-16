@@ -113,7 +113,8 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
         }
     }
     // the court and the plates
-    frame::stage(d, &g, if rm.doubles { ["TEAM 1", "TEAM 2"] } else { ["", ""] });
+    // M120: no court drawn behind the Online screens (user 2026-10-16)
+    frame::sides(d, &g, if rm.doubles { ["TEAM 1", "TEAM 2"] } else { ["", ""] });
     let s = g.k * g.s;
     for i in 0..rm.seats.len() {
         let Some(&rect) = g.plates.get(i) else { continue };

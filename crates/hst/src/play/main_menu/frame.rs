@@ -361,6 +361,12 @@ pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, page: bool,
 /// (an empty one draws no pill) and the VS badge on it.
 pub(super) fn stage(d: &mut Draw, g: &Geo, labels: [&str; 2]) {
     rounded(d, g.stage, g.x(18.0), GREEN, 128.0);
+    court(d, g);
+    sides(d, g, labels);
+}
+
+/// The court's blue, lines and net (the stage's green under them is the caller's).
+fn court(d: &mut Draw, g: &Geo) {
     let [x, y, w, h] = g.court;
     let (t, ty) = (g.x(3.0), g.y(3.0));
     d.q(Tex::Solid, [0.0; 4], [x, y, w, h], WHITE, 128.0);
@@ -378,6 +384,11 @@ pub(super) fn stage(d: &mut Draw, g: &Geo, labels: [&str; 2]) {
     }
     let net = if g.turned { [x - g.x(12.0), y + h / 2.0 - g.y(3.0), w + g.x(24.0), g.y(6.0)] } else { [x + w / 2.0 - g.x(3.0), y - g.y(12.0), g.x(6.0), h + g.y(24.0)] };
     rounded(d, net, g.x(3.0), NET, 128.0);
+}
+
+/// M120: the teams' labels (an empty one draws no pill) and the VS badge alone, no court under them (the Online
+/// screens, user 2026-10-16).
+pub(super) fn sides(d: &mut Draw, g: &Geo, labels: [&str; 2]) {
     // the labels
     for (k, &[lx, ly, lw, lh]) in g.labels.iter().enumerate() {
         let size = g.y(14.0) * g.s.min(1.2);

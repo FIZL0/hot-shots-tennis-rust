@@ -771,6 +771,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B513** Remove the lobby QR code everywhere (dependency, big-QR overlay, docs) — user: we don't have it anymore — crates/hst/src/play/main_menu/online.rs
 - [x] **B514** Android browser couldn't join by code ('No open lobby has the code'): a native host's relay put waited for its DHT put, guests gave up after 20 s — crates/hst-base/src/net.rs
 - [x] **B518** Host saw 'Others may not find this lobby' as someone joined: each room change re-listed on the pkarr relay, past its per-network rate limit with the guest's lookups — crates/hst-base/src/net.rs host()
+- [x] **M120** Online Host goes straight into the lobby: pressing Host opens the lobby at once (code/relay status in a corner while it connects), the same local roster cards as Local play for this machine's players, and the remote players as compact cards like today's (their roster not shown) but with their stats (win/loss, rating or record, character's stat bars). Drop the court drawing behind the Online screens (user 2026-10-16) — crates/hst/src/play/main_menu/online.rs, crates/hst/src/play/main_menu/roster.rs — concept mockup (2026-10-16): https://claude.ai/artifact/87BVBpYtRMRjV9d71A1gHi
 
 
 ### Shots

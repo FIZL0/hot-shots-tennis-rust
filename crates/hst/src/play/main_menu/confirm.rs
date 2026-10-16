@@ -54,7 +54,9 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], _hand_x
     frame::bar(d, &g, "Ready to play?", m.doubles, !m.online(), false);
     d.hit(g.title, pointer::press(|k| k.back = true));
     // online singles names no sides: each client keeps its own player on the near side (B490)
-    frame::stage(d, &g, if m.doubles { ["TEAM 1", "TEAM 2"] } else if m.online() { ["", ""] } else { ["NEAR SIDE", "FAR SIDE"] });
+    // M120: online, no court behind the plates
+    let stage = if m.online() { frame::sides } else { frame::stage };
+    stage(d, &g, if m.doubles { ["TEAM 1", "TEAM 2"] } else if m.online() { ["", ""] } else { ["NEAR SIDE", "FAR SIDE"] });
     let s = g.k * g.s;
     for (p, &rect) in g.plates.iter().enumerate() {
         plate(d, m, text, pads, p, rect, s, on(CONFIRM_ROWS + p));

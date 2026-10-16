@@ -562,13 +562,19 @@ fn again(w: &mut World) {
     if !over || w.resource::<Messages<AppExit>>().is_empty() || w.resource::<Netplay>().end.is_some() || !w.contains_resource::<Net>() {
         return;
     }
+    // M120: the team that won, into everyone's record (a guest's lobby from its host has it counted already)
+    let team = w.resource::<Game>().match_stats.result.as_ref().map(|t| t.winner);
     let mut np = w.resource_mut::<Netplay>();
     let wait = np.me != "host" && np.recover.lobby.is_none();
-    let room = np.recover.lobby.take().unwrap_or_else(|| {
+    let own = np.me == "host" || np.recover.lobby.is_none();
+    let mut room = np.recover.lobby.take().unwrap_or_else(|| {
         let mut r = np.room.clone();
         r.again();
         r
     });
+    if let Some(team) = team.filter(|_| own) {
+        room.scored(team);
+    }
     let net = w.remove_resource::<Net>().expect("checked");
     if w.resource::<Netplay>().me == "host" {
         info!("online: back to the lobby after the match");
