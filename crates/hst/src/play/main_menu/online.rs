@@ -1981,6 +1981,12 @@ pub(super) fn sample(m: &mut Menu) {
     if menu == "lobby-bot" {
         m.sel = m.items().iter().position(|it| *it == Item::Seat(3)).unwrap_or(0);
     }
+    // B490: a singles lobby (no side names on the court)
+    if menu == "lobby-singles" {
+        let r = m.net.room.as_mut().unwrap();
+        r.doubles = false;
+        r.seats.truncate(2);
+    }
     let r = m.net.room.as_mut().unwrap();
     if menu == "chars-online" {
         r.live.insert("host".into(), vec![Live { char: 6, costume: 0, ready: true, r#mod: None, name: String::new(), ..Default::default() }]);

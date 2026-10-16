@@ -1,7 +1,8 @@
 //! B449: the lobby, v4 (ours, the approved board "Concept v4: Lobby"; the frame and the plates are shared with the
 //! confirm screen, `frame.rs`). Along the top the title, the code pill (CODE and the join code, the QR big on ✕; Copy
 //! link; the host's Public / Private) and the Singles / Doubles button (the host's □ or ✕ switches). The middle is
-//! the court: a team each side of the net (singles: near side, far side), a plate a seat with its seat-coloured
+//! the court: a team each side of the net (doubles: TEAM 1, TEAM 2; singles has no side names, B490: each client
+//! keeps its own player on the near side), a plate a seat with its seat-coloured
 //! header (tag, who has it: "You · Keyboard", "Mika · 35 ms" (the ping gold over 150 ms), Computer, Open seat; the
 //! host's X that takes the player off), the 3D model in its well (the stand-in note for a mod this machine lacks),
 //! the character, its style and hand and one chip: Ready, Picking..., Not ready, COM · rank or Open. A taken seat's
@@ -112,7 +113,7 @@ pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
         }
     }
     // the court and the plates
-    frame::stage(d, &g, if rm.doubles { ["TEAM 1", "TEAM 2"] } else { ["NEAR SIDE", "FAR SIDE"] });
+    frame::stage(d, &g, if rm.doubles { ["TEAM 1", "TEAM 2"] } else { ["", ""] });
     let s = g.k * g.s;
     for i in 0..rm.seats.len() {
         let Some(&rect) = g.plates.get(i) else { continue };

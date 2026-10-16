@@ -358,7 +358,7 @@ pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, page: bool,
 }
 
 /// The court: the green, the blue court with its lines, the net down the middle (across, turned), the teams' labels
-/// and the VS badge on it.
+/// (an empty one draws no pill) and the VS badge on it.
 pub(super) fn stage(d: &mut Draw, g: &Geo, labels: [&str; 2]) {
     rounded(d, g.stage, g.x(18.0), GREEN, 128.0);
     let [x, y, w, h] = g.court;
@@ -382,6 +382,9 @@ pub(super) fn stage(d: &mut Draw, g: &Geo, labels: [&str; 2]) {
     for (k, &[lx, ly, lw, lh]) in g.labels.iter().enumerate() {
         let size = g.y(14.0) * g.s.min(1.2);
         let words = labels[k];
+        if words.is_empty() {
+            continue;
+        }
         let ww = d.width(words, size) + words.len() as f32 * g.x(2.0) + g.x(24.0);
         let pill = [lx + (lw - ww) / 2.0, ly, ww, lh];
         rounded(d, pill, lh / 2.0, NAVY, 128.0);
