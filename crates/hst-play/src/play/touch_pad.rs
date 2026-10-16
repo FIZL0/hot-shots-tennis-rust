@@ -41,10 +41,10 @@ const NAME: &str = if cfg!(target_os = "android") { "Touch controls (Android)" }
 const SONY: u16 = 0x054c;
 
 /// The Vibration setting (Settings → Mobile), as the menus last had it.
-pub(crate) static BUZZ: AtomicBool = AtomicBool::new(true);
+pub static BUZZ: AtomicBool = AtomicBool::new(true);
 
 /// Whether this app is played by touch: the iPhone or Android app, or anything with `HST_TOUCH` set.
-pub(crate) fn on() -> bool {
+pub fn on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| cfg!(any(target_os = "ios", target_os = "android")) || std::env::var_os("HST_TOUCH").is_some_and(|v| v != "0"))
 }
@@ -54,7 +54,7 @@ pub(crate) fn on() -> bool {
 static TOP_ROW: AtomicU32 = AtomicU32::new(0);
 
 /// `TOP_ROW`: the share of the window's height the pad's top row takes while it shows, else 0.
-pub(crate) fn top_row() -> f32 {
+pub fn top_row() -> f32 {
     f32::from_bits(TOP_ROW.load(Ordering::Relaxed))
 }
 
@@ -257,7 +257,7 @@ enum StickNode {
     Knob,
 }
 
-pub(crate) fn plugin(app: &mut App) {
+pub fn plugin(app: &mut App) {
     if on() {
         input(app);
         app.add_systems(PostUpdate, draw.before(bevy::ui::UiSystems::Prepare));

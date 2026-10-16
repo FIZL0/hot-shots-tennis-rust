@@ -13,13 +13,13 @@ use super::{Game, Phase, controls::Action, set_motion};
 
 /// The emotes by flick (up, down, left, right): the character's post-point reactions `gu_set` (the big win),
 /// `di_set` (the big loss), `gu` (a won point), `di` (a lost one) — a mod character's from its pack.
-pub(super) const MOTIONS: [usize; 4] = [0x2e, 0x2f, 0x2c, 0x2d];
+pub const MOTIONS: [usize; 4] = [0x2e, 0x2f, 0x2c, 0x2d];
 
 /// Keys 1–4 by default, in flick order.
-pub(super) const KEYS: [Action; 4] = [Action::EmoteUp, Action::EmoteDown, Action::EmoteLeft, Action::EmoteRight];
+pub const KEYS: [Action; 4] = [Action::EmoteUp, Action::EmoteDown, Action::EmoteLeft, Action::EmoteRight];
 
 /// A right stick (`Gamepad::right_stick`, +y up) pushed fully toward one side: its emote direction.
-pub(super) fn flick(v: Vec2) -> Option<u8> {
+pub fn flick(v: Vec2) -> Option<u8> {
     // ponytail: "fully" is 0.9 of the way out, so worn sticks still reach it
     (v.length() >= 0.9).then(|| match v.y.abs() > v.x.abs() {
         true if v.y > 0.0 => 0,
@@ -31,7 +31,7 @@ pub(super) fn flick(v: Vec2) -> Option<u8> {
 
 /// B271: the browser's touch pad (web/touch.js) has no right stick, so its L1 / R1 stand in for the left / right
 /// flick, held as a stick is. Only that pad: a real pad's shoulders never emote.
-pub(super) fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
+pub fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
     name.is_some_and(|n| is_touch(n))
         .then(|| [(GamepadButton::LeftTrigger, 2), (GamepadButton::RightTrigger, 3)].into_iter().find(|(b, _)| g.pressed(*b)))
         .flatten()
@@ -39,7 +39,7 @@ pub(super) fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
 }
 
 /// The touch pad's id (web/touch.js `pad.id`), as gilrs names it.
-pub(super) fn is_touch(name: &str) -> bool {
+pub fn is_touch(name: &str) -> bool {
     name.starts_with("Touch controls")
 }
 

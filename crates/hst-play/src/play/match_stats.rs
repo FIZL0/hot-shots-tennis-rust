@@ -369,7 +369,7 @@ struct Art(Vec<Handle<Image>>, Option<std::sync::Arc<crate::audio::SoundBank>>);
 #[derive(Component)]
 struct Slot(usize);
 #[derive(Component)]
-pub(super) struct Root;
+pub struct Root;
 /// The whole window's fade to black after Continue (a `Root` too, so the pause screen leaves it up with the HUD hidden).
 #[derive(Component)]
 struct Fade;

@@ -83,7 +83,7 @@ pub enum Style {
 }
 
 impl Style {
-    pub(crate) const ALL: [Style; 6] = [Style::Keys, Style::Xbox, Style::Ps, Style::Deck, Style::Switch, Style::Generic];
+    pub const ALL: [Style; 6] = [Style::Keys, Style::Xbox, Style::Ps, Style::Deck, Style::Switch, Style::Generic];
 }
 
 /// B362: the Button Icons setting's values (a [`LAYOUT`]): Auto (each pad's own), then one style for every pad.

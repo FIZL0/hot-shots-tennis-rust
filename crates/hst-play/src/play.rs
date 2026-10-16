@@ -57,7 +57,7 @@ mod heard;
 #[cfg(test)]
 mod hit_fx;
 mod intro;
-mod key_hints;
+pub mod key_hints;
 mod instant_replay;
 mod doubles_ai;
 mod flare;
@@ -67,8 +67,7 @@ mod mod_match;
 pub mod hand_swap;
 pub mod net_hide;
 mod own_camera;
-mod match_stats;
-pub(crate) mod menu;
+pub mod match_stats;
 pub mod front_end;
 pub mod word_label;
 pub mod legend;
@@ -77,28 +76,27 @@ mod rollback;
 mod resync;
 mod recover;
 mod npcs;
-mod panel;
-pub(crate) mod menu_art;
+pub mod panel;
+pub mod menu_art;
 mod popups;
 mod reaction_voices;
-mod emote;
+pub mod emote;
 mod replay_camera;
 mod surprise;
 pub(crate) mod snapshot;
 mod serve_check;
 mod partner_ball;
-mod tick_input;
+pub mod tick_input;
 mod timing;
 mod tornado;
 mod tick_cost;
-pub(crate) mod touch_pad;
+pub mod touch_pad;
 mod umpire_mod;
 #[cfg(test)]
 mod court_mod_match;
 mod replay_pace;
 mod weather;
 pub use hst_base::widescreen;
-pub(crate) mod main_menu;
 
 /// The original's default exhibition: one set to 4 games, deuce on.
 const SINGLES: Rules = Rules {
@@ -129,7 +127,7 @@ const SWEET_FRAME: i32 = serve::SWEET_FRAME;
 const SHOWN_ASPECT: f32 = 0.75;
 
 #[derive(Clone, Copy, Default, Debug, serde::Serialize, serde::Deserialize)]
-struct Player {
+pub struct Player {
     pos: V3,
     prev: V3,
     vel: Vec2,
@@ -227,7 +225,7 @@ struct Player {
     ai_press: Option<(Vec2, u8)>,
     ai_second: i32,
     /// +1 right-handed, −1 left-handed (the game mirrors left-handers' models).
-    hand: f32,
+    pub hand: f32,
     /// The motion the game's code last set (number, speed, loop, start frame), restarted on every set.
     cmd: Cmd,
     /// A swing waiting for 8 frames before contact while the body turns, and a soft follow-through due next frame.
@@ -311,8 +309,8 @@ enum Phase {
 }
 
 #[derive(Resource, Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct Game {
-    rules: Rules,
+pub struct Game {
+    pub rules: Rules,
     /// Serve trajectory tables, kinds 0..3 (topspin, slice, flat, underhand).
     /// Per player: the character's serve trajectory tables with their launch spin, [strong/underhand, weak toss]
     /// by kind (topspin, slice, flat, underhand; the weak toss's `dw1` tables have no underhand).
@@ -346,7 +344,7 @@ pub(crate) struct Game {
     flight: Flight,
     shot: Shot,
     prev_ball: V3,
-    players: Vec<Player>,
+    pub players: Vec<Player>,
     phase: Phase,
     /// Player who hit last (−1: none yet).
     last_hitter: i32,
@@ -355,14 +353,14 @@ pub(crate) struct Game {
     hit_flight: Flight,
     /// Court contacts the original's predicted path keeps after the ball touches the net (0 before).
     path_base: i32,
-    score: Score,
+    pub score: Score,
     rally: Rally,
     /// Shots this rally (1 = the serve).
     shots: i32,
     /// The last shot was on the sweet spot (not a dive, |offset| < 2): its record's flag the next aim reads.
     last_sweet: bool,
     /// The match statistics (`match_stats`).
-    match_stats: hst_sim::stats::Stats,
+    pub match_stats: hst_sim::stats::Stats,
     /// Per player: the character's aim values (see `aim_stats`).
     aim_stats: Vec<hst_sim::shot::AimStats>,
     /// Line tolerance from the game program.
@@ -407,7 +405,7 @@ pub(crate) struct Game {
     /// Per player: the character's pelvis forward row per motion at its first frame (the body turn's input).
     pelvis: Const<Vec<Vec<[f32; 2]>>>,
     /// Each player's character number and data.
-    chars: Vec<i32>,
+    pub chars: Vec<i32>,
     /// Each player's last shouts.
     voices: Vec<sound::Voice>,
     /// No serve struck yet this match: the singles server's voice on the coming new point.
@@ -421,7 +419,7 @@ pub(crate) struct Game {
     umpire: Umpire,
     umpire_voice: u64,
     /// The court number (the gallery's banks and keys).
-    stage: u8,
+    pub stage: u8,
     /// The gallery, the errors in a row it has seen, whether the last point won a game, and its plays due (with
     /// their bearings).
     gallery: sound::Gallery,
@@ -439,9 +437,9 @@ pub(crate) struct Game {
     /// Per player its character's smash top and window middle (TParam, m) and the landing markers' state.
     smash_heights: Vec<[f32; 2]>,
     /// Per player the contact search's reach: `reach` with the character's TParam reach and heights and its hand.
-    reaches: Vec<Reach>,
+    pub reaches: Vec<Reach>,
     /// Per player TParam's hand (+1 right, −1 left) before the select's hand toggle (`hand_swap`): the AI's strong side.
-    strong_hand: [f32; 4],
+    pub strong_hand: [f32; 4],
     /// The doubles AI's rally state (`doubles_ai`).
     doubles_ai: doubles_ai::Shared,
     marks: Marks,
@@ -512,33 +510,33 @@ struct ServeSwing {
 
 /// One controller slot's state, gathered every display frame and consumed by the 60 Hz simulation.
 #[derive(Clone, Copy, Default, Debug)]
-struct SlotPad {
+pub struct SlotPad {
     /// The left stick alone (after the pad driver, `pad_stick`).
-    stick: Vec2,
+    pub stick: Vec2,
     /// D-pad (and direction keys) held, as the pad's bits (`loco::pad_dir`: 0x10 up, 0x20 right, 0x40 down,
     /// 0x80 left): the original runs and aims by them only while the stick sits in its dead square.
-    dpad: u16,
+    pub dpad: u16,
     /// Latched shot press (kind), so a press between fixed steps is never lost.
-    shot: Option<i32>,
+    pub shot: Option<i32>,
     /// Latched □ (`controls::Action::Replay`, the wire's SQUARE): the post-point's replay request; serves take `shot`.
-    serve: bool,
+    pub serve: bool,
     /// The right stick flicked fully (0 up, 1 down, 2 left, 3 right) or keys 1–4: latched as `shot`; a new
     /// direction on the wire is an emote (`emote`).
-    emote: Option<u8>,
+    pub emote: Option<u8>,
 }
 
 /// Controller slots 1P..4P (without `--pads` the keyboard and the first gamepad drive 1P). See `slot_of` for which
 /// player each drives.
 #[derive(Resource, Clone)]
-struct Pads {
-    slots: [SlotPad; 4],
+pub struct Pads {
+    pub slots: [SlotPad; 4],
     /// Gamepads connected.
-    connected: usize,
+    pub connected: usize,
     /// Which seats (1P..4P) are human, fixed for the match: with `--pads` at startup (`controls::load`), else at the
     /// match's first tick (`tick_input`).
-    seats: Option<[bool; 4]>,
+    pub seats: Option<[bool; 4]>,
     /// `HST_AUTOPLAY`: every player a bot.
-    autoplay: bool,
+    pub autoplay: bool,
 }
 
 /// `HST_AUTOPLAY` set from code: tests turn it on here, since changing the environment while other test threads
@@ -555,7 +553,7 @@ impl Pads {
     /// Which slot controls player `i` of `n`, if any. Slot s is the menu's (s+1)P: in singles player s; in doubles
     /// 1P→0, 2P→2 (1P's partner, teams are {1,3} vs {2,4}), 3P→1, 4P→3. Without seats slot 1 is always human and
     /// slot s > 1 while s+1 gamepads are connected.
-    fn slot_of(&self, i: usize, n: usize) -> Option<usize> {
+    pub fn slot_of(&self, i: usize, n: usize) -> Option<usize> {
         if self.autoplay {
             return None;
         }
@@ -1241,7 +1239,7 @@ fn shot_effect(g: &Game, who: usize, src: usize, class: u8, kind: i32, (branch, 
     hst_sim::shot::effect(&g.specials[src].0, class, kind, hit, target, g.players[who].hand < 0.0, flip)
 }
 
-fn setup(
+pub fn setup(
     mut commands: Commands,
     args: Res<Args>,
     root: Query<Entity, With<GameSpace>>,
@@ -1695,7 +1693,7 @@ fn base_yaw(end: f32) -> f32 {
 #[derive(Resource)]
 pub struct MatchRng(pub Rngs);
 
-fn read_input(
+pub fn read_input(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(Entity, &Gamepad, Option<&Name>)>,
     mut pads: ResMut<Pads>,
@@ -2217,7 +2215,7 @@ fn serve_whiff(g: &mut Game, i: usize) -> bool {
 
 /// A stick axis (−1..1, +1 right/up) as the pad's byte (0x00 full left/up, 0x80 centre, 0xff full right/down;
 /// pass −y for a vertical axis).
-pub(crate) fn stick_byte(v: f32) -> u8 {
+pub fn stick_byte(v: f32) -> u8 {
     (128.0 + v.clamp(-1.0, 1.0) * if v < 0.0 { 128.0 } else { 127.0 }).round() as u8
 }
 

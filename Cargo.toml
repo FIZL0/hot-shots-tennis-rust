@@ -31,6 +31,8 @@ debug = "line-tables-only"  # ours (git dependency): keeps file:line past the "*
 opt-level = 1
 [profile.dev.package.hst-base]
 opt-level = 1
+[profile.dev.package.hst-play]
+opt-level = 1
 
 # gilrs-core with a read-only fallback for gamepads whose device node isn't writable (third_party/gilrs-core).
 [patch.crates-io]

@@ -1,7 +1,7 @@
 //! B136: the menus' remastered art (ours, by the user's request). A menu sheet named in [`SHEETS`] is rebuilt at load
 //! time at [`K`]× its size, in the same layout, so every screen's pixel rects still pick the same pieces
 //! (`textures::ours` scales them): each label listed for it is erased from the disc picture and set again as vector
-//! text in M PLUS Rounded 1c (OFL, `assets/fonts/`), filled with the label's own colours (sampled per row from the
+//! text in M PLUS Rounded 1c (OFL, `crates/hst/assets/fonts/`), filled with the label's own colours (sampled per row from the
 //! disc, outline colour and width too), so it stays sharp at any resolution; what's left (pills, boxes, icons) is
 //! scaled up with its edges snapped sharp. Only the label rects and their words are ours in the source; the pixels come
 //! from the user's disc at run time. `--original` (`OFF`) keeps the disc's sheets.
@@ -22,12 +22,12 @@ pub static OFF: AtomicBool = AtomicBool::new(false);
 pub const K: u32 = 4;
 
 /// A wall's scale over the disc's tile (the tiled quad divides its stretch by it): `K`, or 1 with `--original`.
-pub(crate) fn wall_k() -> f32 {
+pub fn wall_k() -> f32 {
     if OFF.load(Ordering::Relaxed) { 1.0 } else { K as f32 }
 }
 
-static HEAVY: &[u8] = include_bytes!("../../assets/fonts/MPLUSRounded1c-ExtraBold.ttf");
-pub(crate) static BOLD: &[u8] = include_bytes!("../../assets/fonts/MPLUSRounded1c-Bold.ttf");
+static HEAVY: &[u8] = include_bytes!("../../../hst/assets/fonts/MPLUSRounded1c-ExtraBold.ttf");
+pub(crate) static BOLD: &[u8] = include_bytes!("../../../hst/assets/fonts/MPLUSRounded1c-Bold.ttf");
 
 /// A label: its ink box on the disc sheet (x, y, w, h) and its words.
 type Label<'a> = (u16, u16, u16, u16, &'a str);
@@ -430,7 +430,7 @@ const OPTION_00: &[Label<'static>] = &[
 ];
 
 /// `data` (a TIM2 sheet called `name`) as an image: rebuilt if it's one of ours, else the disc's.
-pub(crate) fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
+pub fn image(images: &mut Assets<Image>, data: &[u8], name: &str) -> Handle<Image> {
     // match_stats names `info` by its folder ("/2d/info.tm2")
     let name = name.trim_end_matches(".tm2").rsplit('/').next().unwrap_or_default().to_ascii_lowercase();
     if name.starts_with("wall_") && !OFF.load(Ordering::Relaxed) {
@@ -738,7 +738,7 @@ fn stadium(l: f32, t: f32, rr: f32, b: f32) -> tiny_skia::Path {
 /// then inset 2 and 4 px), then three rounded boxes 64×64 apart from y [`BOX_Y`] (radius 15: the rim's band, the ring's
 /// band 2 px in, the fill 4 px in, each band alone so a fill can be see-through), `K`× sharp, for a button's or a
 /// panel's rim, ring and fill each tinted its own colour.
-pub(crate) fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
+pub fn pill_layers(images: &mut Assets<Image>) -> Handle<Image> {
     let k = K as f32;
     let mut out = Pixmap::new(64 * K, (ICON_Y as u32 + 72) * K).expect("pill size");
     let mut paint = Paint { anti_alias: true, ..Paint::default() };
@@ -771,10 +771,10 @@ const BOX_Y: f32 = 120.0;
 /// B141a: our icons on [`pill_layers`]' sheet below the boxes (disc px): the confirm screen's meter balls, lit and
 /// not, and its bounce and speed meters' icons.
 const ICON_Y: f32 = BOX_Y + 192.0;
-pub(crate) const BALL: [f32; 4] = [0.0, ICON_Y, 24.0, 24.0];
-pub(crate) const BALL_OFF: [f32; 4] = [24.0, ICON_Y, 24.0, 24.0];
-pub(crate) const BOUNCE: [f32; 4] = [0.0, ICON_Y + 24.0, 45.0, 22.0];
-pub(crate) const SPEED: [f32; 4] = [0.0, ICON_Y + 48.0, 46.0, 17.0];
+pub const BALL: [f32; 4] = [0.0, ICON_Y, 24.0, 24.0];
+pub const BALL_OFF: [f32; 4] = [24.0, ICON_Y, 24.0, 24.0];
+pub const BOUNCE: [f32; 4] = [0.0, ICON_Y + 24.0, 45.0, 22.0];
+pub const SPEED: [f32; 4] = [0.0, ICON_Y + 48.0, 46.0, 17.0];
 
 /// The meter icons at [`ICON_Y`].
 fn meter_icons(out: &mut Pixmap) {
@@ -1014,14 +1014,14 @@ pub(crate) fn pill_slices(i: usize) -> [[f32; 4]; 3] {
 
 /// Pill layer `i` over `[x, y, w, h]`: (source, destination) for its left end, middle and right end, the ends `h / 2`
 /// wide so they stay round at any height.
-pub(crate) fn pill_quads(i: usize, [x, y, w, h]: [f32; 4]) -> [([f32; 4], [f32; 4]); 3] {
+pub fn pill_quads(i: usize, [x, y, w, h]: [f32; 4]) -> [([f32; 4], [f32; 4]); 3] {
     let [l, m, r] = pill_slices(i);
     let e = (h / 2.0).min(w / 2.0);
     [(l, [x, y, e, h]), (m, [x + e, y, w - 2.0 * e, h]), (r, [x + w - e, y, e, h])]
 }
 
 /// Box layer `i` over `[x, y, w, h]` with `c`-px corners: (source, destination) for each of its nine slices.
-pub(crate) fn box_quads(i: usize, [x, y, w, h]: [f32; 4], c: f32) -> [([f32; 4], [f32; 4]); 9] {
+pub fn box_quads(i: usize, [x, y, w, h]: [f32; 4], c: f32) -> [([f32; 4], [f32; 4]); 9] {
     let (u, v, s) = (1.0, BOX_Y + 64.0 * i as f32 + 1.0, 16.0);
     let cols = [(u, s, x, c), (u + s, 62.0 - 2.0 * s, x + c, w - 2.0 * c), (u + 62.0 - s, s, x + w - c, c)];
     let rows = [(v, s, y, c), (v + s, 62.0 - 2.0 * s, y + c, h - 2.0 * c), (v + 62.0 - s, s, y + h - c, c)];
