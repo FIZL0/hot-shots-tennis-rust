@@ -51,7 +51,9 @@ pub trait HstEe: Sized {
 impl HstEe for Ee {
     fn game() -> Option<Self> {
         let (boot, game, load) = program()?;
-        Some(Self::from_program(RAM, &boot, &[(load, &game)]).expect("boot ELF"))
+        let mut ee = Self::from_program(RAM, &boot, &[(load, &game)]).expect("boot ELF");
+        boot_vu0(&mut ee);
+        Some(ee)
     }
 
     fn from_ram(name: &str) -> Option<Self> {
@@ -60,6 +62,14 @@ impl HstEe for Ee {
         let (_, game, load) = program()?;
         let (at, n) = (load as usize + 0x100, 0x1000); // code, past the overlay header
         assert_eq!(ram[at..at + n], game[0x100..0x100 + n], "{name} holds a different GAME overlay");
-        Some(Self::with_ram(ram))
+        let mut ee = Self::with_ram(ram);
+        boot_vu0(&mut ee);
+        Some(ee)
     }
+}
+
+/// VU0's micro programs (slerp among them), uploaded as the game does it at boot: the VIF0 DMA chain in the boot
+/// program's data, run through `ps2-oracle`'s VIF0. A RAM dump doesn't hold VU0 memory, but the chain is in it too.
+fn boot_vu0(ee: &mut Ee) {
+    ee.vif0_dma(addr("vu0_boot_chain"), false);
 }

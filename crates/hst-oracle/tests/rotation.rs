@@ -1,9 +1,9 @@
 //! The swept-sphere plane test, its contact point and the rotation helpers (matrix ↔ quaternion, slerp) against
 //! `hst_sim::contact` and `hst_sim::quat`, through the oracle. Needs `context/iso/` (skips without it).
 //!
-//! The slerp's core is a VU0 micro program, which the interpreter does not run: its call is hooked with
-//! `quat::micro_slerp`, so this checks the wrapper (t = 0/1 shortcuts, the shortest-arc flip and its dot) around
-//! it; the micro program itself is proven by the motion sampler's recordings (`pose` tests).
+//! The slerp's core is a VU0 micro program, run by the interpreter's micro mode (pipeline latencies and flag timing
+//! included) from the micro memory the game's boot DMA chain fills; it is checked bare (as the motion sampler's squad
+//! calls it) and inside the wrapper (t = 0/1 shortcuts, the shortest-arc flip and its dot).
 
 use hst_oracle::{Ee, HstEe, addr};
 use hst_sim::contact::{Hit, contact_point, sweep};
@@ -277,11 +277,6 @@ fn quat_to_matrix() {
 fn quat_slerp() {
     let Some(mut ee) = Ee::game() else { return eprintln!("skip: no context/iso") };
     let at = addr("quat_slerp");
-    ee.hooks.insert(addr("quat_micro_slerp"), Box::new(|ee: &mut Ee| {
-        let (out, a, b, t) = (ee.r(4) as u32, ee.r(5) as u32, ee.r(6) as u32, ee.f(12));
-        let r = quat::micro_slerp(get(ee, a), get(ee, b), t);
-        put(ee, out, &r);
-    }));
     let (mut seed, mut bad, n) = (0xbb67_ae85_84ca_a73bu64, vec![], 30_000);
     let mut kinds = [0usize; 4]; // t = 0, t = 1, flipped (dot < 0), as is
     for k in 0..n {
@@ -315,4 +310,45 @@ fn quat_slerp() {
     eprintln!("t=0 / t=1 / flipped / as is: {kinds:?}");
     assert!(kinds.iter().all(|&k| k > n / 20), "a branch is barely reached: {kinds:?}");
     report("slerp", n, &bad);
+}
+
+/// The micro program called bare: its three lerp fallbacks (dot negative — a −0 dot included, the S flag is the
+/// sign bit —, sin²θ = 0, dot > 0.999) and the arctan/sine polynomial path, on unit and off-unit quaternions.
+#[test]
+fn quat_micro_slerp() {
+    let Some(mut ee) = Ee::game() else { return eprintln!("skip: no context/iso") };
+    let at = addr("quat_micro_slerp");
+    let (mut seed, mut bad, n) = (0x3c6e_f372_fe94_f82bu64, vec![], 30_000);
+    let mut kinds = [0usize; 3]; // negative dot, nearly equal (dot ≥ 0.999), the polynomial path
+    for k in 0..n {
+        let s = &mut seed;
+        let a = unit_quat(s);
+        let b = match k % 8 {
+            0 => a.map(|c| -c + uni(s, -0.3, 0.3)),
+            1 => a.map(|c| c + uni(s, -1e-3, 1e-3)),
+            2 => a,
+            // products that are all −0 (or +0): the dot's sign bit alone decides
+            3 => std::array::from_fn(|i| if a[i] == 0.0 { 1.0 } else { [-0.0, 0.0][rng(s) as usize % 2] }),
+            4 => unit_quat(s).map(|c| c * uni(s, 0.5, 1.5)),
+            _ => unit_quat(s),
+        };
+        let a = if k % 8 == 3 { [a[0], 0.0, a[2], -0.0] } else { a };
+        let t = match rng(s) % 8 {
+            0 => [0.0, 1.0, -0.0, 0.5][rng(s) as usize % 4],
+            1 => uni(s, -0.5, 1.5),
+            _ => uni(s, 0.0, 1.0),
+        };
+        put(&mut ee, B, &a);
+        put(&mut ee, C, &b);
+        ee.call(at, &[A as u64, B as u64, C as u64], &[t], 1_000);
+        let (want, got): (V4, V4) = (get(&ee, A), quat::micro_slerp(a, b, t));
+        let dot: f32 = (0..4).map(|i| a[i] * b[i]).sum();
+        kinds[if dot < 0.0 { 0 } else if dot >= 0.999 { 1 } else { 2 }] += 1;
+        if bits(want) != bits(got) {
+            bad.push(format!("{a:?} → {b:?} at {t}: game {want:?} port {got:?}"));
+        }
+    }
+    eprintln!("negative / nearly equal / polynomial: {kinds:?}");
+    assert!(kinds.iter().all(|&k| k > n / 20), "a branch is barely reached: {kinds:?}");
+    report("micro slerp", n, &bad);
 }

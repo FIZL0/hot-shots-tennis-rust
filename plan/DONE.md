@@ -664,6 +664,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B461** Roster: an unjoined seat's dashed outline has no corners (the dashes stop short at each side and the 14px rounded corners aren't drawn; the joined card's yellow dashed rim has the same gap). Draw the corner arcs in dashed(). Files: crates/hst/src/play/main_menu/roster.rs
 - [x] **B452** Android Chrome: the WebGPU build won't start, 'The game stopped: instance dropped in popErrorScope' (user 2026-10-15, build 54125cc); WebGL2 runs fine there. Find the wgpu error-scope/instance lifetime bug, else fall back to WebGL2 when it fires → web/index.html
 - [x] **B456** Web build crashes in Zen browser (user 2026-10-15): "Caught rendering error: Validation Error … In Device::create_texture, label = 'main_texture_a' Downlevel flags DownlevelFlags(VIEW_FORMATS) are required but not supported on the device." Zen (Firefox-based) WebGPU lacks view_formats; Bevy's main_texture_a/b requests an sRGB view format. Check adapter downlevel_properties at startup and fall back (WebGL2 backend, or skip view formats / no sRGB view) so the game runs instead of stopping; verify in Zen/Firefox. Files: crates/hst/src/main.rs (render plugin setup), web build config.
+- [x] **T3** VU0 micro mode (vcallms) in ps2-oracle so the slerp micro program can run under the oracle; then drop the micro_slerp hook in hst-oracle/tests/rotation.rs quat_slerp (T2 journal). Files: ../ps2-oracle, crates/hst-oracle/tests/rotation.rs, crates/hst-sim/src/quat.rs
 
 
 ### Shots
