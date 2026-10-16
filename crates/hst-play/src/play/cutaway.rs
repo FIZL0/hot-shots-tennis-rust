@@ -54,18 +54,25 @@ fn setup(mut commands: Commands, args: Res<Args>) {
     commands.insert_resource(super::replay_camera::ReplayCamera::new(game.camera_shots(), game.replay_cameras()));
 }
 
-/// Bone `name`'s world matrix with the player's motion `id` at time `t` (clamped to its length), the player
-/// standing at `pos`.
+/// Bone `name`'s world matrix with the player's motion `id` as drawn at time `t` (clamped to its length), the player
+/// standing at `pos`. Drawn (B502): a mod's own clip for the motion (its reactions 0x2c..0x2f can face up to half a
+/// turn from the donor's the game plays), else the gameplay clip, so a shot frames the body on screen.
 pub(super) fn bone(p: &Player, data: &CharacterData, id: usize, t: f32, pos: [f32; 4], name: &str) -> Option<M4> {
     let sk = &data.skeleton;
-    let c = data.motions.get(&id)?;
+    let c = data.drawn(id)?;
     let n = sk.names.iter().position(|s| s == name)?;
     let mut m = player_matrix(p);
     m[3] = pos;
     Some(node_world(sk, &c.locals(sk, t.min(c.length)), n, &m))
 }
 
-/// Player `i`'s head and Spine2 as their reaction will leave them `t` frames in: a team reaction (and `gu_set`)
+/// The time on the clock of the clip drawn for `m`: a mod's own clip runs on `Motion::drawn`, else the gameplay clock.
+pub(super) fn drawn_time(data: &CharacterData, m: &Motion) -> f32 {
+    if data.visual.contains_key(&m.id) { m.drawn.sampled } else { m.clock.sampled }
+}
+
+/// Player `i`'s head and Spine2 as their reaction will leave them `t` frames in (as drawn: a mod's own clip starts
+/// with the gameplay one and runs at its speed, so `t` frames in on either clock): a team reaction (and `gu_set`)
 /// carries the player along its root path. One without a reaction (a body-hit player standing) holds `motion`, its
 /// current one, where it stands.
 fn predicted(g: &Game, i: usize, t: f32, motion: Option<usize>) -> Option<(M4, M4)> {
@@ -158,7 +165,7 @@ fn show(g: &mut Game, d: &mut Director, q: &Query<(&Figure, &Motion)>) {
     if let Some((_, m)) = q.iter().find(|(f, _)| f.0 == *shown) {
         let p = &g.players[*shown];
         frames.spot = [p.pos[0], p.pos[1], p.pos[2], 1.0];
-        if let Some(h) = bone(p, &g.data[*shown], m.id, m.clock.sampled, [p.pos[0], p.pos[1], p.pos[2], 1.0], "Bip01Head") {
+        if let Some(h) = bone(p, &g.data[*shown], m.id, drawn_time(&g.data[*shown], m), [p.pos[0], p.pos[1], p.pos[2], 1.0], "Bip01Head") {
             frames.head = cutaway::head_frame(&h, p.hand < 0.0);
         }
     }
@@ -172,3 +179,38 @@ fn show(g: &mut Game, d: &mut Director, q: &Query<(&Figure, &Motion)>) {
 }
 
 impl super::snapshot::Wire for Director {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::character;
+
+    const ISO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso");
+
+    /// B502: a cut-away frames the clip drawn: a stock player's gameplay reaction as before, a mod's own reaction
+    /// (0x2c..0x2f, up to half a turn from the donor's) on its own clock.
+    #[test]
+    fn frames_follow_the_drawn_clip() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let (mut a, mut b, mut c, mut d) = (Assets::default(), Assets::default(), Assets::default(), Assets::default());
+        let mut data = character::load_disc(&mut iso, 6, 0, &mut a, &mut b, &mut c, &mut d).unwrap();
+        let mut p = Player { hand: 1.0, ..default() };
+        p.body.face.dir = [0.6, 0.0, 0.8, 0.0];
+        let pos = [1.0, 0.0, 2.0, 1.0];
+        let mut m = Motion::default();
+        m.set(0x2c, 1.0, false, None, 0);
+        (m.clock.sampled, m.drawn.sampled) = (5.0, 9.0);
+        let gameplay = |id: usize, t: f32| {
+            let (sk, c) = (&data.skeleton, &data.motions[&id]);
+            let mut w = player_matrix(&p);
+            w[3] = pos;
+            node_world(sk, &c.locals(sk, t.min(c.length)), sk.names.iter().position(|s| s == "Bip01Head").unwrap(), &w)
+        };
+        let (stock, own) = (gameplay(0x2c, 5.0), gameplay(0x10, 9.0));
+        assert_eq!(drawn_time(&data, &m), 5.0, "stock clock changed");
+        assert_eq!(bone(&p, &data, 0x2c, drawn_time(&data, &m), pos, "Bip01Head").unwrap(), stock, "stock frames changed");
+        data.visual.insert(0x2c, data.motions[&0x10].clone());
+        assert_eq!(drawn_time(&data, &m), 9.0, "not the drawn clock");
+        assert_eq!(bone(&p, &data, 0x2c, drawn_time(&data, &m), pos, "Bip01Head").unwrap(), own, "not the drawn clip");
+    }
+}

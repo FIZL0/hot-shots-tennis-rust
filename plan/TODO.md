@@ -8,7 +8,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 
 ### Next (user priorities, in order)
 
-- [ ] **B502** Post-point cut-aways frame a mod character's donor reaction, not the drawn one (found in B366): `play/cutaway.rs` `bone`/`predicted` read `data.motions`; a mod's own 0x2c..0x2f clips (`CharacterData::visual`) face up to 180° away, so read `data.drawn` on the drawn clock like `replay_camera::drawn_bone`; stock unchanged → play/cutaway.rs · play/replay_camera.rs
 - [ ] **P0b4c** Umpire-call timing (in P0b4) → `hst-sim/src/flow.rs` | t: score.rs | j: 2026-10-06-p0b-rules
 - [~] **P35** **High fps everywhere (umbrella, user 2026-10-15)**: CPU-bound at ~250 fps on an RX 9070 XT (GPU ~1.3 ms of a 4 ms frame). Target: ≥480 fps in a 4-bot match at 1440p on that rig, and P23's Deck/low-end numbers, with replay tests still bit-exact and no look change at defaults. Work through P36–P48, re-profile after each (tools/profile.sh), log before/after in the journal. Done when the target holds → tools/profile.sh · tools/bench.sh | j: 2026-10-15-p35-high-fps BLOCKED: umbrella: needs P36–P48 landed first, then re-profile/bench on an idle machine at 1440p; unblock when they are ticked
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:
