@@ -54,7 +54,6 @@ index out of bounds: the len is 0 but the index is 0"
 - [~] **P16** Camera (other modes open; court views P16c, pick and wiring P16a) → `hst-sim/src/camera.rs` `cutaway.rs` · `play.rs` camera · `tools/record_camera.py` `record_cutaway.py` | t: camera.rs, cutaway.rs | j: 2026-10-06-p16-cutaway
 - [ ] **P17** (split into P17a–h) Court rendering fidelity → `main.rs` load/models/image · `hst-data/src/mtl.rs` `mdl.rs` `layout.rs`
 - [~] **P17p1** Close-up debris and step sound (P17p gap): with gm+0x344 set (close-up/training) the game sprays par/tuti dirt and par/siba/run/spray water from the feet and plays step sound 0x69; done when a training/close-up mode exists and both are ported and checked against a PINE recording in that mode → `play/foot_fx.rs` · `hst-sim/src/foot.rs` | j: 2026-10-08-p17p1-replay-debris — BLOCKED: gm+0x344 is the instant replay; dive debris (clods/blades) ported bit for bit (foot_s05g/c) and drawn, step-sound gate ported; needs P0b4d to set `Feet::replay`/play the step, and a singles replay recording in the close-up camera to check the step sound
-- [~] **P20** Audio (see N3) → `hst-data/src/xb.rs` | j: 2026-10-06-characters/1-MODELS-ANIM-AUDIO-PART.md
 - [ ] **P21** Menus and modes → `main.rs`
 - [ ] **P21a** Controller assignment screen (after P21): P1 picks which connected controller drives which player. The original shakes a controller's selector when that controller moves its right stick → `main.rs` · `play.rs` read_input/Pads
 
