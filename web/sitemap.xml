@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- M107: the site is one page (index.html) -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>https://opentennis.dev/</loc>
+    <image:image><image:loc>https://opentennis.dev/shots/rally-autumn.jpg</image:loc></image:image>
+    <image:image><image:loc>https://opentennis.dev/shots/rally-grass.jpg</image:loc></image:image>
+    <image:image><image:loc>https://opentennis.dev/shots/menu-chars.jpg</image:loc></image:image>
+  </url>
+</urlset>

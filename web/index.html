@@ -3,8 +3,76 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
-<title>OpenTennis</title>
-<meta name="description" content="OpenTennis: a from-scratch, open-source rewrite of the PS2 game Hot Shots Tennis that plays exactly like the original. Runs in your browser from your own disc image; also on Windows, Linux, Android and iOS. Online play and mods.">
+<title>OpenTennis: a Hot Shots Tennis remaster for PC, browser and online play</title>
+<meta name="description" content="OpenTennis is a free, open-source remaster of the PS2 game Hot Shots Tennis (Everybody's Tennis, Minna no Tennis). Play it on PC, in your browser, on your phone or online, from your own disc.">
+<!-- M107: search and link previews. The site's one address is opentennis.dev; the beta site and ?site/?code= point
+     back to it. The original's names appear only as what this is a remaster of (AGENT.md: the name is OpenTennis). -->
+<link rel="canonical" href="https://opentennis.dev/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="OpenTennis">
+<meta property="og:url" content="https://opentennis.dev/">
+<meta property="og:title" content="OpenTennis: a remaster of Hot Shots Tennis">
+<meta property="og:description" content="The PS2's Hot Shots Tennis (Everybody's Tennis, Minna no Tennis), rewritten from scratch: the same game ball for ball, in your browser, on PC and phone, with online play and mods. Bring your own disc.">
+<meta property="og:image" content="https://opentennis.dev/shots/rally-autumn.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="og:image:alt" content="A rally on an autumn court in OpenTennis">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="OpenTennis: a remaster of Hot Shots Tennis">
+<meta name="twitter:description" content="The PS2's Hot Shots Tennis, rewritten from scratch: in your browser, on PC and phone, online. Bring your own disc.">
+<meta name="twitter:image" content="https://opentennis.dev/shots/rally-autumn.jpg">
+<meta name="twitter:image:alt" content="A rally on an autumn court in OpenTennis">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "VideoGame",
+  "name": "OpenTennis",
+  "description": "A free, open-source remaster of the PlayStation 2 game Hot Shots Tennis (Everybody's Tennis in Europe, Minna no Tennis in Japan): the same ball physics, shots, AI and rules, rewritten from scratch in Rust, with online play, mods and any resolution. Runs from the player's own disc image.",
+  "url": "https://opentennis.dev/",
+  "image": "https://opentennis.dev/shots/rally-autumn.jpg",
+  "screenshot": ["https://opentennis.dev/shots/rally-autumn.jpg", "https://opentennis.dev/shots/rally-grass.jpg",
+    "https://opentennis.dev/shots/serve.jpg", "https://opentennis.dev/shots/menu-chars.jpg"],
+  "genre": ["Sports", "Tennis"],
+  "gamePlatform": ["Web browser", "PC", "Windows", "Linux", "Steam Deck", "Android", "iOS"],
+  "operatingSystem": "Windows, Linux, Android, iOS, any browser with WebGPU or WebGL2",
+  "applicationCategory": "GameApplication",
+  "playMode": ["SinglePlayer", "MultiPlayer", "CoOp"],
+  "numberOfPlayers": { "@type": "QuantitativeValue", "minValue": 1, "maxValue": 4 },
+  "inLanguage": "en",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "sameAs": ["https://github.com/FIZL0/opentennis"],
+  "isBasedOn": {
+    "@type": "VideoGame",
+    "name": "Hot Shots Tennis",
+    "alternateName": ["Everybody's Tennis", "Minna no Tennis"],
+    "gamePlatform": "PlayStation 2",
+    "datePublished": "2007",
+    "author": { "@type": "Organization", "name": "Clap Hanz" },
+    "publisher": { "@type": "Organization", "name": "Sony Computer Entertainment" }
+  }
+}
+</script>
+<script>
+// M107: the beta site has the same page; only opentennis.dev is for search engines (the canonical link above says so too)
+if (location.hostname.startsWith('beta.')) {
+  const m = document.createElement('meta');
+  m.name = 'robots';
+  m.content = 'noindex';
+  document.head.append(m);
+}
+// M107: the site's text is in the page from the start (#disc isn't hidden), so search engines and a page without
+// scripts see it; a visit that goes straight into the game (a reload while playing, the autoplay box; see the module
+// script's landing check) hides it before the first paint, and site.js shows it again when the site opens after all.
+try {
+  if (!new URLSearchParams(location.search).has('site')
+      && (sessionStorage.getItem('hst-playing') === '1' || localStorage.getItem('hst-autoplay') === '1'))
+    document.documentElement.dataset.game = '';
+} catch {}
+// the header's picture early, when the site is what shows
+if (!('game' in document.documentElement.dataset))
+  document.head.append(Object.assign(document.createElement('link'), { rel: 'preload', as: 'image', href: 'shots/rally-autumn.jpg' }));
+</script>
 <link rel="stylesheet" href="site.css">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icon.svg">
@@ -84,7 +152,7 @@
 <input id="codekeys" hidden autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done" aria-label="Lobby code">
 <!-- M96: the site (site.css, site.js): the page every visit opens on; with a disc imported its play section is one Play
      button. -->
-<div id="disc" hidden>
+<div id="disc">
   <div class="discord"><div class="wrap">
     <span><b>OpenTennis has a Discord.</b> Find people to play, share mods, report bugs.</span>
     <a class="pill small discord-pill" href="https://discord.gg/kCkz5hFNXG" target="_blank" rel="noopener">Join the Discord</a>
@@ -92,9 +160,10 @@
   <header class="band" style="--shot: url(shots/rally-autumn.jpg)"><div class="wrap">
     <img class="logo" src="logo.svg" alt="OpenTennis" width="1040" height="820">
     <div class="title">
-      <h1>Tennis, the way it played on PS2.</h1>
-      <p class="lede">OpenTennis is a from-scratch rewrite of Hot Shots Tennis. It plays the same as the original, ball
-        for ball, and it runs in your browser. You bring the disc.</p>
+      <h1><span class="kicker">OpenTennis · a remaster of Hot Shots Tennis</span> Tennis, the way it played on PS2.</h1>
+      <p class="lede">OpenTennis is a from-scratch remaster of Hot Shots Tennis (Everybody's Tennis, Minna no Tennis). It
+        plays the same as the original, ball for ball, and it runs in your browser, on PC and on your phone. You bring
+        the disc.</p>
       <div class="row">
         <a class="pill gold" href="#play" data-new>Pick your ISO</a>
         <a class="pill gold" href="#play" data-have hidden>Play</a>
@@ -198,9 +267,49 @@
           <a href="https://github.com/FIZL0/opentennis-mods" target="_blank" rel="noopener">opentennis-mods</a>.</p>
       </div>
       <figure>
-        <img src="shots/menu-chars.jpg" alt="The character select with mod characters" loading="lazy" onerror="this.hidden = true">
+        <img src="shots/menu-chars.jpg" width="1280" height="720" alt="The character select with mod characters" loading="lazy" onerror="this.hidden = true">
         <figcaption>The character select with mod characters, in OpenTennis.</figcaption>
       </figure>
+    </div>
+  </div></section>
+
+  <!-- M107: the questions people search with, answered in text (search engines read this, not the canvas) -->
+  <section id="faq"><div class="wrap">
+    <h2 class="h">Questions</h2>
+    <div class="grid">
+      <div class="panel card">
+        <h3>Can I play Hot Shots Tennis on PC?</h3>
+        <p>Yes. OpenTennis is a remaster of Hot Shots Tennis that runs natively on Windows and Linux (Steam Deck too), in
+          a web browser, and on Android and iPhone. It isn't an emulator: the game is rewritten, so it runs at any
+          resolution, widescreen and a high frame rate, with a controller or keyboard.</p>
+      </div>
+      <div class="panel card">
+        <h3>Is this Everybody's Tennis or Minna no Tennis?</h3>
+        <p>It's the same game. Hot Shots Tennis came out on PlayStation 2 in 2007, called Everybody's Tennis in Europe
+          and Minna no Tennis (みんなのテニス) in Japan. OpenTennis remasters it from the US disc (SCUS-97610), so that's
+          the one it needs; the European and Japanese discs don't work.</p>
+      </div>
+      <div class="panel card">
+        <h3>Can I play Hot Shots Tennis online?</h3>
+        <p>Yes. Host a lobby and send its code or link, or join a public one, for singles or doubles with up to four
+          players. Rollback netcode keeps a match smooth, and every player sees the same match.</p>
+      </div>
+      <div class="panel card">
+        <h3>Is it the same game as the original?</h3>
+        <p>On the court, yes: the ball physics, shots, computer opponents, rules and timing are ported from Hot Shots
+          Tennis and checked against it in an emulator, so the same inputs play out the same way. The menus and the
+          rendering are new.</p>
+      </div>
+      <div class="panel card">
+        <h3>Do I need the disc?</h3>
+        <p>Yes. OpenTennis has none of the game's data: it reads the characters, courts, music and voices from an .iso
+          of your own copy, on your device. It is free and open source.</p>
+      </div>
+      <div class="panel card">
+        <h3>Can I add characters and courts?</h3>
+        <p>Yes. Mods add characters (from other games too), courts, umpires and texture packs, and install from the
+          in-game mod store. See <a href="#mods">Mods</a>.</p>
+      </div>
     </div>
   </div></section>
 
@@ -248,14 +357,14 @@
         <a class="pill gold big" href="https://ko-fi.com/fizlo" target="_blank" rel="noopener">Chip in on Ko-fi</a>
       </div>
       <figure>
-        <img src="shots/rally-grass.jpg" alt="A rally on a grass court" loading="lazy" onerror="this.hidden = true">
+        <img src="shots/rally-grass.jpg" width="1280" height="720" alt="A rally on a grass court" loading="lazy" onerror="this.hidden = true">
         <figcaption>A rally on grass, in OpenTennis.</figcaption>
       </figure>
     </div>
   </div></section>
 
   <footer><div class="wrap">
-    <nav><a href="#play">Play</a><a href="#about">About</a><a href="#mods">Mods</a><a href="#settings">Settings &amp; files</a><a href="#donate">Donate</a>
+    <nav><a href="#play">Play</a><a href="#about">About</a><a href="#mods">Mods</a><a href="#faq">Questions</a><a href="#settings">Settings &amp; files</a><a href="#donate">Donate</a>
       <a href="https://discord.gg/kCkz5hFNXG" target="_blank" rel="noopener">Discord</a><a href="https://github.com/FIZL0/opentennis" target="_blank" rel="noopener">GitHub</a></nav>
     <p>OpenTennis is an unofficial fan project, not affiliated with Sony Interactive Entertainment or Clap Hanz. Hot Shots
       Tennis is their trademark. This site hosts no game data: you bring your own disc.</p>

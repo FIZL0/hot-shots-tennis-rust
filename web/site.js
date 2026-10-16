@@ -46,6 +46,7 @@ const MEMORY_NOTE = 'This browser isn\'t letting the page keep files (a private 
 export async function landing(dir, hasPack) {
   const root = document.getElementById('disc');
   root.hidden = false;
+  delete document.documentElement.dataset.game;
   if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   const have = on => {
     for (const e of root.querySelectorAll('[data-new]')) e.hidden = on;
