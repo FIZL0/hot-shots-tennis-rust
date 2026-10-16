@@ -758,7 +758,7 @@ impl Menu {
                 "All mods" => self.mods_back(out),
                 _ => {
                     out.push(Sound(2));
-                    if let Err(e) = super::reload(out) {
+                    if let Err(e) = super::reload(self.add.app.0, out) {
                         self.add.status = e;
                     }
                 }
@@ -1789,7 +1789,7 @@ pub(super) fn info(m: &Menu) -> String {
             "Add mod" => "Install a mod from a .zip file on this computer: a character, court or umpire.".into(),
             "Remove all" => "Remove every mod the game installed (ones added by hand stay).".into(),
             "Remove all uploads" => "Take every mod you shared off the store (asks first).".into(),
-            "Reload" => "Restart the game so your mod changes take effect: new mods join the select screens, removed ones leave.".into(),
+            "Reload" => super::reload_said(v).into(),
             "Download all" => format!("Install every mod by {} you don't have yet.", v.by.as_ref().map_or("", |b| super::who(&b.author))),
             _ => "Back to every mod in the store.".into(),
         },
