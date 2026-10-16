@@ -17,6 +17,7 @@ use crate::{
     motion::Clock,
     pose::{Clip, M4, Skeleton},
     ps2::{F, f32s, fs},
+    shot::kind,
     world,
 };
 
@@ -156,7 +157,7 @@ pub struct PathEntry {
 /// players' points are drawn at their midpoint.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SmashSearch {
-    /// Per candidate: smash top, middle height, state (0 rising, 1 falling, 2 placed, −1 gave up).
+    /// Per candidate: smash top, middle height, state ([`search`]).
     cands: Vec<(f32, f32, i32)>,
     pending: usize,
     next: usize,
@@ -164,10 +165,22 @@ pub struct SmashSearch {
     pub marks: Vec<[f32; 2]>,
 }
 
+/// A smash-point candidate's state.
+pub mod search {
+    /// The ball hasn't reached the smash top yet.
+    pub const RISING: i32 = 0;
+    pub const FALLING: i32 = 1;
+    pub const PLACED: i32 = 2;
+    pub const GAVE_UP: i32 = -1;
+}
+
+/// A smash point is only placed this far (m) from the net or more.
+const SMASH_NET_GAP: f32 = 1.5;
+
 impl SmashSearch {
     /// Candidates' smash `[top, middle]` heights.
     pub fn new(heights: &[[f32; 2]]) -> SmashSearch {
-        SmashSearch { cands: heights.iter().map(|&[t, m]| (t, m, 0)).collect(), pending: heights.len(), next: 0, marks: vec![] }
+        SmashSearch { cands: heights.iter().map(|&[t, m]| (t, m, search::RISING)).collect(), pending: heights.len(), next: 0, marks: vec![] }
     }
 
     /// Search `path` from where the last call stopped; true when this call placed the first point (the marker's
@@ -178,20 +191,21 @@ impl SmashSearch {
         while self.pending > 0 && i < path.len() {
             let e = path[i];
             for c in &mut self.cands {
+                use search::*;
                 match c.2 {
-                    0 if c.0 <= e.pos[1] => c.2 = 1,
-                    0 if e.bounces > 0 => {
-                        c.2 = -1;
+                    RISING if c.0 <= e.pos[1] => c.2 = FALLING,
+                    RISING if e.bounces > 0 => {
+                        c.2 = GAVE_UP;
                         self.pending -= 1;
                     }
-                    1 if e.vel[1] <= 0.0 && e.pos[1] < c.1 => {
+                    FALLING if e.vel[1] <= 0.0 && e.pos[1] < c.1 => {
                         let p = path[i - 1].pos;
                         let sign = |v: f32| if v < 0.0 { -1 } else { 1 };
-                        if sign(e.vel[2]) == sign(p[2]) && p[2].abs() >= 1.5 {
+                        if sign(e.vel[2]) == sign(p[2]) && p[2].abs() >= SMASH_NET_GAP {
                             self.marks.push([p[0], p[2]]);
-                            c.2 = 2;
+                            c.2 = PLACED;
                         } else {
-                            c.2 = -1;
+                            c.2 = GAVE_UP;
                         }
                         self.pending -= 1;
                     }
@@ -259,10 +273,10 @@ mod tests {
     }
 }
 
-/// The racket-impact effect's scale for shot kind `kind` (0 top … 4 drop) from the ball's velocity as the shot
-/// leaves: twice the speed for top and flat shots, 1 otherwise.
-pub fn impact_scale(kind: i32, vel: [f32; 3]) -> f32 {
-    if kind != 0 && kind != 2 {
+/// The racket-impact effect's scale for shot kind `shot` (`shot::kind`) from the ball's velocity as the shot
+/// leaves: twice the speed for topspin and flat shots, 1 otherwise.
+pub fn impact_scale(shot: i32, vel: [f32; 3]) -> f32 {
+    if shot != kind::TOPSPIN && shot != kind::FLAT {
         return 1.0;
     }
     let [x, y, z] = fs(vel);
@@ -299,6 +313,9 @@ pub const SPARKS: usize = 25;
 /// The frames left below which a spark fades out (alpha `life/FADE`).
 pub const SPARK_FADE: i32 = 20;
 
+/// A full turn as [`Roll::draw`] scales its unit draw (2π rounded up).
+const TURN: f32 = 6.283_185_5;
+
 /// One pre-rolled spark: a turn about the shot direction and three uniforms in [0, 1) (spread, speed, life).
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Roll {
@@ -315,7 +332,7 @@ impl Roll {
 
     /// One roll from four uniform draws: the angle (a unit times 2π), then the uniforms.
     pub fn draw(rng: &mut crate::rng::Mt) -> Roll {
-        let angle = (F(rng.unit()) * 6.283_185_5).0;
+        let angle = (F(rng.unit()) * TURN).0;
         Roll::new(angle, [rng.unit(), rng.unit(), rng.unit()])
     }
 
@@ -339,7 +356,7 @@ pub struct Spark {
     pub life: i32,
 }
 
-/// Per shot kind (0 top … 4 drop): whether the burst scales with the ball's speed, then for a fixed burst its
+/// Per shot kind (`shot::kind`): whether the burst scales with the ball's speed, then for a fixed burst its
 /// forward offset, spread, speed range, speed exponent, size range; both: life range.
 struct Burst {
     by_speed: bool,
@@ -354,8 +371,12 @@ const BURSTS: [Burst; 5] = {
     const fn b(by_speed: bool, size_lo: f32) -> Burst {
         Burst { by_speed, offset: 2.0, spread: 3.5, speed: [if by_speed { 0.1 } else { 0.3 }, if by_speed { 0.5 } else { 0.3 }], exponent: 1.1, size: [size_lo, if by_speed { 0.3 } else { size_lo }] }
     }
+    // topspin, slice, flat, lob, drop
     [b(true, 0.1), b(false, 0.5), b(true, 0.1), b(false, 0.5), b(false, 0.4)]
 };
+/// A speed-scaled burst's speed range per unit of ball speed, and a fixed burst's base pace.
+const BURST_SPEED: f32 = 0.16;
+const FIXED_PACE: f32 = 0.33;
 const LIFE: [i32; 2] = [10, 40];
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -378,23 +399,23 @@ impl Sparks {
         self.live = false;
     }
 
-    /// Throw a burst for shot kind `kind` (`smash`: the hitter's smash branch) from the ball at `pos` moving
+    /// Throw a burst for shot kind `shot` (`smash`: the hitter's smash branch) from the ball at `pos` moving
     /// `vel`: sparks 0..n restart, any older ones past n play on.
-    pub fn start(&mut self, kind: i32, smash: bool, pos: [f32; 4], vel: [f32; 4]) {
+    pub fn start(&mut self, shot: i32, smash: bool, pos: [f32; 4], vel: [f32; 4]) {
         self.live = true;
-        let b = &BURSTS[kind.clamp(0, 4) as usize];
+        let b = &BURSTS[shot.clamp(kind::TOPSPIN, kind::DROP) as usize];
         let [x, y, z, _] = fs(vel);
         let speed = (y * y).madd(x, x).madd(z, z).sqrt();
         let (n, offset, spread, lo, hi, size_lo, size_hi, base) = if smash || b.by_speed {
             let n = (F::ZERO + 5.0).madd(40.0, speed);
             let n = if SPARKS as f32 <= n { SPARKS } else { n.0 as usize };
-            let sp = F(f32::from_bits(0x3e23_d70a)) * speed;
+            let sp = F(BURST_SPEED) * speed;
             let lo = 0.1 + sp;
             (n, 0.5 + speed, 6.0 * speed, lo, 0.3 + sp, lo, (F::ZERO + 0.3).madd(0.5, speed), speed)
         } else {
             let [offset, spread, lo, hi, size_lo, size_hi] =
                 fs([b.offset, b.spread, b.speed[0], b.speed[1], b.size[0], b.size[1]]);
-            (SPARKS, offset, spread, lo, hi, size_lo, size_hi, F(f32::from_bits(0x3ea8_f5c3)))
+            (SPARKS, offset, spread, lo, hi, size_lo, size_hi, F(FIXED_PACE))
         };
         let (range, size_range) = (hi - lo, size_hi - size_lo);
         let mut m = impact_matrix(vel, [pos[0], pos[1], pos[2]]);
@@ -441,6 +462,8 @@ impl Sparks {
 /// A swing's trail: two points along the racket (its y axis at 0.47 and 0.93 from the grip) sampled every frame of
 /// the swing, drawn as a ribbon fading in and out, swept by a B-spline whose tail catches up with the racket.
 pub const TRAIL_POINTS: usize = 120;
+/// The soft follow-throughs a swing may turn into without ending its trail (`motion::soft_follow`'s `f_w`, `b_w`).
+const SOFT_FOLLOWS: [i32; 2] = [0x1c, 0x1d];
 
 #[derive(Clone, Default)]
 pub struct Trail {
@@ -475,7 +498,7 @@ impl Trail {
         }
         self.life -= 1;
         // the game samples on after either end, but never draws it
-        if self.life == 0 || (motion != self.motion && !matches!(motion, 0x1c | 0x1d)) {
+        if self.life == 0 || (motion != self.motion && !SOFT_FOLLOWS.contains(&motion)) {
             self.live = false;
             return;
         }
@@ -584,9 +607,10 @@ fn spline(x: f32, p: &[[[f32; 4]; 2]]) -> [[f32; 4]; 2] {
 /// before it, or within 0.01 of the last kept one, moves the last instead), drawn in the shot kind's colour.
 pub const FLIGHT_POINTS: usize = 50;
 
-/// The ribbon colour (RGBA, 128 = full) by shot kind (top, slice, flat, lob, drop), then the smash.
+/// The ribbon colour (RGBA, 128 = full) by shot kind (`shot::kind`), then the smash ([`SMASH_COLOUR`]).
 // ponytail: the game also has a second smash colour (128, 116, 34, 128) for a mode flag the port doesn't have
 pub const FLIGHT_COLOURS: [u32; 6] = [0x3e0e7f46, 0x80300846, 0x33338046, 0x27802746, 0x800c8046, 0x757d4146];
+const SMASH_COLOUR: usize = 5;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Flight {
@@ -611,8 +635,9 @@ impl Default for Flight {
 
 impl Flight {
     /// A hit: the ribbon starts afresh in the shot's colour.
-    pub fn start(&mut self, kind: i32, smash: bool) {
-        *self = Flight { points: self.points, live: true, colour: FLIGHT_COLOURS[if smash { 5 } else { kind.clamp(0, 4) as usize }], ..Default::default() };
+    pub fn start(&mut self, shot: i32, smash: bool) {
+        let colour = FLIGHT_COLOURS[if smash { SMASH_COLOUR } else { shot.clamp(kind::TOPSPIN, kind::DROP) as usize }];
+        *self = Flight { points: self.points, live: true, colour, ..Default::default() };
     }
 
     /// One frame of the ball at `pos` moving at `vel`.
@@ -665,13 +690,18 @@ pub const GLOW_FRAMES: i32 = 30;
 #[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct Glow {
     pub life: i32,
-    /// `impactef_*` by shot kind: flat shows top's and drop shows slice's.
+    /// `impactef_*` by shot kind: flat shows topspin's and drop shows slice's.
     pub texture: usize,
 }
 
 impl Glow {
-    pub fn start(&mut self, kind: i32) {
-        *self = Glow { life: GLOW_FRAMES, texture: match kind { 2 => 0, 4 => 1, k => k.clamp(0, 4) as usize } };
+    pub fn start(&mut self, shot: i32) {
+        let texture = match shot {
+            kind::FLAT => kind::TOPSPIN,
+            kind::DROP => kind::SLICE,
+            k => k.clamp(kind::TOPSPIN, kind::DROP),
+        };
+        *self = Glow { life: GLOW_FRAMES, texture: texture as usize };
     }
 
     pub fn tick(&mut self) {
@@ -863,13 +893,14 @@ impl Bounce {
 /// The game's table sine: a quarter turn in 256 steps (sin rounded to six decimals; nine steps a millionth off),
 /// read linearly between steps.
 pub fn table_sin(x: f32) -> f32 {
+    const STEPS_PER_RADIAN: f32 = 162.974_66; // 512 / π
     static TABLE: std::sync::OnceLock<[f32; 258]> = std::sync::OnceLock::new();
     let t = TABLE.get_or_init(sin_table);
     let (sign, mut x) = if x < 0.0 { (-1.0, -F(x)) } else { (1.0, F(x)) };
     if x > std::f32::consts::FRAC_PI_2 {
         x = std::f32::consts::PI - x;
     }
-    let at = f32::from_bits(0x4322_f983) * x;
+    let at = STEPS_PER_RADIAN * x;
     let i = at.0 as i32 as usize;
     (sign * (F::ZERO + t[i]).madd(at - i as f32, F(t[i + 1]) - t[i])).0
 }
