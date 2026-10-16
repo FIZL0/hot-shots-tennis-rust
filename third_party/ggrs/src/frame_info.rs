@@ -1,0 +1,118 @@
+use crate::{Frame, NULL_FRAME};
+
+/// Represents the game state of your game for a single frame. The `data` holds the game state, `frame` indicates the associated frame number
+/// and `checksum` can additionally be provided for use during a `SyncTestSession`.
+#[derive(Debug, Clone)]
+pub(crate) struct GameState<S> {
+    /// The frame to which this info belongs to.
+    pub frame: Frame,
+    /// The game state
+    pub data: Option<S>,
+    /// The checksum of the gamestate.
+    pub checksum: Option<u128>,
+}
+
+impl<S> Default for GameState<S> {
+    fn default() -> Self {
+        Self {
+            frame: NULL_FRAME,
+            data: None,
+            checksum: None,
+        }
+    }
+}
+
+/// Represents an input for a single player in a single frame. The associated frame is denoted with `frame`.
+/// You do not need to create this struct, but the sessions will provide a `Vec<PlayerInput>` for you during `advance_frame()`.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub(crate) struct PlayerInput<I>
+where
+    I: Copy + Clone + PartialEq,
+{
+    /// The frame to which this info belongs to. -1/[`NULL_FRAME`] represents an invalid frame
+    pub frame: Frame,
+    /// The input struct given by the user
+    pub input: I,
+}
+
+impl<I: Copy + Clone + PartialEq + Default> PlayerInput<I> {
+    pub(crate) fn new(frame: Frame, input: I) -> Self {
+        Self { frame, input }
+    }
+
+    pub(crate) fn blank_input(frame: Frame) -> Self {
+        Self {
+            frame,
+            input: I::default(),
+        }
+    }
+
+    /// Returns true if only the input data matches, ignoring frame numbers.
+    pub(crate) fn input_matches(&self, other: &Self) -> bool {
+        self.input == other.input
+    }
+
+    /// Returns true if both the frame number and input data match.
+    #[cfg(test)]
+    pub(crate) fn matches_full(&self, other: &Self) -> bool {
+        self.frame == other.frame && self.input == other.input
+    }
+}
+
+// #########
+// # TESTS #
+// #########
+
+#[cfg(test)]
+mod game_input_tests {
+    use super::*;
+
+    #[repr(C)]
+    #[derive(Copy, Clone, PartialEq, Default)]
+    struct TestInput {
+        inp: u8,
+    }
+
+    #[test]
+    fn test_input_equality() {
+        let input1 = PlayerInput::new(0, TestInput { inp: 5 });
+        let input2 = PlayerInput::new(0, TestInput { inp: 5 });
+        assert!(input1.matches_full(&input2));
+    }
+
+    #[test]
+    fn test_input_equality_input_only() {
+        let input1 = PlayerInput::new(0, TestInput { inp: 5 });
+        let input2 = PlayerInput::new(5, TestInput { inp: 5 });
+        assert!(input1.input_matches(&input2)); // different frames, but does not matter
+    }
+
+    #[test]
+    fn test_input_equality_fail() {
+        let input1 = PlayerInput::new(0, TestInput { inp: 5 });
+        let input2 = PlayerInput::new(0, TestInput { inp: 7 });
+        assert!(!input1.matches_full(&input2)); // different bits
+    }
+
+    #[test]
+    fn test_input_equality_frame_mismatch_not_input_only() {
+        // same input, different frames — matches_full checks both
+        let input1 = PlayerInput::new(0, TestInput { inp: 5 });
+        let input2 = PlayerInput::new(1, TestInput { inp: 5 });
+        assert!(!input1.matches_full(&input2));
+    }
+
+    #[test]
+    fn test_blank_input() {
+        let input = PlayerInput::<TestInput>::blank_input(7);
+        assert_eq!(input.frame, 7);
+        assert_eq!(input.input.inp, 0);
+    }
+
+    #[test]
+    fn test_new_stores_frame_and_input() {
+        let input = PlayerInput::new(42, TestInput { inp: 99 });
+        assert_eq!(input.frame, 42);
+        assert_eq!(input.input.inp, 99);
+    }
+}

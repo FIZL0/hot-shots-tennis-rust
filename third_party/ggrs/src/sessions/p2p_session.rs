@@ -1,0 +1,1251 @@
+use crate::error::GgrsError;
+use crate::frame_info::PlayerInput;
+use crate::network::messages::ConnectionStatus;
+use crate::network::network_stats::NetworkStats;
+use crate::network::protocol::{UdpProtocol, MAX_CHECKSUM_HISTORY_SIZE};
+use crate::sessions::builder::MAX_EVENT_QUEUE_SIZE;
+use crate::sync_layer::SyncLayer;
+use crate::DesyncDetection;
+use crate::{
+    network::protocol::Event, Config, Frame, GgrsEvent, GgrsRequest, InputStatus,
+    NonBlockingSocket, PlayerHandle, PlayerType, SessionState, NULL_FRAME,
+};
+use tracing::{debug, trace, warn};
+
+use instant::{Duration, Instant};
+use std::collections::vec_deque::Drain;
+use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap};
+use std::convert::TryInto;
+
+const RECOMMENDATION_INTERVAL: Frame = 60;
+const MIN_RECOMMENDATION: u32 = 3;
+
+pub(crate) struct PlayerRegistry<T>
+where
+    T: Config,
+{
+    pub(crate) handles: HashMap<PlayerHandle, PlayerType<T::Address>>,
+    pub(crate) remotes: HashMap<T::Address, UdpProtocol<T>>,
+    pub(crate) spectators: HashMap<T::Address, UdpProtocol<T>>,
+}
+
+impl<T> std::fmt::Debug for PlayerRegistry<T>
+where
+    T: Config,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerRegistry")
+            .field("handles", &self.handles)
+            .field("remotes", &self.remotes.keys())
+            .field("spectators", &self.spectators.keys())
+            .finish()
+    }
+}
+
+impl<T: Config> PlayerRegistry<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            handles: HashMap::new(),
+            remotes: HashMap::new(),
+            spectators: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn local_player_handles(&self) -> Vec<PlayerHandle> {
+        self.handles
+            .iter()
+            .filter_map(|(k, v)| match v {
+                PlayerType::Local => Some(*k),
+                PlayerType::Remote(_) | PlayerType::Spectator(_) => None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn remote_player_handles(&self) -> Vec<PlayerHandle> {
+        self.handles
+            .iter()
+            .filter_map(|(k, v)| match v {
+                PlayerType::Remote(_) => Some(*k),
+                PlayerType::Local | PlayerType::Spectator(_) => None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn spectator_handles(&self) -> Vec<PlayerHandle> {
+        self.handles
+            .iter()
+            .filter_map(|(k, v)| match v {
+                PlayerType::Spectator(_) => Some(*k),
+                PlayerType::Local | PlayerType::Remote(_) => None,
+            })
+            .collect()
+    }
+
+    pub(crate) fn num_players(&self) -> usize {
+        self.handles
+            .iter()
+            .filter(|(_, v)| matches!(v, PlayerType::Local | PlayerType::Remote(_)))
+            .count()
+    }
+
+    pub(crate) fn num_spectators(&self) -> usize {
+        self.handles
+            .iter()
+            .filter(|(_, v)| matches!(v, PlayerType::Spectator(_)))
+            .count()
+    }
+
+    pub fn handles_by_address(&self, addr: T::Address) -> Vec<PlayerHandle> {
+        self.handles
+            .iter()
+            .filter_map(|(h, player_type)| match player_type {
+                PlayerType::Remote(a) | PlayerType::Spectator(a) => Some((h, a)),
+                PlayerType::Local => None,
+            })
+            .filter_map(|(h, a)| if addr == *a { Some(*h) } else { None })
+            .collect()
+    }
+}
+
+/// A [`P2PSession`] provides all functionality to connect to remote clients in a peer-to-peer fashion, exchange inputs and handle the gamestate by saving, loading and advancing.
+pub struct P2PSession<T>
+where
+    T: Config,
+{
+    /// The number of players of the session.
+    num_players: usize,
+    /// The maximum number of frames GGRS will roll back. Every gamestate older than this is guaranteed to be correct.
+    max_prediction: usize,
+    /// The sync layer handles player input queues and provides predictions.
+    sync_layer: SyncLayer<T>,
+    /// With sparse saving, the session will only request to save the minimum confirmed frame.
+    sparse_saving: bool,
+
+    /// If we receive a disconnect from another client, we have to rollback from that frame on in order to prevent wrong predictions
+    disconnect_frame: Frame,
+
+    /// Internal State of the Session.
+    state: SessionState,
+    /// Expected update frequency. Used to bound the optional lockstep wait helper.
+    fps: usize,
+
+    /// The [`P2PSession`] uses this socket to send and receive all messages for remote players.
+    socket: Box<dyn NonBlockingSocket<T::Address>>,
+    /// Handles players and their endpoints
+    player_reg: PlayerRegistry<T>,
+    /// This struct contains information about remote players, like connection status and the frame of last received input.
+    local_connect_status: Vec<ConnectionStatus>,
+
+    /// notes which inputs have already been sent to the spectators
+    next_spectator_frame: Frame,
+    /// The soonest frame on which the session can send a [`GgrsEvent::WaitRecommendation`] again.
+    next_recommended_sleep: Frame,
+    /// How many frames we estimate we are ahead of every remote client
+    frames_ahead: i32,
+
+    /// Contains all events to be forwarded to the user.
+    event_queue: VecDeque<GgrsEvent<T>>,
+    /// User-submitted inputs for the current session frame. This should have inputs for every local player before calling advance_frame.
+    pending_local_inputs: HashMap<PlayerHandle, PlayerInput<T::Input>>,
+    /// Delayed/effective local inputs accepted by the sync layer but not yet handed to the UDP endpoints.
+    outgoing_local_inputs: BTreeMap<Frame, HashMap<PlayerHandle, PlayerInput<T::Input>>>,
+    /// The newest complete outgoing local-input frame handed to the UDP endpoints.
+    last_sent_outgoing_input_frame: Frame,
+
+    /// With desync detection, the session will compare checksums for all peers to detect discrepancies / desyncs between peers
+    desync_detection: DesyncDetection,
+    /// Desync detection over the network
+    local_checksum_history: HashMap<Frame, u128>,
+    /// The last frame we sent a checksum for
+    last_sent_checksum_frame: Frame,
+}
+
+impl<T: Config> P2PSession<T> {
+    /// Creates a new [`P2PSession`] for players who participate on the game input. After creating the session, add local and remote players,
+    /// set input delay for local players and then start the session. The session will use the provided socket.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        num_players: usize,
+        max_prediction: usize,
+        socket: Box<dyn NonBlockingSocket<T::Address>>,
+        players: PlayerRegistry<T>,
+        sparse_saving: bool,
+        desync_detection: DesyncDetection,
+        input_delay: usize,
+        fps: usize,
+    ) -> Self {
+        // local connection status
+        let mut local_connect_status = Vec::new();
+        for _ in 0..num_players {
+            local_connect_status.push(ConnectionStatus::default());
+        }
+
+        // sync layer & set input delay
+        let mut sync_layer = SyncLayer::new(num_players, max_prediction);
+        for (player_handle, player_type) in &players.handles {
+            if matches!(player_type, PlayerType::Local) {
+                sync_layer.set_frame_delay(*player_handle, input_delay);
+            }
+        }
+
+        // initial session state - if there are no endpoints, we don't need a synchronization phase
+        let state = if players.remotes.len() + players.spectators.len() == 0 {
+            SessionState::Running
+        } else {
+            SessionState::Synchronizing
+        };
+
+        let sparse_saving = if max_prediction == 0 && sparse_saving {
+            // in lockstep mode, saving will never happen, but we use the last saved frame to mark
+            // control marking frames confirmed, so we need to turn off sparse saving to ensure that
+            // frames are marked as confirmed - otherwise we will never advance the game state.
+            warn!(
+                "Sparse saving setting is ignored because lockstep mode is on \
+                (max_prediction set to 0), so no saving will take place"
+            );
+            false
+        } else {
+            sparse_saving
+        };
+
+        Self {
+            state,
+            num_players,
+            max_prediction,
+            fps,
+            sparse_saving,
+            socket,
+            local_connect_status,
+            next_recommended_sleep: 0,
+            next_spectator_frame: 0,
+            frames_ahead: 0,
+            sync_layer,
+            disconnect_frame: NULL_FRAME,
+            player_reg: players,
+            event_queue: VecDeque::new(),
+            pending_local_inputs: HashMap::new(),
+            outgoing_local_inputs: BTreeMap::new(),
+            last_sent_outgoing_input_frame: NULL_FRAME,
+            desync_detection,
+            local_checksum_history: HashMap::new(),
+            last_sent_checksum_frame: NULL_FRAME,
+        }
+    }
+
+    /// Registers local input for a player for the current frame. This should be successfully called for every local player before calling [`advance_frame()`].
+    /// If this is called multiple times for the same player before advancing the frame, older given inputs will be overwritten.
+    ///
+    /// # Errors
+    /// - Returns [`InvalidRequest`] when the given handle does not refer to a local player.
+    ///
+    /// [`advance_frame()`]: Self#method.advance_frame
+    /// [`InvalidRequest`]: GgrsError::InvalidRequest
+    pub fn add_local_input(
+        &mut self,
+        player_handle: PlayerHandle,
+        input: T::Input,
+    ) -> Result<(), GgrsError> {
+        // make sure the input is for a registered local player
+        if !self
+            .player_reg
+            .local_player_handles()
+            .contains(&player_handle)
+        {
+            return Err(GgrsError::InvalidRequest {
+                info: "The player handle you provided is not referring to a local player."
+                    .to_owned(),
+            });
+        }
+        let player_input = PlayerInput::<T::Input>::new(self.sync_layer.current_frame(), input);
+        self.pending_local_inputs
+            .insert(player_handle, player_input);
+        Ok(())
+    }
+
+    /// Advance the session by one frame. Returns an order-sensitive [`Vec<GgrsRequest>`] that
+    /// must be fulfilled in exact order.
+    ///
+    /// Internally calls [`poll_remote_clients`] before doing anything else, so you do not need to
+    /// call it separately on the same tick.
+    ///
+    /// In **lockstep mode** (`max_prediction = 0`), the returned vec may contain no
+    /// `AdvanceFrame` request if remote inputs have not yet arrived — the session stalls without
+    /// consuming a game frame. Call [`poll_remote_clients`] and retry on the next tick, or use
+    /// [`advance_frame_with_wait`] to poll for a bounded amount of time before returning. Unlike
+    /// rollback mode this is not an error; it is the normal wait behaviour.
+    ///
+    /// # Errors
+    /// - Returns [`InvalidRequest`] if a local input is missing for any registered local player.
+    /// - Returns [`NotSynchronized`] if the session is not yet synchronized with remote peers.
+    /// - Returns [`PredictionThreshold`] (rollback mode only) if the remote peer is too far behind.
+    ///
+    /// [`poll_remote_clients`]: Self::poll_remote_clients
+    /// [`advance_frame_with_wait`]: Self::advance_frame_with_wait
+    /// [`Vec<GgrsRequest>`]: GgrsRequest
+    /// [`InvalidRequest`]: GgrsError::InvalidRequest
+    /// [`NotSynchronized`]: GgrsError::NotSynchronized
+    /// [`PredictionThreshold`]: GgrsError::PredictionThreshold
+    pub fn advance_frame(&mut self) -> Result<Vec<GgrsRequest<T>>, GgrsError> {
+        // receive info from remote players, trigger events and send messages
+        self.poll_remote_clients();
+        self.advance_frame_after_poll()
+    }
+
+    /// Advance the session by one frame, waiting briefly for lockstep confirmation before
+    /// returning an empty request list.
+    ///
+    /// This is only different from [`advance_frame`] in lockstep mode (`max_prediction = 0`).
+    /// If the first advance attempt stalls because the current game frame is not confirmed yet,
+    /// GGRS keeps polling the non-blocking socket until either the frame becomes confirmed or one
+    /// frame duration (derived from the session's configured FPS) has elapsed.
+    ///
+    /// In rollback mode this behaves exactly like [`advance_frame`].
+    ///
+    /// [`advance_frame`]: Self::advance_frame
+    pub fn advance_frame_with_wait(&mut self) -> Result<Vec<GgrsRequest<T>>, GgrsError> {
+        let micros = (1_000_000_u64 / self.fps as u64).max(1);
+        self.advance_frame_with_wait_timeout(Duration::from_micros(micros))
+    }
+
+    /// Advance the session by one frame, waiting up to `timeout` for lockstep confirmation.
+    ///
+    /// This helper makes the lockstep wait explicit. It may spin-poll for up to `timeout`, so use
+    /// it only when a short bounded wait is appropriate for your platform and game loop. Passing a
+    /// zero timeout is equivalent to [`advance_frame`].
+    ///
+    /// [`advance_frame`]: Self::advance_frame
+    pub fn advance_frame_with_wait_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Vec<GgrsRequest<T>>, GgrsError> {
+        self.poll_remote_clients();
+        let requests = self.advance_frame_after_poll()?;
+
+        if !self.in_lockstep_mode() || !requests.is_empty() || timeout == Duration::from_micros(0) {
+            return Ok(requests);
+        }
+
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            self.poll_remote_clients();
+            if self.lockstep_current_frame_confirmed() {
+                return self.advance_frame_after_poll();
+            }
+            Self::yield_lockstep_wait();
+        }
+
+        Ok(requests)
+    }
+
+    fn advance_frame_after_poll(&mut self) -> Result<Vec<GgrsRequest<T>>, GgrsError> {
+        // session is not running and synchronized
+        if self.state != SessionState::Running {
+            trace!("Session not synchronized; returning error");
+            return Err(GgrsError::NotSynchronized);
+        }
+
+        // check if input for all local players is queued
+        for handle in self.player_reg.local_player_handles() {
+            if !self.pending_local_inputs.contains_key(&handle) {
+                return Err(GgrsError::InvalidRequest {
+                    info: format!(
+                        "Missing local input for handle {handle} while calling advance_frame()."
+                    ),
+                });
+            }
+        }
+
+        /*
+         *  DESYNC DETECTION
+         */
+        // Collect, send, compare and check the last checksums against the other peers. The timing
+        // of this is important: since the checksum comparison looks at the current confirmed frame,
+        // (and the sync layer will happily mark a frame as confirmed after requesting rollback and
+        // resimulation of it, at which point that frame's new checksum will not be stored yet), we
+        // must examine our checksum state *before* the sync layer is able to mark any frames as
+        // confirmed.
+        if self.desync_detection != DesyncDetection::Off {
+            self.check_checksum_send_interval();
+            self.compare_local_checksums_against_peers();
+        }
+
+        // This list of requests will be returned to the user
+        let mut requests = Vec::new();
+
+        /*
+         * ROLLBACKS AND GAME STATE MANAGEMENT
+         */
+
+        // if in lockstep mode, we will only ever request to advance the frame when all inputs for
+        // the current frame have been confirmed; therefore there's no need to roll back, and hence
+        // no need to ever save the game state either.
+        let lockstep = self.in_lockstep_mode();
+
+        // if we are in the first frame, we have to save the state
+        if self.sync_layer.current_frame() == 0 && !lockstep {
+            trace!("Saving state of first frame");
+            requests.push(self.sync_layer.save_current_state());
+        }
+
+        // propagate disconnects to multiple players
+        self.update_player_disconnects();
+
+        if lockstep {
+            self.advance_lockstep_frame(&mut requests);
+        } else {
+            self.advance_rollback_frame(&mut requests);
+        }
+
+        /*
+         *  WAIT RECOMMENDATION
+         */
+
+        // check time sync between clients and send wait recommendation, if appropriate
+        self.check_wait_recommendation();
+
+        Ok(requests)
+    }
+
+    /// Should be called periodically by your application to give GGRS a chance to do internal work.
+    /// GGRS will receive packets, distribute them to corresponding endpoints, handle all occurring events and send all outgoing packets.
+    pub fn poll_remote_clients(&mut self) {
+        // Get all packets and distribute them to associated endpoints.
+        // The endpoints will handle their packets, which will trigger both events and UPD replies.
+        for (from_addr, msg) in &self.socket.receive_all_messages() {
+            if let Some(endpoint) = self.player_reg.remotes.get_mut(from_addr) {
+                endpoint.handle_message(msg);
+            }
+            if let Some(endpoint) = self.player_reg.spectators.get_mut(from_addr) {
+                endpoint.handle_message(msg);
+            }
+        }
+
+        // update frame information between remote players
+        for remote_endpoint in self.player_reg.remotes.values_mut() {
+            if remote_endpoint.is_running() {
+                remote_endpoint.update_local_frame_advantage(self.sync_layer.current_frame());
+            }
+        }
+
+        // run endpoint poll and get events from players and spectators. This will trigger additional packets to be sent.
+        let mut events = VecDeque::new();
+        for endpoint in self.player_reg.remotes.values_mut() {
+            let polled: Vec<_> = endpoint.poll(&self.local_connect_status).collect();
+            for event in polled {
+                events.push_back((event, endpoint.handles().clone(), endpoint.peer_addr()));
+            }
+        }
+        for endpoint in self.player_reg.spectators.values_mut() {
+            let polled: Vec<_> = endpoint.poll(&self.local_connect_status).collect();
+            for event in polled {
+                events.push_back((event, endpoint.handles().clone(), endpoint.peer_addr()));
+            }
+        }
+
+        // handle all events locally
+        for (event, handles, addr) in events {
+            self.handle_event(event, handles, addr);
+        }
+
+        // send all queued packets
+        for endpoint in self.player_reg.remotes.values_mut() {
+            endpoint.send_all_messages(&mut self.socket);
+        }
+        for endpoint in self.player_reg.spectators.values_mut() {
+            endpoint.send_all_messages(&mut self.socket);
+        }
+    }
+
+    /// Disconnects a remote player and all other remote players with the same address from the session.
+    /// # Errors
+    /// - Returns [`InvalidRequest`] if you try to disconnect a local player or the provided handle is invalid.
+    ///
+    /// [`InvalidRequest`]: GgrsError::InvalidRequest
+    pub fn disconnect_player(&mut self, player_handle: PlayerHandle) -> Result<(), GgrsError> {
+        match self.player_reg.handles.get(&player_handle) {
+            // the local player cannot be disconnected
+            None => Err(GgrsError::InvalidRequest {
+                info: "Invalid Player Handle.".to_owned(),
+            }),
+            Some(PlayerType::Local) => Err(GgrsError::InvalidRequest {
+                info: "Local Player cannot be disconnected.".to_owned(),
+            }),
+            // a remote player can only be disconnected if not already disconnected, since there is some additional logic attached
+            Some(PlayerType::Remote(_)) => {
+                if !self.local_connect_status[player_handle].disconnected {
+                    let last_frame = self.local_connect_status[player_handle].last_frame;
+                    self.disconnect_player_at_frame(player_handle, last_frame);
+                    return Ok(());
+                }
+                Err(GgrsError::InvalidRequest {
+                    info: "Player already disconnected.".to_owned(),
+                })
+            }
+            // disconnecting spectators is simpler
+            Some(PlayerType::Spectator(_)) => {
+                self.disconnect_player_at_frame(player_handle, NULL_FRAME);
+                Ok(())
+            }
+        }
+    }
+
+    /// Changes the input delay for a local player. This can be called at any point during a session.
+    ///
+    /// When decreasing delay, inputs that fall inside the now-removed frames are dropped.
+    /// When increasing delay, the last known input is replicated to fill the created gap.
+    ///
+    /// # Errors
+    /// - Returns [`InvalidRequest`] if the handle does not refer to a local player.
+    ///
+    /// [`InvalidRequest`]: GgrsError::InvalidRequest
+    pub fn set_input_delay(
+        &mut self,
+        player_handle: PlayerHandle,
+        delay: usize,
+    ) -> Result<(), GgrsError> {
+        match self.player_reg.handles.get(&player_handle) {
+            Some(PlayerType::Local) => {
+                let fills = self.sync_layer.set_frame_delay(player_handle, delay);
+
+                // When delay increases, the InputQueue silently replicates the last input to fill
+                // the gap. Send those fill inputs to remote peers so they see consecutive frames.
+                for fill_input in fills {
+                    if fill_input.frame != NULL_FRAME {
+                        self.local_connect_status[player_handle].last_frame = fill_input.frame;
+                        self.queue_outgoing_local_input(player_handle, fill_input);
+                    }
+                }
+                self.send_ready_outgoing_inputs_to_remotes();
+
+                Ok(())
+            }
+            Some(PlayerType::Remote(_) | PlayerType::Spectator(_)) => {
+                Err(GgrsError::InvalidRequest {
+                    info: "Cannot set input delay for a remote player or spectator.".to_owned(),
+                })
+            }
+            None => Err(GgrsError::InvalidRequest {
+                info: "Invalid player handle.".to_owned(),
+            }),
+        }
+    }
+
+    /// Returns a [`NetworkStats`] struct that gives information about the quality of the network connection.
+    /// # Errors
+    /// - Returns [`InvalidRequest`] if the handle is not referring to a remote player or spectator.
+    /// - Returns [`NotSynchronized`] if the endpoint has not yet started connecting.
+    /// - Returns [`NotEnoughData`] if less than one second has elapsed since the connection was
+    ///   established. The session may already be [`Running`]; retry after a short delay.
+    ///
+    /// [`InvalidRequest`]: GgrsError::InvalidRequest
+    /// [`NotSynchronized`]: GgrsError::NotSynchronized
+    /// [`NotEnoughData`]: GgrsError::NotEnoughData
+    /// [`Running`]: crate::SessionState::Running
+    pub fn network_stats(&self, player_handle: PlayerHandle) -> Result<NetworkStats, GgrsError> {
+        match self.player_reg.handles.get(&player_handle) {
+            Some(PlayerType::Remote(addr)) => self
+                .player_reg
+                .remotes
+                .get(addr)
+                .expect("Endpoint should exist for any registered player")
+                .network_stats(),
+            Some(PlayerType::Spectator(addr)) => self
+                .player_reg
+                .spectators
+                .get(addr)
+                .expect("Endpoint should exist for any registered player")
+                .network_stats(),
+            _ => Err(GgrsError::InvalidRequest {
+                info: "Given player handle not referring to a remote player or spectator"
+                    .to_owned(),
+            }),
+        }
+    }
+
+    /// Returns the highest confirmed frame. We have received all input for this frame and it is thus correct.
+    pub fn confirmed_frame(&self) -> Frame {
+        let mut confirmed_frame = i32::MAX;
+
+        for con_stat in &self.local_connect_status {
+            if !con_stat.disconnected {
+                confirmed_frame = std::cmp::min(confirmed_frame, con_stat.last_frame);
+            }
+        }
+
+        assert!(confirmed_frame < i32::MAX);
+        confirmed_frame
+    }
+
+    fn lockstep_current_frame_confirmed(&self) -> bool {
+        self.confirmed_frame() >= self.sync_layer.current_frame()
+    }
+
+    fn yield_lockstep_wait() {
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::yield_now();
+    }
+
+    /// Returns the current frame of a session.
+    pub fn current_frame(&self) -> Frame {
+        self.sync_layer.current_frame()
+    }
+
+    /// Returns the maximum prediction window of a session.
+    pub fn max_prediction(&self) -> usize {
+        self.max_prediction
+    }
+
+    /// Returns true if the session is running in lockstep mode.
+    ///
+    /// In lockstep mode, a session will only advance if the current frame has inputs confirmed from
+    /// all other players.
+    pub fn in_lockstep_mode(&self) -> bool {
+        self.max_prediction == 0
+    }
+
+    /// Returns the current [`SessionState`] of a session.
+    pub fn current_state(&self) -> SessionState {
+        self.state
+    }
+
+    /// Returns all events that happened since last queried for events. If the number of stored events exceeds `MAX_EVENT_QUEUE_SIZE`, the oldest events will be discarded.
+    pub fn events(&mut self) -> Drain<'_, GgrsEvent<T>> {
+        self.event_queue.drain(..)
+    }
+
+    /// Returns the number of players added to this session
+    pub fn num_players(&self) -> usize {
+        self.player_reg.num_players()
+    }
+
+    /// Return the number of spectators currently registered
+    pub fn num_spectators(&self) -> usize {
+        self.player_reg.num_spectators()
+    }
+
+    fn register_local_inputs(&mut self) {
+        for handle in self.player_reg.local_player_handles() {
+            let player_input = *self
+                .pending_local_inputs
+                .get(&handle)
+                .expect("Missing local input while calling advance_frame().");
+            let actual_frame = self.sync_layer.add_local_input(handle, player_input);
+            if actual_frame != NULL_FRAME {
+                let queued_input = PlayerInput::new(actual_frame, player_input.input);
+                self.local_connect_status[handle].last_frame = queued_input.frame;
+                self.queue_outgoing_local_input(handle, queued_input);
+            }
+        }
+        self.send_ready_outgoing_inputs_to_remotes();
+    }
+
+    fn queue_outgoing_local_input(
+        &mut self,
+        player_handle: PlayerHandle,
+        input: PlayerInput<T::Input>,
+    ) {
+        assert_ne!(input.frame, NULL_FRAME);
+        // No remote peers means no one to send to; skip queuing to prevent unbounded growth.
+        if self.player_reg.remotes.is_empty() {
+            return;
+        }
+        self.outgoing_local_inputs
+            .entry(input.frame)
+            .or_default()
+            .insert(player_handle, input);
+    }
+
+    fn send_ready_outgoing_inputs_to_remotes(&mut self) {
+        if self.player_reg.remotes.is_empty() {
+            return;
+        }
+
+        let local_handles = self.player_reg.local_player_handles();
+        if local_handles.is_empty() {
+            return;
+        }
+
+        while let Some(frame_to_send) = self.next_complete_outgoing_input_frame(&local_handles) {
+            let inputs = self
+                .outgoing_local_inputs
+                .remove(&frame_to_send)
+                .expect("complete outgoing input frame should still be queued");
+
+            for endpoint in self.player_reg.remotes.values_mut() {
+                endpoint.send_input(&inputs, &self.local_connect_status);
+                endpoint.send_all_messages(&mut self.socket);
+            }
+
+            self.last_sent_outgoing_input_frame = frame_to_send;
+        }
+    }
+
+    fn next_complete_outgoing_input_frame(&self, local_handles: &[PlayerHandle]) -> Option<Frame> {
+        if self.last_sent_outgoing_input_frame == NULL_FRAME {
+            // Nothing sent yet: find the first frame that has inputs from all local players.
+            // We scan rather than assuming the first key is complete, because players with
+            // different input delays may leave earlier frame slots incomplete.
+            return self
+                .outgoing_local_inputs
+                .iter()
+                .find(|(_, inputs)| {
+                    local_handles
+                        .iter()
+                        .all(|handle| inputs.contains_key(handle))
+                })
+                .map(|(&frame, _)| frame);
+        }
+
+        let next_frame = self.last_sent_outgoing_input_frame + 1;
+        let inputs = self.outgoing_local_inputs.get(&next_frame)?;
+        if local_handles
+            .iter()
+            .all(|handle| inputs.contains_key(handle))
+        {
+            Some(next_frame)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the handles of local players that have been added
+    pub fn local_player_handles(&self) -> Vec<PlayerHandle> {
+        self.player_reg.local_player_handles()
+    }
+
+    /// Returns the handles of remote players that have been added
+    pub fn remote_player_handles(&self) -> Vec<PlayerHandle> {
+        self.player_reg.remote_player_handles()
+    }
+
+    /// Returns the handles of spectators that have been added
+    pub fn spectator_handles(&self) -> Vec<PlayerHandle> {
+        self.player_reg.spectator_handles()
+    }
+
+    /// Returns all handles associated to a certain address
+    pub fn handles_by_address(&self, addr: T::Address) -> Vec<PlayerHandle> {
+        self.player_reg.handles_by_address(addr)
+    }
+
+    /// Returns the number of frames this session is estimated to be ahead of other sessions
+    pub fn frames_ahead(&self) -> i32 {
+        self.frames_ahead
+    }
+
+    /// Returns the [`DesyncDetection`] mode set for this session at creation time.
+    pub fn desync_detection(&self) -> DesyncDetection {
+        self.desync_detection
+    }
+
+    fn disconnect_player_at_frame(&mut self, player_handle: PlayerHandle, last_frame: Frame) {
+        // disconnect the remote player
+        match self
+            .player_reg
+            .handles
+            .get(&player_handle)
+            .expect("Invalid player handle")
+        {
+            PlayerType::Remote(addr) => {
+                let endpoint = self
+                    .player_reg
+                    .remotes
+                    .get_mut(addr)
+                    .expect("There should be no address without registered endpoint");
+
+                // mark the affected players as disconnected
+                for &handle in endpoint.handles() {
+                    self.local_connect_status[handle].disconnected = true;
+                }
+                endpoint.disconnect();
+
+                if self.sync_layer.current_frame() > last_frame {
+                    // remember to adjust simulation to account for the fact that the player disconnected a few frames ago,
+                    // resimulating with correct disconnect flags (to account for user having some AI kick in).
+                    self.disconnect_frame = last_frame + 1;
+                }
+            }
+            PlayerType::Spectator(addr) => {
+                let endpoint = self
+                    .player_reg
+                    .spectators
+                    .get_mut(addr)
+                    .expect("There should be no address without registered endpoint");
+                endpoint.disconnect();
+            }
+            PlayerType::Local => (),
+        }
+
+        // check if all remotes are synchronized now
+        self.check_initial_sync();
+    }
+
+    /// Change the session state to [`SessionState::Running`] if all UDP endpoints are synchronized.
+    fn check_initial_sync(&mut self) {
+        // if we are not synchronizing, we don't need to do anything
+        if self.state != SessionState::Synchronizing {
+            return;
+        }
+
+        // if any endpoint is not synchronized, we continue synchronizing
+        for endpoint in self.player_reg.remotes.values_mut() {
+            if !endpoint.is_synchronized() {
+                return;
+            }
+        }
+        for endpoint in self.player_reg.spectators.values_mut() {
+            if !endpoint.is_synchronized() {
+                return;
+            }
+        }
+
+        // everyone is synchronized, so we can change state and accept input
+        self.state = SessionState::Running;
+    }
+
+    /// Lockstep advance: local delayed input is sent, but the game frame only steps when all
+    /// players have confirmed the current game frame. No prediction occurs, and the sync frame
+    /// remains the public game frame.
+    fn advance_lockstep_frame(&mut self, requests: &mut Vec<GgrsRequest<T>>) {
+        self.register_local_inputs();
+
+        let game_frame = self.sync_layer.current_frame();
+        if self.lockstep_current_frame_confirmed() {
+            let inputs = self
+                .sync_layer
+                .confirmed_inputs(game_frame, &self.local_connect_status)
+                .into_iter()
+                .enumerate()
+                .map(|(handle, pi)| {
+                    debug_assert_eq!(
+                        pi.frame == NULL_FRAME,
+                        self.local_connect_status[handle].disconnected
+                            && self.local_connect_status[handle].last_frame < game_frame,
+                        "confirmed_inputs returned NULL_FRAME for a connected player or \
+                         a real frame for a disconnected player (handle {handle})"
+                    );
+                    if pi.frame == NULL_FRAME {
+                        (pi.input, InputStatus::Disconnected)
+                    } else {
+                        (pi.input, InputStatus::Confirmed)
+                    }
+                })
+                .collect();
+            self.sync_layer.advance_frame();
+            self.pending_local_inputs.clear();
+            requests.push(GgrsRequest::AdvanceFrame { inputs });
+        } else {
+            debug!(
+                "Lockstep stall: waiting for confirmation of frame {} (confirmed up to {})",
+                game_frame,
+                self.confirmed_frame(),
+            );
+        }
+
+        let consumed_frame = self.sync_layer.current_frame() - 1;
+        let bookkeeping_frame = std::cmp::min(self.confirmed_frame(), consumed_frame);
+        self.send_confirmed_inputs_to_spectators(bookkeeping_frame);
+        self.sync_layer
+            .set_last_confirmed_frame(bookkeeping_frame, self.sparse_saving);
+    }
+
+    /// Rollback advance: inputs are predicted and corrected on mismatch. The session may run
+    /// up to `max_prediction` frames ahead of the last confirmed frame.
+    /// NULL_FRAME for `last_confirmed_frame` is treated as 0 frames ahead so prediction can
+    /// start immediately from frame 0 without any prior confirmation.
+    fn advance_rollback_frame(&mut self, requests: &mut Vec<GgrsRequest<T>>) {
+        // find the confirmed frame for which we received all inputs
+        let confirmed_frame = self.confirmed_frame();
+
+        // check game consistency and roll back, if necessary
+        self.handle_rollback_and_save(confirmed_frame, requests);
+
+        // send confirmed inputs to spectators before throwing them away
+        self.send_confirmed_inputs_to_spectators(confirmed_frame);
+
+        // set the last confirmed frame and discard all saved inputs before that frame
+        self.sync_layer
+            .set_last_confirmed_frame(confirmed_frame, self.sparse_saving);
+
+        self.register_local_inputs();
+
+        let frames_ahead = if self.sync_layer.last_confirmed_frame() == NULL_FRAME {
+            self.sync_layer.current_frame()
+        } else {
+            self.sync_layer.current_frame() - self.sync_layer.last_confirmed_frame()
+        };
+        if frames_ahead < self.max_prediction as i32 {
+            let inputs = self
+                .sync_layer
+                .synchronized_inputs(&self.local_connect_status);
+            self.sync_layer.advance_frame();
+            self.pending_local_inputs.clear();
+            requests.push(GgrsRequest::AdvanceFrame { inputs });
+        } else {
+            debug!(
+                "Prediction Threshold reached. Skipping on frame {}",
+                self.sync_layer.current_frame()
+            );
+        }
+    }
+
+    /// Roll back to `min_confirmed` frame and resimulate the game with most up-to-date input data.
+    fn handle_rollback_and_save(
+        &mut self,
+        confirmed_frame: Frame,
+        requests: &mut Vec<GgrsRequest<T>>,
+    ) {
+        let first_incorrect = self
+            .sync_layer
+            .check_simulation_consistency(self.disconnect_frame);
+        if first_incorrect != NULL_FRAME {
+            self.adjust_gamestate(first_incorrect, confirmed_frame, requests);
+            self.disconnect_frame = NULL_FRAME;
+        }
+
+        let last_saved = self.sync_layer.last_saved_frame();
+        if self.sparse_saving {
+            self.check_last_saved_state(last_saved, confirmed_frame, requests);
+        } else {
+            requests.push(self.sync_layer.save_current_state());
+        }
+    }
+
+    fn adjust_gamestate(
+        &mut self,
+        first_incorrect: Frame,
+        min_confirmed: Frame,
+        requests: &mut Vec<GgrsRequest<T>>,
+    ) {
+        let current_frame = self.sync_layer.current_frame();
+        // determine the frame to load
+        let frame_to_load = if self.sparse_saving {
+            // if sparse saving is turned on, we will rollback to the last saved state
+            self.sync_layer.last_saved_frame()
+        } else {
+            // otherwise, we will rollback to first_incorrect
+            first_incorrect
+        };
+
+        // we should always load a frame that is before or exactly the first incorrect frame
+        assert!(frame_to_load <= first_incorrect);
+        let count = current_frame - frame_to_load;
+
+        // request to load that frame
+        debug!(
+            "Pushing request to load frame {} (current frame {})",
+            frame_to_load, current_frame
+        );
+        requests.push(self.sync_layer.load_frame(frame_to_load));
+
+        // we are now at the desired frame
+        assert_eq!(self.sync_layer.current_frame(), frame_to_load);
+        self.sync_layer.reset_prediction();
+
+        // step forward to the previous current state, but with updated inputs
+        for i in 0..count {
+            let inputs = self
+                .sync_layer
+                .synchronized_inputs(&self.local_connect_status);
+
+            // decide whether to request a state save
+            if self.sparse_saving {
+                // with sparse saving, we only save exactly the min_confirmed frame
+                if self.sync_layer.current_frame() == min_confirmed {
+                    requests.push(self.sync_layer.save_current_state());
+                }
+            } else {
+                // without sparse saving, we save every state except the very first (just loaded that))
+                if i > 0 {
+                    requests.push(self.sync_layer.save_current_state());
+                }
+            }
+
+            // advance the frame
+            self.sync_layer.advance_frame();
+            requests.push(GgrsRequest::AdvanceFrame { inputs });
+        }
+        // after all this, we should have arrived at the same frame where we started
+        assert_eq!(self.sync_layer.current_frame(), current_frame);
+    }
+
+    /// For each spectator, send all confirmed input up until the minimum confirmed frame.
+    fn send_confirmed_inputs_to_spectators(&mut self, confirmed_frame: Frame) {
+        if self.num_spectators() == 0 {
+            return;
+        }
+
+        while self.next_spectator_frame <= confirmed_frame {
+            let mut inputs = self
+                .sync_layer
+                .confirmed_inputs(self.next_spectator_frame, &self.local_connect_status);
+            assert_eq!(inputs.len(), self.num_players);
+
+            let mut input_map = HashMap::new();
+            for (handle, input) in inputs.iter_mut().enumerate() {
+                assert!(input.frame == NULL_FRAME || input.frame == self.next_spectator_frame);
+                input_map.insert(handle, *input);
+            }
+
+            // send it to all spectators
+            for endpoint in self.player_reg.spectators.values_mut() {
+                if endpoint.is_running() {
+                    endpoint.send_input(&input_map, &self.local_connect_status);
+                    endpoint.send_all_messages(&mut self.socket);
+                }
+            }
+
+            // onto the next frame
+            self.next_spectator_frame += 1;
+        }
+    }
+
+    /// Check if players are registered as disconnected for earlier frames on other remote players in comparison to our local assumption.
+    /// Disconnect players that are disconnected for other players and update the frame they disconnected
+    fn update_player_disconnects(&mut self) {
+        for handle in 0..self.num_players {
+            let mut queue_connected = true;
+            let mut queue_min_confirmed = i32::MAX;
+
+            // check all player connection status for every remote player
+            for endpoint in self.player_reg.remotes.values() {
+                if !endpoint.is_running() {
+                    continue;
+                }
+                let con_status = endpoint.peer_connect_status(handle);
+                let connected = !con_status.disconnected;
+                let min_confirmed = con_status.last_frame;
+
+                queue_connected = queue_connected && connected;
+                queue_min_confirmed = std::cmp::min(queue_min_confirmed, min_confirmed);
+            }
+
+            // check our local info for that player
+            let local_connected = !self.local_connect_status[handle].disconnected;
+            let local_min_confirmed = self.local_connect_status[handle].last_frame;
+
+            if local_connected {
+                queue_min_confirmed = std::cmp::min(queue_min_confirmed, local_min_confirmed);
+            }
+
+            if !queue_connected {
+                // check to see if the remote disconnect is further back than we have disconnected that player.
+                // If so, we need to re-adjust. This can happen when we e.g. detect our own disconnect at frame n
+                // and later receive a disconnect notification for frame n-1.
+                if local_connected || local_min_confirmed > queue_min_confirmed {
+                    self.disconnect_player_at_frame(handle as PlayerHandle, queue_min_confirmed);
+                }
+            }
+        }
+    }
+
+    /// Gather average frame advantage from each remote player endpoint and return the maximum.
+    fn max_frame_advantage(&self) -> i32 {
+        let mut interval = i32::MIN;
+        for endpoint in self.player_reg.remotes.values() {
+            for &handle in endpoint.handles() {
+                if !self.local_connect_status[handle].disconnected {
+                    interval = std::cmp::max(interval, endpoint.average_frame_advantage());
+                }
+            }
+        }
+
+        // if no remote player is connected
+        if interval == i32::MIN {
+            interval = 0;
+        }
+
+        interval
+    }
+
+    fn check_wait_recommendation(&mut self) {
+        self.frames_ahead = self.max_frame_advantage();
+        if self.sync_layer.current_frame() > self.next_recommended_sleep
+            && self.frames_ahead >= MIN_RECOMMENDATION as i32
+        {
+            self.next_recommended_sleep = self.sync_layer.current_frame() + RECOMMENDATION_INTERVAL;
+            self.event_queue.push_back(GgrsEvent::WaitRecommendation {
+                skip_frames: self
+                    .frames_ahead
+                    .try_into()
+                    .expect("frames ahead is negative despite being positive."),
+            });
+        }
+    }
+
+    fn check_last_saved_state(
+        &mut self,
+        last_saved: Frame,
+        confirmed_frame: Frame,
+        requests: &mut Vec<GgrsRequest<T>>,
+    ) {
+        // in sparse saving mode, we need to make sure not to lose the last saved frame
+        if self.sync_layer.current_frame() - last_saved >= self.max_prediction as i32 {
+            // check if the current frame is confirmed, otherwise we need to roll back
+            if confirmed_frame >= self.sync_layer.current_frame() {
+                // the current frame is confirmed, save it
+                requests.push(self.sync_layer.save_current_state());
+            } else {
+                // roll back to the last saved state, resimulate and save on the way
+                self.adjust_gamestate(last_saved, confirmed_frame, requests);
+            }
+
+            // after all this, we should have saved the confirmed state
+            assert!(
+                confirmed_frame == NULL_FRAME
+                    || self.sync_layer.last_saved_frame()
+                        == std::cmp::min(confirmed_frame, self.sync_layer.current_frame())
+            );
+        }
+    }
+
+    /// Handle events received from the UDP endpoints. Most events are being forwarded to the user for notification, but some require action.
+    fn handle_event(
+        &mut self,
+        event: Event<T>,
+        player_handles: Vec<PlayerHandle>,
+        addr: T::Address,
+    ) {
+        match event {
+            // forward to user
+            Event::Synchronizing { total, count } => {
+                self.event_queue
+                    .push_back(GgrsEvent::Synchronizing { addr, total, count });
+            }
+            // forward to user
+            Event::NetworkInterrupted { disconnect_timeout } => {
+                self.event_queue.push_back(GgrsEvent::NetworkInterrupted {
+                    addr,
+                    disconnect_timeout,
+                });
+            }
+            // forward to user
+            Event::NetworkResumed => {
+                self.event_queue
+                    .push_back(GgrsEvent::NetworkResumed { addr });
+            }
+            // check if all remotes are synced, then forward to user
+            Event::Synchronized => {
+                self.check_initial_sync();
+                self.event_queue.push_back(GgrsEvent::Synchronized { addr });
+            }
+            // disconnect the player, then forward to user
+            Event::Disconnected => {
+                for handle in player_handles {
+                    let last_frame = if handle < self.num_players as PlayerHandle {
+                        self.local_connect_status[handle].last_frame
+                    } else {
+                        NULL_FRAME // spectator
+                    };
+
+                    self.disconnect_player_at_frame(handle, last_frame);
+                }
+
+                self.event_queue.push_back(GgrsEvent::Disconnected { addr });
+            }
+            // add the input and all associated information
+            Event::Input { input, player } => {
+                // input only comes from remote players, not spectators
+                assert!(player < self.num_players as PlayerHandle);
+                if !self.local_connect_status[player].disconnected {
+                    // check if the input comes in the correct sequence
+                    let current_remote_frame = self.local_connect_status[player].last_frame;
+                    assert!(
+                        current_remote_frame == NULL_FRAME
+                            || current_remote_frame + 1 == input.frame
+                    );
+                    // update our info
+                    self.local_connect_status[player].last_frame = input.frame;
+                    // add the remote input
+                    self.sync_layer.add_remote_input(player, input);
+                }
+            }
+        }
+
+        // check event queue size and discard oldest events if too big
+        while self.event_queue.len() > MAX_EVENT_QUEUE_SIZE {
+            self.event_queue.pop_front();
+        }
+    }
+
+    fn compare_local_checksums_against_peers(&mut self) {
+        match self.desync_detection {
+            DesyncDetection::On { .. } => {
+                for remote in self.player_reg.remotes.values_mut() {
+                    let mut checked_frames = Vec::new();
+
+                    for (&remote_frame, &remote_checksum) in &remote.pending_checksums {
+                        if remote_frame >= self.sync_layer.last_confirmed_frame() {
+                            // we're still waiting for inputs for this frame
+                            continue;
+                        }
+                        if let Some(&local_checksum) =
+                            self.local_checksum_history.get(&remote_frame)
+                        {
+                            if local_checksum != remote_checksum {
+                                self.event_queue.push_back(GgrsEvent::DesyncDetected {
+                                    frame: remote_frame,
+                                    local_checksum,
+                                    remote_checksum,
+                                    addr: remote.peer_addr(),
+                                });
+                            }
+                            checked_frames.push(remote_frame);
+                        }
+                    }
+
+                    for frame in checked_frames {
+                        remote.pending_checksums.remove_entry(&frame);
+                    }
+                }
+            }
+            DesyncDetection::Off => (),
+        }
+    }
+
+    fn check_checksum_send_interval(&mut self) {
+        match self.desync_detection {
+            DesyncDetection::On { interval } => {
+                let frame_to_send = if self.last_sent_checksum_frame == NULL_FRAME {
+                    interval as i32
+                } else {
+                    self.last_sent_checksum_frame + interval as i32
+                };
+
+                if frame_to_send <= self.sync_layer.last_confirmed_frame() {
+                    let Some(cell) =
+                        self.sync_layer
+                            .saved_state_by_frame(frame_to_send)
+                            .or_else(|| {
+                                self.sync_layer.latest_saved_state_in_range(
+                                    frame_to_send,
+                                    self.sync_layer.last_confirmed_frame(),
+                                )
+                            })
+                    else {
+                        return;
+                    };
+
+                    if let Some(checksum) = cell.checksum() {
+                        let checksum_frame = cell.frame();
+                        for remote in self.player_reg.remotes.values_mut() {
+                            remote.send_checksum_report(checksum_frame, checksum);
+                        }
+                        self.last_sent_checksum_frame = checksum_frame;
+                        // collect locally for later comparison
+                        self.local_checksum_history.insert(checksum_frame, checksum);
+
+                        if self.local_checksum_history.len() > MAX_CHECKSUM_HISTORY_SIZE {
+                            let oldest_frame_to_keep = checksum_frame
+                                - (MAX_CHECKSUM_HISTORY_SIZE as i32 - 1) * interval as i32;
+                            self.local_checksum_history
+                                .retain(|&frame, _| frame >= oldest_frame_to_keep);
+                        }
+                    }
+                }
+            }
+            DesyncDetection::Off => (),
+        }
+    }
+}
