@@ -96,6 +96,9 @@
 #disc .progress { height: 18px; margin-top: .8em; border: 3px solid var(--ink); border-radius: 999px; background: #eee; overflow: hidden; }
 #disc .progress[hidden] { display: none; }
 #disc .progress i { display: block; height: 100%; width: 0; background: repeating-linear-gradient(-45deg, var(--green-hi) 0 10px, var(--green) 10px 20px); transition: width .2s; }
+#disc .progress.busy i { width: 30% !important; transition: none; animation: busy 1.2s ease-in-out infinite alternate; }
+@keyframes busy { from { margin-left: 0; } to { margin-left: 70%; } }
+@media (prefers-reduced-motion: reduce) { #disc .progress.busy i { animation: none; width: 100% !important; opacity: .4; } }
 #disc #status { min-height: 1.5em; font-weight: 700; }
 #disc #status.err { color: #b3261e; }
 #disc ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: grid; gap: .8em; }

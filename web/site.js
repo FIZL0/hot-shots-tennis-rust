@@ -89,12 +89,15 @@ function importer(done, dir) {
     input.value = '';
     if (!file) return;
     status.className = '';
-    status.textContent = `Importing ${file.name}…`;
+    // B466: iOS fetches an iCloud file before the worker's first read returns; nothing to count until then
+    status.textContent = `Reading ${file.name}…`;
     bar.hidden = false;
+    bar.classList.add('busy');
     fill.style.width = '0';
     const w = new Worker('./worker.js', { type: 'module' });
     w.onmessage = ({ data }) => {
       if (data.progress) {
+        bar.classList.remove('busy');
         const p = Math.floor(100 * data.progress[0] / data.progress[1]);
         fill.style.width = `${p}%`;
         status.textContent = `Importing… ${p}%`;
