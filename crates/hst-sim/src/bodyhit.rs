@@ -7,18 +7,29 @@
 //! 5-frame fade).
 #![deny(clippy::float_arithmetic)]
 
+use crate::ball::{EFFECT_GRASS, EFFECT_NET};
 use crate::ps2::F;
 
 type M4 = [[f32; 4]; 4];
+
+/// The head's ball-sized target: how far back along the head bone's x row it sits, and its radius (m).
+const HEAD_BACK: f32 = 0.15;
+const HEAD_RADIUS: f32 = 0.25;
+/// CONK up to this speed (km/h), SMACK above.
+const CONK_KMH: f32 = 50.0;
+/// For its first 20 frames the pop-up rises `RISE` / `HOLD` m a frame (0.4 m in all) and swells: by 0.15 a frame for
+/// 10, then back by 0.05.
+const RISE: f32 = 0.6;
+const SWELL_FRAMES: i32 = 20;
 
 /// The ball at `ball` touches the player: within 0.25 m of a point 0.15 m back along `Bip01Head`'s x row from
 /// its origin (`head`, the bone's world matrix), or within `r` (the character's collision size,
 /// `player::ReachStats::collision`) of the segment from `Bip01Spine` (`spine`) to `Bip01Neck` (`neck`), measured
 /// square to it.
 pub fn hit(ball: [f32; 3], head: &M4, spine: [f32; 3], neck: [f32; 3], r: f32) -> bool {
-    let c = |k: usize| F(head[3][k]) + 0.0 - F(head[0][k]) * 0.15 - ball[k];
+    let c = |k: usize| F(head[3][k]) + 0.0 - F(head[0][k]) * HEAD_BACK - ball[k];
     let (x, y, z) = (c(0), c(1), c(2));
-    if (z * z).madd(x, x).madd(y, y).sqrt() < 0.25 {
+    if (z * z).madd(x, x).madd(y, y).sqrt() < HEAD_RADIUS {
         return true;
     }
     let d: [F; 3] = std::array::from_fn(|k| F(neck[k]) - spine[k]);
@@ -75,12 +86,12 @@ impl Popup {
     /// `tick`, the frame it is made.
     pub fn new(pos: [f32; 3], kmh: f32) -> Self {
         Popup {
-            word: if kmh <= 50.0 { Word::Conk } else { Word::Smack },
+            word: if kmh <= CONK_KMH { Word::Conk } else { Word::Smack },
             pos,
             scale: 0.0,
             alpha: 128.0,
             frames: 0,
-            rise: (-(F(0.6) / HOLD as f32)).0,
+            rise: (-(F(RISE) / HOLD as f32)).0,
             fade: None,
             timer: HOLD,
         }
@@ -88,12 +99,12 @@ impl Popup {
 
     /// One frame. `practice`: fewer than two players (only then does it time out). `false`: it's gone.
     pub fn tick(&mut self, practice: bool) -> bool {
-        if self.frames < 20 {
+        if self.frames < SWELL_FRAMES {
             self.pos[1] = (F(self.pos[1]) + self.rise).0;
         }
         self.scale = match self.frames {
             ..10 => (F(self.scale) + 0.15).0,
-            ..20 => (F(self.scale) - 0.05).0,
+            ..SWELL_FRAMES => (F(self.scale) - 0.05).0,
             _ => 1.0,
         };
         self.frames += 1;
@@ -148,6 +159,11 @@ pub fn bounce_texture(effect: u8) -> Option<&'static str> {
     NAMES.get(effect.checked_sub(1)? as usize).copied()
 }
 
+/// A bounce word's balloon-table row (size factor, near and far depth factors), frames held and frames of the fade.
+const BOUNCE_SIZE: [f32; 3] = [0.3, 0.18, 0.3];
+const BOUNCE_HOLD: i32 = 20;
+const BOUNCE_FADE: i32 = 5;
+
 /// One bounce word: it pops in at full opacity where the ball touched, holds 20 frames (ticking from the frame it is
 /// made) and fades out over 5.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -167,18 +183,23 @@ impl BouncePop {
         self.timer -= 1;
         if !self.fading {
             if self.timer < 0 {
-                (self.fading, self.timer) = (true, 5);
+                (self.fading, self.timer) = (true, BOUNCE_FADE);
             }
             return true;
         }
-        self.alpha = ((self.timer * 0x80) / 5).max(0) as f32;
+        self.alpha = ((self.timer * 0x80) / BOUNCE_FADE).max(0) as f32;
         self.timer >= 0
     }
 
     pub fn quad(&self, rows: [[f32; 3]; 3], depth: impl Fn([f32; 3]) -> f32, tan: f32) -> ([f32; 3], f32, f32) {
-        quad(self.pos, [0.3, 0.18, 0.3], 1.0, rows, depth, tan)
+        quad(self.pos, BOUNCE_SIZE, 1.0, rows, depth, tan)
     }
 }
+
+/// Bounce words: only for contact counts below this, at least this many frames apart, at most this many at once.
+const BOUNCE_CONTACTS: i32 = 6;
+const BOUNCE_GAP: i32 = 4;
+const BOUNCE_MAX: usize = 10;
 
 /// A point's bounce words. They are made from the rally's start until the next point's setup (on after the point is
 /// decided too, unlike the bounce sounds), by the same rules as `sound::Bounces`' material sounds: a new contact count
@@ -199,16 +220,16 @@ impl BounceWords {
     pub fn frame(&mut self, n: i32, at: [f32; 3], m: &crate::ball::Material) {
         if n == 0 {
             self.last = 0;
-        } else if self.last != n && n < 6 {
+        } else if self.last != n && n < BOUNCE_CONTACTS {
             self.last = n;
-            if self.cooldown < 1 && self.pops.len() < 10 {
+            if self.cooldown < 1 && self.pops.len() < BOUNCE_MAX {
                 self.soft &= !m.court;
-                if !(self.soft && m.effect == 2) && m.effect != 5 {
+                if !(self.soft && m.effect == EFFECT_NET) && m.effect != EFFECT_GRASS {
                     if m.effect != 0 {
-                        self.pops.push(BouncePop { effect: m.effect, pos: at, alpha: 128.0, timer: 20, fading: false });
-                        self.cooldown = 4;
+                        self.pops.push(BouncePop { effect: m.effect, pos: at, alpha: 128.0, timer: BOUNCE_HOLD, fading: false });
+                        self.cooldown = BOUNCE_GAP;
                     }
-                    self.soft = m.effect == 2;
+                    self.soft = m.effect == EFFECT_NET;
                 }
             }
         }

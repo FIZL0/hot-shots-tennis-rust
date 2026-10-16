@@ -61,6 +61,23 @@ pub struct AttributeMap {
     pub table: [u8; 0x10],
 }
 
+impl AttributeMap {
+    fn u16_at(&self, o: usize) -> i32 {
+        u16::from_le_bytes([self.header[o], self.header[o + 1]]) as i32
+    }
+    /// The texture header's width and height.
+    pub fn width(&self) -> i32 {
+        self.u16_at(2)
+    }
+    pub fn height(&self) -> i32 {
+        self.u16_at(4)
+    }
+    /// Texels per stored row: the top mip level's width.
+    pub fn stride(&self) -> i32 {
+        self.u16_at(0x14)
+    }
+}
+
 pub struct Mtl {
     pub textures: Vec<Texture>,
     pub materials: Vec<Material>,

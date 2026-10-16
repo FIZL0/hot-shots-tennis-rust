@@ -13,6 +13,9 @@ use hst_data::{mdl::Model, mor::Tracks, mtl::Material};
 
 use crate::{effect::Channel, face, motion::Clock, ps2::F};
 
+/// A `.UVA` track with this name prefix drives a material (the rest of the name); any other names a node.
+const MATERIAL_TRACK: &str = "@mtluva_";
+
 struct UvTrack {
     ticks: Vec<i32>,
     values: Vec<[f32; 4]>,
@@ -41,7 +44,7 @@ impl CourtAnim {
         for tr in uva.iter().flat_map(|u| &u.tracks) {
             let i = tracks.len();
             let mut hit = false;
-            if let Some(name) = tr.name.strip_prefix("@mtluva_") {
+            if let Some(name) = tr.name.strip_prefix(MATERIAL_TRACK) {
                 for (m, _) in materials.iter().enumerate().filter(|(_, m)| m.name == name) {
                     bind.get_mut(m).into_iter().flatten().for_each(|b| *b = Some(i));
                     hit = true;

@@ -9,11 +9,19 @@ use crate::vu0::Vf;
 
 /// The noise phase wraps at the table's length.
 const SPAN: f32 = 32.0;
+/// The wind rate: `WIND_BASE` + speed·`WIND_GAIN` (0.8/9).
+const WIND_BASE: f32 = 0.2;
+const WIND_GAIN: f32 = 0.08888889;
+/// A deformer's amplitude and rate scales (0.03/13 ≈ 1/433.3, and 0.1).
+const AMP_SCALE: f32 = 0.0023076923;
+const RATE_SCALE: f32 = 0.1;
+/// The VU random register's seed: the game's π (3.14159012, not π rounded), as RINIT takes it.
+const SEED: u32 = 0x4049_0fd0;
 
 /// The global wind rate the deformers scale by: speed·0.0889 + 0.2, set at every game from its wind (`adda 0, 0.2;
 /// madd speed, k`). Before the first game it is 1.0.
 pub fn wind(speed: f32) -> f32 {
-    (F::ZERO + 0.2).madd(f32::from_bits(0x3db6_0b61), speed).0
+    (F::ZERO + WIND_BASE).madd(WIND_GAIN, speed).0
 }
 
 /// One deformer's EE state: the noise frequency, and the phase now and a frame ago (the VU draws with the latter).
@@ -35,8 +43,8 @@ impl Noise {
     /// The per-frame update: amplitude and rate from the wind, the previous phase kept, the phase advanced by
     /// `dt`·rate and wrapped into [0, 32). `amp` is the entry's first amplitude (the other two go unread).
     pub fn step(&mut self, dt: f32, rate: f32, amp: f32, wind: f32) {
-        self.amp = (wind * (F(f32::from_bits(0x3b17_3ca7)) * amp)).0; // amp / 433.3
-        self.rate = (wind * (F(f32::from_bits(0x3dcc_cccd)) * rate)).0;
+        self.amp = (wind * (F(AMP_SCALE) * amp)).0;
+        self.rate = (wind * (F(RATE_SCALE) * rate)).0;
         self.prev = self.phase;
         self.phase = (F::ZERO + self.phase).madd(dt, self.rate).0;
         if self.phase < SPAN {
@@ -61,9 +69,12 @@ impl Noise {
 /// The micro program's noise table, rebuilt the same at every call: the VU random register seeded with π, each
 /// value r in [1, 2) mapped to (r + 2)/4, alternately negated.
 pub fn table() -> [f32; 32] {
-    let mut r = 0x4049_0fd0u32 & 0x7f_ffff | 0x3f80_0000; // RINIT with the game's π, 3.14159012
+    // R is a float in [1, 2): exponent 0x3f8 over 23 random mantissa bits
+    const MANTISSA: u32 = 0x7f_ffff;
+    const ONE: u32 = 0x3f80_0000;
+    let mut r = SEED & MANTISSA | ONE; // RINIT
     std::array::from_fn(|k| {
-        r = (r << 1 ^ (r >> 4 & 1) ^ (r >> 22 & 1)) & 0x7f_ffff | 0x3f80_0000; // RNEXT
+        r = (r << 1 ^ (r >> 4 & 1) ^ (r >> 22 & 1)) & MANTISSA | ONE; // RNEXT
         ((Vf(f32::from_bits(r)) + 2.0) * if k % 2 == 0 { 0.25 } else { -0.25 }).0
     })
 }
@@ -96,6 +107,11 @@ pub fn deform(t: &[f32; 32], p: [f32; 3], weight: f32, freq: f32, prev: f32, amp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scales_are_the_games() {
+        assert_eq!([WIND_GAIN, AMP_SCALE, RATE_SCALE].map(f32::to_bits), [0x3db6_0b61, 0x3b17_3ca7, 0x3dcc_cccd]);
+    }
 
     #[test]
     fn table_seeded_with_pi() {
