@@ -275,7 +275,7 @@ belong; a branch that still ticks/blocks in PLAN.md's old task list: redo that a
 Then `tools/ctx.py archive` (moves any [x] the merge brought into plan/TODO.md to plan/DONE.md), tools/check.sh in the foreground (about 2 min; the agent \
 already passed it on its branch, so skip it when `git diff --name-only task/<ID> HEAD` lists only .md files; never wait on \
 other check.sh processes, the slots run their own); fix what the merge broke, never the task's own work; commit.
-3. `git branch -d task/<ID>`. If you can't make it pass: `git merge --abort`, leave the branch and say why.
+3. `git branch -d task/<ID>`. If you can't make it pass: `git merge --abort`, `git branch -m task/<ID> wip/<ID>` (a task/<ID> ahead of main reads as finished-awaiting-merge, so the picker would never restart it) and say why.
 4. Append one line to context/notes/master.md: <ID>: merged / conflicts fixed (what) / left (why), the task's state \
 (ticked, part, blocked) and anything the human must do.
 5. Commit every change you made in main, so `git status` shows only the user's popped-back edits (context/ is \
