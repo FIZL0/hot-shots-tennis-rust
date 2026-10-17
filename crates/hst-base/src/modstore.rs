@@ -696,24 +696,41 @@ pub fn newer(a: &str, b: &str) -> bool {
 /// Without its `upscaled` set (Upscaled Downloads off, the mod's `upscale` false, and always in the browser) the parts kept are read straight
 /// from the store instead ([`ranged`]).
 pub fn install(e: &Entry, root: &Path, upscaled: bool) {
-    let (e, root) = (e.clone(), root.to_path_buf());
+    let (mut e, root) = (e.clone(), root.to_path_buf());
+    let key = e.key();
     spawn(async move {
         let got = async {
-            #[cfg(not(target_arch = "wasm32"))]
-            // B488: a mod that doesn't want upscaling never takes its upscaled set
-            let m = if upscaled && !e.meta.no_upscale { whole(&e, &root).await? } else { ranged(&e, &root, true).await? };
-            #[cfg(target_arch = "wasm32")]
-            // the browser never takes the upscaled set (its setting is locked off there)
-            let m = {
-                let _ = upscaled;
-                ranged(&e, &root, false).await?
+            let m = match fetch(&e, &root, upscaled).await {
+                // re-uploaded since the listing (cached up to an hour): its meta.json now, and that zip
+                Err(why) if why.starts_with("the download is") => match get_meta(&e.rev, &e.meta.id).await {
+                    Ok(Some(m)) if m.sha256 != e.meta.sha256 => {
+                        stale(None);
+                        e = entry(m, &e.rev.clone(), Some(&e.meta.author.clone()));
+                        fetch(&e, &root, upscaled).await?
+                    }
+                    _ => return Err(why),
+                },
+                m => m?,
             };
             let s = Stamp { sha256: e.meta.sha256.clone(), rev: e.rev.clone(), verified: e.verified, author: e.meta.author.clone() };
             modfs::write(&m.dir.join("store.json"), serde_json::to_vec(&s).unwrap())?;
             keep(&m)
         };
-        send(Event::Installed(e.key(), got.await));
+        send(Event::Installed(key, got.await));
     });
+}
+
+/// `e`'s zip downloaded, checked and unpacked ([`install`]).
+async fn fetch(e: &Entry, root: &Path, upscaled: bool) -> Result<Mod, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    // B488: a mod that doesn't want upscaling never takes its upscaled set
+    return if upscaled && !e.meta.no_upscale { whole(e, root).await } else { ranged(e, root, true).await };
+    #[cfg(target_arch = "wasm32")]
+    // the browser never takes the upscaled set (its setting is locked off there)
+    {
+        let _ = upscaled;
+        ranged(e, root, false).await
+    }
 }
 
 /// `e`'s whole `mod.zip` downloaded, checked and installed on disk.
