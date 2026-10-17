@@ -57,6 +57,7 @@ mod names;
 mod online;
 mod options;
 mod osk;
+mod over;
 mod mods_kind;
 mod mods_screen;
 mod pointer;
@@ -402,6 +403,8 @@ struct Press {
     /// B373: L2 / R2 (keyboard: 1 / 3, over Q / E): the Mods pages' kind tab.
     kind_prev: bool,
     kind_next: bool,
+    /// B558: O / R3: the Settings pages over the select and the lobby (`over.rs`).
+    settings: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -581,6 +584,8 @@ struct Menu {
     net_pause: Option<[bool; 4]>,
     /// M127: the pad takeover prompt (`takeover.rs`).
     takeover: takeover::Takeover,
+    /// B558: the Settings pages opened from the select or the lobby: the screen and row Back returns to (`over.rs`).
+    over: Option<(Screen, usize)>,
 }
 
 impl Default for Menu {
@@ -638,6 +643,7 @@ impl Default for Menu {
             shake: [0.0; 4],
             net_pause: None,
             takeover: default(),
+            over: None,
         }
     }
 }
@@ -1202,7 +1208,8 @@ impl Menu {
             return out;
         }
         // B516: the splash's 1P (and the keyboard) works the menus; another pad only joins the screens that seat players
-        let joins = matches!(self.screen, Screen::Assign | Screen::Chars | Screen::Confirm | Screen::Lobby);
+        // B558: the pages opened over them too, by any seated device
+        let joins = matches!(self.screen, Screen::Assign | Screen::Chars | Screen::Confirm | Screen::Lobby) || self.over.is_some();
         if !self.paused && !joins && matches!(dev, Dev::Pad(_)) && self.p1.is_some_and(|p| p != dev) {
             return out;
         }
@@ -1215,6 +1222,9 @@ impl Menu {
             return out;
         }
         if self.switch_step(k, &mut out) {
+            return out;
+        }
+        if self.settings_step(dev, k, &mut out) {
             return out;
         }
         match self.screen {
@@ -3027,6 +3037,7 @@ fn step(
                 k.name = keys.just_pressed(KeyCode::KeyN);
                 k.kind_prev = keys.just_pressed(KeyCode::Digit1);
                 k.kind_next = keys.just_pressed(KeyCode::Digit3);
+                k.settings = keys.just_pressed(KeyCode::KeyO);
                 // B463: on the select Q / E are the sections (Settings' tab keys), Z / X the costume; 1–4 its emotes
                 if menu.screen == Screen::Chars {
                     (k.kind_prev, k.kind_next) = (k.prev, k.next);
@@ -3048,6 +3059,7 @@ fn step(
                 k.name = g.just_pressed(GamepadButton::Start);
                 k.kind_prev = g.just_pressed(GamepadButton::LeftTrigger2);
                 k.kind_next = g.just_pressed(GamepadButton::RightTrigger2);
+                k.settings = g.just_pressed(GamepadButton::RightThumb);
             }
         }
         let mut dirs = [false; 4];

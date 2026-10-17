@@ -1400,11 +1400,11 @@ fn log_assets(w: &World, mut next: Local<f32>) {
 }
 
 /// `HST_KEYS="2:Enter 9:Escape 10:ArrowDown 11:Enter 15:shot=a.png"`: at each real-time second a key is pressed for one
-/// frame (Enter, Space, Escape, Arrow*, Digit1–4, KeyK, F10) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
+/// frame (Enter, Space, Escape, Arrow*, Digit1–4, KeyK, KeyO, F10) or the window saved, for unattended runs across modes (`--shot` takes one and quits).
 fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut<ButtonInput<KeyCode>>, mut done: Local<usize>, mut pressed_at: Local<f32>) {
     let script = std::env::var("HST_KEYS").unwrap_or_default();
     let steps: Vec<_> = script.split_whitespace().filter_map(|s| s.split_once(':')).collect();
-    for k in [KeyCode::Enter, KeyCode::Space, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::KeyK, KeyCode::F10] {
+    for k in [KeyCode::Enter, KeyCode::Space, KeyCode::Escape, KeyCode::ArrowUp, KeyCode::ArrowDown, KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::KeyK, KeyCode::KeyO, KeyCode::F10] {
         // held through at least one 60 Hz menu tick (a fast display's frame may fall between two)
         if keys.pressed(k) && !keys.just_pressed(k) && time.elapsed_secs() - *pressed_at >= 1.0 / 30.0 {
             keys.release(k);
@@ -1431,6 +1431,8 @@ fn scripted_keys(mut commands: Commands, time: Res<Time<Real>>, mut keys: ResMut
         "Digit4" => KeyCode::Digit4,
         // ○, a slice (a curve serve)
         "KeyK" => KeyCode::KeyK,
+        // B558: the select's and lobby's Settings key
+        "KeyO" => KeyCode::KeyO,
         // the HUD on/off (M98); a scripted F10 turns the key on (B505)
         "F10" => {
             play::no_hud::KEY.store(true, std::sync::atomic::Ordering::Relaxed);
