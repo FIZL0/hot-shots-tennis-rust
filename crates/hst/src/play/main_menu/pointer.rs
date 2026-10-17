@@ -315,6 +315,8 @@ pub(super) struct State {
     hovered: Option<Act>,
     finger: Option<(u64, Vec2, Vec2, bool)>,
     wheel: f32,
+    /// the wheel's sideways part-notches (a tilt wheel, a touchpad): ← / → (the court and umpire rows)
+    hwheel: f32,
     touched: f32,
 }
 
@@ -422,6 +424,13 @@ pub(in crate::play) fn pointer(
     }
     for e in wheel.read() {
         st.wheel += if e.unit == MouseScrollUnit::Line { e.y } else { e.y / 40.0 };
+        st.hwheel += if e.unit == MouseScrollUnit::Line { e.x } else { e.x / 40.0 };
+    }
+    // winit: x > 0 moves the content right, i.e. scrolls left
+    while st.hwheel.abs() >= 1.0 {
+        let left = st.hwheel > 0.0;
+        st.hwheel -= st.hwheel.signum();
+        out(Some(press(|k| (k.left, k.right) = (left, !left))), true);
     }
     while st.wheel.abs() >= 1.0 {
         let up = st.wheel > 0.0;
