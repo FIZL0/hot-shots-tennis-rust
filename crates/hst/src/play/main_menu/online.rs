@@ -1623,7 +1623,7 @@ impl Menu {
             match self.settings.4 {
                 Ask::Always => {
                     self.net.wanted.insert(h);
-                    net.send(Cmd::Want(h));
+                    net.want(h, looks_id(room, h), &cache);
                 }
                 Ask::Never => drop(self.net.looks.insert(h, None)),
                 _ if room.stand_in => drop(self.net.looks.insert(h, None)),
@@ -1732,6 +1732,11 @@ impl Menu {
         let dir = mo::unpack(pack, h, &mo::cache(iso)).map(|m| m.dir).map_err(|e| self.net.status = format!("A mod's files were rejected, so a stand-in plays it: {e}")).ok();
         self.net.looks.insert(h, dir);
     }
+}
+
+/// M125: the id of the lobby's mod with the looks `h` (a pick's, or the host's court), what the store knows it by.
+fn looks_id(room: &Room, h: u64) -> Option<&str> {
+    room.mods().find(|(_, w)| w.looks == h).map(|(_, w)| w.id.as_str()).or_else(|| room.court_mod.as_ref().filter(|c| c.looks == h).map(|c| c.id.as_str()))
 }
 
 fn relay_name(cfg: &Online) -> String {
@@ -2863,7 +2868,11 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
                     n.send(Cmd::Name(menu.net.cfg.as_ref().map_or_else(String::new, |c| c.name.clone())));
                     n.send(Cmd::Courts(menu.court_mod_ids()));
                 }
-                n.send(c)
+                // M125: a mod's looks from the store when it has them
+                match c {
+                    Cmd::Want(h) => n.want(h, menu.net.room.as_ref().and_then(|r| looks_id(r, h)), &mo::cache(iso)),
+                    c => n.send(c),
+                }
             }
             None => {
                 let mut cfg = menu.net.cfg.clone().unwrap_or_else(|| Online::load(iso));
