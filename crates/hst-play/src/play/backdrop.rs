@@ -9,7 +9,8 @@
 //! A backdrop of another size (the window grew or shrank by a lot, or changed shape) is drawn again.
 //!
 //! Only reads the match: no generator draw, nothing of the simulation or its timing changes; a rainy or snowy match
-//! doesn't bake (its sky and darkness would stay on the splash).
+//! doesn't bake (its sky and darkness would stay on the splash). An online match never bakes: the extra camera's
+//! first draw builds new pipelines, which froze an iPhone's Safari for ~19 s mid-match and every peer with it.
 //!
 //! `HST_BACKDROP=off` never bakes; `HST_BACKDROP=now` bakes `HST_BACKDROP_AT` seconds (default 2) into any match,
 //! whatever the phase and the weather, and under `--shot` too (by default a `--shot` run doesn't write one);
@@ -112,6 +113,7 @@ fn bake(
     compiling: Option<Res<crate::mode::Compiling>>,
     time: Res<Time>,
     mut cams: Query<&mut Camera, With<Backdrop>>,
+    netplay: Option<Res<super::netplay::Netplay>>,
 ) {
     let (Some(g), Some(args), Some(mut images)) = (g, args, images) else { return };
     let mode = std::env::var("HST_BACKDROP").unwrap_or_default();
@@ -120,7 +122,8 @@ fn bake(
         Step::Done => {}
         Step::Waiting => {
             let now = mode == "now";
-            if mode == "off" || (args.shot.is_some() && !now && mode != "on") {
+            // never online: its first draw can freeze a phone's browser for seconds (new pipelines), every peer with it
+            if mode == "off" || (args.shot.is_some() && !now && mode != "on") || (netplay.is_some() && !now) {
                 b.step = Step::Done;
                 return;
             }
