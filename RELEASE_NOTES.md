@@ -2,3 +2,4 @@
 - The website's "Pick your ISO" button at the top now opens the file picker straight away.
 - Online lobbies show how far along a download of another player's mod is, instead of a message that never changes.
 - The iPhone app can host, find and join online lobbies (going online no longer fails when the phone blocks local-network discovery).
+- The online lobby is now one screen: pick your player right in the lobby, with the court, rules, Leave and Start underneath.

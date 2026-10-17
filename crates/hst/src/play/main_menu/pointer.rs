@@ -34,6 +34,9 @@ pub(super) enum Act {
     Pick(usize),
     /// A button: a tap is this press.
     Press(Press),
+    /// M121: the lobby's item `i` around the online select while this machine's players pick: a tap presses `k` on it
+    /// (`Menu::lobby_tap`).
+    Lobby(usize, Press),
     /// B238: a seat's ✕: a tap takes its device off it.
     Drop(usize),
     /// B294: Settings tab `i` (`options::TABS`): a tap opens it.
@@ -141,6 +144,8 @@ impl Menu {
         match act {
             Act::Press(k) if tap => out = self.step(dev, k),
             Act::Press(_) => {}
+            Act::Lobby(i, k) if tap => out = self.lobby_tap(i, k),
+            Act::Lobby(..) => {}
             Act::Row(i, k) => {
                 // a row on a screen the press can't reach (the confirm screen's rows while another device drives)
                 if self.choose(i) {

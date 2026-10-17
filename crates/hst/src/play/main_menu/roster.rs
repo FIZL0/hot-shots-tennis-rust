@@ -394,12 +394,16 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     super::look::backdrop(d);
     // the top bar: the title (Back for the pointer, after the "<" `drawn` puts over it), the players and the mode
     let size = 30.0 * PY;
-    let title = "Choose your player";
+    // M121: online, the select is the lobby
+    let title = if m.online() { "Online lobby" } else { "Choose your player" };
     d.outlined(|d| d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE));
     d.hit([l, t, d.width(title, size) + 40.0, TOP_BAR * PY], pointer::press(|k| k.back = true));
+    if m.online() {
+        return online_chars(d, m, text, bind, pads);
+    }
     let (mode, fill) = if m.doubles { ("Doubles", 0x2f7d4f) } else { ("Singles", 0x2f5f9d) };
     let ms = 16.0 * PY;
-    let swaps = m.local_roster() || m.online() && m.net.hosting;
+    let swaps = m.local_roster();
     // B427: the button that swaps it (□ / X / Tab) in 1P's device's art, as the costume and hand pills show theirs
     let glyph = match m.seats[0] {
         Some(Dev::Pad(e)) if swaps => Some(legend::dev_style(Some(e))),
@@ -418,27 +422,44 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     }
     d.centred(mode, mx + gw + (mw - gw) / 2.0, my + 7.0 * PY, ms, WHITE);
     if swaps {
-        // B375: a tap swaps Singles ↔ Doubles, as 1P's □ / Tab (step checks the device is 1P's; B392: online, the host's)
+        // B375: a tap swaps Singles ↔ Doubles, as 1P's □ / Tab (step checks the device is 1P's; online: `lobby::over`)
         d.hit([mx, my, mw, 30.0 * PY], pointer::press(|k| k.page = true));
     }
     let humans = m.humans() + (0..m.players()).filter(|&p| m.seats[p].is_none() && m.remote(p).is_some_and(|s| s.human())).count();
     let who = if humans > 1 { format!("{humans} players, each browses on their own") } else { "1 player".into() };
-    // M120: online, the lobby's code (or how its connecting goes) in the corner by the mode
-    let right = if m.online() { super::online::corner(d, m, mx - 12.0 * PX, my, 30.0 * PY, l + 40.0 + d.width(title, size)) - 12.0 * PX } else { mx - 12.0 * PX };
+    let right = mx - 12.0 * PX;
     let ws = 14.0 * PY;
     let ww = d.width(&who, ws).min(right - (l + 40.0 + d.width(title, size)));
     if ww > 20.0 {
         d.outlined(|d| d.label(&who, right - ww / 2.0, my + 8.0 * PY, ws, ww, WHITE));
     }
-    if m.online() {
-        super::online::band(d, m, l + MARGIN * PX, t + TOP_BAR * PY, r - l - 2.0 * MARGIN * PX);
-    }
+    let c = player_columns(d, m, text, bind, pads);
+    names(d, m, &c);
+}
+
+/// M121: the online select, which is the lobby: the relay's notice band, the columns, the lobby around them (its top
+/// bar's buttons, the strip, Leave, the chat box and Start: `lobby::over`), the name pickers over it all.
+fn online_chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
+    let [l, t, r, _] = m.grid.view;
+    super::online::band(d, m, l + MARGIN * PX, t + TOP_BAR * PY, r - l - 2.0 * MARGIN * PX);
+    let c = player_columns(d, m, text, bind, pads);
+    super::online::lobby_over(d, m);
+    names(d, m, &c);
+}
+
+/// The player columns.
+fn player_columns(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) -> Columns {
     let c = m.columns();
     let pointer_p = m.driven(pointer::device(m, pads));
     for p in 0..c.n {
         column(d, m, text, bind, pads, &c, p, pointer_p == Some(p));
     }
-    // B371: the name pickers over their players' columns (at least 180 wide)
+    c
+}
+
+/// B371: the name pickers over their players' columns (at least 180 wide).
+fn names(d: &mut Draw, m: &Menu, c: &Columns) {
+    let [l, _, r, _] = m.grid.view;
     for p in 0..c.n {
         let [x, y, w, h] = c.parts(p).card;
         let nw = w.max(180.0).min(r - l);
@@ -683,10 +704,21 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
 /// the header band (the player's name over "Online" and their ping), the figure full width with their platform and
 /// input (M95) in its corner, the character's name, hand and costume, then the roster card's own style bar and stats
 /// list where a local card has its grid, and along the foot what it is and where they are.
+/// M121: the host's ✕ on another machine's seat in the lobby: the figure's top-left corner, clear of the band's
+/// Near / Far and the device pill.
+pub(super) fn remove_rect([x, y, _, _]: [f32; 4]) -> [f32; 4] {
+    [x + (PAD + 6.0) * PX, y + (BAND + PAD + 6.0) * PY, 26.0 * PX, 26.0 * PY]
+}
+
 fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p: usize) {
     let Some(f) = m.card_facts(text, p) else {
         // B519: nobody can take it till the relay's up
-        let line = if super::online::reach(&m.net) == super::online::Reach::Up { "Waiting for a player" } else { "Not open yet: friends can join once the relay is up" };
+        // B526: a browser's LAN lobby says how it's joined
+        let line = match super::online::reach(&m.net) {
+            _ if m.lan_host() => super::online::HOST_LAN,
+            super::online::Reach::Up => "Waiting for a player",
+            _ => "Not open yet: friends can join once the relay is up",
+        };
         return open_seat_saying(d, s, card, p, false, line);
     };
     let [x, y, w, h] = card;

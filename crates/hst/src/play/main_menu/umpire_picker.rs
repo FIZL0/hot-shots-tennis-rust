@@ -161,7 +161,7 @@ pub(super) fn axes(m: &Menu) -> (bool, bool, bool) {
 /// The picker over the screen it was opened from (the confirm screen's players, or the lobby's).
 pub(super) fn draw_over(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     if m.net.venue {
-        super::online::layout(d, &m.lobby_under_umpire(), hand_x);
+        super::online::lobby_behind(d, &m.lobby_under_umpire());
     } else {
         super::confirm::draw(d, m, text, pads, hand_x);
     }

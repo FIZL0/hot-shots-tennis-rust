@@ -35,7 +35,8 @@ impl Slide {
     pub(super) fn step(&mut self, screen: Screen, quads: Vec<Quad>, dt: f32) -> Vec<Quad> {
         if let Some(from) = self.on.filter(|&s| s != screen) {
             // no slide into a match (the window hides) or out of one (back to the menus)
-            let still = matches!(screen, Screen::Playing) || matches!(from, Screen::Playing);
+            // M121: nor between the online select and the lobby, one screen with the cursor moving
+            let still = matches!(screen, Screen::Playing) || matches!(from, Screen::Playing) || matches!((from, screen), (Screen::Chars, Screen::Lobby) | (Screen::Lobby, Screen::Chars));
             self.t = if still { 2.0 * HALF } else { 0.0 };
             self.dir = if screen as u8 > from as u8 { 1.0 } else { -1.0 };
             self.old = std::mem::take(&mut self.last);

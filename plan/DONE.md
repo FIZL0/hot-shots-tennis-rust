@@ -804,6 +804,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B535** Change of ends: the receiving players show the wrong motion (user 2026-10-16): during the change-ends move they stand in the ready-to-receive stance, then go idle when that motion runs out mid-move. Keep them in idle for the whole change of ends, like the server's stance is held (B262: change_ends::server holds motion 0x20 over the move). Check the original first (tools/screenshot.sh through a change of ends, slot 3/4 match): if it shows the receivers idle, port that; if it too shows ready-then-idle, it's still the user's call to hold idle, but presentation only: no change to the sim, its motions' timing or the state hash (replays stay bit-exact). Done when no receiver changes motion during a change of ends, singles and doubles, and a test covers it — crates/hst-play/src/play/change_ends.rs, crates/hst-play/src/play.rs (motions)
 - [x] **B537** Online lobby: progress of downloading a joined player's mods may not update on screen (crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
 - [x] **B536** iOS IPA can't find or host online lobbies; likely the same iroh transport issue Safari/web had — compare with the web fix (crates/hst-base/src/net.rs, net/, ios.rs)
+- [x] **M121** Online lobby: put the character select roster inside the lobby instead of two separate menus (crates/hst/src/play/main_menu/, crates/hst-base/src/net.rs)
 
 
 ### Shots

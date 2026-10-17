@@ -824,6 +824,14 @@ impl Menu {
         // B519: online, the relay's notice band under the top bar pushes the columns down
         let [l, t, r, b] = self.grid.view;
         let band = online::band_h(self, r - l - 2.0 * roster::MARGIN * roster::PX);
+        // M121: online, the lobby's strip and bottom row under them
+        let b = match self.online() {
+            true => {
+                let [_, y, _, h] = self.lobby_foot().stage;
+                y + h
+            }
+            false => b,
+        };
         roster::columns_mixed([l, t + band, r, b], self.players(), std::array::from_fn(|p| self.compact(p)))
     }
 
@@ -2643,6 +2651,11 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
             }
         }
         Screen::Chars => roster::chars(&mut d, m, text, bind, pads),
+        // M121: the lobby is the online select's columns with the lobby around them (`lobby::over`), and its prompts
+        Screen::Lobby if m.net.room.is_some() => {
+            roster::chars(&mut d, m, text, bind, pads);
+            online::layout(&mut d, m, hand_x);
+        }
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
         // B451: the umpire picker over the players
         Screen::Confirm if m.picking.is_some() && m.sel == 4 => umpire_picker::draw_over(&mut d, m, text, pads, hand_x),
@@ -2785,7 +2798,7 @@ fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
     match m.sel {
         1 if m.picking.is_some() => {
             if m.net.venue {
-                online::layout(d, &m.venue_under(), hand_x);
+                online::lobby_behind(d, &m.venue_under());
             } else {
                 confirm::draw(d, m, text, pads, hand_x);
             }
@@ -4268,7 +4281,8 @@ mod tests {
             for hosting in [true, false] {
                 m.net.hosting = hosting;
                 let rects = m.lobby_rects();
-                let [l, t, r, b] = g.reach();
+                // M121: the lobby spans the view like the select it holds
+                let [l, t, r, b] = g.view;
                 assert!(rects.iter().all(|&x| inside(x, [l, t, r - l, b - t])), "{a} {hosting} {rects:?}");
                 for i in 0..rects.len() {
                     for j in 0..i {
