@@ -359,7 +359,12 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, p: usize, [x, y, w, h]: [f32; 4]) {
                 let on = i == *sel;
                 d.pill_at([ix, ry, iw, 26.0], [INK, if on { WHITE } else { [60.0; 3] }, if on { ON } else { OFF }], if *taken { 64.0 } else { 128.0 });
                 let rgb = if *taken { [60.0; 3] } else if now.as_deref() == Some(n.as_str()) { GOLD } else if on { WHITE } else { [100.0; 3] };
-                d.label(n, x + w / 2.0, ry + 4.0, 18.0, iw - 16.0, rgb);
+                // concept: the name in use outlined, so it reads on the gold highlight too
+                if now.as_deref() == Some(n.as_str()) && !*taken {
+                    d.outlined(|d| d.label(n, x + w / 2.0, ry + 4.0, 18.0, iw - 16.0, rgb));
+                } else {
+                    d.label(n, x + w / 2.0, ry + 4.0, 18.0, iw - 16.0, rgb);
+                }
                 d.hit([ix, ry, iw, 26.0], Act::Name(p, i));
             }
             if rows.len() > fit {

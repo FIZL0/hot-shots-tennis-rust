@@ -91,7 +91,7 @@ impl Menu {
     /// Where the carried card would go: the chosen card's seat (its ✕ counts as the card).
     pub(in super::super) fn target_seat(&self) -> Option<usize> {
         match self.items().get(self.sel) {
-            Some(&(Item::Seat(t) | Item::Remove(t))) => Some(t),
+            Some(&Item::Seat(t)) => Some(t),
             _ => None,
         }
     }

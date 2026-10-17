@@ -1261,6 +1261,13 @@ impl Menu {
         if k.ok && matches!(dev, Dev::Pad(_)) && !self.seats.contains(&Some(dev)) && self.lobby_join(dev, &mut out) {
             return out;
         }
+        // concept: on the lobby another local player's ○ leaves its seat (held open here for another pad), not the lobby
+        if k.back && self.screen == Screen::Lobby && self.online() && let Some(p) = (0..4).find(|&p| self.seats[p] == Some(dev)).filter(|&p| self.droppable(p)) {
+            self.seats[p] = Some(Dev::Open);
+            self.unready(p);
+            out.push(Sound(LEAVE_SOUND));
+            return out;
+        }
         match self.screen {
             Screen::Main => {
                 let main = self.main_rows();
@@ -1542,6 +1549,7 @@ impl Menu {
                         // B216: the host leaves its computer player as it was in the lobby
                         self.net.edit = None;
                         self.go(Screen::Lobby, &mut out);
+                        self.sel_seat(p);
                         out.push(Sound(1));
                     } else if self.seats[p].is_none() {
                         // player 1 driving a computer player (one added or an open seat's COM card): back to the last

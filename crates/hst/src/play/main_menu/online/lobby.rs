@@ -104,7 +104,6 @@ impl Menu {
             .iter()
             .map(|it| match *it {
                 Item::Seat(i) => g.plates.get(i).copied().unwrap_or_default(),
-                Item::Remove(i) => g.plates.get(i).map_or_else(Default::default, |&c| roster::remove_rect(c)),
                 Item::Set(i) => g.cells[i.min(4)],
                 Item::Mode => g.mode,
                 Item::Button("Start" | "Ready") => g.start,
@@ -132,7 +131,7 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
         let Some(i) = at(it) else { return };
         if lobby {
             d.hit(rect, Act::Row(i, k));
-        } else if !matches!(it, Item::Seat(_) | Item::Remove(_) | Item::Button("Start" | "Ready")) {
+        } else if !matches!(it, Item::Seat(_) | Item::Button("Start" | "Ready")) {
             d.hit(rect, Act::Lobby(i, k));
         }
     };
@@ -156,16 +155,6 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
             frame::focus(d, rect, 16.0 * PX, 4.0 * PX, 3.0 * PX);
         }
         carried(d, m, r, i, rect, s);
-        if at(Item::Remove(i)).is_some() {
-            let xr = roster::remove_rect(rect);
-            frame::ringed(d, xr, xr[2] / 2.0, 2.0 * PX, frame::NAVY, Some(roster::seat(i).ring));
-            let xs = 14.0 * PY;
-            d.centred("X", xr[0] + xr[2] / 2.0, xr[1] + (xr[3] - xs) / 2.0, xs, frame::NAVY);
-            if on(Item::Remove(i)) {
-                frame::focus(d, xr, xr[2] / 2.0, 3.0 * PX, 3.0 * PX);
-            }
-            hit(d, Item::Remove(i), [xr[0] - 2.0, xr[1] - 2.0, xr[2] + 4.0, xr[3] + 4.0], OK);
-        }
     }
     strip(d, m, rm, &g, &on, &hit);
     start_button(d, m, rm, &g, &items, &on);
@@ -352,8 +341,7 @@ mod tests {
                 for (k, a) in rects.iter().enumerate() {
                     assert!(inside(a), "{aspect} {:?} {a:?}", items[k]);
                     for (j, c) in rects.iter().enumerate().skip(k + 1) {
-                        let x = matches!((items[k], items[j]), (Item::Seat(s), Item::Remove(x)) if s == x);
-                        assert!(x || apart(a, c), "{aspect}: {:?} {a:?} over {:?} {c:?}", items[k], items[j]);
+                        assert!(apart(a, c), "{aspect}: {:?} {a:?} over {:?} {c:?}", items[k], items[j]);
                     }
                 }
                 // the columns over the strip, inside the stage

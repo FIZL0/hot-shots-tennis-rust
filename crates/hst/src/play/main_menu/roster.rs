@@ -570,8 +570,21 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         Some(Dev::Keys) if m.team_switch(Dev::Keys).is_some() || m.online_team(Dev::Keys).is_some() => Some(legend::dev_style(None)),
         _ => None,
     };
-    let side = if swap.is_some() { "Swap teams" } else if p < (n / 2).max(1) { "Near" } else { "Far" };
-    band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, false);
+    // concept: a joined local player's ○ leaves its seat (1P's leaves the screen)
+    let leave = m.seats[p].filter(|_| (online || m.local_roster()) && m.droppable(p) && !m.players[p].ready);
+    let (side, swap) = match (swap, leave) {
+        (Some(g), _) => ("Swap teams", Some((g, MODE_GLYPH))),
+        (None, Some(Dev::Pad(e))) => ("Leave", legend::button_glyph(GamepadButton::East).map(|i| (legend::dev_style(Some(e)), i))),
+        (None, Some(_)) => ("Leave", None),
+        _ => ("", None),
+    };
+    let _ = n;
+    let naming = match m.seats[p] {
+        Some(Dev::Keys) if mine => Some("N"),
+        Some(Dev::Pad(e)) if mine => legend::glyphs(legend::dev_style(Some(e)), &legend::item(legend::Act::Name, "", &[])).into_iter().find_map(|g| if let legend::Glyph::Small(s) = g { Some(s) } else { None }),
+        _ => None,
+    };
+    band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, false, naming);
     if mine && m.seats[p].is_some() {
         // B371: a tap on the seat's number or names opens the name picker
         let [hx, hy, hw, hh] = at.head;
@@ -703,16 +716,6 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     d.label(&line, fx + lw / 2.0, fy + (fh - fs) / 2.0, fs, lw, s.soft);
 }
 
-/// M120: seat `p`'s compact card online (another machine's player or the computer's; an open seat is the open card):
-/// the header band (the player's name over "Online" and their ping), the figure full width with their platform and
-/// input (M95) in its corner, the character's name, hand and costume, then the roster card's own style bar and stats
-/// list where a local card has its grid, and along the foot what it is and where they are.
-/// M121: the host's ✕ on another machine's seat in the lobby: the figure's top-left corner, clear of the band's
-/// Near / Far and the device pill.
-pub(super) fn remove_rect([x, y, _, _]: [f32; 4]) -> [f32; 4] {
-    [x + (PAD + 6.0) * PX, y + (BAND + PAD + 6.0) * PY, 26.0 * PX, 26.0 * PY]
-}
-
 /// An open seat's line on the online select.
 pub(super) fn open_line(m: &Menu) -> &'static str {
     use super::online::{Go, Reach};
@@ -728,6 +731,10 @@ pub(super) fn open_line(m: &Menu) -> &'static str {
     }
 }
 
+/// M120: seat `p`'s compact card online (another machine's player or the computer's; an open seat is the open card):
+/// the header band (the player's name over "Online" and their ping), the figure full width with their platform and
+/// input (M95) in its corner, the character's name, hand and costume, then the roster card's own style bar and stats
+/// list where a local card has its grid, and along the foot what it is and where they are.
 fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p: usize) {
     let Some(f) = m.card_facts(text, p) else {
         return open_seat_saying(d, s, card, p, m.lobby_join_seat() == Some(p), open_line(m));
@@ -752,8 +759,12 @@ fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p
         None if com => "Computer".into(),
         None => "Online".into(),
     };
-    let side = if p < (m.players() / 2).max(1) { "Near" } else { "Far" };
-    band(d, s, [x, y, w, BAND * PY], !com, p, m.player_name(p).as_deref(), &f.owner, &sub, side, None, false);
+    // concept: the host's △ on the focused card: a computer's Remove, a guest's Kick
+    let focused = m.screen == super::Screen::Lobby && m.net.hosting && m.lobby_focus() == Some(p);
+    let lead = m.lead().map(|d| legend::dev_style(if let Dev::Pad(e) = d { Some(e) } else { None }));
+    let side = if !focused { "" } else if com { "Remove" } else { "Kick" };
+    let glyph = lead.filter(|_| !side.is_empty()).map(|s| (s, 3));
+    band(d, s, [x, y, w, BAND * PY], !com, p, m.player_name(p).as_deref(), &f.owner, &sub, side, glyph, false, None);
     let (ix, iw) = (x + PAD * PX, w - 2.0 * PAD * PX);
     let mut cy = y + (BAND + PAD) * PY;
     let foot_h = 30.0 * PY;
@@ -1011,7 +1022,8 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 /// pill on the right (`glyph`'s button art before it; left of the ✕ when `drop`; left out when the column is too
 /// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<(legend::Style, u8)>, drop: bool, naming: Option<&str>) {
     // B471: the panel's header strip inside the card's outline, a dark rule under it; a computer player's in the
     // seat's light tint with dark words
     let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.sel, hex(look::INK)) };
@@ -1035,15 +1047,21 @@ pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, 
             tx + d.width(&tag, big) + 10.0 * PX
         }
     };
+    // concept: the seat's name button (Start / Options / + / N) as a chip after its tag
+    let nx = match naming {
+        Some(b) => nx + chip(d, b, [nx, y + (h - 18.0 * PY) / 2.0], 18.0 * PY, WHITE) + 8.0 * PX,
+        None => nx,
+    };
     let (ss, sh) = (12.0 * PY, 20.0 * PY);
     let gh = 14.0 * PY;
-    let gw = glyph.map_or(0.0, |g| gh * legend::glyph_aspect(g, MODE_GLYPH) + 4.0 * PX);
+    let gw = glyph.map_or(0.0, |(g, i)| gh * legend::glyph_aspect(g, i) + 4.0 * PX);
     let sw = d.width(side, ss) + 16.0 * PX + gw;
     let sx = x + w - 12.0 * PX - sw - if drop { 30.0 } else { 0.0 };
-    let end = if sx - 8.0 * PX - nx >= 48.0 * PX {
+    // concept: no Near / Far: the pill only for a button hint
+    let end = if !side.is_empty() && sx - 8.0 * PX - nx >= 48.0 * PX {
         rounded(d, [sx, y + (h - sh) / 2.0, sw, sh], 10.0, hex(BG), 128.0);
-        if let Some(g) = glyph {
-            d.q(Tex::Glyph(g, MODE_GLYPH), [0.0; 4], [sx + 6.0 * PX, y + (h - gh) / 2.0, gw - 4.0 * PX, gh], WHITE, 128.0);
+        if let Some((g, i)) = glyph {
+            d.q(Tex::Glyph(g, i), [0.0; 4], [sx + 6.0 * PX, y + (h - gh) / 2.0, gw - 4.0 * PX, gh], WHITE, 128.0);
         }
         d.centred(side, sx + gw + (sw - gw) / 2.0, y + (h - ss) / 2.0, ss, WHITE);
         sx - 8.0 * PX

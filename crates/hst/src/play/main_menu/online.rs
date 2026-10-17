@@ -183,7 +183,6 @@ const GUEST_BUTTONS: [&str; 3] = ["Code", "Copy Link", "Ready"];
 enum Item {
     Seat(usize),
     /// the host's ✕ on a seat's card: takes a guest out, a computer off.
-    Remove(usize),
     Button(&'static str),
     /// B201: the host's singles / doubles switch (the settings row's last pill).
     Mode,
@@ -226,8 +225,12 @@ impl Menu {
             return None;
         }
         let mine = (0..4).filter(|&p| self.seats[p].is_some()).count();
-        if mine == 0 || mine >= self.local_max() {
+        let held = self.seats.contains(&Some(super::Dev::Open));
+        if mine == 0 || mine >= self.local_max() && !held {
             return None;
+        }
+        if let Some(p) = (0..4).find(|&p| self.seats[p] == Some(super::Dev::Open)) {
+            return Some(p);
         }
         self.net.room.as_ref()?.seats.iter().position(Option::is_none).filter(|&i| i < 4)
     }
@@ -307,7 +310,22 @@ impl Menu {
     pub(super) fn online_bot_ready(&mut self, p: usize, out: &mut Vec<Effect>) {
         self.net.edit = None;
         self.go(Screen::Lobby, out);
+        self.sel_seat(p);
         out.push(Effect::Online(Fx::Net(Cmd::Bot(p, Some(self.wire(p))))));
+    }
+
+    /// The lobby's cursor back on seat `p`'s card (the computer player just picked for), not 1P's.
+    /// The seat under the lobby cursor (its card shows the host's △ hint).
+    pub(super) fn lobby_focus(&self) -> Option<usize> {
+        match self.items().get(self.sel) {
+            Some(Item::Seat(i)) => Some(*i),
+            _ => None,
+        }
+    }
+    pub(super) fn sel_seat(&mut self, p: usize) {
+        if let Some(k) = self.items().iter().position(|it| *it == Item::Seat(p)) {
+            self.sel = k;
+        }
     }
 
     /// The lobby this machine would host: its players in the first seats, the rest open.
@@ -348,7 +366,9 @@ impl Menu {
         // no room yet ("Creating lobby...", or it failed): only Leave is drawn
         if self.net.hosting && room.is_some() {
             let taken = |i: usize| room.is_some_and(|r| r.seats[i].is_some()) && !self.mine(i);
-            let seats = (0..n).flat_map(|i| [Some(Item::Seat(i)), taken(i).then_some(Item::Remove(i))]).flatten();
+            // concept: no ✕ to focus; △ on the card removes / kicks (its pill says so)
+            let _ = taken;
+            let seats = (0..n).map(Item::Seat);
             let lan = self.lan_host();
             seats.chain(lobby::SIDE).chain(with_chat(&HOST_BUTTONS)).map(|it| if lan && it == Item::Button("Public") { Item::Button("Paste") } else { it }).collect()
         } else if room.is_some() && !self.net.started && !self.net.pick_next {
@@ -372,26 +392,6 @@ impl Menu {
         self.lobby_rects_geo()
     }
 
-    /// The lobby's ←→↑↓ off the side panel's pills: from a card → onto its ✕ (← back off it); otherwise to the
-    /// nearest item that way, never onto a ✕.
-    fn lobby_step(&self, items: &[Item], rects: &[[f32; 4]], k: Press) -> usize {
-        let from = self.sel;
-        match (items.get(from), items.get(from + 1)) {
-            (Some(Item::Seat(i)), Some(Item::Remove(j))) if k.right && i == j => return from + 1,
-            (Some(Item::Remove(_)), _) if k.left => return from - 1,
-            _ => {}
-        }
-        // B396: off a ✕ (on its card's corner) as off its card
-        if let (Some(Item::Remove(_)), Some(Item::Seat(_))) = (items.get(from), from.checked_sub(1).and_then(|f| items.get(f))) {
-            let idx: Vec<usize> = (0..items.len()).filter(|&i| i == from - 1 || !matches!(items[i], Item::Remove(_))).collect();
-            let sub: Vec<[f32; 4]> = idx.iter().map(|&i| rects[i]).collect();
-            let to = idx[pill_step(&sub, idx.iter().position(|&i| i == from - 1).unwrap_or(0), k)];
-            return if to == from - 1 { from } else { to };
-        }
-        let idx: Vec<usize> = (0..items.len()).filter(|&i| i == from || !matches!(items[i], Item::Remove(_))).collect();
-        let sub: Vec<[f32; 4]> = idx.iter().map(|&i| rects[i]).collect();
-        idx[pill_step(&sub, idx.iter().position(|&i| i == from).unwrap_or(0), k)]
-    }
 
     /// The host's ←→ (or ✕) on settings pill `i` (1: umpire, 2: sets, 3: games, 4: mods): the next value, sent to
     /// everyone.
@@ -533,13 +533,11 @@ impl Menu {
     /// M14: the chosen lobby item is a computer player's seat (←→ and L1 / R1 change its pick).
     /// M14: on Online or the lobby, whether ↑↓ and ←→ reach another pill from the chosen one.
     pub(super) fn pill_axes(&self) -> (bool, bool) {
-        let lobby = self.screen == Screen::Lobby && !self.lobby_asking();
         let rects = if self.screen == Screen::Lobby { self.lobby_rects() } else { row_rects(self.grid.extra) };
-        let items = self.items();
         let to = |f: fn(&mut Press) -> &mut bool| {
             let mut k = Press::default();
             *f(&mut k) = true;
-            (if lobby { self.lobby_step(&items, &rects, k) } else { pill_step(&rects, self.sel, k) }) != self.sel
+            pill_step(&rects, self.sel, k) != self.sel
         };
         (to(|k| &mut k.up) || to(|k| &mut k.down), to(|k| &mut k.left) || to(|k| &mut k.right))
     }
@@ -572,8 +570,6 @@ impl Menu {
             Item::Seat(i) if self.guest(i).is_some() => return None,
             Item::Seat(_) if self.lobby_bot() => "Pick",
             Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add COM"),
-            Item::Remove(i) if self.guest(i).is_some() => "Take Out",
-            Item::Remove(_) => "Remove",
             Item::Mode if !self.net.hosting => return self.lobby_team().map(|_| "Swap team"),
             Item::Mode if self.can_switch() => "Singles / Doubles",
             Item::Mode => return None,
@@ -1172,7 +1168,7 @@ impl Menu {
                     return self.start(out);
                 }
                 // B449: the arrows go about the screen as its parts lie
-                let to = self.lobby_step(&items, &rects, k);
+                let to = pill_step(&rects, self.sel, k);
                 // B396: on this machine's own seat L1 / R1 step the costume and Select the hand, sent to everyone
                 let own = match items.get(self.sel) {
                     Some(Item::Seat(i)) if self.lobby_own() => Some(*i),
@@ -1211,14 +1207,6 @@ impl Menu {
                 } else if let Some(i) = bot.filter(|_| k.card) {
                     // B216: △ takes the computer player off its seat
                     out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]);
-                } else if let (true, Item::Remove(i)) = (k.ok, item) {
-                    // back onto the seat, as the ✕ goes with its player
-                    self.sel -= 1;
-                    match self.guest(i) {
-                        // B523: asked first, as △
-                        Some(_) => self.ask_kick(i, out),
-                        None => out.extend([Sound(1), Effect::Online(Fx::Net(Cmd::Bot(i, None)))]),
-                    }
                 } else if k.back || (k.ok && item == Item::Button("Leave")) {
                     out.push(Effect::Online(Fx::Net(Cmd::Leave)));
                     self.back_to_online(out);
@@ -3271,7 +3259,7 @@ mod tests {
         // each one's middle hits it
         let rects = m.lobby_rects();
         assert_eq!(rects.len(), m.items().len());
-        assert!(m.items().len() >= 17, "{:?}", m.items());
+        assert!(m.items().len() >= 14, "{:?}", m.items());
         for (k, [x, y, w, h]) in rects.iter().enumerate() {
             assert_eq!(at(&m, x + w / 2.0, y + h / 2.0), Some(k), "{:?}", m.items()[k]);
         }
@@ -3300,15 +3288,14 @@ mod tests {
         sample(&mut m);
         m.net.hosting = true;
         let items = m.items();
-        assert_eq!(items[..12], [Item::Seat(0), Item::Seat(1), Item::Remove(1), Item::Seat(2), Item::Remove(2), Item::Seat(3), Item::Set(0), Item::Set(1), Item::Set(2), Item::Set(3), Item::Set(4), Item::Mode]);
-        assert_eq!(items[12..16], [Item::Button("Code"), Item::Button("Copy Link"), Item::Button("Public"), Item::Button("Leave")]);
+        assert_eq!(items[..10], [Item::Seat(0), Item::Seat(1), Item::Seat(2), Item::Seat(3), Item::Set(0), Item::Set(1), Item::Set(2), Item::Set(3), Item::Set(4), Item::Mode]);
+        assert_eq!(items[10..13], [Item::Button("Code"), Item::Button("Copy Link"), Item::Button("Public")]);
         assert_eq!(*items.last().unwrap(), Item::Button("Start"));
         // B523: a guest's card: ✕ picks it up (○ puts it back); its ✕ asks to kick them, Kick takes them out
         to(&mut m, Item::Seat(1));
         assert_eq!((m.lobby_ok(), net(&m.step(dev, ok)), m.net.grab), (Some("Move"), None, Some(1)));
         assert_eq!((net(&m.step(dev, Press { back: true, ..default() })), m.net.grab, m.items()[m.sel]), (None, None, Item::Seat(1)));
-        to(&mut m, Item::Remove(1));
-        assert_eq!((m.lobby_ok(), net(&m.step(dev, ok)), m.net.kick, m.sel), (Some("Take Out"), None, Some((1, 1)), 1), "asked, on Cancel");
+        assert_eq!((net(&m.step(dev, Press { card: true, ..default() })), m.net.kick, m.sel), (None, Some((1, 1)), 1), "△ asks, on Cancel");
         m.step(dev, Press { up: true, ..default() });
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Kick("k51qzi5uqu5d".into())));
         assert_eq!((m.items()[m.sel], m.net.kick), (Item::Seat(1), None));
@@ -3359,8 +3346,8 @@ mod tests {
         assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Prepared(false)));
         assert_eq!(m.screen, Screen::Chars);
         m.screen = Screen::Lobby;
-        to(&mut m, Item::Button("Leave"));
-        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Leave));
+        // no Leave button: Back leaves
+        assert_eq!(net(&m.step(dev, Press { back: true, ..default() })), Some(Cmd::Leave));
         assert_eq!((m.screen, m.net.room.is_none()), (Screen::Online, true));
         // taken out: only Leave is left
         let mut m = Menu { screen: Screen::Lobby, ..default() };
@@ -3899,19 +3886,12 @@ mod tests {
             items[c.sel]
         };
         assert_eq!(go(Item::Seat(0), |k| k.right = true), Item::Seat(1));
-        assert_eq!(go(Item::Seat(1), |k| k.right = true), Item::Remove(1), "onto the guest's ✕");
-        assert_eq!(go(Item::Remove(1), |k| k.right = true), Item::Seat(2), "across VS");
+        assert_eq!(go(Item::Seat(1), |k| k.right = true), Item::Seat(2), "across VS");
         assert_eq!(go(Item::Seat(2), |k| k.left = true), Item::Seat(1));
-        assert_eq!(go(Item::Seat(3), |k| k.right = true), Item::Remove(3), "onto the computer's ✕");
-        assert_eq!(go(Item::Remove(3), |k| k.left = true), Item::Seat(3));
-        assert_eq!(go(Item::Remove(3), |k| k.right = true), Item::Remove(3), "the court's edge");
+        assert_eq!(go(Item::Seat(3), |k| k.right = true), Item::Seat(3), "the court's edge");
         assert!(matches!(go(Item::Seat(1), |k| k.down = true), Item::Set(_)), "↓ onto the strip");
         assert!(matches!(go(Item::Seat(0), |k| k.up = true), Item::Button(_) | Item::Mode), "↑ onto the bar");
-        assert!(matches!(go(Item::Set(0), |k| k.down = true), Item::Button("Leave")), "↓ onto the bottom row");
-        assert!(matches!(go(Item::Button("Leave"), |k| k.up = true), Item::Set(_)));
-        for i in 0..4 {
-            assert!(!items.iter().any(|&it| it != Item::Seat(i) && go(it, |k| k.right = true) == Item::Remove(i) && !matches!(it, Item::Remove(_))), "only its own card reaches the ✕");
-        }
+        assert_eq!(go(Item::Set(4), |k| k.right = true), Item::Button("Start"), "Start inline with the settings");
         // the code pill: OK copies the link
         let mut c = m.clone();
         c.sel = at(Item::Button("Code"));
@@ -3971,23 +3951,24 @@ mod tests {
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, ok)) else { panic!() };
         // Cody: Sunny Day is ready on costume 1, so it landed on 2 and R1 took it to 3
         assert_eq!((p.char, p.costume, m.screen, m.net.edit), (c, 2, Screen::Lobby, None));
-        m.net.room.as_mut().unwrap().seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(6, 0) });
+        assert_eq!(m.items()[m.sel], Item::Seat(3), "the cursor stays on the computer's card");
+        let mut r = m.net.room.clone().unwrap();
+        r.seats[3] = Some(Seat { peer: crate::net::CPU.into(), pick: Pick::disc(6, 0) });
+        m.heard(Event::Room(r));
+        assert_eq!(m.items()[m.sel], Item::Seat(3), "and once the lobby has it");
         // OK on a computer's seat: its pick on the select again; ○ back to the lobby as it was
         m.sel = m.items().iter().position(|it| *it == Item::Seat(3)).unwrap();
         assert_eq!(net(&m.step(dev, ok)), None);
         assert_eq!((m.screen, m.players[3].char(), m.players[3].ready), (Screen::Chars, 6, false));
         assert_eq!(net(&m.step(dev, Press { back: true, ..default() })), None);
-        assert_eq!((m.screen, m.net.edit), (Screen::Lobby, None));
-        m.sel = m.items().iter().position(|it| *it == Item::Seat(3)).unwrap();
+        assert_eq!((m.screen, m.net.edit, m.items()[m.sel]), (Screen::Lobby, None, Item::Seat(3)));
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { next: true, ..default() })) else { panic!() };
         assert_eq!((p.char, p.costume, m.items()[m.sel]), (6, 1, Item::Seat(3)), "the host's costume 0 of the same character taken");
         m.net.room.as_mut().unwrap().seats[3].as_mut().unwrap().pick.random = true;
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, Press { next: true, ..default() })) else { panic!() };
         assert!(p.random, "a new costume keeps a Random computer hidden");
-        // ←→ don't change its character: → reaches its ✕, OK on that takes it off
+        // ←→ don't change its character; △ takes it off
         assert_eq!(net(&m.step(dev, Press { right: true, ..default() })), None);
-        assert_eq!(m.items()[m.sel], Item::Remove(3));
-        assert_eq!(net(&m.step(dev, ok)), Some(Cmd::Bot(3, None)));
         assert_eq!((m.items()[m.sel], net(&m.step(dev, Press { card: true, ..default() }))), (Item::Seat(3), Some(Cmd::Bot(3, None))));
         // singles only once the taken seats fit
         m.sel = m.items().iter().position(|it| *it == Item::Mode).unwrap();
@@ -4056,15 +4037,15 @@ mod tests {
         let mut m = Menu { screen: Screen::Lobby, ..default() };
         sample(&mut m);
         (m.net.hosting, m.sel) = (true, 0);
-        let (seat, rm, set, b) = (Item::Seat, Item::Remove, Item::Set, Item::Button);
-        walk(&mut m, &[(r, seat(1)), (r, rm(1)), (l, seat(1)), (r, rm(1)), (r, seat(2)), (r, rm(2)), (r, seat(3))]);
+        let (seat, set, b) = (Item::Seat, Item::Set, Item::Button);
+        walk(&mut m, &[(r, seat(1)), (r, seat(2)), (l, seat(1)), (r, seat(2)), (r, seat(3))]);
         m.sel = m.items().iter().position(|i| *i == set(0)).unwrap();
         walk(&mut m, &[(r, set(1)), (r, set(2)), (r, set(3)), (r, set(4)), (l, set(3))]);
         // M121: the top bar left to right: Copy link, Public, the code, Singles / Doubles
         m.sel = m.items().iter().position(|i| *i == b("Copy Link")).unwrap();
         walk(&mut m, &[(r, b("Public")), (r, b("Code")), (r, Item::Mode), (l, b("Code"))]);
-        m.sel = m.items().iter().position(|i| *i == b("Leave")).unwrap();
-        walk(&mut m, &[(r, b("Chat")), (r, b("Start")), (l, b("Chat"))]);
+        m.sel = m.items().iter().position(|i| *i == set(4)).unwrap();
+        walk(&mut m, &[(r, b("Start")), (l, set(4))]);
         // every item reachable with the arrows, the host's and a guest's
         for guest in [false, true] {
             if guest {

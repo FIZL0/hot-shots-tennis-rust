@@ -36,7 +36,6 @@ const COURT: [f32; 3] = hex(0x2f6f9f);
 const NET: [f32; 3] = hex(0xe9eef5);
 pub(super) const GOLD: [f32; 3] = hex(0xffd23f);
 const READY: [f32; 3] = hex(0x2fa860);
-pub(super) const CHAT: [f32; 3] = hex(0xd3deef);
 
 /// A seat's colours (1P red, 2P yellow, 3P blue, 4P green): the ring and header, the plate, the model's well, the
 /// soft words.
@@ -842,36 +841,6 @@ pub(super) fn start(d: &mut Draw, g: &Geo, big: &str, small: &str, play: bool, s
     }
     dotted(d, small, x + w / 2.0, top + bs, ss, w - g.x(40.0), NAVY, true);
 }
-
-/// The chat box: the last lines heard ("who" bold in their colour, then the words).
-pub(super) fn chat(d: &mut Draw, g: &Geo, lines: &[(String, String)], sel: bool) {
-    let [x, y, w, h] = g.chat;
-    if w <= 0.0 {
-        return;
-    }
-    rounded(d, g.chat, g.x(10.0), PANEL, 128.0);
-    if sel {
-        focus(d, g.chat, g.x(10.0), g.x(4.0), g.x(3.0));
-    }
-    // B544: small, two lines in the box's 40
-    let size = g.y(12.0);
-    let pitch = size * 1.2 + g.y(1.0);
-    let n = lines.len().min(2);
-    let top = y + (h - pitch * n as f32) / 2.0;
-    for (k, (who, words)) in lines.iter().rev().take(2).rev().enumerate() {
-        let ly = top + pitch * k as f32;
-        let mut lx = x + g.x(12.0);
-        let room = w - g.x(24.0);
-        if !who.is_empty() {
-            let ww = d.width(who, size).min(room * 0.5);
-            super::left(d, who, lx, ly, size, ww, GOLD);
-            lx += ww + g.x(6.0);
-        }
-        let rest = ellipsis(d, words, size, x + w - g.x(12.0) - lx);
-        d.text(&rest, lx, ly, size, CHAT);
-    }
-}
-
 /// A play style's short name (the boards': "Net Player · Right"), Random's "?".
 pub(super) fn style_short(text: &Text, who: Who) -> &'static str {
     ["All-round", "Baseline", "Net Player", "Big Server"][style_of(text, who).min(3)]
