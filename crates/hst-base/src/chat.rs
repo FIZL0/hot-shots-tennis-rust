@@ -146,7 +146,28 @@ pub fn plugin(app: &mut App) {
     app.init_resource::<Chat>()
         .add_systems(Startup, sample)
         .add_systems(PreUpdate, input.after(bevy::input::InputSystems))
-        .add_systems(PostUpdate, draw);
+        .add_systems(PostUpdate, draw)
+        .add_systems(Update, system_keyboard);
+}
+
+/// The phone apps' system keyboard up while the typed box is open by touch ([`OPEN`], [`TOUCH`]), and a [`RAISE`] puts
+/// it down for a frame and up again. Here in the base app, not with the menus' popups (`main_menu::osk`): a match is
+/// its own mode, and the menu's systems don't run in it. It only moves the keyboard when the box opens or closes,
+/// so the menus' popups keep it otherwise.
+fn system_keyboard(mut was: Local<bool>, mut window: Query<&mut Window, With<bevy::window::PrimaryWindow>>) {
+    if !cfg!(any(target_os = "ios", target_os = "android")) {
+        return;
+    }
+    let raise = RAISE.swap(false, Ordering::Relaxed);
+    let want = OPEN.load(Ordering::Relaxed) && TOUCH.load(Ordering::Relaxed);
+    let Ok(mut w) = window.single_mut() else { return };
+    if raise && want && w.ime_enabled {
+        w.ime_enabled = false;
+        *was = false;
+    } else if want != *was {
+        w.ime_enabled = want;
+        *was = want;
+    }
 }
 
 /// `HST_CHAT` set (a shot of the chat).

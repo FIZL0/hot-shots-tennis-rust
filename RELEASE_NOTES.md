@@ -16,3 +16,4 @@
 - Mod characters' feet now stand on the court and lie flat through steps, lunges and serves like the regular players', instead of sinking into the ground or tipping on their toes.
 - Out of Bounds characters now show a face for every reaction: surprised, sad and angry looks that used to stay blank (Sophie, Bjorn, Fernando, Felipe, Bloom, LJ, Kate, Dino, Anya, Suzuki, Jasmine, Alex) play on their nearest expression.
 - Android browsers: when the phone's graphics crash again soon after a first crash, the game restarts on its fallback graphics instead of stopping with a "device lost" error.
+- Online chat on iPhone and Android: the chat button now brings up the keyboard during a match, not just in the lobby.
