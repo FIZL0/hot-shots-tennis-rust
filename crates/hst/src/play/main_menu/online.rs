@@ -487,6 +487,11 @@ impl Menu {
             return;
         }
         let pill = Item::Set(if self.sel == 1 { 0 } else { 1 });
+        // M121: opened by a tap while this machine's players pick: back to picking
+        if (0..self.players()).any(|p| self.seats[p].is_some() && !self.players[p].ready) {
+            (self.screen, self.sel) = (Screen::Chars, 0);
+            return self.send_venue(out);
+        }
         self.screen = Screen::Lobby;
         self.sel = self.items().iter().position(|it| *it == pill).unwrap_or(0);
         self.send_venue(out);
@@ -1249,6 +1254,27 @@ impl Menu {
         self.go(Screen::Chars, out);
     }
 
+    /// M121: a tap on the lobby's item `i` while this machine's players pick (the lobby around the select): the
+    /// settings, the code, Copy link, Public, Chat as on the lobby, the select staying up; Leave leaves as the select's
+    /// Back does.
+    pub(super) fn lobby_tap(&mut self, i: usize, k: Press) -> Vec<Effect> {
+        let mut out = Vec::new();
+        if self.screen != Screen::Chars || !self.online() {
+            return out;
+        }
+        if self.items().get(i) == Some(&Item::Button("Leave")) {
+            self.chars_back(&mut out);
+            return out;
+        }
+        let (sel, first) = (self.sel, self.net.first);
+        (self.screen, self.sel) = (Screen::Lobby, i);
+        self.online_step(k, &mut out);
+        if self.screen == Screen::Lobby {
+            (self.screen, self.sel, self.net.first) = (Screen::Chars, sel, first);
+        }
+        out
+    }
+
     /// B441: a press in the name's popup: its keys type the name (in capitals), Save keeps one that isn't blank,
     /// ○ leaves it as it was.
     fn online_name_step(&mut self, k: Press, out: &mut Vec<Effect>) {
@@ -1828,36 +1854,26 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
             d.info(&info);
         }
         Screen::Lobby => {
-            // B449 (ours, the board "Concept v4: Lobby"): the bar, the plates on the court, the strip, the bottom row;
-            // what's happening (not what the buttons do: the legend says that) in the chat box
+            // B449 (ours, the board "Concept v4: Lobby"); M121: with a lobby, `roster::chars` drew it (the select's
+            // columns and `lobby::over`); here only a prompt over it
             let room = m.net.room.as_ref();
-            let status = match () {
-                _ if let Some(r) = room.filter(|r| r.wait > 0) => Some(waiting(r)),
-                _ if !m.net.status.is_empty() => Some(m.net.status.clone()),
-                // B526: a browser's LAN guest waiting for the host says how its answer gets there
-                _ if room.is_none() && shared(&m.net).is_some() => Some(GUEST_LAN.into()),
-                _ => None,
-            };
+            let status = status_line(m);
             if !m.net.keep.is_empty() {
-                lobby::draw(d, m, status.as_deref());
                 keep_popup(d, &m.net.keep, m.sel);
                 return;
             }
             if let Some((name, court)) = m.net.ask.and_then(|h| asked(room?, h)) {
                 // a mod this machine doesn't have: its looks, or its donor as a stand-in, asked over the lobby; the gold
                 // pill is the cursor, and it has to be answered
-                lobby::draw(d, m, status.as_deref());
                 ask_popup(d, name, court, room.map_or(0, |r| r.wait), m.sel, None);
                 return;
             }
             if let Some((title, help)) = m.kick_words() {
                 // B523: the host's kick, confirmed (a press off the box: Cancel)
-                lobby::draw(d, m, status.as_deref());
                 rows_popup(d, &title, &arrange::KICK_ROWS, &help, m.sel, Some(Act::Press(Press { back: true, ..Default::default() })));
                 return;
             }
             if room.is_some() {
-                lobby::draw(d, m, status.as_deref());
                 return;
             }
             d.frame(6, super::WALL);
@@ -1889,6 +1905,29 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         }
         _ => {}
     }
+}
+
+/// What's happening in the lobby (the wait for a mod's answer, a guest being taken out), for its chat box.
+pub(super) fn status_line(m: &Menu) -> Option<String> {
+    let room = m.net.room.as_ref();
+    match () {
+        _ if let Some(r) = room.filter(|r| r.wait > 0) => Some(waiting(r)),
+        _ if !m.net.status.is_empty() => Some(m.net.status.clone()),
+        // B526: a browser's LAN guest waiting for the host says how its answer gets there
+        _ if room.is_none() && shared(&m.net).is_some() => Some(GUEST_LAN.into()),
+        _ => None,
+    }
+}
+
+/// M121: the lobby around the online select's columns (`lobby::over`).
+pub(super) fn lobby_over(d: &mut Draw, m: &Menu) {
+    lobby::over(d, m);
+}
+
+/// The lobby under the court or umpire picker opened from it: the picker's panel covers the columns.
+pub(super) fn lobby_behind(d: &mut Draw, m: &Menu) {
+    super::look::backdrop(d);
+    lobby::over(d, m);
 }
 
 /// B236: dots in a ring, the bright one going round (once a second) with a fading tail, centred on (cx, cy).
@@ -2539,6 +2578,9 @@ pub(super) fn sample(m: &mut Menu) {
         r.seats.truncate(2);
     }
     let r = m.net.room.as_mut().unwrap();
+    // M121: the select's columns are the room's seats, as joining sets them
+    m.doubles = r.doubles;
+    m.net.go.get_or_insert(if m.net.hosting { Go::Host } else { Go::Code });
     if menu == "chars-online" {
         r.live.insert("host".into(), vec![Live { char: 6, costume: 0, ready: true, r#mod: None, name: String::new(), ..Default::default() }]);
         r.ready.clear();
@@ -3823,8 +3865,9 @@ mod tests {
         walk(&mut m, &[(r, seat(1)), (r, rm(1)), (l, seat(1)), (r, rm(1)), (r, seat(2)), (r, rm(2)), (r, seat(3))]);
         m.sel = m.items().iter().position(|i| *i == set(0)).unwrap();
         walk(&mut m, &[(r, set(1)), (r, set(2)), (r, set(3)), (r, set(4)), (l, set(3))]);
-        m.sel = m.items().iter().position(|i| *i == b("Code")).unwrap();
-        walk(&mut m, &[(r, b("Copy Link")), (r, b("Public")), (r, Item::Mode), (l, b("Public"))]);
+        // M121: the top bar left to right: Copy link, Public, the code, Singles / Doubles
+        m.sel = m.items().iter().position(|i| *i == b("Copy Link")).unwrap();
+        walk(&mut m, &[(r, b("Public")), (r, b("Code")), (r, Item::Mode), (l, b("Code"))]);
         m.sel = m.items().iter().position(|i| *i == b("Leave")).unwrap();
         walk(&mut m, &[(r, b("Chat")), (r, b("Start")), (l, b("Chat"))]);
         // every item reachable with the arrows, the host's and a guest's

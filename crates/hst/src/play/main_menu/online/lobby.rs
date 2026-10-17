@@ -1,21 +1,20 @@
-//! B449: the lobby, v4 (ours, the approved board "Concept v4: Lobby"; the frame and the plates are shared with the
-//! confirm screen, `frame.rs`). Along the top the title, the code pill (CODE and the join code, ✕ copies the link as
-//! Copy link does; the host's Public / Private) and the Singles / Doubles button (the host's □ or ✕ switches). The middle is
-//! the court: a team each side of the net (doubles: TEAM 1, TEAM 2; singles has no side names, B490: each client
-//! keeps its own player on the near side), a plate a seat with its seat-coloured
-//! header (tag, who has it: "You · Keyboard", "Mika · 35 ms" (the ping gold over 150 ms), Computer, Open seat; the
-//! host's X that takes the player off), the 3D model in its well (the stand-in note for a mod this machine lacks),
-//! the character, its style and hand and one chip: Ready, Picking..., Not ready, COM · rank or Open. A taken seat's
-//! plate follows its player's place on the select live (`Live`). Under it the scoreboard strip: Court (✕ opens the
-//! court select), Umpire (✕ opens the umpire select), Sets, Games and Mods (the host's ✕ steps them on; a tap on
-//! their ‹ › halves steps them back or on). Along the bottom Leave, the chat box (the last lines heard; ✕ types) and
-//! the host's big Start ("n of N ready · who is still picking") or a guest's Ready / Not ready. What the buttons do
-//! is only in the legend strip.
+//! B449: the lobby, v4 (ours, the approved board "Concept v4: Lobby"); M121: one screen with the character select, as
+//! the M120 mockup has it. The select's columns (`roster::chars`: this machine's players' rosters, the other seats'
+//! compact cards) are the lobby's seats, on the online select (`Screen::Chars`, this machine's players picking) and on
+//! the lobby (`Screen::Lobby`, the cursor on the lobby's own items) alike: going between them only moves the cursor.
+//! Along the top the title, Copy link, the host's Public / Private, the code pill (CODE and the join code, the relay's
+//! chip; ✕ copies the link as Copy link does) and the Singles / Doubles button (the host's □ or ✕ switches). On the
+//! lobby a seat's card takes the cursor (the host's X on another's takes the player off; a carried card says where it
+//! goes). Under the columns the scoreboard strip: Court (✕ opens the court select), Umpire (✕ opens the umpire
+//! select), Sets, Games and Mods (the host's ✕ steps them on; a tap on their ‹ › halves steps them back or on). Along
+//! the bottom Leave, the chat box (the last lines heard; ✕ types) and the host's big Start ("n of N ready · who is
+//! still picking") or a guest's Ready / Not ready. What the buttons do is only in the legend strip.
 
-use super::super::frame::{self, Cell, Chip, Plate, Spec, Thumb};
-use super::super::roster;
-use super::super::{Draw, Menu, WHITE, Who};
-use super::{Act, HOST_LAN, Item, OK, Reach, SETTINGS, chip, lock, reach, reach_line, shared, spinner, ticket_only};
+use super::super::frame::{self, Cell, Thumb};
+use super::super::Press;
+use super::super::roster::{self, PX, PY};
+use super::super::{Draw, Menu, Screen, WHITE};
+use super::{Act, Item, OK, SETTINGS, shared};
 use crate::net::Room;
 use bevy::prelude::default;
 
@@ -54,12 +53,43 @@ pub(in super::super) fn ready_count(r: &Room) -> (usize, usize) {
     ((0..r.seats.len()).filter(|&i| state(r, i) == State::Ready).count(), r.seats.len())
 }
 
+/// The title's room in the top bar (mockup px), left of Copy link.
+const TITLE_W: f32 = 230.0;
+
 impl Menu {
-    /// The frame for this lobby: its seats, the code pill (the host's Public in it), the chat box if chat's on.
-    pub(in super::super) fn lobby_geo(&self) -> frame::Geo {
-        let n = self.net.room.as_ref().map_or(if self.doubles { 4 } else { 2 }, |r| r.seats.len());
+    /// M121: the lobby's rows under the select's columns (the strip; Leave, the chat box, Start), across the columns'
+    /// width; its `stage` is the columns' view.
+    pub(in super::super) fn lobby_foot(&self) -> frame::Geo {
+        let [l, t, r, b] = self.grid.view;
+        let band = super::band_h(self, r - l - 2.0 * roster::MARGIN * PX);
         let chat = self.items().contains(&Item::Button("Chat"));
-        frame::layout(self.grid.reach(), Spec { n, code: true, public: self.net.hosting, chat })
+        frame::foot([l + roster::MARGIN * PX, t + band, r - roster::MARGIN * PX, b], chat)
+    }
+
+    /// M121: the top bar's buttons, right to left: Singles / Doubles, the code pill's place (the pill right-aligned
+    /// in it, as wide as its words), the host's Public (a browser's LAN host's Paste), Copy link. Fixed widths, so the
+    /// arrows and the taps agree with what's drawn. `[code, copy, public, mode]`.
+    pub(in super::super) fn lobby_bar(&self) -> [[f32; 4]; 4] {
+        let [l, t, r, _] = self.grid.view;
+        let (y, h) = (t + 16.0 * PY, 30.0 * PY);
+        let mode = [r - roster::MARGIN * PX - 140.0 * PX, y, 140.0 * PX, h];
+        let (copy_w, public_w) = (104.0 * PX, if self.net.hosting { 96.0 * PX } else { 0.0 });
+        let room = mode[0] - 12.0 * PX - (l + 32.0 + TITLE_W * PX) - copy_w - public_w - 16.0 * PX;
+        let code_w = room.clamp(150.0 * PX, 330.0 * PX);
+        let code = [mode[0] - 12.0 * PX - code_w, y, code_w, h];
+        let public = [code[0] - 8.0 * PX - public_w, y, public_w, h];
+        let copy = [public[0] - if public_w > 0.0 { 8.0 * PX } else { 0.0 } - copy_w, y, copy_w, h];
+        [code, copy, public, mode]
+    }
+
+    /// The lobby's frame: the foot, the top bar's buttons, a plate a seat (its column or compact card on the select).
+    pub(in super::super) fn lobby_geo(&self) -> frame::Geo {
+        let mut g = self.lobby_foot();
+        let c = self.columns();
+        g.plates = (0..c.n).map(|p| c.parts(p).card).collect();
+        [g.code, g.copy, g.public, g.mode] = self.lobby_bar();
+        g.pill = g.code;
+        g
     }
 
     /// Seat `i` is this machine's player's.
@@ -71,12 +101,11 @@ impl Menu {
     /// Where `items` are drawn.
     pub(in super::super) fn lobby_rects_geo(&self) -> Vec<[f32; 4]> {
         let g = self.lobby_geo();
-        let s = g.k * g.s;
         self.items()
             .iter()
             .map(|it| match *it {
                 Item::Seat(i) => g.plates.get(i).copied().unwrap_or_default(),
-                Item::Remove(i) => g.plates.get(i).map_or_else(Default::default, |&c| frame::remove_rect(c, s)),
+                Item::Remove(i) => g.plates.get(i).map_or_else(Default::default, |&c| roster::remove_rect(c)),
                 Item::Set(i) => g.cells[i.min(4)],
                 Item::Mode => g.mode,
                 Item::Button("Start" | "Ready") => g.start,
@@ -90,73 +119,100 @@ impl Menu {
     }
 }
 
-/// The lobby screen; `status` is what's happening (the wait for a mod's answer, a guest being taken out), shown in the
-/// chat box.
-pub(in super::super) fn draw(d: &mut Draw, m: &Menu, status: Option<&str>) {
-    frame::ground(d);
+/// M121: the lobby around the select's columns (`roster::chars` draws them on both screens, then this): the top bar's
+/// buttons; on the lobby each seat's focus, the host's ✕ and a carried card; the strip; Leave, the chat box and Start.
+/// While this machine's players pick (`Screen::Chars`) none of it has the cursor, and a tap reaches the settings, the
+/// code and Leave (`Act::Lobby`), not the seats, Start or Ready (the players ready on the select first).
+pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
+    let lobby = m.screen == Screen::Lobby;
     let items = m.items();
     let g = m.lobby_geo();
     let at = |it: Item| items.iter().position(|x| *x == it);
-    let on = |it: Item| !m.lobby_asking() && at(it).is_some_and(|k| k == m.sel);
-    let Some(rm) = m.net.room.as_ref() else { return };
-    // the top bar: the title, the code pill, Singles / Doubles (the host's □ or a tap)
-    frame::bar(d, &g, "Lobby", rm.doubles, false, on(Item::Mode));
-    if let Some(k) = at(Item::Mode) {
-        d.hit(g.mode, Act::Row(k, OK));
-    } else {
-        // only the host switches: a guest's is dimmed
-        frame::rounded(d, g.mode, g.mode[3] / 2.0, frame::NAVY, 64.0);
-    }
-    code_pill(d, m, rm, &g, &on);
-    for (b, rect) in [("Code", g.code), ("Copy Link", g.copy), ("Public", g.public), ("Paste", g.public)] {
-        if let Some(k) = at(Item::Button(b)) {
-            d.hit(rect, Act::Row(k, OK));
+    let on = |it: Item| lobby && !m.lobby_asking() && at(it).is_some_and(|k| k == m.sel);
+    let hit = |d: &mut Draw, it: Item, rect: [f32; 4], k: Press| {
+        let Some(i) = at(it) else { return };
+        if lobby {
+            d.hit(rect, Act::Row(i, k));
+        } else if !matches!(it, Item::Seat(_) | Item::Remove(_) | Item::Button("Start" | "Ready")) {
+            d.hit(rect, Act::Lobby(i, k));
         }
-    }
-    // B519: why friends can't join yet, wrapped across the top of the stage
-    // (the title only: the select's line says to pick a player, done by now)
-    if let Some((title, _)) = reach_line(&m.net) {
-        let size = g.y(14.0);
-        let w = g.stage[2] - 2.0 * g.x(24.0);
-        let cols = (w / (size * 0.55)).max(8.0) as usize;
-        let mut ty = g.stage[1] + g.y(4.0);
-        for l in super::super::wrap(title, cols) {
-            d.outlined(|d| d.label(&l, g.stage[0] + g.stage[2] / 2.0, ty, size, w, WHITE));
-            ty += size * 1.3;
-        }
-    }
-    // the court and the plates
-    // M120: no court drawn behind the Online screens (user 2026-10-16)
-    frame::sides(d, &g, if rm.doubles { ["TEAM 1", "TEAM 2"] } else { ["", ""] });
+    };
+    let rm = m.net.room.as_ref();
+    let own = m.room();
+    top_bar(d, m, rm.unwrap_or(&own), &g, &on, &hit);
+    // the seats: on the lobby the cursor, the host's ✕, a carried card over the select's own columns
     let s = g.k * g.s;
-    for i in 0..rm.seats.len() {
-        let Some(&rect) = g.plates.get(i) else { continue };
-        if let Some(k) = at(Item::Seat(i)) {
-            d.hit(rect, Act::Row(k, OK));
+    for (i, &rect) in g.plates.iter().enumerate().filter(|_| lobby) {
+        let Some(r) = rm else { break };
+        hit(d, Item::Seat(i), rect, OK);
+        if on(Item::Seat(i)) {
+            frame::focus(d, rect, 16.0 * PX, 4.0 * PX, 3.0 * PX);
         }
-        plate(d, m, rm, i, rect, s, on(Item::Seat(i)), at(Item::Remove(i)).is_some(), on(Item::Remove(i)));
-        carried(d, m, rm, i, rect, s);
-        if let Some(k) = at(Item::Remove(i)) {
-            let [x, y, w, h] = frame::remove_rect(rect, s);
-            d.hit([x - 2.0, y - 2.0, w + 4.0, h + 4.0], Act::Row(k, OK));
+        carried(d, m, r, i, rect, s);
+        if at(Item::Remove(i)).is_some() {
+            let xr = roster::remove_rect(rect);
+            frame::ringed(d, xr, xr[2] / 2.0, 2.0 * PX, frame::NAVY, Some(roster::seat(i).ring));
+            let xs = 14.0 * PY;
+            d.centred("X", xr[0] + xr[2] / 2.0, xr[1] + (xr[3] - xs) / 2.0, xs, frame::NAVY);
+            if on(Item::Remove(i)) {
+                frame::focus(d, xr, xr[2] / 2.0, 3.0 * PX, 3.0 * PX);
+            }
+            hit(d, Item::Remove(i), [xr[0] - 2.0, xr[1] - 2.0, xr[2] + 4.0, xr[3] + 4.0], OK);
         }
     }
-    strip(d, m, rm, &g, &items, &on);
+    strip(d, m, rm, &g, &on, &hit);
     // the bottom row: Leave, the chat box, Start / Ready
     frame::back(d, &g, "Leave", on(Item::Button("Leave")));
-    if let Some(k) = at(Item::Button("Leave")) {
-        d.hit(g.back, Act::Row(k, OK));
-    }
-    if let Some(k) = at(Item::Button("Chat")) {
+    hit(d, Item::Button("Leave"), g.back, OK);
+    if at(Item::Button("Chat")).is_some() {
         crate::chat::BOXED.store(true, std::sync::atomic::Ordering::Relaxed);
         let mut lines = crate::chat::RECENT.lock().map(|l| l.clone()).unwrap_or_default();
-        if let Some(s) = status {
-            lines.push((String::new(), s.to_string()));
+        if let Some(s) = super::status_line(m) {
+            lines.push((String::new(), s));
         }
         frame::chat(d, &g, &lines, on(Item::Button("Chat")));
-        d.hit(g.chat, Act::Row(k, OK));
+        hit(d, Item::Button("Chat"), g.chat, OK);
     }
     start_button(d, m, rm, &g, &items, &on);
+}
+
+/// The top bar's buttons right of the title: Copy link (dim until there's a link), the host's Public / Private (a
+/// browser's LAN lobby's Paste), the code pill (`online::corner`: CODE, the code greyed until it's live, the relay's
+/// chip) and Singles / Doubles (a guest's dimmed).
+fn top_bar(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, on: &dyn Fn(Item) -> bool, hit: &dyn Fn(&mut Draw, Item, [f32; 4], Press)) {
+    let lobby = m.screen == Screen::Lobby;
+    let at = |it: Item| m.items().contains(&it);
+    // Singles / Doubles: the host's □ (or a tap) switches; on the select a tap is the □ (B375, B392)
+    frame::bar(d, g, "", r.doubles, !lobby && m.net.hosting, on(Item::Mode));
+    if lobby {
+        hit(d, Item::Mode, g.mode, OK);
+    }
+    if !m.net.hosting {
+        frame::rounded(d, g.mode, g.mode[3] / 2.0, frame::NAVY, 64.0);
+    }
+    // the code pill, right-aligned in its place
+    let [cx, cy, cw, ch] = g.code;
+    let left = super::corner(d, m, cx + cw, cy, ch, cx);
+    if on(Item::Button("Code")) {
+        frame::focus(d, [left, cy, cx + cw - left, ch], ch / 2.0, 3.0 * PX, 3.0 * PX);
+    }
+    hit(d, Item::Button("Code"), [left, cy, cx + cw - left, ch], OK);
+    let dim = shared(&m.net).is_none();
+    let side = if m.lan_host() { (Item::Button("Paste"), "Paste", frame::BUTTON) } else { (Item::Button("Public"), if r.private { "Private" } else { "Public" }, if r.private { frame::BUTTON } else { frame::GREEN }) };
+    for (it, rect, words, fill) in [(Item::Button("Copy Link"), g.copy, "Copy link", frame::BUTTON), (side.0, g.public, side.1, side.2)] {
+        let [bx, by, bw, bh] = rect;
+        if bw <= 0.0 || !at(it) && !(it == Item::Button("Copy Link") && m.online()) {
+            continue;
+        }
+        frame::ringed(d, rect, bh / 2.0, 2.0 * PX, WHITE, Some(fill));
+        if on(it) {
+            frame::focus(d, rect, bh / 2.0, 3.0 * PX, 3.0 * PX);
+        }
+        let size = 14.0 * PY;
+        let rgb = if dim && it == Item::Button("Copy Link") { [70.0; 3] } else { WHITE };
+        d.label(words, bx + bw / 2.0, by + (bh - size) / 2.0, size, bw - 12.0 * PX, rgb);
+        hit(d, it, rect, OK);
+    }
 }
 
 /// B523: the host carrying a card: it stays dimmed where it was, "Moving"; the card it would go onto says what the
@@ -181,64 +237,16 @@ fn carried(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32) {
     d.label(words, x + w / 2.0, py + (ph - size) / 2.0, size, pw - 8.0, if i == from { frame::GOLD } else { frame::NAVY });
 }
 
-/// The code pill: CODE and the join code (a spinner until there is one), Copy link (dim until there's a link), the
-/// host's Public / Private.
-fn code_pill(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, on: &dyn Fn(Item) -> bool) {
-    let [x, y, _, h] = g.pill;
-    frame::ringed(d, g.pill, h / 2.0, g.x(2.0), frame::RULE, Some(frame::PANEL));
-    if on(Item::Button("Code")) {
-        frame::focus(d, g.code, h / 2.0, g.x(3.0), g.x(3.0));
-    }
-    let cx = x + g.x(14.0);
-    let ls = g.y(12.0);
-    let label = if ticket_only(&m.net) { "LINK" } else if r.private { "PRIVATE" } else { "CODE" };
-    super::super::left(d, label, cx, y + (h - ls) / 2.0, ls, g.x(46.0), frame::CAPTION);
-    let vx = cx + g.x(46.0 + 8.0);
-    let vw = g.copy[0] - g.x(8.0) - vx;
-    // B519: until friends can join, a lock and the code greyed (Copy link dims with it)
-    let up = reach(&m.net) == Reach::Up;
-    if shared(&m.net).is_some() || !m.net.short.is_empty() {
-        let code = if ticket_only(&m.net) { "Ready" } else if m.net.short.is_empty() { "...." } else { m.net.short.as_str() };
-        let size = g.y(24.0);
-        let (vx, vw) = if up { (vx, vw) } else { (vx + g.y(18.0), vw - g.y(18.0)) };
-        if !up {
-            lock(d, vx - g.y(18.0), y + h / 2.0, g.y(16.0), roster::hex(0x6f6b85));
-        }
-        super::super::left(d, code, vx, y + (h - size) / 2.0, size, vw, if up { frame::GOLD } else { roster::hex(0x6f6b85) });
-    } else {
-        spinner(d, m.net.spin, vx + g.x(12.0), y + h / 2.0, g.y(9.0));
-    }
-    // the relay chip after the pill, if the bar has room for it
-    let cx = g.public[0] + g.public[2] + g.x(12.0);
-    let ch = g.y(28.0);
-    if cx + chip(d, &m.net, 0.0, 0.0, ch, true) <= g.mode[0] - g.x(12.0) {
-        chip(d, &m.net, cx, y + h / 2.0, ch, false);
-    }
-    let dim = shared(&m.net).is_none();
-    let public = !r.private;
-    // B526: a browser's LAN lobby's Paste (a guest's link back) where Public is
-    let side = if m.lan_host() { (Item::Button("Paste"), g.public, "Paste", frame::BUTTON) } else { (Item::Button("Public"), g.public, if public { "Public" } else { "Private" }, if public { frame::GREEN } else { frame::BUTTON }) };
-    let buttons = [(Item::Button("Copy Link"), g.copy, "Copy link", frame::BUTTON), side];
-    for (it, rect, words, fill) in buttons {
-        let [bx, by, bw, bh] = rect;
-        if bw <= 0.0 {
-            continue;
-        }
-        frame::rounded(d, rect, bh / 2.0, fill, 128.0);
-        if on(it) {
-            frame::focus(d, rect, bh / 2.0, g.x(3.0), g.x(3.0));
-        }
-        let size = g.y(13.0);
-        let rgb = if dim && it == Item::Button("Copy Link") { [70.0; 3] } else { WHITE };
-        d.label(words, bx + bw / 2.0, by + (bh - size) / 2.0, size, bw - g.x(12.0), rgb);
-    }
-}
-
-/// The strip: Court, Umpire, Sets, Games, Mods (the host's ‹ › on the values that step).
-fn strip(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, items: &[Item], on: &dyn Fn(Item) -> bool) {
+/// The strip: Court, Umpire, Sets, Games, Mods (the host's ‹ › on the values that step). The host's own choices before
+/// the lobby is open; a guest's "..." until its line-up comes.
+fn strip(d: &mut Draw, m: &Menu, r: Option<&Room>, g: &frame::Geo, on: &dyn Fn(Item) -> bool, hit: &dyn Fn(&mut Draw, Item, [f32; 4], Press)) {
     let text = d.text;
-    let at = |it: Item| items.iter().position(|x| *x == it);
     let host = m.net.hosting;
+    let own = m.room();
+    let Some(r) = r.or(host.then_some(&own)) else {
+        let cell = |label| Cell { label, value: "...".into(), arrows: false, sel: false, thumb: Thumb::None };
+        return frame::strip(d, m, g, &[cell("COURT"), cell("UMPIRE"), cell("SETS"), cell("GAMES"), cell("MODS")]);
+    };
     // the host's own choice (Random stays Random), a guest's the lobby's
     let (court, sets, games, umpire) = if host { (m.court, m.sets, m.games, m.umpire as usize) } else { (m.room_court_value(r), r.sets, r.games, r.umpire as usize) };
     let umpire_name = match r.umpire_mod.as_ref().filter(|_| !host && !r.vanilla) {
@@ -255,19 +263,24 @@ fn strip(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, items: &[Item], on: &
     ];
     frame::strip(d, m, g, &cells);
     for (i, cell) in g.cells.iter().enumerate() {
-        let Some(k) = at(Item::Set(i)) else { continue };
         let [x, y, w, h] = *cell;
-        d.hit(*cell, Act::Row(k, OK));
+        hit(d, Item::Set(i), *cell, OK);
         if i >= 2 {
             // a tap on the ‹ › halves: back or on
-            d.hit([x, y, w * 0.35, h], Act::Row(k, super::Press { ok: true, left: true, ..default() }));
-            d.hit([x + w * 0.65, y, w * 0.35, h], Act::Row(k, super::Press { ok: true, right: true, ..default() }));
+            hit(d, Item::Set(i), [x, y, w * 0.35, h], Press { ok: true, left: true, ..default() });
+            hit(d, Item::Set(i), [x + w * 0.65, y, w * 0.35, h], Press { ok: true, right: true, ..default() });
         }
     }
 }
 
-/// The host's Start ("n of N ready · who is still picking") or a guest's Ready / Not ready.
-fn start_button(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, items: &[Item], on: &dyn Fn(Item) -> bool) {
+/// The host's Start ("n of N ready · who is still picking") or a guest's Ready / Not ready; before the lobby is open,
+/// what it waits for (no tap).
+fn start_button(d: &mut Draw, m: &Menu, r: Option<&Room>, g: &frame::Geo, items: &[Item], on: &dyn Fn(Item) -> bool) {
+    let big = if m.net.hosting { "Start" } else { "Ready" };
+    let Some(r) = r else {
+        let small = if m.net.hosting { "Opening the lobby..." } else { "Joining the lobby..." };
+        return frame::start(d, g, big, small, false, false);
+    };
     let Some(k) = items.iter().position(|it| matches!(it, Item::Button("Start" | "Ready"))) else { return };
     let (n, of) = ready_count(r);
     let picking = (0..r.seats.len()).find(|&i| state(r, i) == State::Picking).and_then(|i| r.seats[i].as_ref().map(|s| super::seat_name(m, r, i, &s.peer)));
@@ -284,96 +297,9 @@ fn start_button(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, items: &[Item]
         _ => ("Ready".into(), format!("{n} of {of} ready · waiting for the host"), false),
     };
     frame::start(d, g, &big, &small, play, on(items[k]));
-    d.hit(g.start, Act::Row(k, OK));
-}
-
-/// Seat `i`'s plate name, its character and whether it shows as Random.
-fn seat_pick(m: &Menu, r: &Room, i: usize, s: &crate::net::Seat) -> (String, Who, bool) {
-    let pl = &m.players[i];
-    let live = r.live_of(i).filter(|_| s.human());
-    // Random: the plate they're on now (live), else the pick they readied
-    let random = pl.random || live.map_or(s.pick.random, |l| l.random || (l.ready && s.pick.random));
-    let (who, _) = m.pick(i);
-    // the name: the mod's own (B234) for one this machine lacks, Random hidden until the match (B217)
-    let name = match (live, &s.pick.r#mod) {
-        _ if random => "Random".to_string(),
-        (Some(l), _) if !l.name.is_empty() => l.name.clone(),
-        (Some(_), _) | (None, None) => match who {
-            Who::Mod(j) => m.mods[j].name.clone(),
-            Who::Disc(c) => super::super::CHAR_NAMES[c.min(super::super::CHARS - 1)].to_string(),
-        },
-        (None, Some(w)) => w.name.clone(),
-    };
-    (name, who, random)
-}
-
-/// Seat `i`'s plate.
-#[allow(clippy::too_many_arguments)]
-fn plate(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32, focus: bool, remove: bool, remove_focus: bool) {
-    let text = d.text;
-    let hide = m.lobby_asking();
-    let seat = r.seats.get(i).and_then(Option::as_ref);
-    let Some(st) = seat else {
-        // an open seat: the computer plays it unless someone joins
-        // B526: a browser's LAN lobby says how it's joined, in the well
-        let mod_note = m.lan_host().then(|| HOST_LAN.to_string());
-        let pl = Plate { p: i, owner: "Open seat", slow: false, name: "Computer", sub: "Until someone joins", chip: Chip::Open, chip_words: "Open", dashed: true, remove: false, focus, remove_focus: false, random: false, hide, empty: true, mod_note, device: None };
-        return frame::plate(d, &pl, rect, s);
-    };
-    let com = !st.human();
-    let mine = m.mine(i);
-    let (name, who, random) = seat_pick(m, r, i, st);
-    // who has it: this machine's device, the player's name and ping, or the computer
-    let me = if m.net.hosting { "host" } else { m.net.me.as_str() };
-    let ping = match () {
-        _ if com || mine => None,
-        _ if st.peer == "host" => r.ping.get(me),
-        _ => r.ping.get(&st.peer),
-    };
-    let owner = match () {
-        _ if com => "Computer".to_string(),
-        _ if mine => match m.seats[i.min(3)] {
-            Some(super::super::Dev::Keys) => "You · Keyboard".into(),
-            Some(super::super::Dev::Pad(_)) => "You · Controller".into(),
-            _ => "You".into(),
-        },
-        _ => match ping {
-            Some(ms) => format!("{} · {ms} ms", super::seat_name(m, r, i, &st.peer)),
-            None => super::seat_name(m, r, i, &st.peer),
-        },
-    };
-    let state = state(r, i);
-    let (chip, chip_words) = match state {
-        _ if com => {
-            let rank = super::super::com_rank(&text.ranks, st.pick.char, st.pick.costume, r.doubles);
-            (Chip::Com, format!("COM · {}", super::super::RANK_NAMES.get(rank).copied().unwrap_or("COM").trim_start_matches("Tennis ")))
-        }
-        State::Open | State::Ready => (Chip::Ready, "Ready".to_string()),
-        State::Picking => (Chip::Picking, "Picking...".to_string()),
-        State::Waiting => (Chip::Waiting, "Not ready".to_string()),
-    };
-    let sub = if random { "Picked at the start".to_string() } else { format!("{} · {}", frame::style_short(text, who), if m.hand(text, i) < 0.0 { "Left" } else { "Right" }) };
-    let mod_note = m.remote_mod_note(i);
-    let pl = Plate {
-        p: i,
-        owner: &owner,
-        slow: ping.is_some_and(|ms| *ms > 150),
-        name: &name,
-        sub: &sub,
-        chip,
-        chip_words: &chip_words,
-        dashed: com,
-        remove,
-        focus,
-        remove_focus,
-        random,
-        hide,
-        empty: false,
-        mod_note,
-        // M95: a person's platform and input (this machine's too, as the lobby has it)
-        device: r.devices.get(&st.peer).copied().filter(|_| !com),
-    };
-    frame::plate(d, &pl, rect, s);
+    if m.screen == Screen::Lobby {
+        d.hit(g.start, Act::Row(k, OK));
+    }
 }
 
 #[cfg(test)]
@@ -402,7 +328,7 @@ mod tests {
         assert_eq!(ready_count(&r), (3, 4));
     }
 
-    /// Any aspect ratio: every item inside the view, apart (a plate's X on its own plate), the plates on the court.
+    /// Any aspect ratio: every item inside the view, apart (a seat's X on its own column), the columns over the strip.
     #[test]
     fn lays_out_at_any_aspect() {
         for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 1.0, 3.0 / 4.0, 9.0 / 16.0, 0.4] {
@@ -411,7 +337,8 @@ mod tests {
                 super::super::sample(&mut m);
                 m.net.hosting = hosting;
                 let g = m.lobby_geo();
-                let [l, t, r, b] = m.grid.reach();
+                // M121: the lobby is the select's columns, across the whole view
+                let [l, t, r, b] = m.grid.view;
                 let inside = |c: &[f32; 4]| c[0] >= l - 0.01 && c[1] >= t - 0.01 && c[0] + c[2] <= r + 0.01 && c[1] + c[3] <= b + 0.01;
                 let apart = |a: &[f32; 4], c: &[f32; 4]| a[0] + a[2] <= c[0] + 0.01 || c[0] + c[2] <= a[0] + 0.01 || a[1] + a[3] <= c[1] + 0.01 || c[1] + c[3] <= a[1] + 0.01;
                 let items = m.items();
@@ -423,7 +350,8 @@ mod tests {
                         assert!(x || apart(a, c), "{aspect}: {:?} {a:?} over {:?} {c:?}", items[k], items[j]);
                     }
                 }
-                assert!(g.plates.iter().all(|p| p[0] >= g.court[0] && p[0] + p[2] <= g.court[0] + g.court[2] + 0.01), "{aspect}");
+                // the columns over the strip, inside the stage
+                assert!(g.plates.iter().all(|p| p[0] >= g.court[0] - 0.01 && p[0] + p[2] <= g.court[0] + g.court[2] + 0.01 && p[1] + p[3] <= g.strip[1] + 0.01), "{aspect} {:?} {:?}", g.plates, g.strip);
             }
         }
     }

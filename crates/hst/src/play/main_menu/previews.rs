@@ -291,6 +291,8 @@ fn icons(menu: Res<Menu>, mut loader: ResMut<Loader>, mut icons: ResMut<super::I
     let page: Vec<Who> = match menu.screen {
         // B368: every column's tiles on view
         Screen::Chars => menu.on_view(),
+        // M121: the lobby shows the select's columns
+        Screen::Lobby if menu.online() => menu.on_view(),
         // the main screen's pictures' faces (`home::faces`), as the baker draws them
         Screen::Main => super::home::faces(&menu),
         Screen::Mods => super::mods_screen::faces(&menu),

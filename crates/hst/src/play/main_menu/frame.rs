@@ -226,6 +226,32 @@ fn layout_in([l, t, r, b]: [f32; 4], spec: Spec, turned: bool) -> Geo {
     Geo { k, s, turned, title, pill, code, copy, public, mode, stage, court, labels, vs, plates, strip, cells, back, chat, start }
 }
 
+/// M121: the lobby's lower rows alone along the bottom of `reach`: the strip, then Leave, the chat box and Start, as
+/// wide as `reach` (at most full size, smaller only to fit its width or a fifth of a short window's height). The online
+/// select's columns go over them; `stage` is what's left above, the bar and the plates empty.
+pub(super) fn foot([l, t, r, b]: [f32; 4], chat: bool) -> Geo {
+    let rows = ROW_GAP + STRIP_H + ROW_GAP + FOOT_H + PAD_B;
+    let foot_w = (BACK_W + START_W + 12.0 + if chat { CHAT_MIN + 12.0 } else { 0.0 }).max(STRIP_MIN);
+    let k = ((r - l) / PX / foot_w).min((b - t) / PY * 0.3 / rows).min(1.0);
+    let x = |px: f32| px * k * PX;
+    let y = |px: f32| px * k * PY;
+    let foot = b - y(PAD_B) - y(FOOT_H);
+    let strip = [l, foot - y(ROW_GAP) - y(STRIP_H), r - l, y(STRIP_H)];
+    let stage = [l, t, r - l, strip[1] - y(ROW_GAP) - t];
+    let sum: f32 = GROW.iter().sum();
+    let mut at = strip[0];
+    let cells = GROW.map(|g| {
+        let w = strip[2] * g / sum;
+        at += w;
+        [at - w, strip[1], w, strip[3]]
+    });
+    let back = [l, foot, x(BACK_W), y(FOOT_H)];
+    let start = [r - x(START_W), foot, x(START_W), y(FOOT_H)];
+    let chat = if chat { [back[0] + back[2] + x(12.0), foot, start[0] - x(12.0) - (back[0] + back[2] + x(12.0)), y(FOOT_H)] } else { [back[0] + back[2], foot, 0.0, 0.0] };
+    let none = [l, t, 0.0, 0.0];
+    Geo { k, s: 1.0, turned: false, title: none, pill: none, code: none, copy: none, public: none, mode: none, stage, court: stage, labels: [none; 2], vs: none, plates: Vec::new(), strip, cells, back, chat, start }
+}
+
 /// The strip with only its first `n` cells, spread by their shares across all of it (the rest left zero wide at its
 /// right end): the confirm screen leaves Handicap out until handicaps work (B482, back with B40g1).
 pub(super) fn spread(g: &mut Geo, n: usize) {
@@ -426,11 +452,7 @@ pub(super) fn spaced(d: &mut Draw, s: &str, cx: f32, y: f32, size: f32, gap: f32
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Chip {
     Ready,
-    Picking,
-    /// Picked, not readied yet (a guest's Ready).
-    Waiting,
     Com,
-    Open,
 }
 
 /// What a plate shows.
@@ -629,8 +651,7 @@ pub(super) fn plate(d: &mut Draw, pl: &Plate, [x, y, w, h]: [f32; 4], s: f32) {
     dotted(d, pl.sub, bx, ry + (chh - ss) / 2.0, ss, bw - cw - 6.0 * sx, c.soft, false);
 }
 
-/// The status chip in `rect`: Ready (green), Picking… (dashed gold), Not ready (dashed soft), COM (white), Open
-/// (dashed white).
+/// The status chip in `rect`: Ready (green), COM (white).
 fn chip(d: &mut Draw, kind: Chip, words: &str, [x, y, w, h]: [f32; 4], s: f32) {
     let t = 2.0 * s * PX;
     let ink = match kind {
@@ -641,15 +662,6 @@ fn chip(d: &mut Draw, kind: Chip, words: &str, [x, y, w, h]: [f32; 4], s: f32) {
         Chip::Com => {
             rounded(d, [x, y, w, h], h, WHITE, 128.0);
             NAVY
-        }
-        Chip::Picking | Chip::Waiting | Chip::Open => {
-            let ink = match kind {
-                Chip::Picking => GOLD,
-                Chip::Waiting => CAPTION,
-                _ => WHITE,
-            };
-            dashed(d, [x, y, w, h], h / 2.0 * PX / PY, t, 5.0 * s * PX, ink);
-            ink
         }
     };
     let size = 13.0 * s * PY;
