@@ -28,3 +28,4 @@
 - Phones with very sharp screens use much less graphics memory in the menus and in matches, and the browser game warms up the match graphics while you wait in an online lobby, so online matches load faster on phones.
 - Online lobby: a player who picks Random shows as Random to everyone else, not as the character their cursor was on.
 - Online: locking in your character plays their voice line again (it was silent when you were the last on your machine to pick).
+- Online lobbies download another player's mod from the mod store when it's published there, instead of from that player's device, so it arrives faster and their phone no longer slows down while sending it.

@@ -1,7 +1,8 @@
 //! Mods in online matches (M2i). A lobby pick of a mod carries its gameplay data ([`Wire`]: donor, hand, TParam row
 //! and overrides, AI row and the costume's skeleton), and every peer simulates the mod from that, so the match plays
 //! the same whether or not a peer has the mod's looks. The looks are optional: a peer without them asks once
-//! (always / never / ask each time, kept in `mods-online/ask.txt` beside the disc); taken, they come peer to peer as
+//! (always / never / ask each time, kept in `mods-online/ask.txt` beside the disc); taken, they come from the mod
+//! store when it has the same mod with the same looks (M125, `modstore::fetch_looks`), else peer to peer, as
 //! one [`pack`] (data files only, size-capped, hash-checked, then §7-checked before use) into `mods-online/<hash>/`;
 //! declined, the plain donor stands in.
 
@@ -160,15 +161,16 @@ pub fn hash(b: &[u8]) -> u64 {
     b.iter().fold(0xcbf2_9ce4_8422_2325, |h, &x| (h ^ x as u64).wrapping_mul(0x100_0000_01b3))
 }
 
-/// A mod folder's data files (sorted, `/`-separated, upscaled textures left out) as one blob: per file the path's
-/// length (u32 LE), the path, the size (u64 LE), the bytes.
+/// A mod folder's data files (sorted, `/`-separated, upscaled textures and a store install's `store.json` left out)
+/// as one blob: per file the path's length (u32 LE), the path, the size (u64 LE), the bytes. M125: so a copy from the
+/// store packs (and hashes) the same as the owner's, wherever each came from.
 pub fn pack(dir: &Path) -> Result<Vec<u8>, String> {
     // B285: through `modfs`, so the browser's mods (held in memory, not on a file system) pack too
     fn walk(root: &Path, d: &Path, out: &mut Vec<String>) {
         for p in crate::modfs::read_dir(d) {
             let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
             if crate::modfs::is_file(&p) {
-                if allowed(&rel) {
+                if allowed(&rel) && rel != "store.json" {
                     out.push(rel);
                 }
             } else if rel != "textures/upscaled" {
@@ -391,6 +393,8 @@ mod tests {
         std::fs::write(src.join("voice/0_0.wav"), [1, 2, 3]).unwrap();
         std::fs::write(src.join("run.sh"), "rm -rf /").unwrap();
         std::fs::write(src.join("textures/upscaled/a.png"), [0; 9]).unwrap();
+        // M125: a store install's stamp too (the store's copy and the owner's pack the same)
+        std::fs::write(src.join("store.json"), "{}").unwrap();
         let p = pack(&src).unwrap();
         let names: Vec<_> = files(&p, hash(&p)).unwrap().into_iter().map(|f| f.0).collect();
         assert_eq!(names, ["mod.json", "voice/0_0.wav"]);

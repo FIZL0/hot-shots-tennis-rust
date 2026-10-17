@@ -974,6 +974,9 @@ pub struct Net {
     in_room: std::sync::atomic::AtomicBool,
     /// M95: this machine's platform and input, shared with the network task (`Ctx::device`).
     device: Shared,
+    /// M125: into `events` from beside the network task (a mod's looks from the store); whether the store is asked.
+    ev: mpsc::Sender<Event>,
+    store: bool,
 }
 
 /// M95: this machine's `Device`, set from the app and read by the network task (its Hello).
@@ -988,6 +991,7 @@ impl Net {
         let (ev, events) = mpsc::channel();
         let device: Shared = std::sync::Arc::new((*crate::device::CURRENT.lock().unwrap()).into());
         let d = device.clone();
+        let store = ev.clone();
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("net".into())
@@ -999,15 +1003,15 @@ impl Net {
         // the browser: a task on the page's event loop
         #[cfg(target_arch = "wasm32")]
         n0_future::task::spawn(run(cfg, cmd_rx, ev, d));
-        Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default(), device }
+        Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default(), device, ev: store, store: true }
     }
 
     /// A `Net` with no network behind it: what it's told to send comes out of the receiver (tests).
     #[cfg(any(test, feature = "testing"))]
     pub fn wired() -> (Net, amp::UnboundedReceiver<Cmd>) {
         let (cmd, rx) = amp::unbounded_channel();
-        let (_, events) = mpsc::channel();
-        (Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default(), device: Default::default() }, rx)
+        let (ev, events) = mpsc::channel();
+        (Net { cmd, events: events.into(), chats: Default::default(), emotes: Default::default(), in_room: Default::default(), device: Default::default(), ev, store: false }, rx)
     }
 
     /// This test `Net` in a lobby (`in_room`), as a `Room` or `Hosting` event would put it.
@@ -1024,6 +1028,23 @@ impl Net {
             *self.device.lock().unwrap() = d;
         }
         let _ = self.cmd.send(c);
+    }
+
+    /// M125: mod `h`'s looks wanted (`Cmd::Want`). A mod the lobby names by id (`id`: a pick's, the host's court) comes
+    /// from the mod store when it has that mod with these looks (`modstore::fetch_looks`, staged under `cache`), out
+    /// as an `Event::Pack` and checked like a peer's; else, or when the store can't be reached, from its owner's
+    /// device as before.
+    pub fn want(&self, h: u64, id: Option<&str>, cache: &std::path::Path) {
+        let Some(id) = id.filter(|_| self.store) else { return self.send(Cmd::Want(h)) };
+        let (ev, p, cmd, name) = (self.ev.clone(), self.ev.clone(), self.cmd.clone(), id.to_string());
+        let tell = move |got, len| drop(p.send(Event::Progress(h, got, len)));
+        crate::modstore::fetch_looks(id.into(), h, cache.join(format!(".store-{h:016x}")), tell, move |got| match got {
+            Ok(b) => drop(ev.send(Event::Pack(h, b))),
+            Err(e) => {
+                bevy::log::info!("online mod {name}: from its owner ({e})");
+                drop(cmd.send(Cmd::Want(h)));
+            }
+        });
     }
 
     /// M108: sends `Cmd::Leave` when called, from any thread (an Android app gone to the background, its frames stopped).

@@ -81,6 +81,11 @@ pub struct Meta {
     pub covers: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub look: Option<u8>,
+    /// M125: a character's or court's looks as an online lobby names them (`mods_online::pack`'s hash, 16 hex
+    /// digits), so a lobby fetches them from here instead of from the player's device ([`fetch_looks`]). Absent in an
+    /// upload from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub looks: Option<String>,
 }
 
 /// B373: a mod's kind (`meta.json` / `mod.json` `"kind"`): absent is a character, so every older entry still reads;
@@ -331,6 +336,7 @@ fn meta_of(b: &[u8], id: &str) -> Option<Meta> {
     m.textures = m.textures.filter(|_| m.kind == Kind::Textures);
     m.covers = m.covers.filter(|&c| m.kind == Kind::Textures && (c as usize) < crate::mods_textures::COVERS.len());
     m.look = m.look.filter(|&c| m.kind == Kind::Textures && (c as usize) < crate::mods_textures::LOOKS.len());
+    m.looks = m.looks.filter(|l| l.len() == 16 && u64::from_str_radix(l, 16).is_ok()).map(|l| l.to_ascii_lowercase());
     (!m.name.is_empty()).then_some(m)
 }
 
@@ -733,6 +739,45 @@ async fn fetch(e: &Entry, root: &Path, upscaled: bool) -> Result<Mod, String> {
     }
 }
 
+/// M125: the store's copies of mod `id` that may have the looks `looks` (an online lobby's, `mods_online::pack`'s
+/// hash), likeliest first: the ones whose meta says so, then up to two uploads from before [`Meta::looks`], `main`'s
+/// first; one naming other looks never. `lists` as [`lists`] reads them (`main`, then each PR newest first).
+fn looks_candidates(lists: Vec<Vec<Entry>>, id: &str, looks: u64) -> Vec<Entry> {
+    let all: Vec<Entry> = lists.into_iter().flatten().filter(|e| e.meta.id == id && e.meta.kind != Kind::Textures && !crate::mods::dropped(id) && !retired(e)).collect();
+    let says = |e: &Entry| e.meta.looks.as_deref().and_then(|l| u64::from_str_radix(l, 16).ok());
+    let mut out: Vec<Entry> = all.iter().filter(|e| says(e) == Some(looks)).cloned().collect();
+    out.extend(all.iter().filter(|e| e.meta.looks.is_none()).take(2).cloned());
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|e| seen.insert(e.meta.sha256.clone()));
+    out
+}
+
+/// M125: an online lobby's mod `id` with the looks `looks`, from the store instead of its owner's device (a phone
+/// sending tens of MB over the relay is slow and drags its frame rate): a listed copy that may have them
+/// ([`looks_candidates`]) is downloaded without its upscaled set into `stage` (on disk, the browser's in memory), packed
+/// and hashed, and `done` hears the pack if it hashes to `looks` (else why not: the owner is asked instead). `stage`
+/// is cleared afterwards either way; `tell` hears how far a download is (bytes so far, the zip's size).
+pub fn fetch_looks(id: String, looks: u64, stage: std::path::PathBuf, tell: impl Fn(u64, u64) + Send + Sync + 'static, done: impl FnOnce(Result<Vec<u8>, String>) + Send + 'static) {
+    spawn(async move {
+        let got = async {
+            // no internet (a LAN lobby) or a store that hangs: the owner it is, soon
+            let lists = n0_future::time::timeout(n0_future::time::Duration::from_secs(15), lists()).await.map_err(|_| "the store didn't answer".to_string())??;
+            for e in looks_candidates(lists, &id, looks) {
+                let b = ranged_with(&e, &stage, !cfg!(target_arch = "wasm32"), |_, got, len| tell(got, len)).await.and_then(|m| crate::mods_online::pack(&m.dir));
+                modfs::remove(&stage);
+                let _ = std::fs::remove_dir_all(&stage);
+                match b {
+                    Ok(b) if crate::mods_online::hash(&b) == looks => return Ok(b),
+                    Ok(_) => bevy::log::info!("store mod {}: other looks than the lobby's", e.key()),
+                    Err(err) => bevy::log::info!("store mod {}: {err}", e.key()),
+                }
+            }
+            Err(format!("the store has no {id} with these looks"))
+        };
+        done(got.await);
+    });
+}
+
 /// `e`'s whole `mod.zip` downloaded, checked and installed on disk.
 #[cfg(not(target_arch = "wasm32"))]
 async fn whole(e: &Entry, root: &Path) -> Result<Mod, String> {
@@ -799,6 +844,17 @@ impl Drop for Zip {
 /// as it's unpacked (`modfs::unpack_with`); the connection is HTTPS to the store either way.
 async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
     send(Event::Progress(e.key(), format!("Downloading {}...", e.meta.name)));
+    let (key, name) = (e.key(), &e.meta.name);
+    ranged_with(e, root, disk, |was, got, _| {
+        if got >> 20 != was >> 20 {
+            send(Event::Progress(key.clone(), format!("Downloading {name}... {} MB", got >> 20)));
+        }
+    })
+    .await
+}
+
+/// [`ranged`], telling `tell` how far it's got as each part comes (bytes before it, bytes so far, the zip's size).
+async fn ranged_with(e: &Entry, root: &Path, disk: bool, tell: impl Fn(u64, u64, u64) + Sync) -> Result<Mod, String> {
     let asked = file_url(&e.rev, &format!("mods/{}/mod.zip", e.meta.id));
     let mut r = ask(&asked, 0, 1).await?;
     if r.status() != reqwest::StatusCode::PARTIAL_CONTENT && r.url().as_str() != asked {
@@ -817,9 +873,8 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
         return Err("too big".into());
     }
     let (url, got) = (r.url().to_string(), std::sync::atomic::AtomicU64::new(0));
-    let key = e.key();
     let read = |at: u64, n: usize| {
-        let (url, got, name, key) = (url.clone(), &got, &e.meta.name, &key);
+        let (url, got, tell) = (url.clone(), &got, &tell);
         async move {
             if n == 0 {
                 return Ok(Vec::new());
@@ -829,9 +884,7 @@ async fn ranged(e: &Entry, root: &Path, disk: bool) -> Result<Mod, String> {
                 return Err("download cut short".into());
             }
             let was = got.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
-            if (was + n as u64) >> 20 != was >> 20 {
-                send(Event::Progress(key.clone(), format!("Downloading {name}... {} MB", (was + n as u64) >> 20)));
-            }
+            tell(was, was + n as u64, len);
             Ok(b.to_vec())
         }
     };
@@ -972,6 +1025,7 @@ pub fn package(m: &Mod, stats: Option<(usize, [u8; 5])>, iso: &str) -> Result<Pa
         textures: pack.as_ref().map(|p| p.0),
         covers: crate::mods_textures::tag(&j, "covers").filter(|_| pack.is_some()),
         look: crate::mods_textures::tag(&j, "look").filter(|_| pack.is_some()),
+        looks: (kind != Kind::Textures).then(|| crate::mods_online::pack(&m.dir).ok()).flatten().map(|b| format!("{:016x}", crate::mods_online::hash(&b))),
     };
     let preview = pack.and_then(|p| p.1).or_else(|| preview_of(&files, kind));
     Ok(Package { zip, meta, preview })
@@ -1502,6 +1556,25 @@ mod tests {
 
     /// B250: a re-upload by its uploader goes onto their open PR, or a new PR once merged; the same zip, or an older
     /// version than the store's, is skipped.
+    /// M125: a lobby's mod from the store: the copies saying its looks first, then two from before `looks`, `main`'s
+    /// first; one naming other looks, another id or a texture pack never; meta.json's looks read only as 16 hex digits.
+    #[test]
+    fn looks_candidates_say_so_first() {
+        let e = |rev: &str, sha: &str, looks: Option<&str>| Entry { meta: Meta { looks: looks.map(Into::into), sha256: sha.repeat(64), ..meta("a", b"z") }, rev: rev.into(), verified: rev == "main" };
+        let h = 0x0123_4567_89ab_cdefu64;
+        let lists = vec![
+            vec![e("main", "1", None), e("main", "2", Some("00000000000000ff"))],
+            vec![e("refs/pr/9", "3", None), e("refs/pr/9", "4", Some("0123456789abcdef")), Entry { meta: Meta { id: "b".into(), ..e("", "5", None).meta }, ..e("refs/pr/9", "5", None) }],
+            vec![e("refs/pr/7", "6", None), Entry { meta: Meta { kind: Kind::Textures, ..e("", "7", None).meta }, ..e("refs/pr/7", "7", None) }],
+        ];
+        let got: Vec<String> = looks_candidates(lists, "a", h).iter().map(|e| e.meta.sha256[..1].to_string()).collect();
+        assert_eq!(got, ["4", "1", "3"]);
+        let j = |l: &str| serde_json::to_vec(&serde_json::json!({"id": "a", "name": "A", "size": 1, "sha256": "a".repeat(64), "looks": l})).unwrap();
+        assert_eq!(meta_of(&j("0123456789ABCDEF"), "a").unwrap().looks.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(meta_of(&j("123"), "a").unwrap().looks, None);
+        assert_eq!(meta_of(&j("0123456789abcdeg"), "a").unwrap().looks, None);
+    }
+
     #[test]
     fn re_upload_plan() {
         let new = Meta { id: "a".into(), version: "1.10".into(), sha256: "1".repeat(64), ..Default::default() };
@@ -1569,6 +1642,10 @@ mod tests {
         assert_eq!(stamp(&got.dir).unwrap().rev, "refs/pr/1");
         // the stamp stays out of a re-upload's zip
         assert!(!mod_files(&got.dir).unwrap().iter().any(|f| f.0 == "store.json"));
+        // M125: the meta names the looks an online lobby will, and the installed copy (stamp and all) has them
+        let looks = |d: &Path| format!("{:016x}", crate::mods_online::hash(&crate::mods_online::pack(d).unwrap()));
+        assert_eq!(p.meta.looks.as_deref(), Some(looks(&m.dir).as_str()));
+        assert_eq!(looks(&got.dir), looks(&m.dir));
         assert_eq!(mod_files(&got.dir).unwrap().len(), mod_files(&m.dir).unwrap().len());
         std::fs::remove_dir_all(&disk).unwrap();
     }
@@ -1747,6 +1824,34 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    /// M125 against the real store (`HST_LIVE_LOOKS=<id>`, network): store mod `id` installed as a player would (stamp
+    /// and all) names its looks; a lobby asking the store for them gets the same pack, and for other looks nothing.
+    #[test]
+    fn live_looks() {
+        let Ok(id) = std::env::var("HST_LIVE_LOOKS") else { return eprintln!("HST_LIVE_LOOKS unset (skipped)") };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let tmp = std::env::temp_dir().join(format!("hst-looks-{}", std::process::id()));
+        let lists = rt.block_on(lists()).unwrap();
+        let e = lists.iter().flatten().find(|e| e.meta.id == id).expect("not in the store").clone();
+        let m = rt.block_on(ranged(&e, &tmp.join("mods"), true)).unwrap();
+        modfs::write(&m.dir.join("store.json"), b"{}".to_vec()).unwrap();
+        let h = crate::mods_online::hash(&crate::mods_online::pack(&m.dir).unwrap());
+        eprintln!("{} at {}: looks {h:016x}, meta says {:?}", e.key(), e.rev, e.meta.looks);
+        let ask = |looks: u64| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let stage = tmp.join(format!(".store-{looks:016x}"));
+            fetch_looks(id.clone(), looks, stage.clone(), |_, _| {}, move |r| tx.send(r).unwrap());
+            let r = rx.recv_timeout(std::time::Duration::from_secs(600)).unwrap();
+            assert!(!stage.exists() && modfs::files_under(&stage).is_empty());
+            r
+        };
+        let b = ask(h).unwrap();
+        assert_eq!(crate::mods_online::hash(&b), h);
+        eprintln!("{} MB of looks from the store", b.len() >> 20);
+        assert!(ask(h ^ 1).is_err());
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     /// M19 against the real store (`HST_LIVE_MINE=<account>`): that account's uploads, read only.
