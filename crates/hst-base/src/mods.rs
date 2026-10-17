@@ -1467,9 +1467,12 @@ mod tests {
         let mut s = Stores(default(), default(), default(), default());
         let (m, c) = load_mod(&mut iso, &mut s, "test_pc00").unwrap();
         let disc = character::load_disc(&mut iso, 0, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
-        // rest = bind: each joint's model matrix at rest undoes its inverse bind
+        // rest = bind: each joint's model matrix at rest undoes its inverse bind (a foot's as it was before
+        // level_feet turned it onto the donor's: inverse_bind · back⁻¹)
         let rest = model(&c.skeleton, &c.skeleton.rest);
-        let worst = rest.iter().zip(&c.joints).map(|(r, j)| (Mat4::from_cols_array_2d(r) * j.inverse_bind - Mat4::IDENTITY).to_cols_array().iter().fold(0f32, |a, x| a.max(x.abs()))).fold(0f32, f32::max);
+        let f = c.feet.as_ref().unwrap();
+        let bind = |j: usize| f.sides[j].map_or(c.joints[j].inverse_bind, |s| c.joints[j].inverse_bind * Mat4::from_translation(f.turn[s].0) * Mat4::from_quat(f.turn[s].1) * Mat4::from_translation(-f.turn[s].0));
+        let worst = rest.iter().enumerate().map(|(j, r)| (Mat4::from_cols_array_2d(r) * bind(j) - Mat4::IDENTITY).to_cols_array().iter().fold(0f32, |a, x| a.max(x.abs()))).fold(0f32, f32::max);
         assert!(worst < 1e-3, "rest·inverse bind off by {worst}");
         for (id, ts) in [(0x10, [0.0, 0.3, 0.6]), (3, [0.0, 0.25, 0.5])] {
             for t in ts.map(|f| f * c.motions[&id].length) {
