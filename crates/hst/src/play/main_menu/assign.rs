@@ -179,7 +179,7 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         Kind::Online => "Online".into(),
     };
     let side = if p < (m.players() / 2).max(1) { "Near" } else { "Far" };
-    band(d, &s, [x, y, w, BAND * PY], human, p, m.player_name(p).as_deref(), &name, &device, side, None, m.droppable(p));
+    band(d, &s, [x, y, w, BAND * PY], human, p, m.player_name(p).as_deref(), &name, &device, side, None, m.droppable(p), None);
     if m.droppable(p) {
         // the take-off X inside the band's right end, a dark pill like its Near / Far
         let (bw, bh) = (22.0 * PX, 20.0 * PY);

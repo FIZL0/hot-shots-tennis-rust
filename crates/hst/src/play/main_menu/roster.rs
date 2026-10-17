@@ -390,6 +390,8 @@ pub(super) fn chip_w(d: &Draw, s: &str, h: f32) -> f32 {
 /// The character select, one column per player.
 pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
+    // online, the relay's notice band (if any) along the very top, the top bar under it
+    let t = t + super::online::band_h(m, r - l - 2.0 * MARGIN * PX);
     // the background over the whole window
     super::look::backdrop(d);
     // the top bar: the title (Back for the pointer, after the "<" `drawn` puts over it), the players and the mode
@@ -437,11 +439,11 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     names(d, m, &c);
 }
 
-/// M121: the online select, which is the lobby: the relay's notice band, the columns, the lobby around them (its top
+/// M121: the online select, which is the lobby: the relay's notice band (over the top bar), the columns, the lobby around them (its top
 /// bar's buttons, the strip, Leave, the chat box and Start: `lobby::over`), the name pickers over it all.
 fn online_chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
-    super::online::band(d, m, l + MARGIN * PX, t + TOP_BAR * PY, r - l - 2.0 * MARGIN * PX);
+    super::online::band(d, m, l + MARGIN * PX, t + 8.0 * PY, r - l - 2.0 * MARGIN * PX);
     let c = player_columns(d, m, text, bind, pads);
     super::online::lobby_over(d, m);
     names(d, m, &c);
@@ -527,7 +529,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let at = c.parts(p);
     // M120: another machine's seat (or an open one) online: a compact card, no roster
     if m.compact(p) {
-        return compact_card(d, m, text, &s, at.card, p);
+        return compact_card(d, m, text, bind, &s, at.card, p);
     }
     let active = is_active(m, n, p);
     let human = matches!(m.seats[p], Some(Dev::Keys | Dev::Pad(_))) || m.remote(p).is_some_and(|s| s.human());
@@ -571,7 +573,13 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         _ => None,
     };
     let side = if swap.is_some() { "Swap teams" } else if p < (n / 2).max(1) { "Near" } else { "Far" };
-    band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, false);
+    // B371: Start names the player on the device's own seat (the select only: on the lobby Start starts)
+    let name_key = match m.seats[p] {
+        Some(Dev::Pad(e)) if m.screen == super::Screen::Chars => legend::button_names(Some(e), legend::Act::Name, bind).first().cloned(),
+        Some(Dev::Keys) if m.screen == super::Screen::Chars => legend::button_names(None, legend::Act::Name, bind).first().cloned(),
+        _ => None,
+    };
+    band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, false, name_key.as_deref());
     if mine && m.seats[p].is_some() {
         // B371: a tap on the seat's number or names opens the name picker
         let [hx, hy, hw, hh] = at.head;
@@ -707,11 +715,6 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
 /// the header band (the player's name over "Online" and their ping), the figure full width with their platform and
 /// input (M95) in its corner, the character's name, hand and costume, then the roster card's own style bar and stats
 /// list where a local card has its grid, and along the foot what it is and where they are.
-/// M121: the host's ✕ on another machine's seat in the lobby: the figure's top-left corner, clear of the band's
-/// Near / Far and the device pill.
-pub(super) fn remove_rect([x, y, _, _]: [f32; 4]) -> [f32; 4] {
-    [x + (PAD + 6.0) * PX, y + (BAND + PAD + 6.0) * PY, 26.0 * PX, 26.0 * PY]
-}
 
 /// An open seat's line on the online select.
 pub(super) fn open_line(m: &Menu) -> &'static str {
@@ -728,7 +731,7 @@ pub(super) fn open_line(m: &Menu) -> &'static str {
     }
 }
 
-fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p: usize) {
+fn compact_card(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, card: [f32; 4], p: usize) {
     let Some(f) = m.card_facts(text, p) else {
         return open_seat_saying(d, s, card, p, false, open_line(m));
     };
@@ -753,7 +756,7 @@ fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p
         None => "Online".into(),
     };
     let side = if p < (m.players() / 2).max(1) { "Near" } else { "Far" };
-    band(d, s, [x, y, w, BAND * PY], !com, p, m.player_name(p).as_deref(), &f.owner, &sub, side, None, false);
+    band(d, s, [x, y, w, BAND * PY], !com, p, m.player_name(p).as_deref(), &f.owner, &sub, side, None, false, None);
     let (ix, iw) = (x + PAD * PX, w - 2.0 * PAD * PX);
     let mut cy = y + (BAND + PAD) * PY;
     let foot_h = 30.0 * PY;
@@ -778,6 +781,10 @@ fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p
     }
     if let Some(dev) = f.device {
         device_pill(d, dev, ix + iw, cy, s);
+    }
+    // the host's cursor on it: what its △ does, in the figure's top-left corner (a tap does it too)
+    if let Some(what) = m.remove_hint(p) {
+        remove_pill(d, m, bind, what, [ix + 6.0 * PX, cy + 6.0 * PY], iw - 12.0 * PX - 61.0 * PX);
     }
     cy += ph + ROW_GAP * PY;
     // the character's name, its hand and costume under it
@@ -828,6 +835,26 @@ fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p
     let ws = 13.0 * PY;
     let what = ellipsis(d, &what, ws, iw - pw - 8.0 * PX);
     d.text(&what, ix, foot_y + (foot_h - ws) / 2.0, ws, s.soft);
+}
+
+/// The host's Remove / Kick hint at `[x, y]`, at most `max` wide: a grey pill (as the hand pill) with the host's △ key.
+fn remove_pill(d: &mut Draw, m: &Menu, bind: &Bindings, what: &str, [x, y]: [f32; 2], max: f32) {
+    let dev = match (0..4).find_map(|q| m.seats[q]) {
+        Some(Dev::Pad(e)) => Some(e),
+        _ => None,
+    };
+    let key = legend::button_names(dev, legend::Act::Card, bind).first().cloned().unwrap_or_default();
+    let (ph, gh, ts, pad, gap) = (PILL * PY, 18.0 * PY, 13.0 * PY, 8.0 * PX, 6.0 * PX);
+    let kw = if key.is_empty() { 0.0 } else { chip_w(d, &key, gh) + gap };
+    let w = (pad + kw + d.width(what, ts) + pad).min(max.max(0.0));
+    let b = [x, y, w, ph];
+    look::outlined_pill(d, b, hex(look::GREY), 2.0);
+    if !key.is_empty() {
+        chip(d, &key, [x + pad, y + (ph - gh) / 2.0], gh, WHITE);
+    }
+    let words = (w - 2.0 * pad - kw).max(10.0);
+    d.label(what, x + pad + kw + words / 2.0, y + (ph - ts) / 2.0, ts, words, WHITE);
+    d.hit(b, pointer::press(|k| k.card = true));
 }
 
 /// M95: a player's platform and input in a navy pill in the top right corner of the well ending at `right` from `top`.
@@ -1011,7 +1038,7 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 /// pill on the right (`glyph`'s button art before it; left of the ✕ when `drop`; left out when the column is too
 /// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
+pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool, hint: Option<&str>) {
     // B471: the panel's header strip inside the card's outline, a dark rule under it; a computer player's in the
     // seat's light tint with dark words
     let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.sel, hex(look::INK)) };
@@ -1022,7 +1049,7 @@ pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, 
     let big = 36.0 * PY;
     let tag = format!("{}P", p + 1);
     let tx = x + 12.0 * PX;
-    let nx = match own {
+    let mut nx = match own {
         Some(own) => {
             // the words' box as tall as the 1P's caps and its outline
             let th = 32.0 * PY;
@@ -1035,6 +1062,11 @@ pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, 
             tx + d.width(&tag, big) + 10.0 * PX
         }
     };
+    // the button that names the player, by its name
+    if let Some(hint) = hint {
+        let ch = 18.0 * PY;
+        nx += chip(d, hint, [nx, y + (h - ch) / 2.0], ch, WHITE) + 8.0 * PX;
+    }
     let (ss, sh) = (12.0 * PY, 20.0 * PY);
     let gh = 14.0 * PY;
     let gw = glyph.map_or(0.0, |g| gh * legend::glyph_aspect(g, MODE_GLYPH) + 4.0 * PX);

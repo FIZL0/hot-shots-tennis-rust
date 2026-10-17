@@ -4,7 +4,7 @@
 //! the lobby (`Screen::Lobby`, the cursor on the lobby's own items) alike: going between them only moves the cursor.
 //! Along the top the title, Copy link, the host's Public / Private, the code pill (CODE and the join code, the relay's
 //! chip; ✕ copies the link as Copy link does) and the Singles / Doubles button (the host's □ or ✕ switches). On the
-//! lobby a seat's card takes the cursor (the host's X on another's takes the player off; a carried card says where it
+//! lobby a seat's card takes the cursor (the host's △ on another's takes the player off, its hint on the card; a carried card says where it
 //! goes). Under the columns the scoreboard strip: Court (✕ opens the court select), Umpire (✕ opens the umpire
 //! select), Sets, Games and Mods (the host's ✕ steps them on; a tap on their ‹ › halves steps them back or on). Along
 //! the bottom Leave, the chat box (the last lines heard; ✕ types) and the host's big Start ("n of N ready · who is
@@ -71,6 +71,8 @@ impl Menu {
     /// arrows and the taps agree with what's drawn. `[code, copy, public, mode]`.
     pub(in super::super) fn lobby_bar(&self) -> [[f32; 4]; 4] {
         let [l, t, r, _] = self.grid.view;
+        // under the relay's notice band
+        let t = t + super::band_h(self, r - l - 2.0 * roster::MARGIN * PX);
         let (y, h) = (t + 16.0 * PY, 30.0 * PY);
         let mode = [r - roster::MARGIN * PX - 140.0 * PX, y, 140.0 * PX, h];
         let (copy_w, public_w) = (104.0 * PX, if self.net.hosting { 96.0 * PX } else { 0.0 });
@@ -105,7 +107,6 @@ impl Menu {
             .iter()
             .map(|it| match *it {
                 Item::Seat(i) => g.plates.get(i).copied().unwrap_or_default(),
-                Item::Remove(i) => g.plates.get(i).map_or_else(Default::default, |&c| roster::remove_rect(c)),
                 Item::Set(i) => g.cells[i.min(4)],
                 Item::Mode => g.mode,
                 Item::Button("Start" | "Ready") => g.start,
@@ -120,7 +121,7 @@ impl Menu {
 }
 
 /// M121: the lobby around the select's columns (`roster::chars` draws them on both screens, then this): the top bar's
-/// buttons; on the lobby each seat's focus, the host's ✕ and a carried card; the strip; Leave, the chat box and Start.
+/// buttons; on the lobby each seat's focus and a carried card; the strip; Leave, the chat box and Start.
 /// While this machine's players pick (`Screen::Chars`) none of it has the cursor, and a tap reaches the settings, the
 /// code and Leave (`Act::Lobby`), not the seats, Start or Ready (the players ready on the select first).
 pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
@@ -133,7 +134,7 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
         let Some(i) = at(it) else { return };
         if lobby {
             d.hit(rect, Act::Row(i, k));
-        } else if !matches!(it, Item::Seat(_) | Item::Remove(_) | Item::Button("Start" | "Ready")) {
+        } else if !matches!(it, Item::Seat(_) | Item::Button("Start" | "Ready")) {
             d.hit(rect, Act::Lobby(i, k));
         }
     };
@@ -148,7 +149,7 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
         }
     };
     top_bar(d, m, r, &g, &on, &hit);
-    // the seats: on the lobby the cursor, the host's ✕, a carried card over the select's own columns
+    // the seats: on the lobby the cursor, a carried card over the select's own columns
     let s = g.k * g.s;
     for (i, &rect) in g.plates.iter().enumerate().filter(|_| lobby) {
         let Some(r) = rm else { break };
@@ -157,16 +158,6 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
             frame::focus(d, rect, 16.0 * PX, 4.0 * PX, 3.0 * PX);
         }
         carried(d, m, r, i, rect, s);
-        if at(Item::Remove(i)).is_some() {
-            let xr = roster::remove_rect(rect);
-            frame::ringed(d, xr, xr[2] / 2.0, 2.0 * PX, frame::NAVY, Some(roster::seat(i).ring));
-            let xs = 14.0 * PY;
-            d.centred("X", xr[0] + xr[2] / 2.0, xr[1] + (xr[3] - xs) / 2.0, xs, frame::NAVY);
-            if on(Item::Remove(i)) {
-                frame::focus(d, xr, xr[2] / 2.0, 3.0 * PX, 3.0 * PX);
-            }
-            hit(d, Item::Remove(i), [xr[0] - 2.0, xr[1] - 2.0, xr[2] + 4.0, xr[3] + 4.0], OK);
-        }
     }
     strip(d, m, rm, &g, &on, &hit);
     // the bottom row: Leave, the chat box, Start / Ready
@@ -347,7 +338,7 @@ mod tests {
         assert_eq!(ready_count(&r), (3, 4));
     }
 
-    /// Any aspect ratio: every item inside the view, apart (a seat's X on its own column), the columns over the strip.
+    /// Any aspect ratio: every item inside the view, apart, the columns over the strip.
     #[test]
     fn lays_out_at_any_aspect() {
         for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 1.0, 3.0 / 4.0, 9.0 / 16.0, 0.4] {
@@ -365,8 +356,7 @@ mod tests {
                 for (k, a) in rects.iter().enumerate() {
                     assert!(inside(a), "{aspect} {:?} {a:?}", items[k]);
                     for (j, c) in rects.iter().enumerate().skip(k + 1) {
-                        let x = matches!((items[k], items[j]), (Item::Seat(s), Item::Remove(x)) if s == x);
-                        assert!(x || apart(a, c), "{aspect}: {:?} {a:?} over {:?} {c:?}", items[k], items[j]);
+                        assert!(apart(a, c), "{aspect}: {:?} {a:?} over {:?} {c:?}", items[k], items[j]);
                     }
                 }
                 // the columns over the strip, inside the stage
