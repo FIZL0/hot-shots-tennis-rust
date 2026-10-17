@@ -99,7 +99,6 @@ mod court_mod_match;
 mod replay_pace;
 mod weather;
 pub mod no_hud;
-mod backdrop;
 mod phase_code;
 pub use hst_base::widescreen;
 
@@ -616,7 +615,6 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(key_hints::plugin);
     app.add_plugins(umpire_mod::plugin);
     app.add_plugins(no_hud::plugin);
-    app.add_plugins(backdrop::plugin);
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Last, |g: Option<Res<Game>>| crate::web::in_match(g.is_some()));
     app.insert_resource(Time::<Fixed>::from_hz(60.0))

@@ -64,64 +64,6 @@ pub mod store {
     pub fn settings(iso: &str) -> std::path::PathBuf {
         std::path::Path::new(iso).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(".".as_ref()).join("settings.txt")
     }
-
-    /// B524: a court's baked splash backdrop (`play/backdrop.rs` draws it in a match, the splash shows it): disc
-    /// court `n`'s key `court03`, a court mod's `mod-<id>` (its id's characters other than ASCII letters, digits, `-`
-    /// and `_` as `_`).
-    pub fn backdrop_key(disc: Option<usize>, mod_id: Option<&str>) -> String {
-        match mod_id {
-            Some(id) => format!("mod-{}", id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect::<String>()),
-            None => format!("court{:02}", disc.unwrap_or(0)),
-        }
-    }
-
-    /// The backdrop PNG `key` ([`backdrop_key`]): natively `cache/backdrops/<key>.png` beside settings.txt; in the
-    /// browser the card store's (OPFS) `backdrops~<key>.png` (`web::BACKDROPS`, kept through the previews' sweeps).
-    pub fn read_backdrop(iso: &str, key: &str) -> Option<Vec<u8>> {
-        #[cfg(target_arch = "wasm32")]
-        return { let _ = iso; crate::web::card(&format!("{}{key}.png", crate::web::BACKDROPS)).map(|b| b.to_vec()) };
-        #[cfg(not(target_arch = "wasm32"))]
-        std::fs::read(backdrops(iso).join(format!("{key}.png"))).ok()
-    }
-
-    pub fn write_backdrop(iso: &str, key: &str, png: Vec<u8>) -> std::io::Result<()> {
-        #[cfg(target_arch = "wasm32")]
-        return { let _ = iso; crate::web::put_card(format!("{}{key}.png", crate::web::BACKDROPS), png) };
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let dir = backdrops(iso);
-            std::fs::create_dir_all(&dir)?;
-            // whole or not at all: the splash may read it meanwhile
-            let tmp = dir.join(format!("{key}.png.part"));
-            std::fs::write(&tmp, png)?;
-            std::fs::rename(tmp, dir.join(format!("{key}.png")))
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn backdrops(iso: &str) -> std::path::PathBuf {
-        settings(iso).with_file_name("cache").join("backdrops")
-    }
-
-    /// The backdrop PNG `key`'s size, if there is one: only its header is read.
-    pub fn backdrop_size(iso: &str, key: &str) -> Option<[u32; 2]> {
-        #[cfg(target_arch = "wasm32")]
-        return { let _ = iso; png_size(&crate::web::card(&format!("{}{key}.png", crate::web::BACKDROPS))?) };
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use std::io::Read;
-            let mut head = [0; 24];
-            std::fs::File::open(backdrops(iso).join(format!("{key}.png"))).ok()?.read_exact(&mut head).ok()?;
-            png_size(&head)
-        }
-    }
-
-    /// A PNG's width and height from its header (IHDR), without decoding it.
-    pub fn png_size(png: &[u8]) -> Option<[u32; 2]> {
-        let at = |o: usize| Some(u32::from_be_bytes(png.get(o..o + 4)?.try_into().ok()?));
-        (png.get(..8)? == b"\x89PNG\r\n\x1a\n" && png.get(12..16)? == b"IHDR").then_some(())?;
-        Some([at(16)?, at(20)?])
-    }
 }
 
 #[derive(Resource, Clone)]
@@ -177,15 +119,6 @@ impl Orbit {
 /// Y-up without mirroring.
 #[derive(Component)]
 pub struct GameSpace;
-
-/// B524: the render layer the court's own meshes are on besides the scene's (0): the splash backdrop's bake camera
-/// (`play/backdrop.rs`) draws only it, so no player, ball or effect is in the picture.
-pub const COURT_LAYER: usize = 9;
-
-/// The court's meshes' layers: the scene's and [`COURT_LAYER`].
-pub fn court_layers() -> bevy::camera::visibility::RenderLayers {
-    bevy::camera::visibility::RenderLayers::from_layers(&[0, COURT_LAYER])
-}
 
 /// A sky, `_clo`, `_acc` or `_bg` model: the court draw stands it at the camera's eye + (0, lift, 0), turned by yaw
 /// about game y (`gs::backdrop`; slot 5's RAM has these matrices).

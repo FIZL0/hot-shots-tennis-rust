@@ -571,8 +571,6 @@ pub fn put_card(name: String, png: Vec<u8>) -> io::Result<()> {
 /// B372: the store's tile pictures in the card store (`modstore::keep_thumb`): not a drawing, never dropped with them.
 pub const PICTURES: &str = "mod-pictures~";
 
-/// B524: the splash's baked court backdrops (`store::write_backdrop`): not a drawing, never dropped with them.
-pub const BACKDROPS: &str = "backdrops~";
 
 /// Drop every card whose name doesn't start with `prefix` (an older drawing's), but the store's tile pictures.
 pub fn cards_keep(prefix: &str) {
@@ -580,7 +578,7 @@ pub fn cards_keep(prefix: &str) {
     let Some(cards) = cards.as_mut() else { return };
     let drop = page_fn("hstCardDrop");
     cards.retain(|name, _| {
-        let keep = name.starts_with(prefix) || name.starts_with(PICTURES) || name.starts_with(BACKDROPS);
+        let keep = name.starts_with(prefix) || name.starts_with(PICTURES);
         if !keep && let Some(f) = &drop {
             let _ = f.call1(&JsValue::NULL, &name.as_str().into());
         }

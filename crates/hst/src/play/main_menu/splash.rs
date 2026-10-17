@@ -7,13 +7,8 @@
 //! Behind it the confirm screen's court pictures (`MENU/WALL/COURTnn.XB`, read with the menus: nothing more to load)
 //! fill the window, still, crossfading slowly from court to court, dimmed and softened (568×256 is soft blown up
 //! to a big window), court mods with their own picture among them; the site's logo (`web/logo.svg`) over them.
-//! B524: a court that has been played here has a sharp backdrop baked in its match (`hst_play`'s `play/backdrop.rs`,
-//! `store::read_backdrop`): it shows that instead, unsoftened (court mods too, with or without their own picture).
-//! Only the court up and the next are decoded ([`backdrops`]), and nothing once the splash is gone.
 
 use bevy::prelude::*;
-use bevy::tasks::{IoTaskPool, Task};
-use std::collections::HashMap;
 
 use super::{COURTS, Dev, Draw, Menu, Screen, Tex, WHITE, court_pic, pointer};
 use hst_base::widescreen::Anchor;
@@ -29,8 +24,6 @@ const FADE: f32 = 3.0;
 const BLUR: f32 = 1.4;
 /// The backdrop's brightness (128 = as is).
 const DIM: f32 = 52.0;
-/// A baked backdrop's (B524): sharp, so a little brighter.
-const DIM_BAKED: f32 = 60.0;
 /// Seconds the "Player 1" card stays up after the press, before the main menu.
 const CLAIMED: f32 = 1.2;
 
@@ -43,13 +36,11 @@ pub(super) struct Splash {
     aspect: f32,
     /// `HST_MENU=press-claimed` (for `--shot`s): the card stays up.
     held: bool,
-    /// B524: the court values with a baked backdrop, its size and whether it's decoded ([`Backdrops`]).
-    baked: HashMap<usize, ([f32; 2], bool)>,
 }
 
 impl Default for Splash {
     fn default() -> Self {
-        Splash { t: 0.0, claimed: None, aspect: 4.0 / 3.0, held: false, baked: HashMap::new() }
+        Splash { t: 0.0, claimed: None, aspect: 4.0 / 3.0, held: false }
     }
 }
 
@@ -105,23 +96,15 @@ impl Menu {
         self.sel = 0;
     }
 
-    /// The courts the splash cycles: the disc's, then the court mods with a picture loaded or a backdrop baked.
+    /// The courts the splash cycles: the disc's, then the court mods with a picture loaded.
     fn splash_courts(&self) -> Vec<usize> {
-        (0..COURTS).chain(super::court_mods::values(self).filter(|&c| self.court_pic(c).is_some() || self.splash.baked.contains_key(&c))).collect()
+        (0..COURTS).chain(super::court_mods::values(self).filter(|&c| self.court_pic(c).is_some())).collect()
     }
 
     /// The court shown at splash time `t` (`k`th of `splash_courts`) and the one fading in after it.
     fn splash_court_at(&self, k: usize) -> usize {
         let courts = self.splash_courts();
         courts[k % courts.len()]
-    }
-
-    /// B524: court value `c`'s backdrop key (`store::backdrop_key`).
-    fn backdrop_key(&self, c: usize) -> Option<String> {
-        match self.court_mod_of(c) {
-            Some(x) => Some(crate::store::backdrop_key(None, Some(&x.id))),
-            None => (c < COURTS).then(|| crate::store::backdrop_key(Some(c), None)),
-        }
     }
 }
 
@@ -133,91 +116,19 @@ fn fill([pw, ph]: [f32; 2], aspect: f32) -> [f32; 4] {
 
 /// Court value `c`'s picture over the window at weight `w` (1: covers what's under it): [`BLUR`]'s taps,
 /// each at the alpha that leaves them all an equal share of `w` when drawn over one another in turn.
-/// B524: a decoded baked backdrop is drawn once, sharp.
 fn court(d: &mut Draw, m: &Menu, c: usize, w: f32) {
     let blurred = [[0.0, 0.0], [BLUR, 0.0], [-BLUR, 0.0], [0.0, BLUR], [0.0, -BLUR]];
-    let (tex, size, taps, dim): (_, _, &[[f32; 2]], _) = match (m.splash.baked.get(&c), m.court_pic(c)) {
-        (Some(&(size, true)), _) => (Tex::Backdrop(c), size, &[[0.0, 0.0]], DIM_BAKED),
-        (_, Some((i, size))) => (Tex::CourtMod(i), size, &blurred, DIM),
-        _ => (court_pic(m.court_layout(c)), [568.0, 256.0], &blurred, DIM),
+    let (tex, size) = match m.court_pic(c) {
+        Some((i, size)) => (Tex::CourtMod(i), size),
+        None => (court_pic(m.court_layout(c)), [568.0, 256.0]),
     };
     let [x, y, sw, sh] = fill(size, m.splash.aspect);
-    let n = taps.len() as f32;
-    for (j, &[dx, dy]) in taps.iter().enumerate() {
+    let n = blurred.len() as f32;
+    for (j, &[dx, dy]) in blurred.iter().enumerate() {
         let a = (w / n) / (1.0 - w + (j + 1) as f32 * w / n);
         let src = [(x + dx).clamp(0.0, size[0] - sw), (y + dy).clamp(0.0, size[1] - sh), sw, sh];
-        d.q(tex, src, [0.0, 0.0, 640.0, 448.0], [dim; 3], a * 128.0);
+        d.q(tex, src, [0.0, 0.0, 640.0, 448.0], [DIM; 3], a * 128.0);
     }
-}
-
-/// B524: the decoded backdrops (`Tex::Backdrop`) by court value, and the one decoding.
-#[derive(Resource, Default)]
-pub(super) struct Backdrops {
-    pub handles: HashMap<usize, Handle<Image>>,
-    /// The court mods' ids the sizes were read for.
-    read_for: Option<Vec<String>>,
-    decoding: Option<(usize, Task<Option<Image>>)>,
-    /// Court values whose PNG wouldn't decode, not tried again.
-    broken: Vec<usize>,
-}
-
-/// B524: on the splash, which courts have a backdrop (their sizes, from the PNG headers: once, and when the court
-/// mods change), and the court up and the next one decoded, one at a time off the frame; any other dropped. Off the
-/// splash, every decoded one goes.
-pub(super) fn backdrops(mut menu: ResMut<Menu>, mut b: ResMut<Backdrops>, args: Res<crate::Args>, mut images: ResMut<Assets<Image>>) {
-    if menu.screen != Screen::Press {
-        if !b.handles.is_empty() || b.decoding.is_some() {
-            b.handles.clear();
-            b.decoding = None;
-            menu.splash.baked.values_mut().for_each(|v| v.1 = false);
-        }
-        return;
-    }
-    let ids: Vec<String> = menu.court_mods.iter().map(|x| x.id.clone()).collect();
-    if b.read_for.as_ref() != Some(&ids) {
-        let courts = (0..COURTS).chain(COURTS + 1..COURTS + 1 + ids.len());
-        let baked: HashMap<usize, ([f32; 2], bool)> = courts
-            .filter_map(|c| {
-                let size = crate::store::backdrop_size(&args.iso, &menu.backdrop_key(c)?)?;
-                Some((c, (size.map(|v| v as f32), b.handles.contains_key(&c))))
-            })
-            .collect();
-        menu.splash.baked = baked;
-        b.read_for = Some(ids);
-    }
-    let k = (menu.splash.t / SHOW) as usize;
-    let want = [menu.splash_court_at(k), menu.splash_court_at(k + 1)];
-    b.handles.retain(|c, _| want.contains(c));
-    for (c, v) in menu.splash.baked.iter_mut() {
-        v.1 = b.handles.contains_key(c);
-    }
-    if let Some((c, task)) = &mut b.decoding {
-        let c = *c;
-        if !task.is_finished() {
-            return;
-        }
-        let Some((_, task)) = b.decoding.take() else { return };
-        match bevy::tasks::block_on(task) {
-            Some(i) if want.contains(&c) => {
-                b.handles.insert(c, images.add(i));
-                if let Some(v) = menu.splash.baked.get_mut(&c) {
-                    v.1 = true;
-                }
-            }
-            Some(_) => {}
-            None => b.broken.push(c),
-        }
-    }
-    let Some(&c) = want.iter().find(|c| menu.splash.baked.contains_key(c) && !b.handles.contains_key(c) && !b.broken.contains(c)) else { return };
-    let Some(key) = menu.backdrop_key(c) else { return };
-    let iso = args.iso.clone();
-    b.decoding = Some((c, IoTaskPool::get().spawn(async move { decode(&crate::store::read_backdrop(&iso, &key)?) })));
-}
-
-fn decode(png: &[u8]) -> Option<Image> {
-    use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
-    // the PNG holds the scene's encoded values: sRGB, as the disc pictures are read
-    Image::from_buffer(png, ImageType::Extension("png"), CompressedImageFormats::NONE, true, ImageSampler::linear(), bevy::asset::RenderAssetUsages::RENDER_WORLD).ok()
 }
 
 /// The splash: the courts behind, the logo, and what to press (or who has 1P).

@@ -630,8 +630,7 @@ fn load(
             || not.as_deref().is_some_and(|o| n.contains(o))
     };
     let spawn = |commands: &mut Commands, parts: &[(Handle<Mesh>, Handle<gs::GsMaterial>)], t: Transform| {
-        // B524: on the backdrop bake's layer too (its children and any spawned under it later)
-        let e = commands.spawn((t, Visibility::default(), bevy::app::Propagate(court_layers()))).id();
+        let e = commands.spawn((t, Visibility::default())).id();
         for (m, mat) in parts {
             commands.entity(e).with_child((Mesh3d(m.clone()), MeshMaterial3d(mat.clone())));
         }
@@ -1242,7 +1241,7 @@ fn clouds(
         for (i, k) in sky.list.iter().enumerate() {
             let rot = Quat::from_rotation_x(std::f32::consts::PI) * Quat::from_rotation_y(k.yaw);
             let bases = sky.models[k.model].iter().map(|(_, m)| materials.get(m).map_or(Vec4::ONE, |m| m.uniform.color)).collect();
-            let e = commands.spawn((CloudView(i, bases), Transform::from_rotation(rot).with_scale(Vec3::splat(40.0)), Visibility::default(), bevy::app::Propagate(court_layers()))).id();
+            let e = commands.spawn((CloudView(i, bases), Transform::from_rotation(rot).with_scale(Vec3::splat(40.0)), Visibility::default())).id();
             for (m, mat) in &sky.models[k.model] {
                 // its own material: the fade scales its alpha; clouds draw without fog
                 let mut mat = materials.get(mat).expect("cloud material").clone();
