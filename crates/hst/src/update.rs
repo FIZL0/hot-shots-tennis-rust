@@ -109,9 +109,12 @@ pub fn latest() -> Option<String> {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             let api = std::env::var("HST_UPDATE_API").unwrap_or_else(|_| "https://api.github.com/repos/FIZL0/opentennis/releases/latest".into());
             loop {
+                let asked = std::time::SystemTime::now();
                 match ours {
                     Ok(v) => match rt.block_on(check(&api, v, ASSET)) {
                         Ok(f) => {
+                            // in the log (a phone's hst-log.txt): whether this check saw the new release
+                            bevy::log::info!("update check: {}", f.as_ref().map_or(format!("{v} is the latest"), |f| format!("{} is out", f.tag)));
                             let now = f.is_some() && std::env::var_os("HST_UPDATE_NOW").is_some();
                             STATE.lock().unwrap().found = f;
                             if now {
@@ -126,7 +129,12 @@ pub fn latest() -> Option<String> {
                         Err(e) => bevy::log::info!("update check: {e}"),
                     },
                 }
-                std::thread::sleep(std::time::Duration::from_secs(30 * 60));
+                // B567: half an hour by the wall clock, not one 30-minute sleep: a phone keeps the app suspended for
+                // hours or days and a sleep's clock stops meanwhile, so a resumed app asked again only after half an
+                // hour more of use (a 1.0 IPA opened on a phone after 1.1.0 came out didn't offer it)
+                while !due(asked, std::time::SystemTime::now()) {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }
             }
         });
     });
@@ -136,6 +144,13 @@ pub fn latest() -> Option<String> {
         return None;
     }
     s.found.as_ref().map(|f| f.tag.clone()).or_else(|| s.commit.clone())
+}
+
+/// Whether the next check is due: half an hour after the last one `asked` by the wall clock (which keeps counting
+/// while a phone has the app suspended, and a clock set back to before it counts as due).
+#[cfg(not(target_arch = "wasm32"))]
+fn due(asked: std::time::SystemTime, now: std::time::SystemTime) -> bool {
+    now.duration_since(asked).map_or(true, |d| d >= std::time::Duration::from_secs(30 * 60))
 }
 
 /// The commit the "Beta" release was built from (GitHub's API asks for a User-Agent).
@@ -591,6 +606,17 @@ PGdwmy/sa9Kqh1f1dYqI+JP0Iweg2dLM/mEgnRNTVfsQ9pI1u5aeusKILuRdn61QcyAsnzeOSfS5RRAE
         }
         assert!(!newer("beta", "v0.1.0") && !newer("v0.1.0", "beta") && !newer("v1.2", "v1.0.0"));
         assert!(newer("1.0.0", "v0.9.9"));
+    }
+
+    /// B567: a check is due half an hour after the last by the wall clock, however long a phone kept the app
+    /// suspended in between; a clock set back counts as due.
+    #[test]
+    fn checks_again_half_an_hour_later_by_the_wall_clock() {
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+        let min = |m: u64| std::time::Duration::from_secs(60 * m);
+        assert!(!due(t, t) && !due(t, t + min(29)));
+        assert!(due(t, t + min(30)) && due(t, t + min(7 * 60)));
+        assert!(due(t, t - min(1)));
     }
 
     #[test]
