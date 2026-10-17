@@ -191,6 +191,8 @@ pub(super) struct Ceremony {
     gallery: Gallery,
     court_rng: Mt,
     voice: Option<Arc<SoundBank>>,
+    /// The prize voice's win program (lost is the next): 0 on the disc's prize bank, 9 (set cheer) on a mod's own bank.
+    voice_program: u8,
     /// The shown character, whose prize voice speaks.
     speaker: i32,
     /// The result music (with or without `--music`) and its level.
@@ -296,11 +298,14 @@ pub(super) fn begin(
     let slot = plan.start.iter().map(|&s| (s, 0.0)).collect();
     let c = g.chars[plan.shown].clamp(0, 13);
     let b = if g.stage == 7 { "B" } else { "" };
-    // B181: a mod character (not a costume pack) has no prize take of its own and never speaks its donor's
-    let modded = match_mod.as_ref().and_then(|m| m.0.get(plan.shown)?.as_ref()).is_some_and(|m| m.costume_of.is_none());
-    let voice = (!modded).then(|| SoundBank::load(&mut iso, &format!("SND/VOICE/PRIZE/PC_HV{c:02}{b}.XB0"), &format!("data/sound/VOICE/PRIZE/sgv_vc{c:02}f{}.hd", b.to_lowercase())))
-        .flatten()
-        .map(Arc::new);
+    // B181: a mod character (not a costume pack) never speaks its donor's; it has no prize take, so it says its own
+    // set cheer / groan (programs 9 / 10)
+    let modded = match_mod.as_ref().and_then(|m| m.0.get(plan.shown)?.as_ref()).filter(|m| m.costume_of.is_none());
+    let (voice, voice_program) = match modded {
+        Some(m) => (crate::mods::voice(m), 9),
+        None => (SoundBank::load(&mut iso, &format!("SND/VOICE/PRIZE/PC_HV{c:02}{b}.XB0"), &format!("data/sound/VOICE/PRIZE/sgv_vc{c:02}f{}.hd", b.to_lowercase())), 0),
+    };
+    let voice = voice.map(Arc::new);
     let mut cer = Ceremony {
         plan,
         t: 0,
@@ -313,6 +318,7 @@ pub(super) fn begin(
         gallery: g.gallery.clone(),
         court_rng: g.rng.court.clone(),
         voice,
+        voice_program,
         speaker: c,
         // B386: the result music plays whatever the match music setting (that is the court's BGM only)
         music: SoundBank::music(&mut iso, "Menu", RESULT_BGM).map(|(b, m)| (Arc::new(b), m)),
@@ -355,7 +361,7 @@ fn shout(c: &mut Ceremony, sound: Option<&Sound>) {
     let bit = pick(c.speaker, 1 + c.plan.lost as u8, 2);
     info!("ceremony voice: character {} program {} line {bit}", c.speaker, c.plan.lost as u8);
     if let (Some(s), Some(v)) = (sound, &c.voice) {
-        s.play_centre(v, sound::Play { slot: 1, program: c.plan.lost as u8, key: bit, volume: 0x80, speed: 1.0 });
+        s.play_centre(v, sound::Play { slot: 1, program: c.voice_program + c.plan.lost as u8, key: bit, volume: 0x80, speed: 1.0 });
     }
     let roll = &mut || c.court_rng.next();
     c.gallery.point(Reaction { cheer: true, event: Some(if c.plan.lost { 4 } else { 3 }), chain: true }, roll);
