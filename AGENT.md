@@ -28,6 +28,10 @@ Anything a player would notice (new feature, fix, change in how something plays 
 `- ` line in `RELEASE_NOTES.md`, committed with the change: what changed for the player, not how. No task IDs, crate
 names or jargon. Internal work (tests, tooling, refactors, research) gets nothing. `tools/release.sh` publishes it.
 
+## Mod versions
+Any change to a published mod (rebuilt model, motions, faces, textures, manifest fix) bumps its `mod.json` `version`
+before it is re-uploaded, so the mod store sees an update and installed copies refresh.
+
 ## Research setup
 `research/README.md` rebuilds `context/` from the disc (extract, overlay ELFs, Ghidra project, decompilation
 dumps, save states, recordings) and lists the tool pitfalls.
