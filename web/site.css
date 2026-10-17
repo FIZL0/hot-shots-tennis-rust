@@ -106,26 +106,6 @@ html[data-game] #disc { display: none !important; }
 #disc .needs { margin-top: 1em; padding: .7em .9em; border: 3px dashed var(--ink); border-radius: 14px; background: #fff7d6; font-size: 15px; }
 #disc .needs b { font-weight: 800; }
 #disc .needs .no { color: #b3261e; font-weight: 700; }
-/* M18: the pick/drop area (the whole box opens the picker; a file dragged over the panel lights it) */
-#disc .drop { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .5em 1em; margin: .9em 0 .2em;
-  padding: clamp(14px, 2.6vw, 26px) 1em; border: 3px dashed var(--ink); border-radius: 16px; background: #eef7fc; cursor: pointer;
-  font-weight: 800; text-align: center; transition: background .12s, transform .12s; }
-#disc .drop:hover { background: #e2f2fb; }
-#disc .drop.over { background: #fff2b8; border-style: solid; transform: scale(1.015); }
-#disc .drop.busy { opacity: .5; pointer-events: none; }
-@media (hover: none) { #disc .droptext { display: none; } }
-/* the import's steps: numbered circles like How it works, ticked green as each passes, red where it stopped */
-#disc ol.stages { list-style: none; counter-reset: s; margin: .9em 0 0; padding: 0; display: grid; gap: .55em; }
-#disc ol.stages li { counter-increment: s; display: grid; grid-template-columns: 2.2em 1fr; column-gap: .6em; align-items: center; opacity: .45; }
-#disc ol.stages li::before { content: counter(s); grid-row: span 2; display: grid; place-items: center; width: 2em; height: 2em;
-  border: 3px solid var(--ink); border-radius: 50%; background: #fff; font-weight: 800; }
-#disc ol.stages li > b { font-weight: 800; line-height: 1.2; }
-#disc ol.stages li > span { font-size: 14px; color: var(--muted); line-height: 1.3; }
-#disc ol.stages li .progress { grid-column: 2; margin-top: .35em; }
-#disc ol.stages li.on, #disc ol.stages li.ok, #disc ol.stages li.err { opacity: 1; }
-#disc ol.stages li.on::before { background: var(--gold-hi); }
-#disc ol.stages li.ok::before { content: "✓"; background: linear-gradient(var(--green-hi), var(--green)); color: #fff; }
-#disc ol.stages li.err::before { content: "✗"; background: #ffd9d4; color: #b3261e; }
 #disc #iso { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 #disc .progress { height: 18px; margin-top: .8em; border: 3px solid var(--ink); border-radius: 999px; background: #eee; overflow: hidden; }
 #disc .progress[hidden] { display: none; }

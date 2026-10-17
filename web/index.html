@@ -178,18 +178,9 @@ if (!('game' in document.documentElement.dataset))
         <span class="head gold">Play in your browser</span>
         <p>Pick a disc image of your own copy of the game. OpenTennis copies what it needs (about 170 MB) into this
           browser's storage once. Nothing is uploaded, and after that you don't need the ISO.</p>
-        <!-- M18: the pick/drop area, then the import's steps (site.js importer) -->
-        <label class="drop" for="iso">
-          <span class="droptext">Drop your .iso here, or</span>
-          <span class="pill gold big">Pick your ISO</span>
-        </label>
+        <label class="pill gold big" for="iso">Pick your ISO</label>
         <input id="iso" type="file" accept=".iso">
-        <ol class="stages" hidden>
-          <li data-stage="check"><b>Disc check</b><span>Hot Shots Tennis, US, SCUS-97610 v1.00</span></li>
-          <li data-stage="copy"><b>Import</b><span>About 170 MB into this browser's storage</span>
-            <div class="progress"><i></i></div></li>
-          <li data-stage="done"><b>Ready</b><span>The ISO is no longer needed</span></li>
-        </ol>
+        <div class="progress" hidden><i></i></div>
         <p id="status" role="status"></p>
         <div class="needs">
           <b>Needs:</b> Hot Shots Tennis, US release, <b>SCUS-97610 v1.00</b>, as an <b>.iso</b>.
