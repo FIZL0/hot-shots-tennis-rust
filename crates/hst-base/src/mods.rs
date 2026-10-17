@@ -24,14 +24,22 @@ const SKELETON: &str = include_str!("../../hst/hst_skeleton.json");
 const FACE: [&str; 8] = ["joy_eye", "joy_mouth", "anger_eye", "anger_mouth", "sorrow_eye", "sorrow_mouth", "doki_eye", "doki_mouth"];
 
 /// HST's face channels and the expression words that stand in for them, best first (standard §4a, opentennis-mods
-/// `tools/rerig/rerig.py`'s table, plus the donors' own extras: `niya` grin, `tukare` tired).
+/// `tools/rerig/rerig.py`'s table, plus the donors' own extras: `niya` grin, `tukare` tired). The last few of anger,
+/// sorrow and doki are B546's stand-ins picked by eye for Out of Bounds faces: bared teeth, a pout or flat mouth, an
+/// open vowel or talking mouth.
 const FACE_WORDS: [(&str, &[&str]); 5] = [
     ("blink", &["blink", "close", "wink"]),
     ("joy", &["joy", "smile", "laugh", "bigsmile", "grin", "joe", "niya"]),
-    ("anger", &["anger", "angry", "vexing", "muka", "scowl", "miken", "frown", "katamayu", "provocation", "clench"]),
-    ("sorrow", &["sorrow", "sad", "cry", "worry", "disapoint", "beaten", "tukare", "nihil", "pain"]),
-    ("doki", &["doki", "surprise", "suprise", "amaze", "awa", "shy", "open", "o", "ayo", "oh"]),
+    ("anger", &["anger", "angry", "vexing", "muka", "scowl", "miken", "frown", "katamayu", "provocation", "clench", "i"]),
+    ("sorrow", &["sorrow", "sad", "cry", "worry", "disapoint", "beaten", "tukare", "nihil", "pain", "puku", "pucker", "n"]),
+    ("doki", &["doki", "surprise", "suprise", "amaze", "awa", "shy", "open", "o", "ayo", "oh", "a", "talk", "chu"]),
 ];
+
+/// Whole targets standing in for a channel no word finds, last (B546, rerig.py's `FACE_NAMES`): raised brows for
+/// surprised eyes, Felipe's grimace, Anya's pursed lips. rerig.py sums `+`-joined ones into the channel itself, so
+/// only a model packed before that needs these, and only the single ones.
+const FACE_NAMES: [(&str, &[&str]); 3] =
+    [("doki_eye", &["sorrow_eye", "sad_eye"]), ("anger_mouth", &["sad_mouth2"]), ("sorrow_mouth", &["kiss_mouth"])];
 
 /// A morph target name as rerig.py's `face_word` reads it: (word, part `eye`/`mouth`, side `L`/`R`/`LR`/"", variant
 /// rank), `close_eyeL` → (close, eye, L, 0), `sorrowA_mouth` → (sorrow, mouth, "", 1), `joy2_mouth` → (joy, mouth, "", 2).
@@ -92,6 +100,11 @@ pub fn face_target(names: &[String], track: &str) -> Option<usize> {
             .filter_map(|(i, n)| face_word(n).filter(|f| f.0 == *w && f.1 == part && matches!(f.2, "" | "LR")).map(|f| (f.3, i)))
             .min()
             .map(|f| f.1)
+    })
+    .or_else(|| {
+        let want = format!("{channel}_{part}");
+        let (_, stand) = FACE_NAMES.iter().find(|(c, _)| *c == want)?;
+        stand.iter().find_map(|s| names.iter().position(|n| n == s))
     })
 }
 
@@ -1521,7 +1534,8 @@ mod tests {
         assert_eq!(at("face\x01wink_eye"), Some("blink_eye"));
         assert_eq!(at("face\x01smile_eye"), Some("smile_eye"));
         assert_eq!(at("face\x01anger_eye"), Some("muka_eye"));
-        assert_eq!(at("face\x01doki_eye"), None);
+        assert_eq!(at("face\x01doki_eye"), Some("sorrow_eye"));
+        assert_eq!(at("face\x01doki_mouth"), Some("chu_mouth"));
         assert_eq!(at("face\x01kiss_mouth"), None);
         // a channel's lowest variant, never one half of the face
         let names: Vec<String> = ["surprise_mouth2", "surprise_mouth1", "close_eyeL", "close_eyeR"].map(String::from).into();
@@ -1567,17 +1581,20 @@ mod tests {
         Some(format!("{}: donor {}, plays {shown:?}, no target for {missing:?}", m.id, m.donor))
     }
 
-    /// Sophie (skipped without `mods/hst-mods/oob_pc02_sophie`): her donor's smile (`joy2_mouth`) and wink play.
+    /// Sophie (skipped without `mods/hst-mods/oob_pc02_sophie`): her donor's smile (`joy2_mouth`) and wink play, and
+    /// every other face of her donor finds a target.
     #[test]
     fn sophie_smiles_and_winks() {
         let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
         let Some(r) = oob_faces_follow_the_donor(&mut iso, "oob_pc02_sophie") else { return eprintln!("no oob_pc02_sophie, skipped") };
         eprintln!("{r}");
-        assert!(r.contains("no target for {\"doki_eye\", \"doki_mouth\"}"), "{r}");
+        // B546: her surprise plays on her chu (pucker) mouth and raised-brow sorrow eyes
+        assert!(r.contains("no target for {}"), "{r}");
         assert!(r.contains("\"joy_mouth\"") && r.contains("\"blink_eye\""), "{r}");
     }
 
-    /// Every Out of Bounds mod in `mods/hst-mods` (~5 s; `-- --nocapture` prints what each one plays and lacks).
+    /// Every Out of Bounds mod in `mods/hst-mods` (~5 s; `-- --nocapture` prints what each one plays and lacks): each
+    /// donor face binds somewhere.
     #[test]
     fn oob_faces_all() {
         let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
@@ -1585,7 +1602,11 @@ mod tests {
         let mut ids: Vec<_> = std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("oob_")).collect();
         ids.sort();
         for id in ids {
-            eprintln!("{}", oob_faces_follow_the_donor(&mut iso, &id).unwrap());
+            let r = oob_faces_follow_the_donor(&mut iso, &id).unwrap();
+            eprintln!("{r}");
+            // B546: every donor face finds a stand-in, but Fernando's blink (opaque sunglasses, no eye target)
+            let none = if id == "oob_pc05_fernando" { "{\"blink_eye\"}" } else { "{}" };
+            assert!(r.ends_with(&format!("no target for {none}")), "{r}");
         }
     }
 
