@@ -34,3 +34,4 @@
 - Mods: after updating a mod it shows as Installed right away, instead of still offering Update until you refresh.
 - Music and ambience now start at half volume on a fresh install (your saved volumes are kept).
 - In the browser, Settings → Display → Renderer now shows which renderer is actually running (WebGPU or WebGL2), for example "Auto (WebGPU)".
+- Settings open from the character select and the online lobby (O on the keyboard, R3 on a controller); Back returns you where you were with your picks and your place in the lobby kept, and the lobby carries on while you're in them.

@@ -580,6 +580,9 @@ impl Menu {
             let tabs = tabs_shown();
             let n = tabs.len();
             self.go_tab(tabs[(tab(self.screen) + if k.next { 1 } else { n - 1 }) % n].1, out);
+        } else if k.back && self.settings_back() {
+            // B558: back to the select or lobby they were opened from
+            out.push(Effect::Sound(1));
         } else if k.back {
             self.sel = self.main_at(super::home::Row::Settings);
             self.screen = Screen::Main;
@@ -723,7 +726,11 @@ fn chrome(d: &mut Draw, m: &Menu, n: usize, name: &str, foot: &str) -> ([f32; 4]
     let fs = 12.5 * PY;
     let fy = list[1] + list[3] - (look::RIM + look::PAD + FOOT) * PY;
     d.q(Tex::Solid, [0.0; 4], [ix, fy + 2.0 * PY, iw, 2.0 * PY], look::c(look::RULE), 128.0);
-    d.text(foot, ix, fy + (FOOT * PY - fs) / 2.0 + 3.0 * PY, fs, look::c(look::MUTED));
+    // (B558: over the select or the lobby, the host's countdown in the footnote's place)
+    match super::over::countdown(m) {
+        Some(words) => d.text(&words, ix, fy + (FOOT * PY - fs) / 2.0 + 3.0 * PY, fs, look::c(look::BLUE)),
+        None => d.text(foot, ix, fy + (FOOT * PY - fs) / 2.0 + 3.0 * PY, fs, look::c(look::MUTED)),
+    }
     look::panel(d, side, strip(list, n), side_band());
     (list, side)
 }

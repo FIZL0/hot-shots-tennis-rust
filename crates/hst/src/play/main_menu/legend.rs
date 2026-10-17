@@ -265,6 +265,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Extras => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Open Ko-fi"), (Act::Back, "Back")]),
         _ => {}
     }
+    // B558: the Settings pages over the select and the lobby
+    if m.settings_here(dev) {
+        v.push((Act::Settings, "Settings"));
+    }
     // B320: chat works in an online room's lobby and character select (`chat.rs`, unless Settings turned it off)
     if m.net.room.is_some() && matches!(m.screen, Screen::Lobby | Screen::Chars) && !crate::chat::HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         v.push((Act::Chat, "Chat"));
@@ -540,6 +544,7 @@ mod tests {
                         h(|p| &mut p.hand),
                         h(|p| &mut p.kind_prev) || h(|p| &mut p.kind_next),
                         h(|p| &mut p.name),
+                        h(|p| &mut p.settings),
                     ];
                     let want = [
                         has(&[Act::Move, Act::UpDown]),
@@ -552,8 +557,9 @@ mod tests {
                         has(&[Act::Hand]),
                         has(&[Act::Kind]),
                         has(&[Act::Name]),
+                        has(&[Act::Settings]),
                     ];
-                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select L2R2 Start] handled vs legend {acts:?}", m.screen, m.sel);
+                    assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select L2R2 Start R3] handled vs legend {acts:?}", m.screen, m.sel);
                     checked += 1;
                 }
             }

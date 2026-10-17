@@ -2416,6 +2416,8 @@ pub(super) fn poll(
     art: Option<ResMut<super::Art>>,
 ) {
     menu.net.spin = (menu.net.spin + time.delta_secs()) % 60.0;
+    // B558: the lobby's screen back under the Settings pages for this, the pages again after (`over.rs`)
+    let held = super::over::under(&mut menu);
     if let Some(net) = net {
         for e in net.poll() {
             if let Event::Start(r, me) = &e {
@@ -2476,6 +2478,7 @@ pub(super) fn poll(
             }
         }
     }
+    super::over::back(&mut menu, held);
 }
 
 /// M126: a guest's match starting (or rejoined): its lobby code and this player's first seat, for a refresh or crash to

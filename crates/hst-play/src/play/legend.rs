@@ -66,6 +66,8 @@ pub enum Act {
     /// B463: the match's emote keys (1–4) and the right stick: the select's preview plays an emote (B475: its up / down
     /// B422's win / loss, one hint).
     Emote,
+    /// B558: O / R3: the Settings pages over the character select and the online lobby.
+    Settings,
 }
 
 /// A device's button art.
@@ -166,6 +168,7 @@ pub fn menu_keys(act: Act, bind: &Bindings, select: bool) -> Vec<String> {
         Act::Type => vec!["A-Z".into()],
         Act::Chat => vec!["T".into()],
         Act::Kind => vec!["1".into(), "3".into()],
+        Act::Settings => vec!["O".into()],
         Act::Key => vec![],
     }
     .into_iter()
@@ -510,6 +513,7 @@ pub fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Kind if ps || generic || style == Style::Deck => vec![Glyph::Shoulder("L2"), Glyph::Shoulder("R2")],
         Act::Kind => vec![Glyph::Shoulder("LT"), Glyph::Shoulder("RT")],
         Act::Emote => vec![Glyph::Stick],
+        Act::Settings => vec![button_glyph_of(style, GamepadButton::RightThumb)],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start | Act::Name => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         // the chat is the typed box (T, or the lobby's Chat button): no pad button
