@@ -20,3 +20,4 @@
 - On iPhone and iPad Safari the game now offers a new version even when Safari stops its background download, instead of staying on the old one.
 - On phones, the choices shown when an online player doesn't come back (a bot plays for them, everyone to the lobby, leave) can be tapped again; the on-screen stick no longer swallows the taps.
 - Online: the game no longer crashes when the "download this mod?" question comes up in the lobby and you answer it.
+- In an online lobby, players who joined see a "Swap team" button in the top right (tap it to move to the other side) instead of the host's Singles / Doubles switch.

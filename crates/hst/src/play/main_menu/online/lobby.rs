@@ -178,16 +178,18 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
 
 /// The top bar's buttons right of the title: Copy link (dim until there's a link), the host's Public / Private (a
 /// browser's LAN lobby's Paste), the code pill (`online::corner`: CODE, the code greyed until it's live, the relay's
-/// chip) and Singles / Doubles (a guest's dimmed).
+/// chip) and Singles / Doubles (a guest's Swap team: B522's □, dimmed when it has no seat to move to).
 fn top_bar(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, on: &dyn Fn(Item) -> bool, hit: &dyn Fn(&mut Draw, Item, [f32; 4], Press)) {
     let lobby = m.screen == Screen::Lobby;
+    let guest = !m.net.hosting;
     let at = |it: Item| m.items().contains(&it);
-    // Singles / Doubles: the host's □ (or a tap) switches; on the select a tap is the □ (B375, B392)
-    frame::bar(d, g, "", r.doubles, !lobby && m.net.hosting, on(Item::Mode));
-    if lobby {
+    // Singles / Doubles: the host's □ (or a tap) switches; on the select a tap is the □ (B375, B392); a guest's tap is
+    // its □ on either screen (Swap team)
+    frame::bar(d, g, "", r.doubles, guest, guest || !lobby, on(Item::Mode));
+    if lobby && !guest {
         hit(d, Item::Mode, g.mode, OK);
     }
-    if !m.net.hosting {
+    if guest && lobby && m.lobby_team().is_none() {
         frame::rounded(d, g.mode, g.mode[3] / 2.0, frame::NAVY, 64.0);
     }
     // the code pill, right-aligned in its place

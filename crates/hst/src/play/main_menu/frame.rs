@@ -372,14 +372,19 @@ pub(super) fn ground(d: &mut Draw) {
     super::look::backdrop(d);
 }
 
-/// The top bar's title, and the Singles / Doubles button with its □ (`page`: the host's □ / a tap switches).
-pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, page: bool, sel: bool) {
+/// The top bar's title, and the Singles / Doubles button with its □ (`page`: the host's □ / a tap switches; `team`:
+/// an online guest's, Swap team instead).
+pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, team: bool, page: bool, sel: bool) {
     let [tx, ty, tw, th] = g.title;
     let size = g.y(30.0);
     let _ = tw;
     d.outlined(|d| d.text(title, tx, ty + (th - size) / 2.0, size, WHITE));
     let [mx, my, mw, mh] = g.mode;
-    let (words, fill) = if doubles { ("Doubles", GREEN) } else { ("Singles", BLUE) };
+    let (words, fill) = match (team, doubles) {
+        (true, _) => ("Swap team", NAVY),
+        (_, true) => ("Doubles", GREEN),
+        _ => ("Singles", BLUE),
+    };
     ringed(d, g.mode, mh / 2.0, g.x(2.0), WHITE, Some(fill));
     if sel {
         focus(d, g.mode, mh / 2.0, g.x(3.0), g.x(3.0));
