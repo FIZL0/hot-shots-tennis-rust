@@ -1065,18 +1065,32 @@ pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, 
             tx + d.width(&tag, big) + 10.0 * PX
         }
     };
-    let (ss, sh) = (12.0 * PY, 20.0 * PY);
-    let gh = 14.0 * PY;
-    let gw = glyph.map_or(0.0, |(g, i)| gh * legend::glyph_aspect(g, i) + 4.0 * PX);
-    let sw = d.width(side, ss) + 16.0 * PX + gw;
+    // concept: a button hint (Swap teams / Leave / Remove / Kick) in an outlined pill like the Name's: [○] Leave;
+    // the keyboard's Leave is the Esc chip
+    let chip_name = if glyph.is_none() && side == "Leave" { "Esc" } else { "" };
+    let hint = glyph.is_some() || !chip_name.is_empty();
+    let (ts, gh, sh) = if hint { (13.0 * PY, 18.0 * PY, 26.0 * PY) } else { (12.0 * PY, 14.0 * PY, 20.0 * PY) };
+    let gw = match glyph {
+        Some((g, i)) => gh * legend::glyph_aspect(g, i) + 6.0 * PX,
+        None if hint => chip_w(d, chip_name, gh) + 6.0 * PX,
+        None => 0.0,
+    };
+    let sw = d.width(side, ts) + if hint { 18.0 * PX } else { 16.0 * PX } + gw;
     let sx = x + w - 12.0 * PX - sw - if drop { 30.0 } else { 0.0 };
     // concept: no Near / Far: the pill only for a button hint
     let end = if !side.is_empty() && sx - 8.0 * PX - nx >= 48.0 * PX {
-        rounded(d, [sx, y + (h - sh) / 2.0, sw, sh], 10.0, hex(BG), 128.0);
-        if let Some((g, i)) = glyph {
-            d.q(Tex::Glyph(g, i), [0.0; 4], [sx + 6.0 * PX, y + (h - gh) / 2.0, gw - 4.0 * PX, gh], WHITE, 128.0);
+        let (sy, gy) = (y + (h - sh) / 2.0, y + (h - gh) / 2.0);
+        if hint {
+            look::outlined_pill(d, [sx, sy, sw, sh], hex(look::GREY), 2.0);
+            match glyph {
+                Some((g, i)) => d.q(Tex::Glyph(g, i), [0.0; 4], [sx + 8.0 * PX, gy, gw - 6.0 * PX, gh], WHITE, 128.0),
+                None => _ = chip(d, chip_name, [sx + 8.0 * PX, gy], gh, WHITE),
+            }
+            d.text(side, sx + 8.0 * PX + gw, y + (h - ts) / 2.0, ts, WHITE);
+        } else {
+            rounded(d, [sx, sy, sw, sh], 10.0, hex(BG), 128.0);
+            d.centred(side, sx + sw / 2.0, y + (h - ts) / 2.0, ts, WHITE);
         }
-        d.centred(side, sx + gw + (sw - gw) / 2.0, y + (h - ss) / 2.0, ss, WHITE);
         sx - 8.0 * PX
     } else {
         x + w - 8.0 * PX - if drop { 30.0 } else { 0.0 }

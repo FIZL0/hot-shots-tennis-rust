@@ -3973,7 +3973,9 @@ mod tests {
         assert_eq!(m.players[3].char(), p.char, "the seat being picked isn't overwritten by the room");
         // from the grid's first card (the add drew a random one), so the steps below land on known picks
         (m.players[3].cursor, m.players[3].costume) = (0, 0);
-        m.step(dev, Press { right: true, ..default() });
+        // (← to the Random card, ↓ to Cody: the grid is two across here)
+        m.step(dev, Press { left: true, ..default() });
+        m.step(dev, Press { down: true, ..default() });
         m.step(dev, Press { next: true, ..default() });
         let c = m.players[3].char();
         let Some(Cmd::Bot(3, Some(p))) = net(&m.step(dev, ok)) else { panic!() };

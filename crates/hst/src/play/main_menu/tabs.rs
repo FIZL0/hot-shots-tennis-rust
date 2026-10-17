@@ -169,7 +169,7 @@ impl Menu {
     }
 
     /// B382: a not-ready player's ↑↓←→ and L2 / R2 on the grid (B66: past a full tile the same way): ←→ the next
-    /// tile in order, across rows and sections, stopping at the ends; ↑↓ a row, headings passed over; L2 this
+    /// tile in its row, stopping at the row's ends (concept: a grid); ↑↓ a row, headings passed over; L2 this
     /// section's first tile (the previous section's from there), R2 the next section's, stopping at the ends (B462).
     /// Whether the cursor moved.
     pub(super) fn grid_move(&mut self, p: usize, k: Press) -> bool {
@@ -190,13 +190,17 @@ impl Menu {
         let to = if dy != 0 {
             self.row_step(p, &secs, s, i, dy)
         } else {
-            let n = secs.iter().map(|t| t.cells.len()).sum::<usize>() as i32;
+            // a grid one tile across (no layout yet): ←→ walk on through every tile, as ↑↓ would
+            let cols = self.cols();
+            let start = i - i % cols;
+            let n = secs.iter().map(|t| t.cells.len()).sum::<usize>();
+            let row = if cols == 1 { 0..n as i32 } else { (at - i + start) as i32..(at - i + (start + cols).min(secs[s].cells.len())) as i32 };
             let cell = |k: i32| unflat(&secs, k as usize).map(|(s, i)| secs[s].cells[i]);
             let mut to = at as i32 + dx;
-            while (0..n).contains(&to) && cell(to).is_some_and(|c| self.full(p, c)) {
+            while row.contains(&to) && cell(to).is_some_and(|c| self.full(p, c)) {
                 to += dx;
             }
-            (0..n).contains(&to).then_some(to as usize)
+            row.contains(&to).then_some(to as usize)
         };
         match to {
             Some(t) if t != at => {
@@ -205,6 +209,15 @@ impl Menu {
             }
             _ => false,
         }
+    }
+
+    /// Whether player `p`'s ←→ would move: another open tile in its row (a grid one across walks on).
+    pub(super) fn row_open(&self, p: usize) -> bool {
+        let secs = self.sections();
+        let Some((s, i)) = self.place(p, &secs).and_then(|at| unflat(&secs, at)) else { return false };
+        let cols = self.cols();
+        let start = i - i % cols;
+        cols == 1 || (start..(start + cols).min(secs[s].cells.len())).any(|j| j != i && !self.full(p, secs[s].cells[j]))
     }
 
     /// B382 / B462: the section L2 (`back`) / R2 takes player `p` to from section `s`'s `i`th tile: L2 this section's
@@ -231,13 +244,20 @@ impl Menu {
         [self.jump_to(p, &secs, s, i, true).is_none(), self.jump_to(p, &secs, s, i, false).is_none()]
     }
 
-    /// The tile `dy` rows down from section `s`'s `i`th (up for -1): the same place across, the row's last if it's
-    /// shorter, past rows whose tile there has nothing open; past the grid's ends its last (first) tile, if open (B306).
+    /// The tile `dy` rows down from section `s`'s `i`th (up for -1): the same place across, past rows too short to
+    /// have it (concept: a grid) or whose tile there has nothing open; no row on that way has it: the next row's last
+    /// tile, as before; past the grid's ends its last (first) tile, if open (B306).
     fn row_step(&self, p: usize, secs: &[Section], s: usize, i: usize, dy: i32) -> Option<usize> {
         let cols = self.cols();
         let rows: Vec<(usize, usize)> = lines(secs, cols).into_iter().filter_map(|l| if let Line::Tiles(s, i) = l { Some((s, i)) } else { None }).collect();
         let col = i % cols;
-        let mut r = rows.iter().position(|&row| row == (s, i - col))? as i32;
+        let here = rows.iter().position(|&row| row == (s, i - col))?;
+        let has = |&(rs, ri): &(usize, usize)| secs[rs].cells.len() - ri > col && !self.full(p, secs[rs].cells[ri + col]);
+        let found = if dy > 0 { rows[here + 1..].iter().find(|r| has(r)) } else { rows[..here].iter().rev().find(|r| has(r)) };
+        if let Some(&(rs, ri)) = found {
+            return Some(flat(secs, rs, ri + col));
+        }
+        let mut r = here as i32;
         loop {
             r += dy;
             let Some(&(rs, ri)) = usize::try_from(r).ok().and_then(|r| rows.get(r)) else {
@@ -413,8 +433,8 @@ mod tests {
         assert_eq!(at(&m), ("Golf".into(), 1));
     }
 
-    /// ←→ walk every tile in order across rows and sections, stopping at the grid's ends; ↑↓ keep the place across
-    /// (the row's last on a shorter row), passing the headings.
+    /// ←→ walk a row's tiles, stopping at its ends; ↑↓ keep the place across, past the headings and rows too short
+    /// to have it (concept: a grid).
     #[test]
     fn moves_cross_rows_and_sections() {
         let mut m = menu();
@@ -426,11 +446,16 @@ mod tests {
         let hst = "Hot Shots Tennis".to_string();
         let last = CHARS; // the Random card first
         m.put(0, m.sections()[0].cells[last]);
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Get a Grip".into(), 0));
-        assert_eq!(k(&mut m, |p| &mut p.left), (hst.clone(), last));
-        // ↓ from Hot Shots' last tile (its last row's 5th) to Get a Grip's last (two tiles), then Golf's 2nd, its 7th
+        assert_eq!(k(&mut m, |p| &mut p.right), (hst.clone(), last), "the row's end");
+        assert_eq!(k(&mut m, |p| &mut p.left), (hst.clone(), last - 1));
+        assert_eq!(k(&mut m, |p| &mut p.right), (hst.clone(), last));
+        // ↓ from Hot Shots' last tile (its last row's 5th) past Get a Grip (two tiles) to Golf's 5th, and back
         assert_eq!(last % 5, 4);
-        assert_eq!(k(&mut m, |p| &mut p.down), ("Get a Grip".into(), 1), "the shorter row's last");
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Golf".into(), 4), "past the shorter row");
+        assert_eq!(k(&mut m, |p| &mut p.up), (hst.clone(), last));
+        // from the 2nd across: Get a Grip's 2nd, then Golf's 2nd, its 7th
+        m.put(0, m.sections()[0].cells[last - 3]);
+        assert_eq!(k(&mut m, |p| &mut p.down), ("Get a Grip".into(), 1));
         assert_eq!(k(&mut m, |p| &mut p.down), ("Golf".into(), 1));
         assert_eq!(k(&mut m, |p| &mut p.down), ("Golf".into(), 6));
         assert_eq!(k(&mut m, |p| &mut p.up), ("Golf".into(), 1));
@@ -488,7 +513,7 @@ mod tests {
         assert_eq!(k(&mut m, |p| &mut p.kind_prev), ("Favorites".into(), 0));
         assert_eq!(m.cell(0), Some(Who::Mod(5)));
         assert_eq!(m.section_ends(0), [true, false]);
-        assert_eq!(k(&mut m, |p| &mut p.right), ("Hot Shots Tennis".into(), 0), "on past Favorites' end");
+        assert_eq!(k(&mut m, |p| &mut p.right), ("Favorites".into(), 0), "Favorites' row ends there");
     }
 
     /// B66: a tile with nothing open is passed over, the jumps' first tile too.
@@ -500,9 +525,10 @@ mod tests {
         m.put(1, Some(Who::Mod(10)));
         m.players[1].ready = true;
         m.players[0].random = false;
-        m.put(0, m.sections()[0].cells[CHARS]);
-        m.step(Dev::Keys, press(|p| &mut p.right));
-        assert_eq!(m.cell(0), Some(Who::Mod(11)));
+        // ↓ from Hot Shots' last row's first tile passes Get a Grip's (full) to Golf's
+        m.put(0, m.sections()[0].cells[CHARS - 4]);
+        m.step(Dev::Keys, press(|p| &mut p.down));
+        assert_eq!(m.players[0].tab, m.sections()[2].id, "Golf");
         m.put(0, None);
         m.step(Dev::Keys, press(|p| &mut p.kind_next));
         assert_eq!(m.cell(0), Some(Who::Mod(11)));
@@ -587,7 +613,7 @@ mod tests {
             // → walks on from there
             if tab == FAVORITES {
                 m.step(Dev::Keys, press(|p| &mut p.right));
-                assert_eq!(section(&m, 1), ("Hot Shots Tennis".into(), 0), "on past Favorites' end");
+                assert_eq!(section(&m, 1), ("Favorites".into(), 0), "Favorites' row ends there");
             }
         }
     }

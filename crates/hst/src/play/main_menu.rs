@@ -1517,8 +1517,9 @@ impl Menu {
                     out.push(Sound(1));
                     return out;
                 }
-                // concept: nobody seated (1P left, alone): any device's ○ leaves the screen
-                if k.back && self.local_roster() && self.humans() == 0 {
+                // concept: nobody seated (1P left, alone): any device's ○ leaves the screen; so does the keyboard's
+                // Esc when it has no seat (the pads seated may be unplugged)
+                if k.back && self.local_roster() && (self.humans() == 0 || dev == Dev::Keys && !self.seats.contains(&Some(dev))) {
                     self.seats = [None; 4];
                     self.sel = self.main_at(home::Row::Local);
                     self.screen = Screen::Main;
@@ -3977,9 +3978,9 @@ mod tests {
         m.step(Dev::Keys, ok);
         assert!(m.players[0].ready && !m.blocked(1));
         assert_eq!(m.players[1].costume, 1);
-        m.step(pad, press(|p| &mut p.right));
-        assert_eq!((m.players[1].char(), m.players[1].costume), (1, 0));
-        m.step(pad, press(|p| &mut p.left));
+        m.step(pad, press(|p| &mut p.down));
+        assert_eq!((m.players[1].char(), m.players[1].costume), (2, 0));
+        m.step(pad, press(|p| &mut p.up));
         assert_eq!((m.players[1].char(), m.players[1].costume), (0, 1));
         m.step(pad, press(|p| &mut p.prev));
         assert_eq!(m.players[1].costume, COSTUMES - 1);
@@ -3989,7 +3990,9 @@ mod tests {
         assert!(m.players[1].ready);
         // 1P now picks the computer's 3P: Cody; the open 4P starts on Cody too (B346), his next free costume
         assert_eq!(m.driven(Dev::Keys), Some(2));
-        m.step(Dev::Keys, press(|p| &mut p.right));
+        // (the grid two across here: ← the Random card, ↓ Cody)
+        m.step(Dev::Keys, press(|p| &mut p.left));
+        m.step(Dev::Keys, press(|p| &mut p.down));
         m.step(Dev::Keys, ok);
         // B258: then the open 4P's COM card
         assert_eq!(m.driven(Dev::Keys), Some(3));
@@ -4024,8 +4027,7 @@ mod tests {
         assert_eq!(m.columns().cols, 8);
         assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(2)));
         assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Mod(0)));
-        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Disc(GRID[CHARS - 1].0)), "back past the section's start");
-        assert_eq!(go(&mut m, |p| &mut p.right), Some(Who::Mod(0)));
+        assert_eq!(go(&mut m, |p| &mut p.left), Some(Who::Mod(0)), "the row's start");
         assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)));
         assert_eq!(go(&mut m, |p| &mut p.down), Some(Who::Mod(8)), "the grid's end");
         assert_eq!(go(&mut m, |p| &mut p.up), Some(Who::Mod(0)));
@@ -4432,6 +4434,15 @@ mod tests {
         m.step(pa, press(|p| &mut p.name)); // Start (✕ only selects)
         assert_eq!((m.screen, m.lead()), (Screen::Chars, Some(Dev::Keys)));
         assert!(m.droppable(0)); // concept: the select's 1P may leave its seat
+    }
+
+    #[test]
+    fn an_unseated_keyboard_backs_out_of_the_local_roster() {
+        // the pads seated may be unplugged: the keyboard's Esc still leaves
+        let pa = Dev::Pad(Entity::from_raw_u32(5).unwrap());
+        let mut m = Menu { screen: Screen::Chars, seats: [Some(pa), None, None, None], ..default() };
+        m.step(Dev::Keys, press(|p| &mut p.back));
+        assert_eq!((m.screen, m.seats), (Screen::Main, [None; 4]));
     }
 
     #[test]
