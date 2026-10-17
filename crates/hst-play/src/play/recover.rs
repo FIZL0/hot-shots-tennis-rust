@@ -3,8 +3,9 @@
 //! (`Msg::Away`) and everyone shows "Waiting for …" with a countdown, the match held where it is (rollback stalls
 //! at its window without the peer's pads, lockstep at once). The same peer heard again: the match just goes on. A
 //! new process joining with the lobby's code takes the away player's seats (`net.rs` relay), and the host restarts
-//! the match with it in. After [`WAIT`] the players are asked: a bot takes the seats, or everyone still in goes
-//! back to the lobby together (`Msg::Lobby`; no answer in [`CHOOSE`]: the lobby too), or this one leaves alone.
+//! the match with it in. While they wait the players can already choose (after [`GRACE`]), and after [`WAIT`] they're
+//! asked: a bot takes the seats, or everyone still in goes back to the lobby together (`Msg::Lobby`; no answer in
+//! [`CHOOSE`]: the lobby too), or this one leaves alone.
 //!
 //! A restart (`Msg::Restart`) is the host's state before a tick every machine has every seat's pads for (rollback:
 //! ggrs' confirmed tick; lockstep: its next tick) and the new line-up; every machine, the host too, takes the state
@@ -31,6 +32,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Keep-alive every this many seconds.
 const ALIVE: f32 = 0.5;
+/// A press this soon into the wait isn't an answer (a shot's button still held from the rally).
+const GRACE: f32 = 1.0;
 /// A peer not heard for this long is away; before it has loaded the match (`Msg::Loaded`: its first word may come
 /// before its loading screen's slow frames, a browser compiling pipelines), [`LOADING`] (B200).
 pub const SILENT: f32 = 3.0;
@@ -128,10 +131,10 @@ pub(super) fn heard(np: &mut Netplay, m: Msg) {
     let r = &mut np.recover;
     match m {
         Msg::Away { who, left, ask } if !host => {
-            r.answered &= ask;
+            r.answered &= !who.is_empty();
             r.told = (!who.is_empty()).then_some((who, left, ask));
         }
-        Msg::Choose(bot) if host && r.asking.is_some() => {
+        Msg::Choose(bot) if host && !r.away.is_empty() && r.waited >= GRACE => {
             r.chosen.get_or_insert(bot);
         }
         Msg::Restart { round, tick, room, last, data, end } if !host => {
@@ -265,11 +268,11 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
         }
         let Some((who, left, ask)) = &r.told else { return switched(&np.room, &r.hidden) };
         let (left, ask) = (*left, *ask);
-        if ask && !r.answered && let Some(bot) = press {
+        if !r.answered && (ask || left as f32 <= WAIT - GRACE) && let Some(bot) = press {
             r.answered = true;
             np.out.push(Msg::Choose(bot));
         }
-        r.ask_me = ask && !r.answered;
+        r.ask_me = !r.answered;
         return notice(&names(&np.room, who), left, ask, r.answered);
     }
     // the host: who's away and who's back
@@ -303,11 +306,11 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     if r.asking.is_none() && r.waited >= WAIT {
         r.asking = Some(CHOOSE);
     }
+    if let Some(bot) = press.filter(|_| r.waited >= GRACE) {
+        r.chosen.get_or_insert(bot);
+    }
     if let Some(left) = &mut r.asking {
         *left -= dt;
-        if let Some(bot) = press {
-            r.chosen.get_or_insert(bot);
-        }
         if *left <= 0.0 {
             r.chosen.get_or_insert(false);
         }
@@ -338,7 +341,7 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
             String::new()
         }
         None => {
-            r.ask_me = ask;
+            r.ask_me = true;
             notice(&who, left, ask, false)
         }
     }

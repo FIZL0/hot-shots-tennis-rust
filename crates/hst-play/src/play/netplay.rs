@@ -1679,8 +1679,8 @@ mod tests {
             eprintln!("{said:#?}");
             assert!(said[0].iter().all(|t| t.starts_with("Waiting for g to come back or rejoin... 0:2")), "{:?}", said[0]);
             assert!(said[1].iter().all(|t| t.starts_with("g didn't come back.")), "{:?}", said[1]);
-            // B196a: the waiting has no choice; then both machines left get the pills
-            assert_eq!(asked, [[false; 2], [true; 2]]);
+            // both machines left get the pills, while they wait too
+            assert_eq!(asked, [[true; 2], [true; 2]]);
             let base = in_step(&[&apps[0], &apps[1]], 600);
             assert!(base > kill as usize - 30 && base <= kill as usize + rollback::WINDOW, "restarted at {base}");
             for a in &apps[..2] {
@@ -1691,18 +1691,19 @@ mod tests {
             }
         }
 
-        /// B196, two peers: `g` killed, the host alone chooses a bot, which plays 3P and 4P on.
+        /// B196, two peers: `g` killed, the host alone chooses a bot while it waits (no need to sit out the wait),
+        /// which plays 3P and 4P on.
         #[test]
         fn a_bot_takes_the_only_guests_seats() {
             if !Path::new(ISO).is_file() {
                 return eprintln!("no ISO, skipped");
             }
             let (kill, s) = (600, |x: f32| (x * 60.0) as u32);
-            let apps = peers(true, kill + s(recover::SILENT + recover::WAIT) + 800, |round, apps, live| {
+            let apps = peers(true, kill + s(recover::SILENT) + 120 + 800, |round, apps, live| {
                 if round == kill {
                     live[1] = false;
                 }
-                if round == kill + s(recover::SILENT + recover::WAIT) + 60 {
+                if round == kill + s(recover::SILENT) + 120 {
                     press(&mut apps[0], KeyCode::Enter);
                 }
             });

@@ -341,28 +341,7 @@ mod tests {
         if !Path::new(ISO).is_file() {
             return;
         }
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
-        app.init_asset::<crate::gs::GsMaterial>();
-        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 1, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 1, pads: None });
-        app.insert_resource(Pads { seats: Some([true, false, false, false]), autoplay: true, ..default() });
-        app.init_resource::<tick_input::TickPads>();
-        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
-        app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
-        app.add_systems(PostStartup, setup);
-        app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
-        let mut iso = hst_data::iso::Iso::open(ISO).unwrap();
-        let sound = crate::audio::Sound::test(&mut iso);
-        app.insert_resource(crate::audio::court_bank(&mut iso, 1));
-        app.insert_resource(crate::audio::GalleryBank(crate::audio::gallery_bank(&mut iso, 1, 0).map(std::sync::Arc::new)));
-        app.insert_resource(sound.clone());
-        app.add_systems(FixedUpdate, play_sounds.after(held_ball));
-        app.add_plugins(instant_replay::plugin);
-        app.finish();
-        app.cleanup();
-        app.world_mut().run_schedule(Startup);
-        app.world_mut().run_schedule(PostStartup);
+        let (mut app, sound) = match_app(true);
         app.world_mut().resource_mut::<Game>().humans[0] = true;
         let (mut last, mut plays, mut tiebreak_points) = (String::new(), 0, 0);
         for _ in 0..60 * 60 * 25 {
@@ -385,6 +364,84 @@ mod tests {
             }
         }
         assert!(tiebreak_points > 3, "reached the tiebreak ({tiebreak_points} points)");
+    }
+
+    /// A singles match on the disc, 1P a person (`autoplay`: a bot too), its sound the test's.
+    fn match_app(autoplay: bool) -> (App, crate::audio::Sound) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.init_asset::<crate::gs::GsMaterial>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 1, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 1, pads: None });
+        app.insert_resource(Pads { seats: Some([true, false, false, false]), autoplay, ..default() });
+        app.init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_plugins((cutaway::plugin, bodyhit::plugin, surprise::plugin, reaction_voices::plugin, match_stats::plugin, panel::plugin, popups::plugin, npcs::plugin, foot_fx::plugin, weather::plugin, heard::plugin));
+        app.add_systems(PostStartup, setup);
+        app.add_systems(FixedUpdate, (remember, effects::tick, tick_input::systems(), control, simulate, start_effects, age_balloons, motions, character::tick, played_out, held_ball).chain());
+        let mut iso = hst_data::iso::Iso::open(ISO).unwrap();
+        let sound = crate::audio::Sound::test(&mut iso);
+        app.insert_resource(crate::audio::court_bank(&mut iso, 1));
+        app.insert_resource(crate::audio::GalleryBank(crate::audio::gallery_bank(&mut iso, 1, 0).map(std::sync::Arc::new)));
+        app.insert_resource(sound.clone());
+        app.add_systems(FixedUpdate, play_sounds.after(held_ball));
+        app.add_plugins(instant_replay::plugin);
+        app.finish();
+        app.cleanup();
+        app.world_mut().run_schedule(Startup);
+        app.world_mut().run_schedule(PostStartup);
+        (app, sound)
+    }
+
+    /// An online seat handed to a bot (its player gone, `recover`) plays on in the point it takes over: mid-rally
+    /// with the ball coming at it, and in the serve, serving or receiving.
+    #[test]
+    fn a_bot_taking_over_plays_on() {
+        if !Path::new(ISO).is_file() {
+            return;
+        }
+        for case in ["rally", "receive", "serve"] {
+            let (mut app, _) = match_app(true);
+            let (mut person, mut back, mut returned, mut t) = (false, false, false, 0);
+            for _ in 0..60 * 60 * 3 {
+                run(&mut app, &[[tick_input::IDLE; 4]]);
+                let (rally, serve, hitter, shots, server) = {
+                    let g = app.world().resource::<Game>();
+                    (g.phase == Phase::Rally, g.phase == Phase::Serve, g.last_hitter, g.shots, g.score.server)
+                };
+                let start = match case {
+                    "rally" => rally && hitter == 0 && shots >= 2,
+                    "receive" => serve && server == 1,
+                    _ => serve && server == 0,
+                };
+                if !person && start {
+                    app.world_mut().resource_mut::<Pads>().autoplay = false;
+                    person = true;
+                }
+                t += person as u32;
+                let hand = match case {
+                    "rally" => hitter == 1,
+                    _ => t == 30,
+                };
+                if person && !back && hand {
+                    app.world_mut().resource_mut::<Pads>().autoplay = true;
+                    (back, t) = (true, 0);
+                } else if back && hitter == 0 && (case != "rally" || t > 0) {
+                    returned = true;
+                    break;
+                }
+                if back && !rally && !serve {
+                    // the other side's error (a fault, say): 1P had nothing to play, another point
+                    if app.world().resource::<Game>().post_winner == 0 {
+                        (person, back, t) = (false, false, 0);
+                        continue;
+                    }
+                    break;
+                }
+            }
+            assert!(back, "{case}: 1P handed over");
+            assert!(returned, "{case}: the bot played on");
+        }
     }
 
     fn run(app: &mut App, pads: &[[hst_sim::replay::Pad; 4]]) -> Vec<u64> {
