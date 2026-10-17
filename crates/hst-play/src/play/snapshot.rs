@@ -397,6 +397,29 @@ mod tests {
             .collect()
     }
 
+    /// The drawing entities and materials of the landing markers and the call pop-ups.
+    fn views(w: &bevy::prelude::World) -> Vec<(Entity, usize)> {
+        let marks = w.resource::<effects::LandingMarks>().views().map(|v| (v.root, v.materials.len()));
+        marks.into_iter().chain(w.resource::<popups::Calls>().views()).collect()
+    }
+
+    /// B556: a resync's state keeps this machine's own marker and call-model entities and materials (they went as
+    /// the host's entities with none: no red or yellow landing marker after a resync).
+    #[test]
+    fn a_resync_keeps_the_local_marker_views() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = app();
+        run(&mut app, &[[tick_input::IDLE; 4]; 30]);
+        let before = views(app.world());
+        assert!(before.iter().all(|&(_, m)| m > 0), "{before:?}");
+        // the state as a machine sends it (its materials never go on the wire)
+        let data = super::encode(app.world_mut());
+        super::decode(app.world_mut(), &data).unwrap();
+        assert_eq!(views(app.world()), before);
+    }
+
     #[test]
     fn save_run_restore_rerun() {
         let (Ok(data), true) = (std::fs::read(FIXTURE), Path::new(ISO).is_file()) else {
