@@ -32,7 +32,7 @@ const BUZZ: f32 = 0.2;
 const BUZZ_STRENGTH: f32 = 0.5;
 
 /// How long (seconds) a moved controller's chip slides to its new seat.
-const SLIDE: f32 = 0.3;
+const SLIDE: f32 = 0.5;
 
 /// When each seat's card stops shaking (`Time::elapsed_secs`).
 #[derive(Resource, Default)]
@@ -119,8 +119,9 @@ fn slide(mut menu: ResMut<Menu>, time: Res<Time<Real>>, mut was: Local<Option<[O
     }
     let want = moves.map(|m| match m {
         Some((d, t)) if now - t < SLIDE => {
-            // ease out: fast off the old seat, settling on the new one
-            let k = (1.0 - (now - t) / SLIDE).powi(3);
+            // eased both ends (smoothstep), so the whole trip reads
+            let u = (now - t) / SLIDE;
+            let k = 1.0 - u * u * (3.0 - 2.0 * u);
             [d[0] * k, d[1] * k]
         }
         _ => [0.0; 2],

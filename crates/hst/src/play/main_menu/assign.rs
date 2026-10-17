@@ -128,7 +128,10 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, _bind: &Bindings, pads
         None => String::new(),
     };
     // the key legend carries the buttons; the bar only says when 1P's own seat change is pending
-    d.info(&pending);
+    // no empty bar: only a pending move has words for it
+    if !pending.is_empty() {
+        d.info(&pending);
+    }
     keep_layout(d, m);
 }
 
@@ -189,7 +192,16 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
     let side = if p < (m.players() / 2).max(1) { "Near" } else { "Far" };
     band(d, &s, [x, y, w, BAND * PY], human, p, m.player_name(p).as_deref(), &name, &device, side, None, m.droppable(p));
     if m.droppable(p) {
-        super::drop_button(d, p, x + w - 30.0, y - 6.0);
+        // the take-off X inside the band's right end, a dark pill like its Near / Far
+        let (bw, bh) = (22.0 * PX, 20.0 * PY);
+        let r = [x + w - 12.0 * PX - bw, y + (BAND * PY - bh) / 2.0, bw, bh];
+        rounded(d, r, 10.0, hex(BG), 128.0);
+        let (cx, cy) = (r[0] + bw / 2.0, r[1] + bh / 2.0);
+        for a in [std::f32::consts::FRAC_PI_4, -std::f32::consts::FRAC_PI_4] {
+            d.q(super::Tex::Solid, [0.0; 4], [cx - 6.0 * PX, cy - 1.0 * PY, 12.0 * PX, 2.0 * PY], WHITE, 128.0);
+            d.out.last_mut().unwrap().angle = a;
+        }
+        d.hit(r, pointer::Act::Drop(p));
     }
 
     let (ix, iw) = (x + PAD * PX, w - 2.0 * PAD * PX);
@@ -210,7 +222,13 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
     foot(d, m, pads, &s, [ix, foot_y, iw, FOOT * PY], p, kind, on, yours);
     // a controller that just changed seats slides in from the one it left, over the other cards
     let [dx, dy] = m.slide[p];
-    let chip: Vec<_> = if dx != 0.0 || dy != 0.0 { d.out.drain(start..).collect() } else { Vec::new() };
+    let chip: Vec<_> = if dx != 0.0 || dy != 0.0 {
+        // lifted while it travels: a gold rim round it
+        super::frame::ringed(d, [ix - 3.0 * PX, foot_y - 3.0 * PY, iw + 6.0 * PX, (FOOT + 6.0) * PY], 13.0 * PX, 3.0 * PX, GOLD, None);
+        d.out.drain(start..).collect()
+    } else {
+        Vec::new()
+    };
     // 1P's focus: the lobby's ring round the card (gold while its controller is held) and the menus' pointing hand
     if on {
         let rim = if m.held { GOLD } else { WHITE };
