@@ -10,9 +10,8 @@
 //! It is the second page of the original's result screen. The first is the match's final board (the result board
 //! with every set settled, 40 up, the winner's stripes under the pulsing highlight and its sets count pulsing in
 //! scale) under the "Game, Set, Match!" model (`i_gameset_00`, `AZUMA/PRIZE/OTHER.XB0`). → / ← slide 40 px a tick
-//! to the other page (✕ too, while the stats page hasn't been seen); along the bottom (`KeyAssign_inpane`, the
-//! menus' `info` icons) the other page's name beside the blinking d-pad, and from tick 120 "✕ Continue", which
-//! ends it once the stats page has been seen.
+//! to the other page (✕ too, while the stats page hasn't been seen); from tick 120 ✕ Continue ends it once the
+//! stats page has been seen. Its button prompts are our key legend (M14), not the original's PS2-glyph bar.
 //!
 //! The match pauses on it; Continue fades to black over 60 ticks and goes back to the menu, as the pause menu's
 //! "Return to the Menu". `HST_STATS=<seconds>` ends the match (as it stands) after
@@ -47,12 +46,8 @@ const CONFETTI: usize = 4;
 enum Tex {
     Frame,
     Text,
-    /// "Score Screen", "Stats Screen", "Continue", 152×24 rows.
-    Keys,
     /// The dark sprite behind the columns.
     Back,
-    /// The menus' button icons.
-    Info,
     Face(usize),
     Rank,
     /// The result board's (popups) sheets.
@@ -312,27 +307,6 @@ fn percent(out: &mut Vec<Quad>, v: f32, x: i32, y: i32) {
     out.push(cell(tenths % 10, x + 56));
 }
 
-/// A sprite at its native size.
-fn sprite(tex: Tex, src: [i32; 4], x: i32, y: i32) -> Quad {
-    Quad { tex, src: src.map(|c| c as f32), dst: [x as f32, y as f32, src[2] as f32, src[3] as f32], rgb: WHITE, alpha: 128.0 }
-}
-
-/// The bottom bar: from tick 120 "✕ Continue" (the ✕ blinking in), always the other page's name beside the d-pad
-/// (blinking to the side it lies).
-fn bar(page: usize, timer: i32, blink: i32) -> Vec<Quad> {
-    let mut out = Vec::new();
-    if timer >= 120 {
-        out.push(sprite(Tex::Keys, [0, 48, 152, 24], 288, 404));
-        if blink > 0x13 {
-            out.push(sprite(Tex::Info, [144, 160, 32, 32], 256, 400));
-        }
-        out.push(sprite(Tex::Info, [224, 96, 32, 32], 256, 400));
-    }
-    out.push(sprite(Tex::Keys, [0, (page == 0) as i32 * 24, 152, 24], 472, 404));
-    let pad = if blink < 0x14 { [192, if page == 0 { 64 } else { 32 }, 32, 32] } else { [144, 128, 32, 32] };
-    out.push(sprite(Tex::Info, pad, 440, 400));
-    out
-}
 
 /// The winner's header pulse: 0 up to 102 and back over 21 ticks each way.
 #[derive(Default)]
@@ -398,7 +372,6 @@ struct Screen {
     /// The stats page has been shown.
     seen: bool,
     timer: i32,
-    blink: i32,
     /// Ticks into the fade to black after Continue.
     leaving: Option<i32>,
 }
@@ -422,7 +395,6 @@ impl Screen {
                 self.seen |= self.page == 1;
             }
         }
-        self.blink = (self.blink + 1) % 40;
         self.alpha = self.pulse.step();
         self.scale = self.grow.scale();
         self.timer += 1;
@@ -707,7 +679,6 @@ fn draw(
     pads: Res<Pads>,
     screen: Res<Screen>,
     cer: Option<Res<ceremony::Ceremony>>,
-    dissolve: Res<dissolve::Dissolve>,
     art: Option<Res<Art>>,
     panel_art: Option<Res<panel::Art>>,
     board_art: Option<Res<popups::Art>>,
@@ -753,9 +724,6 @@ fn draw(
             };
             quads.append(&mut page);
         }
-        if !dissolve.fading() {
-            quads.extend(bar(screen.page, screen.timer, screen.blink));
-        }
     } else if let Some(c) = cer.filter(|_| g.match_stats.result.is_some()) {
         quads = ceremony::quads(&c.plan, n > 2);
     }
@@ -775,10 +743,8 @@ fn draw(
         img.image = match quad.tex {
             Tex::Frame => art.0[0].clone(),
             Tex::Text => art.0[1].clone(),
-            Tex::Keys => art.0[2].clone(),
             Tex::Gameset => art.0[3].clone(),
             Tex::Back => art.0[5].clone(),
-            Tex::Info => art.0[6].clone(),
             Tex::Team => art.0[7].clone(),
             Tex::Face(p) => panel_art.0[panel::FACES + p].clone(),
             Tex::Rank => panel_art.0[6].clone(),
@@ -906,22 +872,11 @@ mod tests {
         assert!(!s.step(1));
         assert!(s.step(2));
         assert_eq!((s.page_x(1), s.page_x(0)), (Some(40), Some(-600)));
-        assert_eq!((s.timer, s.blink), (19, 19));
+        assert_eq!(s.timer, 19);
         // the scale pulse: 1 up 0.015 a tick to 1.3, then back down
         let mut s = Screen::opened(0);
         let k: Vec<f32> = (0..22).map(|_| (s.step(0), s.scale).1).collect();
         assert_eq!((k[0], k[19], k[20], k[21]), (1.0, 1.285, 1.3, 1.3));
-    }
-
-    /// Before tick 120 only the other page's name and the d-pad; then ✕ Continue, its ✕ blinking.
-    #[test]
-    fn bar_items() {
-        let src = |q: Vec<Quad>| q.iter().map(|q| (q.tex, q.src[0] as i32, q.src[1] as i32, q.dst[0] as i32)).collect::<Vec<_>>();
-        assert_eq!(src(bar(0, 119, 0)), vec![(Tex::Keys, 0, 24, 472), (Tex::Info, 192, 64, 440)]);
-        assert_eq!(
-            src(bar(1, 120, 20)),
-            vec![(Tex::Keys, 0, 48, 288), (Tex::Info, 144, 160, 256), (Tex::Info, 224, 96, 256), (Tex::Keys, 0, 0, 472), (Tex::Info, 144, 128, 440)]
-        );
     }
 
     #[test]
