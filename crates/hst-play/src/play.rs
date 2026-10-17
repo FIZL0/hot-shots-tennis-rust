@@ -4310,6 +4310,10 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
         let c = p.cmd;
         if c.serial != m.serial {
             m.set(c.id, c.speed, c.looping, c.hold, c.serial);
+            // a doubles team reaction: the point's losers show its `_2` face, five on from the winners'
+            if c.id >= motion::id::TEAM as usize && i as i32 & 1 != g.post_winner {
+                m.face += 5;
+            }
         }
         m.clock.speed = c.speed;
     }

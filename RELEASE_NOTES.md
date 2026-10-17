@@ -1,4 +1,5 @@
 <!-- What's new since the last release, for players, in plain English: one "- " line per change. tools/release.sh puts this in the release and empties it. -->
+- Doubles: players' faces now change during their team celebrations and commiserations after a point, as in the original (they stayed blank before).
 - Mod characters with their own celebration and reaction animations no longer tip their toes up during them.
 - Matches with mod characters start more smoothly: their models load in the background while the menu fades out, instead of freezing the first frames of the match.
 - Controllers screen: each card shows a badge with its controller's number (KB for the keyboard), and pressing any button on a controller flashes its card and rumbles it so you can see which one is yours.

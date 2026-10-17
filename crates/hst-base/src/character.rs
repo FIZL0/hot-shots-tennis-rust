@@ -517,7 +517,8 @@ impl Motion {
     /// The game's motion setter: restart motion `id` at its start.
     pub fn set(&mut self, id: usize, speed: f32, looping: bool, hold: Option<i32>, serial: u32) {
         // the soft follow-throughs 0x1c/0x1d keep the stroke's face; the face clock restarts with the motion
-        // ponytail: the face clock ignores the crossfade hold; team reactions (0x30..) use their own clip's face, not the co offset
+        // ponytail: the face clock ignores the crossfade hold; a team reaction (0x30..) starts on the winners' face (the
+        // match moves the losers' to their `_2` take, `Motion::face` + 5)
         let face = if id == 0x1c || id == 0x1d { self.face } else { id };
         // crossfade length: the held count's frames, 8 for looping motions and whiffs, else a cut
         // ponytail: stand↔ready's track 6 (the game's longest-arc slerp) mixes like the others
@@ -874,7 +875,10 @@ pub fn disc_motions_counted(iso: &mut Iso, n: usize, skeleton: &Skeleton, target
     for id in (0..ani::MOTIONS.len()).filter(|&id| want(id)) {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
         let file = |ext: &str| aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.{ext}"))).and_then(|e| aarc.read(e).ok());
-        faces.extend(face_counted(file("mor"), file("uva"), skeleton, &target, &counts).map(|f| (id, f)));
+        // the game's face list takes the first 0x30 motions' faces; the team reactions' follow (below)
+        if id < 0x30 {
+            faces.extend(face_counted(file("mor"), file("uva"), skeleton, &target, &counts).map(|f| (id, f)));
+        }
         let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
         let Ok(a) = ani::parse(&aarc.read(e).map_err(|e| e.0)?) else { continue };
         if let (Some(h), Some(row)) = (hip, pelvis.get_mut(id)) {
@@ -907,6 +911,14 @@ pub fn disc_motions_counted(iso: &mut Iso, n: usize, skeleton: &Skeleton, target
     {
         let carc = Archive::parse(&cg).map_err(|e| e.0)?;
         for (k, stem) in ["co01_f", "co02_f", "co03", "co04", "co05"].iter().enumerate() {
+            // the character's own faces for them: the point's winners' (`TEAM` + k) and the losers' `_2` take (5 on)
+            for (face, take) in [(0x30 + k, ""), (0x35 + k, "_2")] {
+                let file = |ext: &str| {
+                    let name = format!("mtgrl/pc{n:02}/re_pc{n:02}_{stem}{take}.{ext}");
+                    carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)).and_then(|e| carc.read(e).ok())
+                };
+                faces.extend(face_counted(file("mor"), file("uva"), skeleton, &target, &counts).map(|f| (face, f)));
+            }
             let name = format!("mtgrl/re_pc00_{stem}.ani2");
             let Some(e) = carc.entries.iter().find(|e| e.name.to_ascii_lowercase().replace('\\', "/").ends_with(&name)) else { continue };
             let Ok(a) = ani::parse(&carc.read(e).map_err(|e| e.0)?) else { continue };
@@ -1496,6 +1508,35 @@ mod tests {
 mod uv_tests {
     use super::*;
 
+    /// The doubles team reactions' faces (`PCDATA/PCCG0.XB` `MtGrl/pcNN`): the winners' at `TEAM` + k, the losers'
+    /// `_2` take five on, for the sets each character has files for (the game's face list after the first 0x30).
+    #[test]
+    fn team_reactions_have_faces() {
+        let Ok(mut iso) = Iso::open(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Hot Shots Tennis (USA).iso")) else { return eprintln!("no ISO, skipped") };
+        for n in 0..14 {
+            let data = iso.read(&format!("PC/PC{n:02}C00.XB")).unwrap();
+            let arc = Archive::parse(&data).unwrap();
+            let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).unwrap();
+            let model = mdl::parse(&arc.read(e).unwrap()).unwrap();
+            let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
+            let m = disc_motions(&mut iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name)).unwrap();
+            let sets: &[usize] = match n {
+                5 => &[0, 1, 3, 4],
+                7 | 11 => &[3, 4],
+                _ if n & 1 == 0 => &[0, 1, 2, 3, 4],
+                _ => &[2, 3, 4],
+            };
+            let mut want: Vec<usize> = sets.iter().flat_map(|k| [0x30 + k, 0x35 + k]).collect();
+            want.sort();
+            let mut got: Vec<usize> = m.faces.iter().filter(|(id, f)| (0x30..POSE).contains(*id) && !f.tracks.is_empty()).map(|(&id, _)| id).collect();
+            got.sort();
+            assert_eq!(got, want, "character {n}");
+            // co02_f's eyes (`.UVA`, both takes; character 8's `_2` names no node, so it never plays) for those with the set but 5
+            let uv = [0x31, 0x36].map(|id| m.faces.get(&id).is_some_and(|f| !f.uv.is_empty() || !f.uv_unbound.is_empty()));
+            assert_eq!(uv, [n & 1 == 0 && n != 5; 2], "character {n}");
+        }
+    }
+
     /// The match motions that carry a bound `.UVA`: the point reactions 0x2c..0x2f for some characters, and nearly
     /// every motion of character 3's (stance, run, strokes, whiffs, reactions); the motion setter restarts the UV clock with the face's, and it holds at the `.UVA`'s end.
     #[test]
@@ -1509,7 +1550,7 @@ mod uv_tests {
             let model = mdl::parse(&arc.read(e).unwrap()).unwrap();
             let skeleton = Skeleton { names: model.node_names.clone(), parent: model.node_parent.clone(), rest: model.node_local.clone() };
             let m = disc_motions(&mut iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name)).unwrap();
-            let mut ids: Vec<usize> = m.faces.iter().filter(|(id, f)| **id != POSE && !f.uv.is_empty()).map(|(&id, _)| id).collect();
+            let mut ids: Vec<usize> = m.faces.iter().filter(|(id, f)| **id < 0x30 && !f.uv.is_empty()).map(|(&id, _)| id).collect();
             ids.sort();
             with.extend(ids.into_iter().map(|id| (n, id)));
             if n == 1 {

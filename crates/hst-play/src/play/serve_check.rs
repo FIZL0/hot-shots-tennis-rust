@@ -309,6 +309,9 @@ mod tests {
                 // in doubles `gu`/`di` may be drawn as a team reaction (0x30..0x34)
                 let reacts = |i: usize, base| ms[i].1 == base || (0x30..0x35).contains(&ms[i].1);
                 assert!(reacts(0, 0x2d) && reacts(2, 0x2d) && reacts(1, 0x2c) && reacts(3, 0x2c), "{ms:x?}");
+                // a team reaction's face: the winners' (team 1) its own, the losers' its `_2` take five on
+                let faces: Vec<_> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, m.id, m.face)).collect();
+                assert!(faces.iter().all(|&(i, id, face)| face == if id >= 0x30 && i & 1 == 0 { id + 5 } else { id }), "{faces:x?}");
                 assert!(stood, "the server didn't stand once its miss motion ran out");
                 return;
             }
