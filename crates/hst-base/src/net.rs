@@ -422,10 +422,16 @@ impl Room {
 
     /// Seat `peer`'s picks in the first open seats; false (and no change) if they don't all fit.
     fn take(&mut self, peer: &str, picks: &[Pick]) -> bool {
+        self.take_from(peer, picks, &[])
+    }
+
+    /// `take`, seats `first` (free ones) filled before the others.
+    fn take_from(&mut self, peer: &str, picks: &[Pick], first: &[usize]) -> bool {
         if picks.is_empty() || picks.len() > self.open() {
             return false;
         }
-        let mut free = (0..self.seats.len()).filter(|&i| self.seats[i].is_none()).collect::<Vec<_>>().into_iter();
+        let rest = (0..self.seats.len()).filter(|i| !first.contains(i));
+        let mut free = first.iter().copied().chain(rest).filter(|&i| self.seats[i].is_none()).collect::<Vec<_>>().into_iter();
         for pick in picks {
             self.seats[free.next().unwrap()] = Some(Seat { peer: peer.into(), pick: pick.clone() });
         }
@@ -544,6 +550,14 @@ impl Room {
     pub fn again(&mut self) {
         self.ready.clear();
         (self.rejoin, self.ver) = (false, self.ver + 1);
+    }
+
+    /// B551: `peer` back on a new connection while its old one still counts: everything of it gone (as `leave`),
+    /// the seats it held returned, to be taken back first.
+    fn reclaim(&mut self, peer: &str) -> Vec<usize> {
+        let held = (0..self.seats.len()).filter(|&i| self.seats[i].as_ref().is_some_and(|s| s.peer == peer)).collect();
+        self.leave(peer);
+        held
     }
 
     fn leave(&mut self, peer: &str) {
@@ -828,6 +842,11 @@ impl Link {
             }
         });
         Link(s)
+    }
+
+    /// The same connection's link (B551: a peer's old connection told from its new one).
+    fn same(&self, o: &Link) -> bool {
+        self.0.same_channel(&o.0)
     }
 
     fn send(&self, m: &Msg) {
@@ -1490,7 +1509,8 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
 enum Guest {
     In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device },
     Said(String, Msg),
-    Gone(String),
+    /// B551: the peer's connection whose link this is ended (a newer one of the same peer's stays).
+    Gone(String, Link),
     /// A datagram from the first peer for the second.
     Datagram(String, String, Vec<u8>),
     /// A mod's looks from its owner: hash, pack.
@@ -1603,7 +1623,7 @@ async fn guest(gtx: amp::UnboundedSender<Guest>, peer: String, conn: Conn, link:
     let g = gtx.clone();
     let p = gtx.clone();
     n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(g.send(Guest::Pack(h, b))), move |h, got, n| drop(p.send(Guest::Progress(h, got, n)))));
-    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts, device });
+    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link: link.clone(), conn, courts, device });
     loop {
         tokio::select! {
             m = inbox.msgs.recv() => match m {
@@ -1615,7 +1635,7 @@ async fn guest(gtx: amp::UnboundedSender<Guest>, peer: String, conn: Conn, link:
             },
         }
     }
-    let _ = gtx.send(Guest::Gone(peer));
+    let _ = gtx.send(Guest::Gone(peer, link));
 }
 
 /// The next iroh connection (never, on the browser's LAN).
@@ -1937,11 +1957,23 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             },
             Some(g) = guests.recv() => match g {
                 Guest::In { peer, name, picks, build, link, conn, courts, device } => {
+                    // B551: the same peer on a new connection (it left and came back before its old one was seen to
+                    // drop): the old one goes, its seats free for it to take back
+                    let mut back = Vec::new();
+                    if let Some(i) = joined.iter().position(|(p, ..)| *p == peer) {
+                        joined.remove(i).2.close(b"rejoined");
+                        back = room.reclaim(&peer);
+                        ready.clear();
+                        (starting, go, count, room.count) = (None, false, None, 0);
+                        broadcast(&joined, &Msg::Room(room.clone()));
+                        cx.say(Event::Room(room.clone()));
+                        dirty = true;
+                    }
                     let why = if build != our_build() {
                         Some(version_differs(our_build(), &build))
                     } else if let Err(e) = picks_ok(&picks) {
                         Some(e)
-                    } else if starting.is_some() || !room.take(&peer, &picks) {
+                    } else if starting.is_some() || !room.take_from(&peer, &picks, &back) {
                         Some(format!("not enough open seats ({} open, you bring {})", room.open(), picks.len()))
                     } else {
                         None
@@ -2052,11 +2084,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                 }
                 Guest::Said(..) | Guest::Datagram(..) | Guest::Pack(..) | Guest::Progress(..) => {}
-                Guest::Gone(peer) => {
-                    recent.remove(&peer);
-                    if !joined.iter().any(|(p, ..)| *p == peer) {
+                Guest::Gone(peer, link) => {
+                    // B551: an old connection's end, the peer back on a newer one, frees nothing
+                    if !joined.iter().any(|(p, l, _)| *p == peer && l.same(&link)) {
                         continue;
                     }
+                    recent.remove(&peer);
                     ready.clear();
                     let name = room.names.get(&peer).cloned().unwrap_or_else(|| short(&peer).into());
                     room.leave(&peer);
@@ -2301,7 +2334,7 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
                     joined.iter().filter(|(p, ..)| *p != peer).for_each(|(_, l, _)| l.send(&m));
                     cx.say(Event::Match(m));
                 }
-                Guest::Gone(peer) => joined.retain(|(p, ..)| *p != peer),
+                Guest::Gone(peer, link) => joined.retain(|(p, l, _)| !(*p == peer && l.same(&link))),
                 Guest::In { peer, name, build, link, conn, .. } => {
                     // ponytail: the rejoiner plays the seat's old picks (a mod pick it lacks shows its stand-in)
                     let back = away.iter().find(|p| room.names.get(*p).is_some_and(|n| *n == name)).or(away.first()).cloned();
@@ -3934,6 +3967,71 @@ mod tests {
             gcmd.send(Cmd::Picks(vec![Pick { r#mod: Some(Box::new(bad)), ..Pick::disc(1, 0) }])).unwrap();
             next(&hev, |e| matches!(e, Event::Status(s) if s.contains("pick was refused"))).await;
             next(&gev, |e| matches!(e, Event::Chat { text, .. } if text.starts_with("Your pick was refused"))).await;
+        });
+    }
+
+    /// B551 on loopback, singles: a guest leaves and joins again (seated, not "not enough open seats"); a guest back on
+    /// a new connection while the host still has its old one (its leave never arrived) is seated too, on its old
+    /// seat, and that old connection's end later doesn't free it.
+    #[test]
+    fn a_guest_who_left_joins_again() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let dht = || Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap();
+            let cx = |ep: &Endpoint| {
+                let (tx, rx) = mpsc::channel();
+                (Ctx { ep: Some(ep.clone()), dht: dht(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+            };
+            let ((hep, _), (gep, _)) = (endpoint(&Relay::Off).await.unwrap(), endpoint(&Relay::Off).await.unwrap());
+            let (hcx, hev) = cx(&hep);
+            let (_hcmd, mut hrx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(3, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+                for _ in 0..1500 {
+                    while let Ok(e) = ev.try_recv() {
+                        assert!(!matches!(e, Event::Failed(_)), "{e:?}");
+                        if want(&e) {
+                            return e;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                panic!("timed out")
+            }
+            let Event::Code(code) = next(&hev, |e| matches!(e, Event::Code(_))).await else { unreachable!() };
+            let me = gep.id().to_string();
+            let seated = |e: &Event| matches!(e, Event::Room(r) if r.seats[1].as_ref().is_some_and(|s| s.peer == me));
+            // each join from the same machine (endpoint), on its own connection
+            let joins = |pick: usize| {
+                let (gcx, gev) = cx(&gep);
+                let (gcmd, mut grx) = amp::unbounded_channel();
+                let code = code.clone();
+                tokio::spawn(async move { join(&gcx, &code, vec![Pick::disc(pick, 0)], &mut grx).await });
+                (gcmd, gev)
+            };
+            // join, leave, join again
+            let (g1, e1) = joins(1);
+            next(&e1, seated).await;
+            next(&hev, seated).await;
+            g1.send(Cmd::Leave).unwrap();
+            next(&hev, |e| matches!(e, Event::Status(s) if s.ends_with("left."))).await;
+            let (g2, e2) = joins(2);
+            next(&e2, seated).await;
+            // back on a third connection, the second's leave unseen: seated on the same seat with its new pick
+            let (_g3, e3) = joins(4);
+            let back = |e: &Event| matches!(e, Event::Room(r) if r.seats[1].as_ref().is_some_and(|s| s.peer == me && s.pick.char == 4));
+            next(&e3, back).await;
+            next(&hev, back).await;
+            // the second connection closed by the host (its join over: the Leave goes nowhere) frees nothing
+            let _ = g2.send(Cmd::Leave);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            while let Ok(e) = hev.try_recv() {
+                assert!(!matches!(&e, Event::Status(s) if s.ends_with("left.")), "{e:?}");
+                assert!(!matches!(&e, Event::Room(r) if r.seats[1].is_none()), "{e:?}");
+            }
         });
     }
 
