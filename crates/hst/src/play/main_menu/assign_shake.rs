@@ -56,11 +56,24 @@ fn flash(
     time: Res<Time>,
     mut rumble: MessageWriter<GamepadRumbleRequest>,
     mut shot: Local<Option<Option<usize>>>,
+    mut seated: Local<Option<[Option<Dev>; 4]>>,
 ) {
     let now = time.elapsed_secs();
     if menu.screen != Screen::Assign {
         flashes.0 = [0.0; 4];
+        *seated = None;
     } else {
+        // a device that just joined (wasn't on any seat) flashes its new card too
+        if let Some(was) = *seated {
+            for p in 0..4 {
+                if let Some(d @ (Dev::Keys | Dev::Pad(_))) = menu.seats[p]
+                    && !was.contains(&Some(d))
+                {
+                    flashes.0[p] = now + GLOW;
+                }
+            }
+        }
+        *seated = Some(menu.seats);
         let n = menu.players();
         let seat = |d: Dev| menu.seats[..n].iter().position(|s| *s == Some(d));
         for (e, g) in pads.iter().filter(|(_, g)| controls::readable(g)) {
