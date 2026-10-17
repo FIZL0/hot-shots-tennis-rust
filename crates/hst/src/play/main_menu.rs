@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type / names-card = chars with 1P named and its name picker open on the list / typing / closed (B371, B541), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), lobby-fetching = the host's lobby with a player still downloading a mod (M122), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), rematch-update = both cards (M97), main-extras / extras = main on Extras / the Extras screen (M97), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327), graphics-list / graphics-fps = Graphics with Preset's / Frame Limit's dropdown open (B498)) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type / names-card = chars with 1P named and its name picker open on the list / typing / closed (B371, B541), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), lobby-fetching = the host's lobby with a player still downloading a mod (M122), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), rematch-update = both cards (M97), main-extras / extras = main on Extras / the Extras screen (M97), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327), takeover / takeover-toast = main with the pad takeover prompt up / its Yes's toast (M127), graphics-list / graphics-fps = Graphics with Preset's / Frame Limit's dropdown open (B498)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -74,6 +74,7 @@ mod previews;
 mod roster;
 mod slide;
 mod splash;
+mod takeover;
 
 /// Characters on the select screen.
 const CHARS: usize = 14;
@@ -570,6 +571,8 @@ struct Menu {
     /// M124: the assignment over an online match's pause: the seats another machine plays. Only this machine's own
     /// seats (the rest are `bots`, fixed) take or swap its pads, and no device is taken off.
     net_pause: Option<[bool; 4]>,
+    /// M127: the pad takeover prompt (`takeover.rs`).
+    takeover: takeover::Takeover,
 }
 
 impl Default for Menu {
@@ -622,6 +625,7 @@ impl Default for Menu {
             splash: default(),
             shake: [0.0; 4],
             net_pause: None,
+            takeover: default(),
         }
     }
 }
@@ -1123,6 +1127,10 @@ impl Menu {
         // B437: left the assignment: its seats stand, 1P's device drives from here
         if self.screen != Screen::Assign {
             self.assign_lead = None;
+        }
+        // M127: the pad takeover prompt takes every press while it's up
+        if let Some(fx) = self.takeover_step(dev, k) {
+            return fx;
         }
         let rows = |n: usize, sel: &mut usize, out: &mut Vec<Effect>| {
             if k.up || k.down {
@@ -2092,6 +2100,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     if fresh && screen == "reloadmods" {
         mods_screen::sample(&mut menu, &screen);
     }
+    // M127: the pad takeover prompt up / its toast
+    if fresh && (screen == "takeover" || screen == "takeover-toast") {
+        takeover::sample(&mut menu, screen == "takeover-toast");
+    }
     // B327: the Renderer switch's popup up, on WebGL2
     if fresh && screen == "renderer" {
         menu.switch = Some((2, 0));
@@ -2644,6 +2656,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         Screen::Extras => extras::layout(&mut d, m, hand_x),
     }
     online::draw_ask_over(&mut d, m);
+    takeover::layout(&mut d, m, hand_x);
     // B221: the screens with no Back row show the title tab's Back (B449: the confirm screen has its own)
     if matches!(m.screen, Screen::Main | Screen::Mode | Screen::Assign | Screen::Chars) && m.picking.is_none() && m.add.ask.is_none() {
         d.anchor = Anchor::Span;
@@ -3346,6 +3359,7 @@ pub fn plugin(app: &mut App) {
     // M14: the button legend
     legend::plugin(app);
     app.add_systems(Update, legend::fill.after(step));
+    app.add_systems(Update, takeover::watch.before(step).after(pointer::pointer));
     app.init_resource::<umpire_mods::Pics>().add_systems(Update, umpire_mods::load.before(draw));
     app.init_resource::<court_mods::Pics>().add_systems(Update, court_mods::load.before(draw));
     app.init_resource::<splash::Backdrops>().add_systems(Update, splash::backdrops.after(court_mods::load).after(splash::tick).before(draw));

@@ -25,3 +25,4 @@
 - Button hints now show your own controller's buttons (or your keyboard keys) instead of always naming PlayStation buttons: the Singles / Doubles / Swap team button, the Controllers screen's help, the title screen and the mods page.
 - Mod store: updating a mod that was re-uploaded within the last hour no longer fails with a size mismatch; the new version installs.
 - Online lobbies no longer slow to a crawl on phones when you've picked a large custom character.
+- Picking up a controller while you're using the keyboard in the menus now asks whether the controller should be player 1; say yes and the keyboard is free for a second player, say no (or wait a few seconds) and it won't ask again until that controller is plugged back in.
