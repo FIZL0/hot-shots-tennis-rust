@@ -315,7 +315,7 @@ pub(super) fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: 
 
 /// A dashed `t`-px rim round a box with `r`-px corners on a `fill` box: a computer player's column. The corners are
 /// whole arcs; each side's dashes are spread to end flush with them.
-fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rgb: [f32; 3], fill: [f32; 3]) {
+pub(super) fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rgb: [f32; 3], fill: [f32; 3]) {
     let (dash, gap) = (10.0, 6.0);
     let (tx, ty) = (t * PX, t * PY);
     // the dashes along a side from `r` to `len - r` (`k` units to the axis'), first and last touching the corners
@@ -999,7 +999,7 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 /// pill on the right (`glyph`'s button art before it; left of the ✕ when `drop`; left out when the column is too
 /// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
-fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
+pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
     // B471: the panel's header strip inside the card's outline, a dark rule under it; a computer player's in the
     // seat's light tint with dark words
     let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.sel, hex(look::INK)) };

@@ -103,11 +103,11 @@ struct Quad {
 const OPTIONS: [i32; 3] = [6, SETTINGS, 1];
 /// Not a row of `i_dialog_01`: [`LABEL`].
 const SETTINGS: i32 = -1;
-/// B254: a local match's rows, with (ours) "Controllers" ([`SEATS`]) before "Return to the Menu".
+/// B254: a local match's rows (M124: or an online one with two local players), with (ours) "Controllers" ([`SEATS`]) before "Return to the Menu".
 const OPTIONS_LOCAL: [i32; 4] = [6, SETTINGS, CONTROLLERS, 1];
 const CONTROLLERS: i32 = -2;
 
-/// The dialog's rows: an online match has no "Controllers".
+/// The dialog's rows: "Controllers" only when there is something to assign (M124: online, only with two local players).
 fn options(local: bool) -> &'static [i32] {
     if local { &OPTIONS_LOCAL } else { &OPTIONS }
 }
@@ -176,7 +176,8 @@ struct Menu {
     acc: f32,
     /// "Settings" chosen: `step` opens them.
     settings: bool,
-    /// B254: a local match (the dialog has "Controllers"), set by `step`; "Controllers" chosen.
+    /// B254: the dialog has "Controllers" (a local match, or M124 an online one with two local players), set by `step`;
+    /// "Controllers" chosen.
     local: bool,
     seats: bool,
     /// B68: a point has been scored (set by `step`), so "Return to the Menu" asks first.
@@ -641,7 +642,8 @@ fn step(
         return;
     }
     let sets = g.rules.sets.clamp(1, 3);
-    menu.local = net.is_none();
+    // M124: online too when this machine plays two seats, which can swap its pads
+    menu.local = net.as_ref().is_none_or(|np| np.lock.mine.len() > 1);
     let n = options(menu.local).len();
     // B178: the confirm's pills are Yes and No
     let (ask, rows) = (menu.ask.is_some(), if menu.ask.is_some() { 2 } else { n });

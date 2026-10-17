@@ -808,6 +808,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B538** iOS (iPhone 15 Pro): game keeps reloading/crashing, probably out of memory; find the peak and keep it under iOS's limit (textures, preload, pipelines; crates/hst-base/src/ios.rs, textures.rs, crates/hst-play/src/preload.rs)
 - [x] **M122** Online lobby: show every player a notice when someone is still downloading a mod, so they know why that player isn't ready (builds on B537's progress; crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
 - [x] **B539** iOS Safari (in the browser, not the home-screen web app): play full screen with no tab/address bar, as far as iPhone Safari allows (it has no Fullscreen API for pages; check what minimal-ui/scroll tricks still work, else lean on M123's home-screen tutorial) (web/index.html, web/site.js)
+- [x] **M124** Controller select (the menu's and the pause menu's Assign screen) shows the match roster: each seat's character card (characters can't be changed there). Local: P1 can leave, swap players between seats and remove players. Online: you can only swap your own pads between your local players (crates/hst/src/play/main_menu.rs, crates/hst/src/play/main_menu/pause.rs, crates/hst/src/play/main_menu/roster.rs, crates/hst/src/play/main_menu/online.rs, crates/hst-base/src/seats.rs)
 
 
 ### Shots
