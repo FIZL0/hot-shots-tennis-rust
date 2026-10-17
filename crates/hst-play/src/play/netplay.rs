@@ -1677,7 +1677,7 @@ mod tests {
                 }
             });
             eprintln!("{said:#?}");
-            assert!(said[0].iter().all(|t| t.starts_with("Waiting for g to come back... 2")), "{:?}", said[0]);
+            assert!(said[0].iter().all(|t| t.starts_with("Waiting for g to come back or rejoin... 0:2")), "{:?}", said[0]);
             assert!(said[1].iter().all(|t| t.starts_with("g didn't come back.")), "{:?}", said[1]);
             // B196a: the waiting has no choice; then both machines left get the pills
             assert_eq!(asked, [[false; 2], [true; 2]]);
@@ -1807,7 +1807,7 @@ mod tests {
                 }
             });
             assert!(said[0].starts_with("g switched away from the game.\nWaiting for them to come back... 0:0"), "{said:?}");
-            assert!(said[1].starts_with("Waiting for g to come back... "), "{said:?}");
+            assert!(said[1].starts_with("Waiting for g to come back or rejoin... "), "{said:?}");
         }
 
         /// B196: nobody wants a bot (○ on `h`): both machines left go back to the lobby together.

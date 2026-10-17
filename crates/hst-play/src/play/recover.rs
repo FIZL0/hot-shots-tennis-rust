@@ -16,6 +16,11 @@
 //! keeper (`net::keeper`) says so (`Msg::Hidden`) about once a second. Everyone holds the match for it with "… switched
 //! away" and a countdown of [`LONG`]; it's away (the wait and question above) only after that, or if even the keeper
 //! goes quiet for [`HIDDEN_QUIET`] (a browser throttles a hidden tab's timers). Back, it plays on from where it was.
+//!
+//! M126: a guest's page refreshed or game restarted comes back by itself: its lobby code and seat are kept
+//! (`net::rejoin`, the menu's `launch`) and a fresh menu joins that code again, asking for its old seat. [`WAIT`] covers
+//! a phone reloading the page and the disc pack. The record goes once the match is over here. A refreshed host still
+//! ends the match: the guests' connections were to it, and there's no new host.
 
 use super::netplay::{Lockstep, Netplay, unwire};
 use super::tick_input::IDLE;
@@ -30,7 +35,12 @@ const ALIVE: f32 = 0.5;
 /// before its loading screen's slow frames, a browser compiling pipelines), [`LOADING`] (B200).
 pub const SILENT: f32 = 3.0;
 const LOADING: f32 = 60.0;
-/// How long the others wait for an away player to come back, then for an answer.
+/// How long the others wait for an away player to come back (M126: long enough for a refreshed page or a restarted
+/// game to load and rejoin), then for an answer. The match tests (`netplay::tests::matches`) wait 20 s, as before M126,
+/// so they don't play 100 s more of frames.
+#[cfg(not(test))]
+pub const WAIT: f32 = 120.0;
+#[cfg(test)]
 pub const WAIT: f32 = 20.0;
 pub const CHOOSE: f32 = 15.0;
 /// How long the guests wait for a silent host.
@@ -68,13 +78,15 @@ pub struct Recover {
     /// B162: the peers whose players switched away, seconds since; this machine's keeper (`keep`).
     pub hidden: BTreeMap<String, f32>,
     keeper: Option<crate::net::keeper::Keeper>,
+    /// M126: this machine's rejoin record is gone (the match is over).
+    forgot: bool,
 }
 
 impl Recover {
     /// `others`: the other peers, already playing if this machine rejoins.
     pub fn new(rejoin: bool, others: impl Iterator<Item = String>) -> Self {
         let loaded = if rejoin { others.collect() } else { BTreeSet::new() };
-        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None, ask_me: false, loaded, hidden: BTreeMap::new(), keeper: None }
+        Recover { quiet: BTreeMap::new(), alive: 0.0, away: Vec::new(), waited: 0.0, asking: None, chosen: None, sent: None, told: None, answered: false, pieces: Vec::new(), ready: None, round: 0, hold: rejoin, lobby: None, ask_me: false, loaded, hidden: BTreeMap::new(), keeper: None, forgot: false }
     }
 
     /// Any word from a peer.
@@ -201,6 +213,13 @@ pub(super) fn tick(w: &mut World, dt: f32) -> String {
     let score = score(w);
     // B279: on the result screen nobody waits for anybody: each leaves it for the lobby in their own time
     let over = w.get_resource::<Game>().is_some_and(|g| g.match_stats.result.is_some());
+    // M126: over, nothing to rejoin after a refresh
+    if (over || w.resource::<Netplay>().end.is_some()) && !w.resource::<Netplay>().recover.forgot {
+        w.resource_mut::<Netplay>().recover.forgot = true;
+        if let Some(a) = w.get_resource::<crate::Args>() {
+            crate::net::rejoin::forget(&a.iso);
+        }
+    }
     let mut np = w.resource_mut::<Netplay>();
     let np = &mut *np;
     let r = &mut np.recover;
@@ -350,7 +369,8 @@ pub(super) fn keep(w: &mut World) {
 
 fn notice(who: &str, left: u32, ask: bool, answered: bool) -> String {
     match (ask, answered) {
-        (false, _) => format!("Waiting for {who} to come back... {left} s"),
+        // M126: up to WAIT's two minutes (a page reloading rejoins by itself)
+        (false, _) => format!("Waiting for {who} to come back or rejoin... {}:{:02}", left / 60, left % 60),
         // the choices are the window's pills (`netplay.rs` `CHOICES`)
         (true, false) => format!("{who} didn't come back. ({left} s)"),
         (true, true) => format!("{who} didn't come back.\nWaiting for the others' choice... ({left} s)"),
@@ -412,5 +432,15 @@ pub(super) fn restarted(w: &mut World) {
     let (room, me, lockstep) = (np.room.clone(), np.me.clone(), np.room.lockstep);
     if !lockstep {
         super::rollback::restart(w, &room, &me, tick, round);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// M126: the wait for an away player counts down in minutes and says it can rejoin.
+    #[test]
+    fn the_wait_says_minutes() {
+        assert_eq!(super::notice("Sam", 120, false, false), "Waiting for Sam to come back or rejoin... 2:00");
+        assert_eq!(super::notice("Sam", 9, false, false), "Waiting for Sam to come back or rejoin... 0:09");
     }
 }

@@ -24,7 +24,8 @@
 //! on every change (a guest's [`Msg::Prepared`] marks it ready) and [`Msg::Start`] at the end of a countdown (B215,
 //! `Room::count`: every guest ready, or the host's Start; a peer's [`Msg::Cancel`] or un-ready stops it), the open
 //! seats then to the computer ([`CPU`]). Mid-match, a joiner with the same build takes a seat whose
-//! peer went silent ([`Msg::Away`]) and gets `Start` with `rejoin` set (B196, `play/recover.rs`). Messages are JSON, a u32 length before each.
+//! peer went silent ([`Msg::Away`]) and gets `Start` with `rejoin` set (B196, `play/recover.rs`); one
+//! back from a refresh or crash says its old seat in the Hello (M126, [`rejoin`]). Messages are JSON, a u32 length before each.
 //!
 //! The app talks to this through [`Net`]: commands in, [`Event`]s out; the network runs on its own tokio thread (in the browser: a task on the page's event loop, relays only).
 //! `hst net host|find|quick|join …` drives the same thing from a terminal (two machines, no menus).
@@ -52,6 +53,7 @@ use tokio::sync::mpsc as amp;
 
 pub mod rtc;
 pub mod keeper;
+pub mod rejoin;
 
 pub const ALPN: &[u8] = b"hst/lobby/1";
 /// The lobby list's infohash (any 20 bytes; these spell it).
@@ -667,6 +669,9 @@ pub enum Msg {
         /// M95: this machine's platform and input.
         #[serde(default)]
         device: crate::device::Device,
+        /// M126: rejoining after a refresh or crash, the seat this player had (the host gives it back first).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seat: Option<u8>,
     },
     Room(Room),
     Refused(String),
@@ -872,6 +877,8 @@ pub enum Cmd {
     Name(String),
     /// B450: this machine's installed court mods (ids; sent in the Hello, before Host/Join/Quick like `Name`).
     Courts(Vec<String>),
+    /// M126: the seat this player had in the match it rejoins (sent in the next Join's Hello; None: not rejoining).
+    Seat(Option<u8>),
     /// Leave the lobby (or stop hosting, or leave the match).
     Leave,
     /// In the match: to every other peer.
@@ -1097,6 +1104,8 @@ struct Ctx {
     courts: Vec<String>,
     /// M95: this machine's platform and input (`Net::device`).
     device: Shared,
+    /// M126: the seat to rejoin (`Cmd::Seat`).
+    seat: Option<u8>,
     /// The relays are on (n0 or own): the codes need one, as browsers reach peers only through relays (B175).
     relays: bool,
 }
@@ -1271,7 +1280,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
     };
     #[cfg(not(target_arch = "wasm32"))]
     let mut dht_since = n0_future::time::Instant::now();
-    let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone(), courts: Vec::new(), device, relays: cfg.relay != Relay::Off };
+    let mut cx = Ctx { ep, dht, lan: watch_lan(mdns), ev, name: cfg.name.clone(), courts: Vec::new(), device, seat: None, relays: cfg.relay != Relay::Off };
     bevy::log::info!("online in {:?}", t0.elapsed());
     cx.say(Event::Status("Online.".into()));
     // B321: a Host, Join, Quickplay or Find that came in during a Find (dropped for it)
@@ -1290,7 +1299,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
                 cx.say(Event::Status("Looking for lobbies...".into()));
                 // B267: the LAN's wait and the DHT's lookups at once, each list shown as it answers
                 let mut f = Finding::start(&cx);
-                let (mut name, mut courts) = (None, None);
+                let (mut name, mut courts, mut seat) = (None, None, None);
                 // B321: the Online screen's search (the browser's slot reads take 7-12 s) never holds up a Host
                 // chosen meanwhile: the first host after a page load showed no code until it was over
                 loop {
@@ -1304,6 +1313,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
                         c = cmds.recv() => match c {
                             Some(Cmd::Name(n)) => name = Some(n),
                             Some(Cmd::Courts(c)) => courts = Some(c),
+                            Some(Cmd::Seat(n)) => seat = Some(n),
                             Some(c @ (Cmd::Host(_) | Cmd::Join(..) | Cmd::Quick(_) | Cmd::Find)) => {
                                 cut = Some(c);
                                 break;
@@ -1319,6 +1329,9 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
                 }
                 if let Some(c) = courts {
                     cx.courts = c;
+                }
+                if let Some(n) = seat {
+                    cx.seat = n;
                 }
             }
             Cmd::Quick(room) => {
@@ -1350,6 +1363,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
             }
             Cmd::Name(n) => cx.name = n,
             Cmd::Courts(c) => cx.courts = c,
+            Cmd::Seat(n) => cx.seat = n,
             _ => {}
         }
     }
@@ -1488,7 +1502,7 @@ async fn announce(cx: &Ctx, n: u16, room: &Room) {
 /// A joiner's side, inside the host task.
 #[allow(clippy::large_enum_variant)] // `Said` keeps its `Msg` by value so the host's match arms destructure it
 enum Guest {
-    In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device },
+    In { peer: String, name: String, picks: Vec<Pick>, build: String, link: Link, conn: Conn, courts: Vec<String>, device: crate::device::Device, seat: Option<u8> },
     Said(String, Msg),
     Gone(String),
     /// A datagram from the first peer for the second.
@@ -1596,14 +1610,14 @@ fn micros(t0: n0_future::time::Instant) -> u64 {
 
 /// A guest's arrivals into the host task: its Hello first (else it's dropped), then what it says and sends, then gone.
 async fn guest(gtx: amp::UnboundedSender<Guest>, peer: String, conn: Conn, link: Link, mut inbox: Inbox) {
-    let Some(Ok(Msg::Hello { build, picks, name, courts, device })) = inbox.msgs.recv().await else {
+    let Some(Ok(Msg::Hello { build, picks, name, courts, device, seat })) = inbox.msgs.recv().await else {
         conn.close(b"no hello");
         return;
     };
     let g = gtx.clone();
     let p = gtx.clone();
     n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(g.send(Guest::Pack(h, b))), move |h, got, n| drop(p.send(Guest::Progress(h, got, n)))));
-    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts, device });
+    let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts, device, seat });
     loop {
         tokio::select! {
             m = inbox.msgs.recv() => match m {
@@ -1848,7 +1862,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let put = !l.private || std::mem::take(&mut listed);
                 listed |= !l.private;
                 ep.set_user_data_for_address_lookup(lan_data(&Listing::of(ep.id(), &l)).filter(|_| !l.private));
-                let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), courts: cx.courts.clone(), device: cx.device.clone(), relays: cx.relays };
+                let cx2 = Ctx { ep: cx.ep.clone(), dht: cx.dht.clone(), lan: cx.lan.clone(), ev: cx.ev.clone(), name: String::new(), courts: cx.courts.clone(), device: cx.device.clone(), seat: None, relays: cx.relays };
                 let n = lobby_number(ep.id());
                 let (code, ticket) = (code.clone(), code_ticket(ep, home.as_ref()));
                 let (id, slot, unlisted) = (ep.id(), slot.clone(), unlisted.clone());
@@ -1936,7 +1950,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
             },
             Some(g) = guests.recv() => match g {
-                Guest::In { peer, name, picks, build, link, conn, courts, device } => {
+                Guest::In { peer, name, picks, build, link, conn, courts, device, .. } => {
                     let why = if build != our_build() {
                         Some(version_differs(our_build(), &build))
                     } else if let Err(e) = picks_ok(&picks) {
@@ -2275,6 +2289,13 @@ fn next_second(end: Option<n0_future::time::Instant>) -> Duration {
 /// The host in the match: passes the match's messages and datagrams on. B196: a guest's connection going away says
 /// nothing (the match sees the silence, `play/recover.rs`); while the match says someone is away, a joiner (by the
 /// same name first) takes their seats and gets the line-up to rejoin with.
+/// Whose seats a mid-match joiner called `name` takes: (M126) the away peer in the seat it says it had (a refresh or
+/// crash), else one away by that name, else the first away.
+fn back_for(room: &Room, away: &[String], name: &str, seat: Option<u8>) -> Option<String> {
+    let had = seat.and_then(|s| room.seats.get(s as usize)?.as_ref()).map(|s| s.peer.as_str());
+    away.iter().find(|p| had == Some(p.as_str())).or_else(|| away.iter().find(|p| room.names.get(*p).is_some_and(|n| n == name))).or(away.first()).cloned()
+}
+
 /// The match; back to the lobby (B196): the lobby's room, the guests still in, their messages.
 type Back = (Room, Vec<(String, Link, Conn)>, amp::UnboundedReceiver<Guest>);
 
@@ -2302,9 +2323,9 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
                     cx.say(Event::Match(m));
                 }
                 Guest::Gone(peer) => joined.retain(|(p, ..)| *p != peer),
-                Guest::In { peer, name, build, link, conn, .. } => {
+                Guest::In { peer, name, build, link, conn, seat, .. } => {
                     // ponytail: the rejoiner plays the seat's old picks (a mod pick it lacks shows its stand-in)
-                    let back = away.iter().find(|p| room.names.get(*p).is_some_and(|n| *n == name)).or(away.first()).cloned();
+                    let back = back_for(&room, &away, &name, seat);
                     match back {
                         Some(_) if build != our_build() => refuse(&link, conn, version_differs(our_build(), &build)),
                         Some(old) => {
@@ -2598,7 +2619,7 @@ async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unb
         let _ = n0_future::time::timeout(Duration::from_secs(10), ep.online()).await;
     }
     let Some((conn, link, inbox, me)) = connect(cx, code, cmds).await else { return false };
-    link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap() });
+    link.send(&Msg::Hello { build: build.into(), picks: picks.clone(), name: cx.name.clone(), courts: cx.courts.clone(), device: *cx.device.lock().unwrap(), seat: cx.seat });
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
     let ev = cx.ev.clone();
@@ -3258,6 +3279,25 @@ mod tests {
         Room { name: "t".into(), doubles, court: 0, sets: 0, games: 4, umpire: 4, seats: vec![None; if doubles { 4 } else { 2 }], ..Default::default() }
     }
 
+    /// M126: a rejoiner gets the away seat it says it had, before one away by its name (two players can share a name),
+    /// else the first away; a seat it names that isn't away is no claim.
+    #[test]
+    fn a_rejoiner_gets_its_own_seat_back() {
+        let mut r = room(true);
+        r.take("host", &[Pick::disc(0, 0)]);
+        r.take("a", &[Pick::disc(1, 0)]);
+        r.take("b", &[Pick::disc(2, 0)]);
+        r.names.extend([("a".into(), "Sam".into()), ("b".into(), "Sam".into())]);
+        let away = vec!["a".to_string(), "b".to_string()];
+        let at = |p: &str| r.seats.iter().position(|s| s.as_ref().is_some_and(|s| s.peer == p)).unwrap() as u8;
+        assert_eq!(back_for(&r, &away, "Sam", Some(at("b"))).as_deref(), Some("b"));
+        assert_eq!(back_for(&r, &away, "Sam", Some(at("a"))).as_deref(), Some("a"));
+        assert_eq!(back_for(&r, &away, "Sam", None).as_deref(), Some("a"), "by name: the first");
+        assert_eq!(back_for(&r, &["b".into()], "Sam", Some(at("host"))).as_deref(), Some("b"), "the host's seat isn't away");
+        assert_eq!(back_for(&r, &["b".into()], "Alex", Some(9)).as_deref(), Some("b"));
+        assert_eq!(back_for(&r, &[], "Sam", Some(at("a"))), None);
+    }
+
     /// B292: every person in ready doesn't count down while a seat is open; a full lobby does.
     #[test]
     fn no_autostart_with_open_seats() {
@@ -3462,7 +3502,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -3521,7 +3561,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -3739,7 +3779,7 @@ mod tests {
             let dht = |b: &[String]| Dht::builder().bootstrap(b).build().unwrap();
             let (a, b) = (dht(&net.bootstrap), dht(&net.bootstrap));
             let ep = Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled).bind().await.unwrap();
-            let cx = Ctx { ep: Some(ep), dht: a, lan: Lan::default(), ev: mpsc::channel().0, name: String::new(), courts: Vec::new(), device: Default::default(), relays: false };
+            let cx = Ctx { ep: Some(ep), dht: a, lan: Lan::default(), ev: mpsc::channel().0, name: String::new(), courts: Vec::new(), device: Default::default(), seat: None, relays: false };
             let mut r = room(true);
             r.take("host", &[Pick::disc(0, 0)]);
             announce(&cx, 4242, &r).await;
@@ -3761,7 +3801,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: dht(&net.bootstrap), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: dht(&net.bootstrap), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let id = hcx.ep.as_ref().unwrap().id().to_string();
@@ -3906,7 +3946,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let (_hcmd, mut hrx) = amp::unbounded_channel();
@@ -3947,7 +3987,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let (_hcmd, mut hrx) = amp::unbounded_channel();
@@ -4006,7 +4046,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             let ((hcx, hev), (gcx, gev)) = (cx().await, cx().await);
             let (hcmd, mut hrx) = amp::unbounded_channel();
@@ -4081,7 +4121,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -4140,7 +4180,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -4188,7 +4228,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {
@@ -4242,7 +4282,7 @@ mod tests {
                 async move {
                     let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                     let (tx, rx) = mpsc::channel();
-                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
                 }
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
@@ -4321,7 +4361,7 @@ mod tests {
                 async move {
                     let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                     let (tx, rx) = mpsc::channel();
-                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
                 }
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
@@ -4389,7 +4429,7 @@ mod tests {
                     let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                     let (tx, rx) = mpsc::channel();
                     let device = std::sync::Arc::new(std::sync::Mutex::new(d));
-                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device, relays: false }, rx)
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name, courts: Vec::new(), device, seat: None, relays: false }, rx)
                 }
             };
             async fn room_where(ev: &mpsc::Receiver<Event>, want: impl Fn(&Room) -> bool) -> Room {
@@ -4462,7 +4502,7 @@ mod tests {
             let cx = || async {
                 let (ep, _) = endpoint(&Relay::Off).await.unwrap();
                 let (tx, rx) = mpsc::channel();
-                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), relays: false }, rx)
+                (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&testnet.bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays: false }, rx)
             };
             async fn next(ev: &mpsc::Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
                 for _ in 0..1500 {

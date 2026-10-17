@@ -109,6 +109,8 @@ pub struct View {
     /// M120: a guest's players all ready on the select before the lobby's first line-up came: their picks go to the
     /// host as it comes (`poll`).
     pub early: bool,
+    /// M126: joining to rejoin the match a refresh or crash left (`linked`): the seat this player had there.
+    pub rejoin: Option<u8>,
 }
 
 /// M120: another machine's seat on the select's compact card: its player's name and ping (none for the computer's),
@@ -2401,7 +2403,12 @@ pub(super) fn poll(
     if let Some(net) = net {
         for e in net.poll() {
             if let Event::Start(r, me) = &e {
+                remember(&menu, r, me, &args.iso);
                 launch(&menu, r.clone(), me.clone(), &gamepads, &args, &mut commands);
+            }
+            // M126: the match to rejoin is over, or can't be joined
+            if matches!(e, Event::Failed(_) | Event::Dropped(_) | Event::Match(Msg::Lobby(_))) {
+                crate::net::rejoin::forget(&args.iso);
             }
             if let Event::Pack(h, b) = &e {
                 menu.got_pack(&args.iso, *h, b);
@@ -2455,6 +2462,17 @@ pub(super) fn poll(
     }
 }
 
+/// M126: a guest's match starting (or rejoined): its lobby code and this player's first seat, for a refresh or crash to
+/// come back with. The host's isn't kept (a host gone ends the match).
+fn remember(menu: &Menu, room: &Room, me: &str, iso: &str) {
+    let code = if menu.net.paste.is_empty() { &menu.net.short } else { &menu.net.paste };
+    let seat = room.seats.iter().position(|s| s.as_ref().is_some_and(|s| s.peer == me));
+    match seat {
+        Some(seat) if me != "host" && !code.is_empty() && !crate::net::rtc::is_offer(code) => crate::net::rejoin::save(iso, &crate::net::rejoin::Rejoin { code: code.clone(), seat: seat as u8 }),
+        _ => crate::net::rejoin::forget(iso),
+    }
+}
+
 /// B214: a pill grid's cursor moved by ←→↑↓: the nearest pill that way (sideways distance counted double, as the
 /// select's `grid_step`; ←→ only along its row); none that way, it stays (the grids don't wrap).
 pub(super) fn pill_step(rects: &[[f32; 4]], from: usize, k: Press) -> usize {
@@ -2473,13 +2491,21 @@ pub(super) fn pill_step(rects: &[[f32; 4]], from: usize, k: Press) -> usize {
 
 /// Started from a lobby link (the browser's `?code=`, or `HST_CODE`): straight to joining that lobby as one player
 /// (the first device to press anything is it, `Menu::step`), then its character select.
-pub(super) fn linked(m: &mut Menu) {
+/// M126: or the match a browser refresh or crash left (`net::rejoin`), its old seat asked for.
+pub(super) fn linked(m: &mut Menu, args: &crate::Args) {
     #[cfg(target_arch = "wasm32")]
     let text = crate::web::pasted();
     #[cfg(not(target_arch = "wasm32"))]
     let text = std::env::var("HST_CODE").ok();
-    let Some(code) = text.as_deref().and_then(crate::net::code_in) else { return };
-    let net = View { paste: code, go: Some(Go::Code), ..default() };
+    let back = if args.shot.is_none() { crate::net::rejoin::take(&args.iso) } else { None };
+    let linked = text.as_deref().and_then(crate::net::code_in);
+    let Some(code) = linked.clone().or_else(|| back.as_ref().map(|b| b.code.clone())) else { return };
+    let rejoin = back.filter(|b| b.code == code).map(|b| b.seat);
+    if rejoin.is_some() {
+        info!("online: rejoining the match left at {code}");
+    }
+    let status = if rejoin.is_some() { "Rejoining your match: press any button.".into() } else { String::new() };
+    let net = View { paste: code, go: Some(Go::Code), rejoin, status, ..default() };
     *m = Menu { screen: Screen::Assign, doubles: true, net, settings: m.settings, mods: std::mem::take(&mut m.mods), ..default() };
 }
 
@@ -2851,6 +2877,11 @@ fn copy(clipboard: &mut bevy::clipboard::Clipboard, text: &str) -> Copied {
     if clipboard.set_text(text.to_owned()).is_ok() { Copied::Done } else { Copied::Failed }
 }
 
+/// M126: the seat to ask back for with `c`: a Join of the code a refresh or crash left (`linked`).
+fn rejoin_seat(menu: &Menu, c: &Cmd) -> Option<u8> {
+    menu.net.rejoin.filter(|_| matches!(c, Cmd::Join(code, _) if *code == menu.net.paste))
+}
+
 /// An Online effect (from `Menu::step`).
 /// Returns the sounds to play.
 pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Option<&Net>, clipboard: &mut bevy::clipboard::Clipboard, iso: &str) -> Vec<u8> {
@@ -2862,6 +2893,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
                 if matches!(c, Cmd::Host(_) | Cmd::Join(..) | Cmd::Quick(_)) {
                     n.send(Cmd::Name(menu.net.cfg.as_ref().map_or_else(String::new, |c| c.name.clone())));
                     n.send(Cmd::Courts(menu.court_mod_ids()));
+                    n.send(Cmd::Seat(rejoin_seat(menu, &c)));
                 }
                 n.send(c)
             }
@@ -2873,6 +2905,7 @@ pub(super) fn apply(fx: Fx, menu: &mut Menu, commands: &mut Commands, net: Optio
                 }
                 let n = Net::start(cfg);
                 n.send(Cmd::Courts(menu.court_mod_ids()));
+                n.send(Cmd::Seat(rejoin_seat(menu, &c)));
                 n.send(c);
                 commands.insert_resource(n);
             }

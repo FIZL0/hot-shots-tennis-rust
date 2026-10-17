@@ -2067,7 +2067,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         menu.splash.hold();
     }
     if fresh && matches!(menu.screen, Screen::Press | Screen::Main) {
-        online::linked(&mut menu);
+        online::linked(&mut menu, &args);
     }
     // B297: the main screen with a Rematch card (a singles match against the computer played)
     if fresh && (screen == "rematch" || screen == "rematch-update") {
