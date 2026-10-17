@@ -4,8 +4,9 @@
 //! follows its player from seat to seat and through the matches of this session. The names are kept in `names.txt`
 //! beside settings.txt (the browser's localStorage), one a line, and offered again next time.
 //!
-//! The chosen name replaces the seat tag above the player: on the select's card, over the player's head before each
-//! serve (`play::name_tags`, from the match's `--names`) and on the result screen. Online, each of this machine's
+//! The chosen name replaces the seat tag above the player, set as the original's own tags are (B541,
+//! `play::name_tags::Style`): on the select's card, over the player's head before each serve (`play::name_tags`, from
+//! the match's `--names`) and on the result screen. Online, each of this machine's
 //! players' names goes out with its live pick (`net::Live::player`).
 
 use bevy::prelude::*;
@@ -14,8 +15,8 @@ use super::legend::Act as Key;
 use super::pointer::Act;
 use super::{COLOURS, Dev, Draw, GOLD, INK, Menu, Press, Screen, WHITE};
 
-/// A name's longest (in characters).
-pub(super) const MAX: usize = 10;
+/// A name's longest (in characters): B541, as wide as fits where the original's "1P" tag goes.
+pub(super) const MAX: usize = 6;
 /// The most names kept.
 const KEEP: usize = 40;
 /// The on-screen grid's letters, eight to a row.
@@ -105,7 +106,7 @@ impl Names {
     /// `HST_MENU=names` / `names-type` (for `--shot`s): `d` on seat `p` named ANNA, a few names saved, `p`'s picker
     /// open on its list or typing; nothing is written to disk.
     pub(super) fn demo(&mut self, p: usize, d: Dev, typing: bool) {
-        self.saved = ["ANNA", "ROBIN", "SAM", "KIM-LEE", "JO"].map(String::from).to_vec();
+        self.saved = ["ANNA", "ROBIN", "SAM", "KIM-LI", "JO"].map(String::from).to_vec();
         self.chosen = vec![(d, "ANNA".into())];
         self.open[p] = Some(if typing { Picker::Typing("ROB".into(), 17) } else { Picker::List(1) });
     }
@@ -452,6 +453,29 @@ pub(super) fn typing(
     }
 }
 
+/// B541: each seat's name set as the original's slot-label tag (`play::name_tags::Style::Plate`) for its select card
+/// (`Tex::Name`), with the name it was set for.
+#[derive(Resource, Default)]
+pub(super) struct NameArt(pub(super) [Option<(String, Handle<Image>)>; 4]);
+
+/// Sets a seat's tag again when its name changes, and drops it when the name goes.
+pub(super) fn name_art(menu: Res<Menu>, mut art: ResMut<NameArt>, mut images: ResMut<Assets<Image>>) {
+    for p in 0..4 {
+        let name = menu.player_name(p);
+        if art.0[p].as_ref().map(|a| &a.0) != name.as_ref() {
+            art.0[p] = name.map(|n| (n.clone(), images.add(crate::play::name_tags::tag_image(&n, crate::play::name_tags::Style::Plate, 1.0))));
+        }
+    }
+}
+
+/// Where `name`'s tag goes on the select card with its words' box `h` high (menu units) from `[x, y]`: the whole
+/// image, accents' rows over `y` included, at its own aspect.
+pub(super) fn tag_rect(name: &str, [x, y]: [f32; 2], h: f32) -> [f32; 4] {
+    let ([w, th], above) = crate::play::name_tags::tag_size(name, crate::play::name_tags::Style::Plate);
+    let k = h / crate::play::name_tags::PLATE_H;
+    [x, y - above * k, w * k / super::roster::PY * super::roster::PX, th * k]
+}
+
 /// Writes the saved names when they change; closes the pickers off the select.
 pub(super) fn persist(mut menu: ResMut<Menu>, args: Res<crate::Args>) {
     if menu.screen != Screen::Chars && menu.names.open.iter().any(Option::is_some) {
@@ -487,7 +511,7 @@ mod tests {
     #[test]
     fn the_file_round_trips() {
         let saved = parse("# x\nANNA\n\n Bo \nanna\nlong name over ten,\n");
-        assert_eq!(saved, ["ANNA", "Bo", "long name"]);
+        assert_eq!(saved, ["ANNA", "Bo", "long n"]);
         assert_eq!(parse(&text(&saved)), saved);
     }
 
@@ -570,10 +594,11 @@ mod tests {
     fn the_keyboard_types_into_its_entry() {
         let mut m = menu();
         m.names.open[0] = Some(Picker::Typing(String::new(), 0));
+        // the comma is left out, the rest stops at six, then a Backspace
         for c in "Ann, Lee!xyz".chars() {
             m.type_name(0, Some(c));
         }
         m.type_name(0, None);
-        assert_eq!(m.names.open[0], Some(Picker::Typing("Ann Lee!x".into(), 0)));
+        assert_eq!(m.names.open[0], Some(Picker::Typing("Ann L".into(), 0)));
     }
 }

@@ -1,15 +1,18 @@
 //! B371: player names over the players in a match. A named player's "1P".."4P" marker (`markers`) is swapped for
-//! a tag with the name in the player's panel colour, with a small pointer under it, hung at the same spot (the
-//! pointer's tip on the marker's anchor) and as tall on screen as the marker. Unnamed players keep the original's
-//! marker. The names come from the main menu's name picker (`--names a,,b`, by match slot); without any the match
-//! looks as before. The point boards' plates, the final board and the result screen write the name where the slot
-//! label was (`take`, `labels`). Drawing only: nothing here touches the sim.
+//! the name set as the original's own tag (B541, [`Style::Head`]): white words leaning right in a grey outline with
+//! the marker's pointer under them, tinted with the player's panel colour, a camera-facing quad hung at the marker's
+//! spot (the pointer's tip on its anchor), as tall as the marker and as wide as the name needs. Unnamed players keep
+//! the original's marker. The names come from the main menu's name picker (`--names a,,b`, by match slot); without
+//! any the match looks as before. The point boards' plates, the final board and the result screen set the name where
+//! the slot label was (`take`, `labels`), as that label is drawn ([`Style::Plate`]). Drawing only: nothing here
+//! touches the sim.
 
 use bevy::prelude::*;
+use tiny_skia::{Color as SkColor, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform as SkTransform};
 
 use super::markers::{self, Marker};
+use super::menu_art::{self, Look};
 use super::panel::Colours;
-use super::widescreen;
 use super::Game;
 
 /// The players' names by match slot (empty: no name, the marker shows).
@@ -28,17 +31,122 @@ impl Names {
     }
 }
 
-/// One player's tag: the root node (a column centred on the anchor), its body, text and pointer.
+/// B541: which of the original's seat tags a name is set as. The disc has these tags' words only ("1P".."4P",
+/// "COM"), so a name is set in the menus' remastered font (`menu_art`) in the tag's colours, outline and size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Style {
+    /// Over the player's head (`i_playerinfo`'s 40×32 cells): white leaning words (3 px across their height) in a
+    /// grey (64) 2-px outline, 18 px tall with it, from 1 px down; the pointer under them.
+    Head,
+    /// The point boards' slot labels (`inpane_p`) and the result screen's (the stats sheet): upright white words in
+    /// a near-black (30) 2-px outline, 19 px tall with it.
+    Plate,
+}
+
+impl Style {
+    fn look(self) -> Look {
+        let (edge, slant) = match self {
+            Style::Head => (64, 0.27),
+            Style::Plate => (30, 0.0),
+        };
+        Look { top: [255; 3], bottom: [255; 3], edge: [edge; 3], ring: [0; 3], ew: 2.0, rw: 0.0, slant }
+    }
+
+    /// The words' box (outline included) and its top in the tag, disc px.
+    fn words(self) -> (f32, f32) {
+        match self {
+            Style::Head => (18.0, 1.0),
+            Style::Plate => (PLATE_H, 0.0),
+        }
+    }
+}
+
+/// The plate tag's words' box height (disc px, outline included): its image's height less an accent's or a
+/// descender's rows.
+pub const PLATE_H: f32 = 19.0;
+/// How narrow a plate's words get (`squeeze`) before a long name shrinks instead: a condensed face, still the tag's
+/// height.
+const CONDENSE: f32 = 0.7;
+/// A tag's room for the words' antialiased edge either side (disc px).
+const PAD: f32 = 1.0;
+/// The head tag's cell (`i_playerinfo`): no narrower than the original's, as tall.
+const HEAD: [f32; 2] = [40.0, 32.0];
+
+/// `name` set as `style`'s tag: its size in disc px (the head tag's pointer tip mid-bottom) and how far above the
+/// tag's own top an accent reaches (the image's extra rows, included in the size).
+pub fn tag_size(name: &str, style: Style) -> ([f32; 2], f32) {
+    let font = ab_glyph::FontRef::try_from_slice(menu_art::HEAVY).expect("menu font");
+    let l = style.look();
+    let (h, _) = style.words();
+    let m = l.ew + l.rw;
+    let (Some(path), Some(caps)) = (menu_art::text_path(&font, name), menu_art::text_path(&font, "H")) else {
+        return (if style == Style::Head { HEAD } else { [2.0 * (m + PAD), h] }, 0.0);
+    };
+    let (b, cap) = (path.bounds(), -caps.bounds().top());
+    let sy = (h - 2.0 * m) / cap;
+    let w = b.width() * sy + l.slant * (h - 2.0 * m) + 2.0 * (m + PAD);
+    // accents over the caps, descenders under the baseline (font y is 0 at the baseline, down positive); a round
+    // glyph's or a digit's overshoot (under a px) stays in the outline's rows
+    let above = ((-b.top() - cap) * sy - 1.0).max(0.0).ceil();
+    let below = (b.bottom() * sy - 1.0).max(0.0).ceil();
+    match style {
+        // a descender runs into the pointer, as it would on the disc's art
+        Style::Head => ([w.max(HEAD[0]), HEAD[1] + above], above),
+        Style::Plate => ([w, h + above + below], above),
+    }
+}
+
+/// `name` set as `style`'s tag at `menu_art::K`× ([`tag_size`]; its words `squeeze` as wide, ≤ 1), white and grey for
+/// a tint to colour as the original's art.
+pub fn tag_image(name: &str, style: Style, squeeze: f32) -> Image {
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let font = ab_glyph::FontRef::try_from_slice(menu_art::HEAVY).expect("menu font");
+    let ([w, h], above) = tag_size(name, style);
+    let w = w * squeeze.min(1.0);
+    let k = menu_art::K as f32;
+    let mut out = Pixmap::new((w * k).ceil() as u32, (h * k).ceil() as u32).expect("tag pixmap");
+    let (wh, top) = style.words();
+    if style == Style::Head {
+        pointer(&mut out, w / 2.0, above);
+    }
+    menu_art::stamp(&mut out, &font, [PAD, top + above, w - 2.0 * PAD, wh], name, &style.look());
+    let px = out.pixels().iter().flat_map(|c| {
+        let c = c.demultiply();
+        [c.red(), c.green(), c.blue(), c.alpha()]
+    });
+    Image::new(
+        Extent3d { width: out.width(), height: out.height(), depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        px.collect(),
+        TextureFormat::Rgba8UnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// The head tag's pointer under the words, its middle at `cx` (disc px), `above` rows down: as `i_playerinfo`'s, a
+/// white triangle 14 px across at row 22 narrowing to its tip at row 29, in the words' 2-px grey outline.
+fn pointer(out: &mut Pixmap, cx: f32, above: f32) {
+    let k = menu_art::K as f32;
+    let mut pb = PathBuilder::new();
+    pb.move_to((cx - 7.0) * k, (22.0 + above) * k);
+    pb.line_to((cx + 7.0) * k, (22.0 + above) * k);
+    pb.line_to(cx * k, (29.0 + above) * k);
+    pb.close();
+    let path = pb.finish().expect("pointer");
+    let mut paint = Paint { anti_alias: true, ..Paint::default() };
+    paint.set_color(SkColor::from_rgba8(64, 64, 64, 255));
+    out.stroke_path(&path, &paint, &Stroke { width: 4.0 * k, line_join: LineJoin::Miter, line_cap: LineCap::Butt, ..Stroke::default() }, SkTransform::identity(), None);
+    paint.set_color(SkColor::WHITE);
+    out.fill_path(&path, &paint, FillRule::Winding, SkTransform::identity(), None);
+}
+
+/// One named player's head tag: its quad's material, the tag's size (disc px).
 #[derive(Component)]
 struct Tag {
     i: usize,
-    body: Entity,
-    text: Entity,
-    pointer: Entity,
+    material: Handle<StandardMaterial>,
+    size: [f32; 2],
 }
-
-/// The root's width (percent of the HUD's): room for any name, centred on the anchor.
-const ROOM: f32 = 40.0;
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Plates>()
@@ -47,18 +155,16 @@ pub fn plugin(app: &mut App) {
         .add_systems(PostUpdate, labels.before(bevy::ui::UiSystems::Prepare));
 }
 
-/// A named player's slot label on a HUD this frame (640×448 rect, tint and alpha out of 128): `labels` writes the
-/// name there instead.
+/// A named player's slot label on a HUD this frame (640×448 rect, its cell on its sheet, tint and alpha out of 128):
+/// `labels` sets the name there instead.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Plate {
     player: usize,
     dst: [f32; 4],
+    src: [f32; 4],
     rgb: [f32; 3],
     alpha: f32,
 }
-
-/// A label's room for the name over its art's width.
-const ROOM_K: f32 = 1.2;
 
 /// Which HUD a pool of labels is on.
 pub(super) const BOARDS: usize = 0;
@@ -75,188 +181,164 @@ struct Label(usize, usize);
 /// Spawns `hud`'s labels under its 4:3 root, after its quads so they draw over them.
 pub(super) fn pool(p: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, hud: usize) {
     for k in 0..4 {
-        p.spawn((Label(hud, k), Node { position_type: PositionType::Absolute, align_items: AlignItems::Center, ..default() }, Visibility::Hidden))
-            .with_child((
-                Text::new(""),
-                TextFont::from_font_size(16.0),
-                TextColor(Color::WHITE),
-                TextShadow { offset: Vec2::splat(2.0), color: Color::srgba(0.0, 0.0, 0.0, 0.9) },
-                TextLayout::no_wrap(),
-            ));
+        p.spawn((Label(hud, k), ImageNode { image_mode: NodeImageMode::Stretch, ..default() }, Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
     }
 }
 
 /// Takes the named players' slot labels out of `quads`: `label` gives a quad's slot if it is a slot label, `parts`
-/// its rect, tint and alpha; `slots` is each match player's slot (humans 0..3, unique). The rest stay as they are.
+/// its rect, cell, tint and alpha; `slots` is each match player's slot (humans 0..3, unique). The rest stay as they
+/// are.
 pub(super) fn take<Q>(
     quads: &mut Vec<Q>,
     names: Option<&Names>,
     slots: &[usize],
     label: impl Fn(&Q) -> Option<usize>,
-    parts: impl Fn(&Q) -> ([f32; 4], [f32; 3], f32),
+    parts: impl Fn(&Q) -> ([f32; 4], [f32; 4], [f32; 3], f32),
 ) -> Vec<Plate> {
     let Some(names) = names else { return Vec::new() };
     let mut out = Vec::new();
     quads.retain(|q| {
         let player = label(q).filter(|&s| s < 4).and_then(|s| slots.iter().position(|&x| x == s)).filter(|&i| names.get(i).is_some());
         let Some(player) = player else { return true };
-        let (dst, rgb, alpha) = parts(q);
-        out.push(Plate { player, dst, rgb, alpha });
+        let (dst, src, rgb, alpha) = parts(q);
+        out.push(Plate { player, dst, src, rgb, alpha });
         false
     });
     out
 }
 
-/// Writes each HUD's plates' names where their labels were: from the label's left edge on the screen's left half,
-/// to its right edge on the right half (where the face is on the other side), in the label's tint.
+/// A slot label's words in its cell (disc px: left, top, right of their ink, outline included): `inpane_p`'s 40-px
+/// cells or the stats sheet's 48-px rows.
+fn ink(src: [f32; 4]) -> [f32; 3] {
+    if src[2] == 48.0 { [0.0, 2.5, 32.0] } else { [5.0, 4.0, 33.0] }
+}
+
+/// Where a plate's name goes on its HUD (640×448), and how much its words are squeezed: the tag of `size` (disc px,
+/// `above` of it over the words' top) scaled as the label's cell is, its words where the label's were, from their
+/// left edge on the screen's left half, to their right edge on the right half (where the face is on the other side).
+/// A name wider than the cell has room for from there (the next column, the set count) is condensed to fit, down to
+/// [`CONDENSE`], then shrinks at that aspect round the words' middle.
+fn place(p: &Plate, size: [f32; 2], above: f32) -> ([f32; 4], f32) {
+    let ([x, y, w, h], [_, _, sw, sh]) = (p.dst, p.src);
+    let (kx, ky) = (w / sw, h / sh);
+    let [l, t, r] = ink(p.src);
+    let right = x + w / 2.0 > 320.0;
+    let room = if right { r + PAD } else { sw - l + PAD };
+    // in twentieths (down), so a HUD's few cells make few images
+    let squeeze = ((room / size[0] * 20.0 + 1e-3).floor() / 20.0).clamp(CONDENSE, 1.0);
+    let f = (room / (size[0] * squeeze)).min(1.0);
+    let tw = size[0] * squeeze * f * kx;
+    let left = if right { x + (r + PAD) * kx - tw } else { x + (l - PAD) * kx };
+    let mid = y + (t + PLATE_H / 2.0) * ky;
+    ([left, mid - (above + PLATE_H / 2.0) * f * ky, tw, size[1] * f * ky], squeeze)
+}
+
+/// Sets each HUD's plates' names where their labels were ([`place`]), in the label's tint.
 #[allow(clippy::type_complexity)]
 fn labels(
     plates: Res<Plates>,
     names: Option<Res<Names>>,
-    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut q: Query<(&Label, &mut Node, &mut Visibility, &Children)>,
-    mut texts: Query<(&mut Text, &mut TextFont, &mut TextColor)>,
+    mut images: ResMut<Assets<Image>>,
+    mut sizes: Local<std::collections::HashMap<String, ([f32; 2], f32)>>,
+    mut made: Local<std::collections::HashMap<(String, u8), Handle<Image>>>,
+    mut q: Query<(&Label, &mut Node, &mut ImageNode, &mut Visibility)>,
 ) {
-    let hud = window.single().map_or(Vec2::new(640.0, 448.0), widescreen::view_size);
-    // the 4:3 screen's height in HUD px (letterboxed in a window taller than 4:3)
-    let px = hud.y.min(hud.x * 0.75) / 448.0;
-    for (Label(h, k), mut node, mut vis, kids) in &mut q {
+    for (Label(h, k), mut node, mut img, mut vis) in &mut q {
         let Some((p, name)) = plates.0[*h].get(*k).and_then(|p| Some((p, names.as_ref()?.get(p.player)?))) else {
             vis.set_if_neq(Visibility::Hidden);
             continue;
         };
-        let [x, y, w, hh] = p.dst;
-        let right = x + w / 2.0 > 320.0;
-        // the label's room, a little past its art (the cell has padding); a long name shrinks to fit it (the
-        // default font is monospace: 0.6 em a character)
-        let room = w * ROOM_K;
-        let size = (room / (0.62 * name.chars().count().max(1) as f32 + 0.3)).min(22.0);
-        let placed = Node {
-            left: if right { Val::Auto } else { Val::Percent(x / 6.4) },
-            right: if right { Val::Percent((640.0 - x - w) / 6.4) } else { Val::Auto },
-            top: Val::Percent(y / 4.48),
-            width: Val::Percent(room / 6.4),
-            height: Val::Percent(hh / 4.48),
-            justify_content: if right { JustifyContent::End } else { JustifyContent::Start },
-            overflow: Overflow::clip(),
-            ..node.clone()
-        };
+        let (size, above) = *sizes.entry(name.to_string()).or_insert_with(|| tag_size(name, Style::Plate));
+        let ([x, y, w, hh], squeeze) = place(p, size, above);
+        let handle = made.entry((name.to_string(), (squeeze * 20.0).round() as u8)).or_insert_with(|| images.add(tag_image(name, Style::Plate, squeeze))).clone();
+        let placed = Node { left: Val::Percent(x / 6.4), top: Val::Percent(y / 4.48), width: Val::Percent(w / 6.4), height: Val::Percent(hh / 4.48), ..node.clone() };
         node.set_if_neq(placed);
-        if let Some(Ok((mut t, mut f, mut c))) = kids.first().map(|&e| texts.get_mut(e)) {
-            if t.0 != name {
-                t.0 = name.to_string();
-            }
-            let size = FontSize::Px(size * px);
-            if f.font_size != size {
-                f.font_size = size;
-            }
-            let [r, g, b] = p.rgb.map(|c| (c / 128.0).min(1.0));
-            c.set_if_neq(TextColor(Color::srgba(r, g, b, p.alpha / 128.0)));
+        if img.image != handle {
+            img.image = handle;
+        }
+        let [r, g, b] = p.rgb.map(|c| (c / 128.0).min(1.0));
+        let colour = Color::srgba(r, g, b, p.alpha / 128.0);
+        if img.color != colour {
+            img.color = colour;
         }
         vis.set_if_neq(Visibility::Inherited);
     }
 }
 
-/// Spawns the tags once the panel's colours are in.
-fn setup(mut commands: Commands, g: Res<Game>, names: Option<Res<Names>>, colours: Option<Res<Colours>>, mut done: Local<bool>) {
-    let (false, Some(names), Some(colours)) = (*done, names, colours) else { return };
+/// Spawns the named players' head tags: each its own quad (bottom edge on the anchor) and material, as the markers.
+fn setup(
+    mut commands: Commands,
+    g: Res<Game>,
+    names: Option<Res<Names>>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut done: Local<bool>,
+) {
+    let (false, Some(names)) = (*done, names) else { return };
     *done = true;
+    let quad = meshes.add(Rectangle::new(1.0, 1.0).mesh().build().translated_by(Vec3::Y * 0.5));
     for i in 0..g.players.len() {
         let Some(name) = names.get(i) else { continue };
-        let [r, gg, b] = colours.0[i].map(|c| (c as f32 / 128.0).min(1.0));
-        let colour = Color::srgb(r, gg, b);
-        let text = commands
-            .spawn((
-                Text::new(name.to_string()),
-                TextFont::from_font_size(16.0),
-                TextColor(Color::WHITE),
-                TextShadow { offset: Vec2::splat(1.0), color: Color::srgba(0.0, 0.0, 0.0, 0.7) },
-                TextLayout::no_wrap(),
-            ))
-            .id();
-        let body = commands.spawn((Node::default(), BackgroundColor(colour))).add_child(text).id();
-        // the pointer: a square turned 45° whose lower half shows under the body
-        let pointer = commands.spawn((Node::default(), UiTransform::from_rotation(Rot2::degrees(45.0)), BackgroundColor(colour), ZIndex(-1))).id();
-        let root = Node {
-            position_type: PositionType::Absolute,
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            width: Val::Percent(ROOM),
+        let (size, _) = tag_size(name, Style::Head);
+        let material = materials.add(StandardMaterial {
+            base_color_texture: Some(images.add(tag_image(name, Style::Head, 1.0))),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            double_sided: true,
+            cull_mode: None,
+            depth_bias: markers::LAST,
             ..default()
-        };
-        commands.spawn((Tag { i, body, text, pointer }, root, GlobalZIndex(1), Visibility::Hidden)).add_children(&[body, pointer]);
+        });
+        commands.spawn((Tag { i, material: material.clone(), size }, Mesh3d(quad.clone()), MeshMaterial3d(material), Transform::default(), Visibility::Hidden));
     }
 }
 
-
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+/// Hangs each head tag where its player's marker would be (`markers::draw`), the marker's height and the tag's
+/// width at the marker's scale, tinted as the marker; the named players' markers stay hidden.
+#[allow(clippy::type_complexity)]
 fn draw(
     g: Res<Game>,
     names: Option<Res<Names>>,
+    colours: Option<Res<Colours>>,
     time: Res<Time<Fixed>>,
-    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    cam: Query<(&Camera, &GlobalTransform, &Transform), With<crate::Orbit>>,
+    cam: Query<&Transform, (With<crate::Orbit>, Without<Marker>, Without<Tag>)>,
     mut markers: Query<(&Marker, &mut Visibility), Without<Tag>>,
-    mut tags: Query<(&Tag, &mut Node, &mut Visibility), Without<Marker>>,
-    mut nodes: Query<&mut Node, Without<Tag>>,
-    mut fonts: Query<&mut TextFont>,
+    mut tags: Query<(&Tag, &mut Transform, &mut Visibility), Without<Marker>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let Some(names) = names else { return };
-    let (Ok(win), Ok((camera, gt, tr))) = (window.single(), cam.single()) else { return };
-    let on = markers::shown(&g);
-    // a named player's marker gives way to the tag
     for (m, mut vis) in &mut markers {
         if names.get(m.0).is_some() {
             *vis = Visibility::Hidden;
         }
     }
-    // the HUD's logical size (`hud_gamma` draws it at the view's size)
-    let hud = widescreen::view_size(win);
+    let (Ok(cam), Some(colours)) = (cam.single(), colours) else { return };
+    let on = markers::shown(&g);
     let a = time.overstep_fraction();
     let t = g.cam.view.fov.tan();
-    for (tag, mut node, mut vis) in &mut tags {
+    for (tag, mut tr, mut vis) in &mut tags {
         let Some(p) = g.players.get(tag.i).filter(|_| on) else {
             *vis = Visibility::Hidden;
             continue;
         };
-        // the marker's anchor and height (`markers::draw`)
         let at = Vec3::from(p.prev).lerp(Vec3::from(p.pos), a);
         let anchor = Vec3::new(at.x, g.reaches[tag.i].base + 0.65, -at.z);
-        let z = (anchor - tr.translation).dot(*tr.forward());
-        let height = 2.0 * 0.84 * markers::half_width(z, t);
-        let (Some(foot), Some(top)) = (camera.world_to_ndc(gt, anchor), camera.world_to_ndc(gt, anchor + *tr.up() * height)) else {
-            *vis = Visibility::Hidden;
-            continue;
-        };
-        if z <= 0.0 {
-            *vis = Visibility::Hidden;
-            continue;
-        }
-        let frac = |n: Vec3| Vec2::new((n.x + 1.0) / 2.0, (1.0 - n.y) / 2.0);
-        let (foot, top) = (frac(foot), frac(top));
-        // the marker's on-screen height in HUD px: the tag takes the same
-        let px = ((foot - top) * hud).length().max(4.0);
-        let font = px * 0.42;
-        let point = px * 0.2;
-        if let Ok(mut b) = nodes.get_mut(tag.body) {
-            b.padding = UiRect::axes(Val::Px(font * 0.45), Val::Px(font * 0.1));
-            b.border_radius = BorderRadius::all(Val::Px(font * 0.3));
-        }
-        if let Ok(mut n) = nodes.get_mut(tag.pointer) {
-            (n.width, n.height) = (Val::Px(point * 1.4), Val::Px(point * 1.4));
-            n.margin = UiRect::top(Val::Px(-point * 0.7));
-        }
-        if let Ok(mut f) = fonts.get_mut(tag.text)
-            && !matches!(f.font_size, FontSize::Px(s) if (s - font).abs() <= 0.25)
+        let z = (anchor - cam.translation).dot(*cam.forward());
+        let s = markers::half_width(z, t);
+        tr.translation = anchor;
+        tr.rotation = cam.rotation;
+        // the marker's 40×32 cell is 2s × 1.68s
+        tr.scale = Vec3::new(2.0 * s * tag.size[0] / HEAD[0], 2.0 * 0.84 * s * tag.size[1] / HEAD[1], 1.0);
+        let [r, gg, b] = colours.0[tag.i].map(|c| c as f32 / 128.0);
+        let colour = Color::srgb(r, gg, b);
+        // written only when it changes (B328)
+        if materials.get(&tag.material).is_some_and(|mat| mat.base_color != colour)
+            && let Some(mut mat) = materials.get_mut(&tag.material)
         {
-            f.font_size = FontSize::Px(font);
+            mat.base_color = colour;
         }
-        // pointer tip on the anchor: the root's bottom edge, its centre on the anchor's x
-        let tip = point * 0.7 * std::f32::consts::SQRT_2 - point * 0.7;
-        node.left = Val::Percent(foot.x * 100.0 - ROOM / 2.0);
-        node.top = Val::Auto;
-        node.bottom = Val::Percent((1.0 - foot.y + tip / hud.y) * 100.0);
-        *vis = Visibility::Inherited;
+        *vis = Visibility::Visible;
     }
 }
 
@@ -279,9 +361,52 @@ mod tests {
         let names = Names::parse("ANNA,,BO");
         // players 0..3 on slots 1, 0, 4 (COM), and slot labels for each plus another quad
         let mut quads = vec![(Some(1), 10.0), (Some(0), 20.0), (Some(4), 30.0), (None, 40.0)];
-        let got = take(&mut quads, Some(&names), &[1, 0, 4], |q| q.0, |q| ([q.1, 0.0, 40.0, 24.0], [128.0; 3], 128.0));
+        let got = take(&mut quads, Some(&names), &[1, 0, 4], |q| q.0, |q| ([q.1, 0.0, 40.0, 24.0], [0.0, 0.0, 40.0, 24.0], [128.0; 3], 128.0));
         assert_eq!(got.iter().map(|p| (p.player, p.dst[0])).collect::<Vec<_>>(), [(0, 10.0)]);
         assert_eq!(quads.iter().map(|q| q.1).collect::<Vec<_>>(), [20.0, 30.0, 40.0]);
-        assert!(take(&mut quads, None, &[1, 0, 4], |q| q.0, |q| ([q.1; 4], [0.0; 3], 0.0)).is_empty());
+        assert!(take(&mut quads, None, &[1, 0, 4], |q| q.0, |q| ([q.1; 4], [0.0; 4], [0.0; 3], 0.0)).is_empty());
+    }
+
+    /// B541: "1P" set as either tag comes out the size of the disc's own (the head cell 40×32; the plate's words
+    /// 25–28 px across with their outline, 19 tall), a six-letter name is wider but no taller, and an accent or a
+    /// descender gets its own rows. `HST_TAG_ART=DIR` saves the tags as PNGs to look at.
+    /// A plate's name starts where the label's words did (left half) or ends where they did (right half); a long
+    /// one shrinks into the cell's room round the words' middle.
+    #[test]
+    fn plates_fit_their_cells() {
+        let plate = |x: f32| Plate { player: 0, dst: [x, 100.0, 80.0, 48.0], src: [0.0, 0.0, 40.0, 24.0], rgb: [128.0; 3], alpha: 128.0 };
+        assert_eq!(place(&plate(100.0), [30.0, PLATE_H], 0.0), ([108.0, 108.0, 60.0, 38.0], 1.0));
+        let ([l, _, w, _], _) = place(&plate(400.0), [30.0, PLATE_H], 0.0);
+        assert_eq!(l + w, 400.0 + 34.0 * 2.0);
+        // 45 wide, 36 of room: condensed to 0.8, full height
+        assert_eq!(place(&plate(100.0), [45.0, PLATE_H], 0.0), ([108.0, 108.0, 72.0, 38.0], 0.8));
+        // 72 wide: condensed to 0.7, then 36 / 50.4 of the height, its middle where the words' was
+        let ([l, t, w, h], squeeze) = place(&plate(100.0), [72.0, PLATE_H], 0.0);
+        assert_eq!((l, w, squeeze), (108.0, 72.0, 0.7));
+        assert!((h - 38.0 * 36.0 / 50.4).abs() < 1e-3 && (t + h / 2.0 - (108.0 + 19.0)).abs() < 1e-3, "{t} {h}");
+    }
+
+    #[test]
+    fn tags_are_the_originals_size() {
+        let (head, _) = tag_size("1P", Style::Head);
+        assert_eq!(head, HEAD);
+        let ([w, h], above) = tag_size("1P", Style::Plate);
+        assert!((25.0..=32.0).contains(&w) && h == 19.0 && above == 0.0, "{w} {h} {above}");
+        let ([w, h], _) = tag_size("WWWWWW", Style::Head);
+        assert!(w > 80.0 && h == HEAD[1], "{w} {h}");
+        let ([_, h], above) = tag_size("Éy", Style::Plate);
+        assert!(above > 0.0 && h > 19.0 + above, "{h} {above}");
+        for (name, style) in [("1P", Style::Head), ("ANNA", Style::Head), ("WWWWWW", Style::Head), ("Jégy", Style::Head), ("1P", Style::Plate), ("KIM-LI", Style::Plate), ("Jégy", Style::Plate)] {
+            let img = tag_image(name, style, 1.0);
+            let k = menu_art::K as f32;
+            let ([w, h], _) = tag_size(name, style);
+            assert_eq!((img.width(), img.height()), ((w * k).ceil() as u32, (h * k).ceil() as u32));
+            let px = img.data.as_ref().unwrap();
+            // white words, a darker outline: both there
+            assert!(px.chunks(4).any(|c| c == [255, 255, 255, 255]) && px.chunks(4).any(|c| c[3] == 255 && c[0] < 100), "{name}");
+            if let Ok(dir) = std::env::var("HST_TAG_ART") {
+                let _ = image::save_buffer(format!("{dir}/{name}-{style:?}.png"), px, img.width(), img.height(), image::ColorType::Rgba8);
+            }
+        }
     }
 }

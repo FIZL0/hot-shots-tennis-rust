@@ -18,7 +18,7 @@
 //! it, and a character with none free is drawn dark and passed over by the cursor); the computer players added are
 //! picked by player 1 after the humans. B368: the select is one column per player (`roster`), each browsing and
 //! scrolling the roster on its own device, its stats card always up (△ opens its name picker, B371).
-//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type = chars with 1P named and its name picker open on the list / typing (B371), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), lobby-fetching = the host's lobby with a player still downloading a mod (M122), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), rematch-update = both cards (M97), main-extras / extras = main on Extras / the Extras screen (M97), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327), graphics-list / graphics-fps = Graphics with Preset's / Frame Limit's dropdown open (B498)) opens on that screen (for `--shot`).
+//! `HST_MENU=<screen>` (main, rematch = main with a Rematch card, settings, graphics, sound, controls, mode, assign, chars, coms = chars with 1P ready (the COM cards), coms-random / confirm-random = 2P's computer readied on Random, chars-random = 1P on the Random card, names / names-type / names-card = chars with 1P named and its name picker open on the list / typing / closed (B371, B541), attrs / mods-attrs = chars / mods (B368: the stats card is always up), roster1–roster4 = 1–4 humans (B368), roster2-favs / roster4-favs = them with four favorites, 1P in Favorites and 2P on the last section (B382), roster2-deep = 2P's column scrolled to a mod far down, lobby-bot = the host's lobby with a computer player, lobby-singles = a singles lobby (B490), lobby-wait = the host's lobby waiting on a player choosing about a mod (B281), lobby-fetching = the host's lobby with a player still downloading a mod (M122), confirm-court = confirm on Nakagawa River Courts (B192), umpires-mod / confirm-umpire-mod = the umpire select / confirm on the first umpire mod (M8f3), courts-mod / confirm-court-mod = the court select / confirm on the first court mod (M8f6), chars4 = four humans on one portrait, mods = chars with 1P on the first mod, main-mods = main with the Mods row highlighted, main-update = main with B317's New version card highlighted (with `HST_LATEST`), rematch-update = both cards (M97), main-extras / extras = main on Extras / the Extras screen (M97), confirm, sets / games = confirm with that pill picked, assign-moved = assign with 1P moved to 3P, pending (B437), online-custom / relay-url = the Relay row on Custom... / its URL entry, renderer = Display with the Renderer switch's confirm popup up (B327), graphics-list / graphics-fps = Graphics with Preset's / Frame Limit's dropdown open (B498)) opens on that screen (for `--shot`).
 //!
 //! Custom characters (remaster-only): every standard mod under `mods/` beside the disc image (`mods::list`) is on a
 //! second page of the select, switched for everyone by Tab / □: B133: a grid like the disc characters', as many
@@ -1694,6 +1694,8 @@ enum Tex {
     Logo,
     /// B524: court value `c`'s baked backdrop (`splash::Backdrops`), in its pixels.
     Backdrop(usize),
+    /// B541: seat `p`'s name as a tag (`names::NameArt`), whole.
+    Name(usize),
 }
 
 /// B133: the select's face icons (B160: the disc grid's too), as `previews.rs` reads them.
@@ -2036,7 +2038,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "controls" | "controls-keys" | "controls-bind" => Screen::Controls,
         "mode" => Screen::Mode,
         "assign" | "assign-moved" => Screen::Assign,
-        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-hosting" | "chars-relay" | "chars-random" | "names" | "names-type" => Screen::Chars,
+        "chars" | "chars2" | "chars4" | "chars4-pads" | "roster1" | "roster2" | "roster3" | "roster4" | "roster2-favs" | "roster4-favs" | "roster2-deep" | "mods" | "attrs" | "mods-attrs" | "coms" | "coms-random" | "chars-online" | "chars-hosting" | "chars-relay" | "chars-random" | "names" | "names-type" | "names-card" => Screen::Chars,
         "confirm" | "confirm-random" | "confirm-court" | "courts" | "umpires" | "umpires-mod" | "confirm-umpire-mod" | "courts-mod" | "confirm-court-mod" | "sets" | "games" => Screen::Confirm,
         "online" | "online-custom" | "online-unread" => Screen::Online,
         "lobbies" | "lobbies-searching" | "lobbies-more" | "lobbies-none" | "lobbies-failed" => Screen::Lobbies,
@@ -2099,9 +2101,13 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         menu.players[0].cursor = 6;
         menu.players[0].ready = screen.starts_with("coms");
         menu.players[0].random = screen == "chars-random";
-        // B371: 1P named, its name picker open on the list or typing (`names`, `names-type`)
+        // B371: 1P named, its name picker open on the list or typing (`names`, `names-type`) or closed (`names-card`)
         if screen.starts_with("names") {
             menu.names.demo(0, Dev::Keys, screen == "names-type");
+            // B541: picked, the picker closed: the name's tag on the card (`names-card`)
+            if screen == "names-card" {
+                menu.names.open[0] = None;
+            }
         }
         // B437: doubles, the keyboard (1P) moved itself to 3P (pending until it leaves), a pad on 1P, 2P and 4P open
         if fresh && screen == "assign-moved" {
@@ -3118,7 +3124,7 @@ fn draw(
     shelf: Res<mods_screen::Shelf>,
     mut hits: ResMut<pointer::Hits>,
     images: Res<Assets<Image>>,
-    (buttons, umpire_pics, court_pics, logo, backdrops): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>, Option<Res<splash::Logo>>, Option<Res<splash::Backdrops>>),
+    (buttons, umpire_pics, court_pics, logo, backdrops, name_art): (Option<Res<legend::Buttons>>, Option<Res<umpire_mods::Pics>>, Option<Res<court_mods::Pics>>, Option<Res<splash::Logo>>, Option<Res<splash::Backdrops>>, Option<Res<names::NameArt>>),
 ) {
     let Some(art) = art else { return };
     let mut pads: Vec<_> = gamepads.iter().filter(|(_, g, _)| controls::readable(g)).map(|(e, _, _)| e).collect();
@@ -3233,6 +3239,13 @@ fn draw(
                     continue;
                 }
             },
+            Tex::Name(p) => match name_art.as_ref().and_then(|a| a.0.get(p).cloned().flatten()) {
+                Some((_, h)) => h,
+                None => {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+            },
             Tex::Backdrop(c) => match backdrops.as_ref().and_then(|b| b.handles.get(&c).cloned()) {
                 Some(h) => h,
                 None => {
@@ -3242,7 +3255,7 @@ fn draw(
             },
         };
         let [u, v, w, h] = quad.src;
-        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Glyph(..) | Tex::Thumb(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
+        img.rect = (quad.tex != Tex::Solid && quad.tex != Tex::Shelf && !matches!(quad.tex, Tex::Button(_) | Tex::Glyph(..) | Tex::Thumb(_) | Tex::Name(_)) && !matches!(quad.tex, Tex::Icon(w) if icons.0.contains_key(&w)) && !matches!(quad.tex, Tex::Face(_) | Tex::Cover(_)) && (quad.tex != Tex::Cursor || cursor.is_none())).then(|| Rect::new(u, v, u + w, v + h));
         // a face's source is out of 64 whatever the icon's size (a part of it: the Mods tiles' square crop)
         if matches!(quad.tex, Tex::Face(_)) && [u, v, w, h] != [0.0, 0.0, 64.0, 64.0] {
             let k = images.get(&img.image).map_or(1.0, |i| i.width() as f32 / 64.0);
@@ -3352,6 +3365,7 @@ pub fn plugin(app: &mut App) {
         // `HST_STRESS` (previews.rs) drives the select itself: no real key or pad reaches the menus or settings
         .init_resource::<Ticker>()
         .init_resource::<Icons>()
+        .init_resource::<names::NameArt>()
         .init_resource::<slide::Slide>()
         .add_systems(Update, ((fit_grid, step.run_if(|| std::env::var_os("HST_STRESS").is_none()), flame::tick, splash::tick, draw, ticker_text).chain(), bgm, cursor::tick))
         .add_systems(Startup, splash::load)
@@ -3365,7 +3379,7 @@ pub fn plugin(app: &mut App) {
     app.add_systems(Update, trace::trace.after(online::poll).run_if(trace::on));
     app.init_resource::<pointer::Pending>().init_resource::<pointer::Hits>().add_systems(
         Update,
-        (online::poll.after(step).before(draw), online::typing.before(step), names::typing.before(step), names::persist.after(step), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
+        (online::poll.after(step).before(draw), online::typing.before(step), names::typing.before(step), names::persist.after(step), names::name_art.after(step).before(draw), pointer::pointer.before(step).run_if(|| std::env::var_os("HST_STRESS").is_none())),
     );
     // B531: a finger on the lobby's Chat button readies the phone's keyboard for its lift
     #[cfg(target_arch = "wasm32")]

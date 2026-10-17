@@ -545,10 +545,6 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         None if m.seats[p] == Some(Dev::Open) => "Open".into(),
         None => dev_name(m.seats[p], pads),
     };
-    let device = match m.player_name(p) {
-        Some(own) => format!("{own} - {device}"),
-        None => device,
-    };
     let name = match m.who(p) {
         _ if pl.random => "Random".to_string(),
         _ if !active => "-".to_string(),
@@ -564,7 +560,7 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         _ => None,
     };
     let side = if swap.is_some() { "Swap teams" } else if p < (n / 2).max(1) { "Near" } else { "Far" };
-    band(d, &s, at.head, solid, p, &name, &device, side, swap, m.droppable(p));
+    band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, m.droppable(p));
     if mine && m.seats[p].is_some() {
         // B371: a tap on the seat's number or names opens the name picker
         let [hx, hy, hw, hh] = at.head;
@@ -742,7 +738,7 @@ fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p
         None => "Online".into(),
     };
     let side = if p < (m.players() / 2).max(1) { "Near" } else { "Far" };
-    band(d, s, [x, y, w, BAND * PY], !com, p, &f.owner, &sub, side, None, false);
+    band(d, s, [x, y, w, BAND * PY], !com, p, m.player_name(p).as_deref(), &f.owner, &sub, side, None, false);
     let (ix, iw) = (x + PAD * PX, w - 2.0 * PAD * PX);
     let mut cy = y + (BAND + PAD) * PY;
     let foot_h = 30.0 * PY;
@@ -995,11 +991,12 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 }
 
 /// B422: seat `p`'s header band in `[x, y, w, h]`: `solid` the seat's colour (a computer player's dark, its words in
-/// the seat's colour), its top corners the card's; a big `1P`, the character's `name` over `device`, and the `side`
+/// the seat's colour), its top corners the card's; a big `1P` (B541: the player's `own` name in its place, set as the
+/// original's slot-label tags are), the character's `name` over `device`, and the `side`
 /// pill on the right (`glyph`'s button art before it; left of the ✕ when `drop`; left out when the column is too
 /// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
-fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
+fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<legend::Style>, drop: bool) {
     // B471: the panel's header strip inside the card's outline, a dark rule under it; a computer player's in the
     // seat's light tint with dark words
     let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.sel, hex(look::INK)) };
@@ -1010,8 +1007,19 @@ fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, n
     let big = 36.0 * PY;
     let tag = format!("{}P", p + 1);
     let tx = x + 12.0 * PX;
-    d.text(&tag, tx, y + (h - big) / 2.0 + 2.0 * PY, big, ink);
-    let nx = tx + d.width(&tag, big) + 10.0 * PX;
+    let nx = match own {
+        Some(own) => {
+            // the words' box as tall as the 1P's caps and its outline
+            let th = 32.0 * PY;
+            let r = super::names::tag_rect(own, [tx, y + (h - th) / 2.0], th);
+            d.q(Tex::Name(p), [0.0; 4], r, WHITE, 128.0);
+            r[0] + r[2] + 8.0 * PX
+        }
+        None => {
+            d.text(&tag, tx, y + (h - big) / 2.0 + 2.0 * PY, big, ink);
+            tx + d.width(&tag, big) + 10.0 * PX
+        }
+    };
     let (ss, sh) = (12.0 * PY, 20.0 * PY);
     let gh = 14.0 * PY;
     let gw = glyph.map_or(0.0, |g| gh * legend::glyph_aspect(g, MODE_GLYPH) + 4.0 * PX);
