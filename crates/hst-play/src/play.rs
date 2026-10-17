@@ -4289,6 +4289,11 @@ fn motions(g: Res<Game>, mut q: Query<(&Figure, &mut Motion)>) {
             }
             continue;
         }
+        // B535: everyone but the next server stands idle through the change of ends
+        if change_ends::idle(&g, i) {
+            change_ends::hold_idle(&g, &mut m);
+            continue;
+        }
         // the serve swing plays on (at speed 1) through the server's follow-through
         if p.served.is_some() {
             m.serial = p.cmd.serial;
