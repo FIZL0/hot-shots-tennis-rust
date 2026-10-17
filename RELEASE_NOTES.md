@@ -55,5 +55,5 @@
 - Online: matches no longer go out of sync when a player couldn't download a mod character's looks, and the red and yellow landing markers no longer vanish after a resync.
 - After an online match, leaving the results takes everyone back to the same lobby with their seats and characters, ready for another match, instead of dropping you on the home screen.
 - Browser and iPhone: the game no longer freezes just after the first point of a match. The title screen behind "Press Start" now always shows the game's own court pictures.
-- Local matches: a player leaving the character select no longer flips a doubles match back to singles (a third player joining still turns singles into doubles), and a player joining now has its own sound instead of the select sound.
+- Local matches: a player leaving the character select no longer flips a doubles match back to singles (a third player joining still turns singles into doubles), and a player leaving now has its own sound.
 - Mod characters' feet now stay on the court through runs, swings and celebrations instead of floating above it or sinking into it: their legs bend to put each foot where the original character's would be.

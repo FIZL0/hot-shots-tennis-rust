@@ -654,8 +654,8 @@ impl Default for Menu {
 /// Rows per screen (the main screen's: `Menu::main_rows`).
 const CONFIRM_ROWS: usize = 5;
 
-/// The system bank's cue for a device joining the roster (not the select cue, key 2).
-const JOIN_SOUND: u8 = 3;
+/// The system bank's cue for a device leaving the roster (joining plays the back cue, key 1).
+const LEAVE_SOUND: u8 = 3;
 
 /// What a step asks of the app.
 #[derive(Debug, PartialEq)]
@@ -1437,7 +1437,7 @@ impl Menu {
                 if k.ok && !self.seats.contains(&Some(dev)) && let Some(p) = self.join_seat() {
                     self.seats[p] = Some(dev);
                     self.unready(p);
-                    out.push(Sound(JOIN_SOUND));
+                    out.push(Sound(1));
                     return out;
                 }
                 let Some(p) = self.driven(dev) else { return out };
@@ -1531,7 +1531,7 @@ impl Menu {
                         out.push(Sound(1));
                     } else if self.seats[p] == Some(dev) && self.drop_seat(p) {
                         // B238: a joined device's ○ takes it off its seat
-                        out.push(Sound(1));
+                        out.push(Sound(LEAVE_SOUND));
                     } else if p == 0 && self.online() && self.net.first {
                         self.chars_back(&mut out);
                     } else if p == 0 && self.online() {
