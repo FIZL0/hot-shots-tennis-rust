@@ -18,3 +18,4 @@
 - Android browsers: when the phone's graphics crash again soon after a first crash, the game restarts on its fallback graphics instead of stopping with a "device lost" error.
 - Online chat on iPhone and Android: the chat button now brings up the keyboard during a match, not just in the lobby.
 - On iPhone and iPad Safari the game now offers a new version even when Safari stops its background download, instead of staying on the old one.
+- On phones, the choices shown when an online player doesn't come back (a bot plays for them, everyone to the lobby, leave) can be tapped again; the on-screen stick no longer swallows the taps.

@@ -256,9 +256,12 @@ fn input(app: &mut App) {
         .add_systems(Last, menu_form);
 }
 
-/// The menus' form while no match is on, or its pause or result screen is up (`web/touch.js` `hstTouchMenu`).
+/// The menus' form while no match is on, or its pause or result screen or an online match's bot-or-lobby question is
+/// up (`web/touch.js` `hstTouchMenu`), so taps reach its pills.
 fn menu_form(w: &World) {
-    let on = w.get_resource::<super::Game>().is_none_or(|g| g.match_stats.result.is_some()) || super::front_end::paused(w);
+    let on = w.get_resource::<super::Game>().is_none_or(|g| g.match_stats.result.is_some())
+        || super::front_end::paused(w)
+        || w.get_resource::<super::netplay::OnlineNotice>().is_some_and(|n| n.ask);
     MENU.store(on, Ordering::Relaxed);
 }
 
