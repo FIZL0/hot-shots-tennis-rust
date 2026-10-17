@@ -255,12 +255,13 @@ fn choices(o: Opt) -> Vec<String> {
     }
 }
 
-/// B498: rows with this many choices or more open a dropdown list on ✕ (fewer keep the ‹ › cycle).
-const LIST: usize = 5;
+/// B498: rows with this many choices or more open a dropdown list on ✕ (On/Off keeps the ‹ › toggle; user 2026-10-17:
+/// every row with more than two choices is a dropdown).
+const LIST: usize = 3;
 
-/// B498: whether `o` opens a dropdown (a slider, a way in or the Renderer's switch never does).
+/// B498: whether `o` opens a dropdown (a slider or a way in never does).
 pub(super) fn listed(o: Opt) -> bool {
-    !locked(o) && !matches!(o, Volume(_) | Advanced | Renderer) && choices(o).len() >= LIST
+    !locked(o) && !matches!(o, Volume(_) | Advanced) && choices(o).len() >= LIST
 }
 
 /// B498: a dropdown choice's short hint (the presets'), so Low and Phone tell apart without the side panel.
@@ -448,11 +449,6 @@ impl Menu {
                 self.editing = None;
                 return;
             };
-            if (k.left || k.right) && o == Renderer {
-                self.editing = None;
-                self.open_switch(if k.left { -1 } else { 1 }, out);
-                return;
-            }
             if k.left || k.right {
                 let now = self.settings;
                 self.settings.step(o, if k.left { -1 } else { 1 });
@@ -486,7 +482,8 @@ impl Menu {
                 out.push(Effect::Sound(2));
                 return;
             }
-            if k.left || k.right {
+            // (the Renderer changes only through its list and the popup: the page reloads)
+            if (k.left || k.right) && o != Renderer {
                 let now = self.settings;
                 self.settings.step(o, if k.left { -1 } else { 1 });
                 if self.settings != now {
@@ -514,6 +511,13 @@ impl Menu {
         if k.up || k.down {
             self.listing = Some((j + if k.down { 1 } else { n - 1 }) % n);
             out.push(Effect::Sound(0));
+        } else if k.ok && o == Renderer {
+            // B327: a different renderer asks first (the page reloads into it); the one in use just closes the list
+            (self.listing, self.editing) = (None, None);
+            if j as u8 != self.settings.5 {
+                self.switch = Some((j as u8, 0));
+            }
+            out.push(Effect::Sound(2));
         } else if k.ok {
             (self.listing, self.editing) = (None, None);
             let now = self.settings;
@@ -528,34 +532,12 @@ impl Menu {
         }
     }
 
-    /// B327: the page reloads into a new renderer, so a press on Renderer asks first: the popup opens on the value the
-    /// press (direction `d`) steps to, Switch chosen.
-    fn open_switch(&mut self, d: isize, out: &mut Vec<Effect>) {
-        self.switch = Some((self.renderer_step(self.settings.5, d), 0));
-        out.push(Effect::Sound(0));
-    }
-
-    /// The renderer after `r` one step in direction `d`, passing the one in use (the popup only offers a change).
-    fn renderer_step(&self, r: u8, d: isize) -> u8 {
-        let n = RENDERERS.len() as isize;
-        let mut r = r as isize;
-        loop {
-            r = (r + d).rem_euclid(n);
-            if r != self.settings.5 as isize {
-                return r as u8;
-            }
-        }
-    }
-
-    /// B327: one press while the Renderer switch's popup is up (it takes them all): ◀ ▶ change the renderer it
-    /// offers, ↑ ↓ move between Switch and Cancel, ✕ chooses, ○ is Cancel. Switch saves the setting, which reloads
+    /// B327: one press while the Renderer switch's popup is up (it takes them all; it opens on a renderer picked from
+    /// the row's list): ↑ ↓ move between Switch and Cancel, ✕ chooses, ○ is Cancel. Switch saves the setting, which reloads
     /// the page into it (`web::renderer`); Cancel leaves it as it was. Returns whether the popup was up.
     pub(super) fn switch_step(&mut self, k: Press, out: &mut Vec<Effect>) -> bool {
         let Some((r, c)) = self.switch else { return false };
-        if k.left || k.right {
-            self.switch = Some((self.renderer_step(r, if k.left { -1 } else { 1 }), c));
-            out.push(Effect::Sound(0));
-        } else if k.up || k.down {
+        if k.up || k.down {
             self.switch = Some((r, 1 - c));
             out.push(Effect::Sound(0));
         } else if k.ok && c == 0 {
@@ -968,7 +950,7 @@ fn drop_list(d: &mut Draw, o: Opt, [x, y, w, h]: [f32; 4], j: usize, now: &str, 
 const SWITCH_TOP: f32 = 226.0;
 
 /// B327: the Renderer switch's confirm popup over the dimmed page, as the mods' Reload / Later one
-/// (`mods_screen::ask_layout`): the renderer it offers between ◀ ▶ (a tap on either side steps it), Switch and Cancel.
+/// (`mods_screen::ask_layout`): the renderer picked, Switch and Cancel.
 fn switch_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let Some((r, c)) = m.switch else { return };
     use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
@@ -986,10 +968,6 @@ fn switch_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
     let name = format!("Switch to {}?", RENDERERS[r as usize].1);
     d.outlined(|d| d.label(&name, 320.0, SWITCH_TOP - 56.0, 22.0, 224.0, WHITE));
     d.outlined(|d| d.label("The page reloads to change it.", 320.0, SWITCH_TOP - 32.0, 18.0, 288.0, WHITE));
-    d.outlined(|d| d.text("<", 176.0, SWITCH_TOP - 56.0, 22.0, WHITE));
-    d.outlined(|d| d.text(">", 464.0 - d.width(">", 22.0), SWITCH_TOP - 56.0, 22.0, WHITE));
-    d.hit([160.0, top, 160.0, 36.0], pointer::Act::Press(Press { left: true, ..default() }));
-    d.hit([320.0, top, 160.0, 36.0], pointer::Act::Press(Press { right: true, ..default() }));
     for (k, word) in ["Switch", "Cancel"].into_iter().enumerate() {
         let y = SWITCH_TOP + 40.0 * k as f32;
         let on = k == c;
@@ -1340,8 +1318,9 @@ mod tests {
     /// tap on a choice highlights / picks it, a tap off it closes it.
     #[test]
     fn dropdowns() {
-        assert!(GRAPHICS.iter().filter(|&&o| listed(o)).eq([Preset, Scale, Fps].iter()));
-        assert!(listed(MenuSize) && listed(ButtonIcons) && listed(AtOnce) && !listed(Shadows) && !listed(Mesh) && !listed(Volume(0)));
+        // every row with more than two choices (user 2026-10-17); On/Off rows, sliders and Advanced aren't
+        assert!(GRAPHICS.iter().chain(DISPLAY).chain(ADVANCED).chain(MODS).all(|&o| listed(o) == (choices(o).len() > 2 && !locked(o) && o != Advanced)));
+        assert!(listed(Shadows) && listed(Msaa) && listed(ShowFps) && listed(Renderer) && !listed(Vsync) && !listed(Volume(0)));
         assert!(choices(Preset).iter().all(|c| !hint(Preset, c).is_empty()));
         let mut m = Menu { screen: Screen::Graphics, ..default() };
         m.step(Dev::Keys, press(|k| &mut k.ok));
@@ -1493,44 +1472,52 @@ mod tests {
     }
 
     /// B327: Renderer asks before it switches (the browser build's Display page; forced here, the desktop has no such
-    /// row): the popup offers the value the press steps to, ◀ ▶ step it past the one in use, Cancel / ○ / a tap off it
-    /// change nothing, Switch saves; while it's up it takes the presses, the legend says so, and it draws within the
-    /// pause overlay's pool at any aspect.
+    /// row): its list picks a renderer, and only a different one opens the popup; ◀ ▶ on the row change nothing,
+    /// Cancel / ○ / a tap off it change nothing, Switch saves; while it's up it takes the presses, the legend says so,
+    /// and it draws within the pause overlay's pool at any aspect.
     #[test]
     fn renderer_asks_first() {
         let mut m = Menu { screen: Screen::Display, sel: 1, ..default() };
-        let mut out = Vec::new();
-        m.open_switch(1, &mut out);
-        assert_eq!((m.switch, &out[..]), (Some((1, 0)), &[Effect::Sound(0)][..]));
-        m.step(Dev::Keys, press(|k| &mut k.right));
-        assert_eq!(m.switch, Some((2, 0)));
-        // Auto is in use: not offered
-        m.step(Dev::Keys, press(|k| &mut k.right));
+        // the row's list on choice `j`, picked
+        let pick = |m: &mut Menu, j: usize| {
+            (m.listing, m.editing) = (Some(j), Some(m.settings));
+            let mut out = Vec::new();
+            m.step_list(Some(Renderer), j, Press { ok: true, ..default() }, &mut out);
+            out
+        };
+        assert!(listed(Renderer));
+        // the one in use: no popup
+        pick(&mut m, 0);
+        assert_eq!((m.switch, m.listing), (None, None));
+        pick(&mut m, 1);
         assert_eq!(m.switch, Some((1, 0)));
+        assert_eq!(m.settings, Settings::default());
         let fx = m.step(Dev::Keys, press(|k| &mut k.down));
         assert_eq!((m.switch, m.sel, fx), (Some((1, 1)), 1, vec![Effect::Sound(0)]));
         let fx = m.step(Dev::Keys, press(|k| &mut k.ok));
         assert_eq!((m.switch, m.settings, fx), (None, Settings::default(), vec![Effect::Sound(1)]));
-        m.open_switch(-1, &mut out);
+        pick(&mut m, 2);
         assert_eq!(m.switch, Some((2, 0)));
         let fx = m.step(Dev::Keys, press(|k| &mut k.back));
         assert_eq!((m.switch, m.screen, m.settings, fx), (None, Screen::Display, Settings::default(), vec![Effect::Sound(1)]));
         // a tap off the popup is Cancel; a tap on Switch switches
-        m.open_switch(-1, &mut out);
+        pick(&mut m, 2);
         let t = super::super::pointer::tests::text_with_mods(0);
         let d = super::super::drawn(&m, &t, &controls::Bindings::default(), &[], 0, 0.0);
         assert_eq!(d.outside, Some(pointer::Act::Row(1, pointer::OK)));
         assert!(super::super::legend::acts(&m, Dev::Keys).iter().any(|(_, w)| w == "Cancel"));
         m.point(Dev::Keys, pointer::Act::Row(1, pointer::OK), true);
         assert_eq!((m.switch, m.settings.5), (None, 0));
-        m.open_switch(-1, &mut out);
+        pick(&mut m, 2);
         let fx = m.point(Dev::Keys, pointer::Act::Row(0, pointer::OK), true);
         assert!(m.switch.is_none() && m.settings.5 == 2 && fx.contains(&Effect::SaveSettings));
         assert!(m.settings.text().contains("renderer = webgl2") || !cfg!(target_arch = "wasm32"));
         assert_eq!(m.settings.value(Renderer), "WebGL2");
-        assert!(choices(Renderer).contains(&m.settings.value(Renderer)));
-        // the popup again (from WebGL2: Auto offered first), on every aspect
-        m.open_switch(1, &mut out);
+        // ◀ ▶ on the row neither change it nor ask
+        m.step(Dev::Keys, press(|k| &mut k.right));
+        assert_eq!((m.switch, m.settings.5), (None, 2));
+        // the popup again, on every aspect
+        pick(&mut m, 0);
         assert_eq!(m.switch, Some((0, 0)));
         for a in [4.0, 16.0 / 9.0, 4.0 / 3.0, 9.0 / 16.0, 0.4] {
             m.grid = Grid::fit(a);

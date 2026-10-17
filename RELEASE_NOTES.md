@@ -35,3 +35,5 @@
 - Music and ambience now start at half volume on a fresh install (your saved volumes are kept).
 - In the browser, Settings → Display → Renderer now shows which renderer is actually running (WebGPU or WebGL2) and whether your graphics card draws it (Hardware) or the CPU does (Software, much slower), for example "Auto (WebGPU, Hardware)".
 - Online: when a player drops out, you no longer have to sit through the two-minute wait: while waiting you can already choose to let a bot play for them, take everyone back to the lobby, or leave.
+- Every setting with more than two choices (Shadows, Anti-aliasing, Show FPS, Renderer and the rest) is now a dropdown list; On/Off settings still toggle.
+- In the browser, switching renderer is now picked from the Renderer list, and only then asks whether to reload or cancel.
