@@ -17,3 +17,4 @@
 - Out of Bounds characters now show a face for every reaction: surprised, sad and angry looks that used to stay blank (Sophie, Bjorn, Fernando, Felipe, Bloom, LJ, Kate, Dino, Anya, Suzuki, Jasmine, Alex) play on their nearest expression.
 - Android browsers: when the phone's graphics crash again soon after a first crash, the game restarts on its fallback graphics instead of stopping with a "device lost" error.
 - Online chat on iPhone and Android: the chat button now brings up the keyboard during a match, not just in the lobby.
+- Phones with very sharp screens use much less graphics memory in the menus and in matches, and the browser game warms up the match graphics while you wait in an online lobby, so online matches load faster on phones.

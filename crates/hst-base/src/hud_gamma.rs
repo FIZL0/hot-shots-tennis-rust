@@ -123,13 +123,20 @@ fn encode_pbr_output(mut events: MessageReader<AssetEvent<Shader>>, mut shaders:
     }
 }
 
+/// B547: the most device pixels per CSS px (logical px) the images get: a phone's DPR 3 drew and held 2.25× the pixels
+/// of 2 for a picture that looks the same at its pixel density (the composite upscales). Desktop windows (DPR ≤ 2)
+/// never reach it.
+const MAX_DENSITY: f32 = 2.0;
+
 /// Both images at the window's physical size and scale factor, as the window target was; the scene's times the
-/// render scale setting (the composite upscales it). The original mode (`Graphics::original`) draws the scene at 448
-/// lines and 640 columns per 4:3 width (the PS2's non-square pixels, `pixel_aspect`) and the HUD at 448 lines, both
-/// scaled up unfiltered.
+/// render scale setting (the composite upscales it); neither past [`MAX_DENSITY`]. The persistence's images only
+/// while a match keeps them (`Persist`), else 1 px (B547: two more screens' worth held in the menus). The original
+/// mode (`Graphics::original`) draws the scene at 448 lines and 640 columns per 4:3 width (the PS2's non-square
+/// pixels, `pixel_aspect`) and the HUD at 448 lines, both scaled up unfiltered.
 fn follow_window(
     t: Res<Targets>,
     g: Res<crate::graphics::Graphics>,
+    persist: Option<Res<Persist>>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
     mut targets: Query<&mut RenderTarget>,
@@ -152,11 +159,13 @@ fn follow_window(
         let k = 448.0 / ph.max(1.0);
         ((size(480.0 * pw / ph.max(1.0), 448.0), k), (size(pw * k, 448.0), k))
     } else {
-        let k = g.scale as f32 / 100.0;
-        ((size((pw * k).floor(), (ph * k).floor()), k), (size(pw, ph), 1.0))
+        let cap = densest(w.scale_factor());
+        let k = (g.scale as f32 / 100.0).min(cap);
+        ((size((pw * k).floor(), (ph * k).floor()), k), (size((pw * cap).floor(), (ph * cap).floor()), cap))
     };
     let sampler = if g.original { ImageSampler::nearest() } else { ImageSampler::Default };
-    for (h, size) in [(&t.scene, scene), (&t.hud, hud), (&t.last[0], scene), (&t.last[1], scene)] {
+    let last = if persist.is_some() { scene } else { size(1.0, 1.0) };
+    for (h, size) in [(&t.scene, scene), (&t.hud, hud), (&t.last[0], last), (&t.last[1], last)] {
         if images.get(h).is_some_and(|i| i.texture_descriptor.size != size) {
             images.get_mut(h).unwrap().resize(size);
         }
@@ -182,6 +191,12 @@ fn follow_window(
             *target = RenderTarget::Image(ImageRenderTarget { handle, scale_factor: scale });
         }
     }
+}
+
+/// The share of a window's physical pixels the images may have at `scale_factor` device px per logical px
+/// ([`MAX_DENSITY`]).
+fn densest(scale_factor: f32) -> f32 {
+    (MAX_DENSITY / scale_factor.max(1e-3)).min(1.0)
 }
 
 /// Each frame in a match: this parity's mix of the last frame into the scene, shown by the composite (`out`).
@@ -256,6 +271,13 @@ fn pixel_aspect(g: Res<crate::graphics::Graphics>, window: Query<&Window, With<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn density_capped_at_two() {
+        // a DPR-3 phone: two thirds of its pixels; DPR 2 and below: all
+        assert_eq!(densest(3.0), 2.0 / 3.0);
+        assert_eq!((densest(2.0), densest(1.25), densest(1.0)), (1.0, 1.0, 1.0));
+    }
 
     #[test]
     fn glare_strength() {

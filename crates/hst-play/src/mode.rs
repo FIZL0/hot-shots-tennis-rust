@@ -620,7 +620,9 @@ const WARM_IDLE: f32 = 1.0;
 /// P55: the pipelines earlier runs' matches asked for (`pipelines.rs`) queued to compile while a mode other than the
 /// match runs (the menu) with no loading screen up: all at once where they compile off the render thread, else one a
 /// frame once nobody has touched the controls for [`WARM_IDLE`] (each one stalls its frame there: ~40–150 ms in a
-/// browser), so a match loaded from the menu finds them built.
+/// browser), so a match loaded from the menu finds them built. In an online lobby one a frame without the wait (B547:
+/// players tap about in the lobby until its match starts, and an iPhone's match then compiled 28 behind its loading
+/// screen at seconds a frame).
 #[allow(clippy::too_many_arguments)]
 fn warm_up(
     warm: Option<ResMut<crate::pipelines::Warmup>>,
@@ -635,6 +637,7 @@ fn warm_up(
     touches: Option<Res<Touches>>,
     pads: Query<&Gamepad>,
     time: Res<Time<Real>>,
+    net: Option<Res<crate::net::Net>>,
     mut quiet: Local<f32>,
 ) {
     let (Some(mut warm), Some(server), Some(mut shaders)) = (warm, server, shaders) else { return };
@@ -649,7 +652,7 @@ fn warm_up(
     }
     if !crate::pipelines::IN_PLACE {
         warm.feed(&server, &mut shaders, usize::MAX);
-    } else if *quiet >= WARM_IDLE {
+    } else if *quiet >= WARM_IDLE || net.is_some_and(|n| n.in_room()) {
         warm.feed(&server, &mut shaders, 1);
     }
 }
