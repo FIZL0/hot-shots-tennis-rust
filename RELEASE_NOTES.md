@@ -60,3 +60,4 @@
 - Mod characters' feet now stay on the court through runs, swings and celebrations instead of floating above it or sinking into it: their legs bend to put each foot where the original character's would be.
 - Online: a host whose lobby code is slow to go online no longer stays stuck on "Connecting to the relay" — it becomes joinable as soon as a friend gets in, and a code that takes too long falls back to the lobby link.
 - Leaving an online lobby and joining it again no longer gets you turned away as "not enough open seats".
+- Get a Grip, Out of Bounds and Open Tee 2 mod characters now cry out when the ball hits them ("Ouch!", "Ow!", "Ugh!"), in their own voice, once you update them from the mod store.
