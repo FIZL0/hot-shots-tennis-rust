@@ -234,7 +234,8 @@ impl Menu {
     /// Main → Online, as `dev`.
     pub(super) fn go_online(&mut self, dev: Dev, out: &mut Vec<Effect>) {
         self.rematch = false;
-        self.seats = [Some(self.p1.unwrap_or(dev)), None, None, None];
+        // concept: whoever picks Online is 1P there (the keyboard too, over a pad's 1P)
+        (self.seats, self.p1) = ([Some(dev), None, None, None], Some(dev));
         self.net.status.clear();
         out.push(Effect::Online(super::online::Fx::Load));
         self.go(Screen::Online, out);

@@ -3247,6 +3247,23 @@ mod tests {
         assert_eq!((m.screen, m.players[0].ready, m.seats[3]), (Screen::Lobby, true, Some(pad)));
     }
 
+    /// Concept: a pad went into the lobby as 1P; the keyboard (no seat) still backs out of it; and whoever works the
+    /// online menus goes in as 1P.
+    #[test]
+    fn keys_back_out_of_a_pads_lobby() {
+        use super::super::Dev;
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Lobby, p1: Some(pad), seats: [Some(pad), None, None, None], ..default() };
+        sample(&mut m);
+        m.net.me = "host".into();
+        m.net.hosting = true;
+        let fx = m.step(Dev::Keys, Press { back: true, ..default() });
+        assert!(m.screen != Screen::Lobby || fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Leave)))), "{:?} {fx:?}", m.screen);
+        let mut m = Menu { screen: Screen::Online, p1: Some(pad), seats: [Some(pad), None, None, None], ..default() };
+        m.step(Dev::Keys, Press { ok: true, ..default() });
+        assert_eq!((m.seats[0], m.p1), (Some(Dev::Keys), Some(Dev::Keys)));
+    }
+
     #[test]
     fn creating_lobby_ok_leaves() {
         // no room yet: the hidden side panel isn't there, ✕ is on Leave (not Select Court)

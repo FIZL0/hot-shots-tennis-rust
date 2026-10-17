@@ -550,7 +550,8 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
     let human = matches!(m.seats[p], Some(Dev::Keys | Dev::Pad(_))) || m.remote(p).is_some_and(|s| s.human());
     // an unjoined seat: an empty card, dashed and dim, its number and the join prompt in the middle; B434: a seat held
     // open for a device and an online seat waiting for a player too: no figure in either, it reads as an open seat
-    if m.seats[p] == Some(Dev::Open) || !active && (online || m.local_roster()) {
+    // concept: 1P left the local roster with nobody else seated: every card open
+    if m.seats[p] == Some(Dev::Open) || !active && (online || m.local_roster()) || m.local_roster() && m.humans() == 0 {
         open_seat(d, &s, at.card, p, !online || m.seats[p] == Some(Dev::Open));
         return;
     }
