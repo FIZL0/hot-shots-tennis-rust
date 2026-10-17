@@ -366,6 +366,13 @@ def failures(chk):
     return re.findall(r'^---- (\S+) stdout ----', chk.stdout, re.M)
 
 
+def tested_by_cargo(f):
+    # check.sh is only `cargo test`: plan/journal, CI and runner scripts can't change its result (B535 sat through a
+    # second full run, 2026-10-16, for a pages.yml/ship-local.sh commit)
+    # ponytail: path heuristic; a test that reads a tools/ file at runtime would need tools/ back in
+    return not (f.endswith('.md') or f.startswith('.github/') or (f.startswith('tools/') and f != 'tools/check.sh'))
+
+
 def merge_locked(tid, d):
     """merge()'s body, under MERGE. Sessions keep committing to main the whole time: the merge is built on a copy of
     main in the merge worktree and tested there, then lands on main as a fast-forward (or, when main moved meanwhile
@@ -386,7 +393,7 @@ def merge_locked(tid, d):
             git('commit', '-qm', f'{tid}: archive ticked tasks into plan/DONE.md', '--', *plan, cwd=d)
         merged = git('rev-parse', 'HEAD', cwd=d).stdout.strip()
         # the agent's done.sh passed the tests on its branch: rerun them only if the merge's code differs from the branch's
-        tested = all(f.endswith('.md') for f in git('diff', '--name-only', f'task/{tid}', merged).stdout.split())
+        tested = not any(map(tested_by_cargo, git('diff', '--name-only', f'task/{tid}', merged).stdout.split()))
         chk = sp.CompletedProcess([], 0, '', '') if tested else check(d)
         # ponytail: the net:: tests time out under the slots' load; one rerun of just the failures before it counts
         if chk.returncode and (names := failures(chk)):
@@ -411,7 +418,7 @@ def merge_locked(tid, d):
         # main got code commits during the tests: the tested commit doesn't cover them, so build and test again
         # (plan/journal edits don't need it); after three tries it lands anyway, as any two commits on main would
         moved = git('diff', '--name-only', base, 'main').stdout.split()
-        if attempt < 2 and not all(f.endswith('.md') for f in moved):
+        if attempt < 2 and any(map(tested_by_cargo, moved)):
             log(f'{tid}: main got code commits during the tests ({", ".join(moved[:5])}); testing the merge again')
             continue
         if why := land(tid, merged):
