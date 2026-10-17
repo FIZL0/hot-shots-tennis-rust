@@ -485,8 +485,9 @@ pub(in crate::play) fn plugin(app: &mut App) {
         .init_resource::<super::mods_screen::Shelf>()
         .init_resource::<OnlineNotice>()
         .add_systems(PostStartup, (setup, notice_setup))
-        // the mouse pointer shows when the mouse moves (hidden again by a key or pad button), as on the front-end's
-        .add_systems(PreUpdate, super::pointer::mouse_idle.after(bevy::input::InputSystems).run_if(open))
+        // the whole match: the mouse pointer shows when the mouse moves (hidden again by a key or pad button), as on the
+        // front-end's, so it never sits hidden where it was left (a window's app: tests without one skip it)
+        .add_systems(PreUpdate, super::pointer::mouse_idle.after(bevy::input::InputSystems).run_if(resource_exists::<Messages<bevy::window::CursorMoved>>))
         .add_systems(Update, (notice_pool, notice_draw).chain().after(Systems))
         .add_systems(
             Update,
