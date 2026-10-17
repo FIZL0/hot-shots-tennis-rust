@@ -12,8 +12,9 @@
 
 use bevy::prelude::*;
 
+use super::super::controls::Bindings;
 use super::roster::{BG, PX, PY, Seat, band, dashed, ellipsis, hex, ringed, rounded, seat, stats};
-use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, home, look, pointer, tile_face};
+use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, home, legend, look, pointer, tile_face};
 
 /// The top bar's height, the margins round the cards and the gap between them, a card's padding (mockup px).
 const TOP_BAR: f32 = 60.0;
@@ -64,7 +65,7 @@ impl Menu {
 }
 
 /// The assignment screen.
-pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
+pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
     super::look::backdrop(d);
     let size = 30.0 * PY;
@@ -106,12 +107,19 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity]) {
         Some(None) => "Pending: you give up your seat when you leave this screen; until then you keep 1P's controls here. ".to_string(),
         None => String::new(),
     };
+    // 1P's buttons in its own device's names and bindings; the others' devices vary, so theirs go by what they do
+    let dev = match m.seats[0] {
+        Some(Dev::Pad(e)) => Some(e),
+        _ => None,
+    };
+    let b = |a: legend::Act| legend::button_names(dev, a, bind).join(" / ");
+    let (ok, back, page, card) = (b(legend::Act::Ok), b(legend::Act::Back), b(legend::Act::Page), b(legend::Act::Card));
     let help = if m.net_pause.is_some() {
-        "1P: Up/Down picks one of your seats, Left/Right swaps its controller with your next player's, X or Enter keeps the change, O or Esc leaves it. Another of your controllers: X or Enter takes your seat that has none."
+        format!("1P: Up/Down picks one of your seats, Left/Right swaps its controller with your next player's, {ok} keeps the change, {back} leaves it. Another of your controllers: its OK button takes your seat that has none.")
     } else if m.paused {
-        "1P: Up/Down picks a seat, Left/Right swaps its controller with the next player's, Tab / Square takes a controller off its seat, X or Enter keeps the change, O or Esc leaves it. Others: X or Enter takes a free seat, Left/Right changes seat, O or its red X leaves. A controller's right stick shakes its seat."
+        format!("1P: Up/Down picks a seat, Left/Right swaps its controller with the next player's, {page} takes a controller off its seat, {ok} keeps the change, {back} leaves it. Others: OK takes a free seat, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
     } else {
-        "1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves. A controller's right stick shakes its seat."
+        format!("1P: Up/Down picks a seat, Left/Right swaps it, {page} takes it off, {card} adds or removes a computer player (empty seats are filled at Start). Others: OK joins, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
     };
     d.info(&format!("{pending}{help}"));
 }

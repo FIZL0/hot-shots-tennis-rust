@@ -22,3 +22,4 @@
 - Online: the game no longer crashes when the "download this mod?" question comes up in the lobby and you answer it.
 - In an online lobby, players who joined see a "Swap team" button in the top right (tap it to move to the other side) instead of the host's Singles / Doubles switch.
 - Online: a match no longer freezes for several seconds after the first point on iPhone Safari.
+- Button hints now show your own controller's buttons (or your keyboard keys) instead of always naming PlayStation buttons: the Singles / Doubles / Swap team button, the Controllers screen's help, the title screen and the mods page.

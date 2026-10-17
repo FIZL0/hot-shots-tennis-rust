@@ -370,7 +370,7 @@ fn ringed_text(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, rgb: [f32; 3]) 
 }
 
 /// The legend's □ / Tab art (`Tex::Glyph`'s), the mode pill's button.
-const MODE_GLYPH: u8 = 4;
+pub(super) const MODE_GLYPH: u8 = 4;
 
 /// A button's name as a small chip in `rgb` with dark words (the legend's L1 / R1, Q / E, Select…), `h` high from
 /// `[x, y]`; its width.

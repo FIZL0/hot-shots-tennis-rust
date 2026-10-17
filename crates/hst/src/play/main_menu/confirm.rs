@@ -51,7 +51,7 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], _hand_x
     let picking = m.picking.is_some();
     let on = |row: usize| !picking && m.sel == row;
     // the top bar: the title (Back for the pointer), Singles / Doubles (1P's □ or a tap)
-    frame::bar(d, &g, "Ready to play?", m.doubles, false, !m.online(), false);
+    frame::bar(d, &g, "Ready to play?", m.doubles, false, frame::page_glyph(m, Some(0)).filter(|_| !m.online()), !m.online(), false);
     d.hit(g.title, pointer::press(|k| k.back = true));
     // online singles names no sides: each client keeps its own player on the near side (B490)
     // M120: online, no court behind the plates

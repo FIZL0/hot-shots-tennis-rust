@@ -2209,14 +2209,14 @@ pub(super) fn info(m: &Menu) -> String {
             Pill::Show(Show::Updates) => "Installed mods with a newer version on the store.".into(),
             Pill::Show(Show::Mine) if v.account.is_none() => "The mods you've shared on the store. Sign in under Upload (top right) to see them.".into(),
             Pill::Show(Show::Mine) => "The mods you've shared on the store: press one to take it down.".into(),
-            Pill::Show(Show::Wish) => "The mods you saved with Save (□ on a mod).".into(),
+            Pill::Show(Show::Wish) => "The mods you saved with Save on a mod.".into(),
             Pill::Sort => match v.b.sort {
                 Sort::Newest => "The newest uploads first, under their games. Press for A-Z or by uploader.",
                 Sort::Az => "By name, under their games A-Z. Press for by uploader or newest.",
                 Sort::Uploader => "Grouped by who shared them. Press for newest or A-Z.",
             }
             .into(),
-            Pill::Filter if v.groups() > 1 => format!("Showing {}: press for the next, Select for {}.", v.filter_words(), v.group_name((v.b.filter + 1) % v.groups()).to_lowercase()),
+            Pill::Filter if v.groups() > 1 => format!("Showing {}: press for the next; Filter in the legend jumps to {}.", v.filter_words(), v.group_name((v.b.filter + 1) % v.groups()).to_lowercase()),
             Pill::Filter => format!("Showing {}: press for the next game.", v.filter_words()),
         },
         Slot::Tile(_) if v.packs_page() => match v.hovered(m.sel).and_then(|e| v.pack_of(e)) {

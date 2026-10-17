@@ -2481,7 +2481,7 @@ fn dev_name(d: Option<Dev>, pads: &[Entity]) -> String {
         None => "COM".into(),
         Some(Dev::Keys) => "Keyboard".into(),
         Some(Dev::Pad(e)) => format!("Controller {}", pads.iter().position(|x| *x == e).map_or(0, |i| i + 1)),
-        Some(Dev::Open) => "X or Enter joins".into(),
+        Some(Dev::Open) => "OK or Enter joins".into(),
     }
 }
 
@@ -2628,7 +2628,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
             d.info(text.msg(192));
         }
         // M124: the match roster's cards (`assign.rs`)
-        Screen::Assign => assign::layout(&mut d, m, text, pads),
+        Screen::Assign => assign::layout(&mut d, m, text, bind, pads),
         Screen::Chars => roster::chars(&mut d, m, text, bind, pads),
         // M121: the lobby is the online select's columns with the lobby around them (`lobby::over`), and its prompts
         Screen::Lobby if m.net.room.is_some() => {

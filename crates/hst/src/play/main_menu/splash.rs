@@ -238,9 +238,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, pads: &[Entity], controllers: usize
     let (line, sub) = match m.p1 {
         Some(Dev::Keys) if super::touch_page() => ("Player 1: Touch screen".to_string(), "Other players join on the character select".to_string()),
         Some(dev) => (format!("Player 1: {}", super::dev_name(Some(dev), pads)), "Other players join on the character select".to_string()),
-        None if super::touch_page() => ("Tap to start".to_string(), "or press X / Start on a controller".to_string()),
-        None if controllers > 0 => ("Press X / Start or Enter".to_string(), "Whoever presses it plays as Player 1".to_string()),
-        None => ("Press Enter".to_string(), "or plug in a controller and press X / Start".to_string()),
+        None if super::touch_page() => ("Tap to start".to_string(), "or press Start on a controller".to_string()),
+        None if controllers > 0 => ("Press Start or Enter".to_string(), "Whoever presses it plays as Player 1".to_string()),
+        None => ("Press Enter".to_string(), "or plug in a controller and press Start".to_string()),
     };
     // the prompt breathes until it's answered
     let a = if m.p1.is_some() { 128.0 } else { 128.0 * (0.7 + 0.3 * (s.t * 2.6).cos().abs()) };

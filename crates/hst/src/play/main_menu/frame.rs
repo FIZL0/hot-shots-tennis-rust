@@ -35,7 +35,6 @@ const BLUE: [f32; 3] = hex(0x2f5f9d);
 const COURT: [f32; 3] = hex(0x2f6f9f);
 const NET: [f32; 3] = hex(0xe9eef5);
 pub(super) const GOLD: [f32; 3] = hex(0xffd23f);
-const PINK: [f32; 3] = hex(0xf58ac0);
 const READY: [f32; 3] = hex(0x2fa860);
 pub(super) const CHAT: [f32; 3] = hex(0xd3deef);
 
@@ -372,9 +371,19 @@ pub(super) fn ground(d: &mut Draw) {
     super::look::backdrop(d);
 }
 
-/// The top bar's title, and the Singles / Doubles button with its □ (`page`: the host's □ / a tap switches; `team`:
-/// an online guest's, Swap team instead).
-pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, team: bool, page: bool, sel: bool) {
+/// The legend's □ / X / Tab art of seat `p`'s device (none for a seat without a pad or the keyboard).
+pub(super) fn page_glyph(m: &Menu, p: Option<usize>) -> Option<super::legend::Style> {
+    match p.and_then(|p| m.seats[p])? {
+        super::Dev::Pad(e) => Some(super::legend::dev_style(Some(e))),
+        super::Dev::Keys => Some(super::legend::dev_style(None)),
+        super::Dev::Open => None,
+    }
+}
+
+/// The top bar's title, and the Singles / Doubles button with the button that switches it in `glyph`'s art (`page`:
+/// the host's □ / a tap switches; `team`: an online guest's, Swap team instead).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, team: bool, glyph: Option<super::legend::Style>, page: bool, sel: bool) {
     let [tx, ty, tw, th] = g.title;
     let size = g.y(30.0);
     let _ = tw;
@@ -389,13 +398,17 @@ pub(super) fn bar(d: &mut Draw, g: &Geo, title: &str, doubles: bool, team: bool,
     if sel {
         focus(d, g.mode, mh / 2.0, g.x(3.0), g.x(3.0));
     }
-    // the □ on its navy disc
-    let disc = [mx + g.x(8.0), my + (mh - g.y(28.0)) / 2.0, g.x(28.0), g.y(28.0)];
-    rounded(d, disc, g.x(14.0), NAVY, 128.0);
-    let sq = [disc[0] + g.x(9.0), disc[1] + g.y(9.0), g.x(10.0), g.y(10.0)];
-    ringed(d, sq, 0.0, g.x(2.0), PINK, Some(NAVY));
+    // the device's own □ / X / Tab, as the legend draws it
+    let gh = g.y(24.0);
+    let lx = match glyph {
+        Some(style) => {
+            let gw = gh * super::legend::glyph_aspect(style, super::roster::MODE_GLYPH);
+            d.q(Tex::Glyph(style, super::roster::MODE_GLYPH), [0.0; 4], [mx + g.x(10.0), my + (mh - gh) / 2.0, gw, gh], WHITE, 128.0);
+            mx + g.x(20.0) + gw
+        }
+        None => mx + g.x(16.0),
+    };
     let ws = g.y(20.0);
-    let lx = disc[0] + disc[2] + g.x(10.0);
     super::left(d, words, lx, my + (mh - ws) / 2.0, ws, mx + mw - g.x(16.0) - lx, WHITE);
     if page {
         d.hit(g.mode, super::pointer::press(|k| k.page = true));

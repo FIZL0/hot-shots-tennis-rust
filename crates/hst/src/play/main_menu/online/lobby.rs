@@ -185,7 +185,11 @@ fn top_bar(d: &mut Draw, m: &Menu, r: &Room, g: &frame::Geo, on: &dyn Fn(Item) -
     let at = |it: Item| m.items().contains(&it);
     // Singles / Doubles: the host's □ (or a tap) switches; on the select a tap is the □ (B375, B392); a guest's tap is
     // its □ on either screen (Swap team)
-    frame::bar(d, g, "", r.doubles, guest, guest || !lobby, on(Item::Mode));
+    let glyph = match guest {
+        true => frame::page_glyph(m, if lobby { m.lobby_team() } else { (0..4).find(|&p| m.seats[p].is_some_and(|dev| m.online_team(dev).is_some())) }),
+        false => frame::page_glyph(m, (0..4).find(|&p| m.seats[p].is_some())).filter(|_| m.can_switch()),
+    };
+    frame::bar(d, g, "", r.doubles, guest, glyph, guest || !lobby, on(Item::Mode));
     if lobby && !guest {
         hit(d, Item::Mode, g.mode, OK);
     }
