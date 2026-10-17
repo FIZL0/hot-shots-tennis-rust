@@ -7,6 +7,9 @@
 //! (`Menu::flash`, drawn by the Assign layout: a gold glow ring and a "this is you" bubble) and rumbles that pad. It
 //! only watches: the press still does what it does on the screen, the flash itself moves no focus.
 //!
+//! A controller (or computer player) that changes seats slides its chip over from the seat it left for `SLIDE` seconds
+//! (`Menu::slide`), so a trade reads as one, not a jump.
+//!
 //! `HST_SHAKE=<seat>` (for `--shot`s): that seat's card is drawn mid-shake; `HST_FLASH=<seat>`: mid-flash.
 
 use bevy::input::gamepad::{GamepadRumbleIntensity, GamepadRumbleRequest};
@@ -28,6 +31,9 @@ const GLOW: f32 = 1.0;
 const BUZZ: f32 = 0.2;
 const BUZZ_STRENGTH: f32 = 0.5;
 
+/// How long (seconds) a moved controller's chip slides to its new seat.
+const SLIDE: f32 = 0.3;
+
 /// When each seat's card stops shaking (`Time::elapsed_secs`).
 #[derive(Resource, Default)]
 struct Shakes([f32; 4]);
@@ -37,7 +43,7 @@ struct Shakes([f32; 4]);
 struct Flashes([f32; 4]);
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Shakes>().init_resource::<Flashes>().add_systems(Update, (shake, flash).before(super::draw));
+    app.init_resource::<Shakes>().init_resource::<Flashes>().add_systems(Update, (shake, flash, slide.after(super::step)).before(super::draw));
 }
 
 /// B564: a press on a seated device restarts its card's flash (and rumbles a pad, once per flash: holding a menu's
@@ -84,6 +90,43 @@ fn flash(
     }
     if menu.flash != want {
         menu.flash = want;
+    }
+}
+
+/// Who sits on a seat, for telling where they moved: a device, a computer player, or nobody.
+fn occupants(m: &Menu) -> [Option<Option<Dev>>; 4] {
+    std::array::from_fn(|p| if m.seats[p].is_some() { Some(m.seats[p]) } else if m.bots[p] { Some(None) } else { None })
+}
+
+/// Each seat whose occupant came from another seat this frame slides its chip in from that seat's card: an offset
+/// from there to here easing out to nothing over `SLIDE`.
+fn slide(mut menu: ResMut<Menu>, time: Res<Time<Real>>, mut was: Local<Option<[Option<Option<Dev>>; 4]>>, mut moves: Local<[Option<([f32; 2], f32)>; 4]>) {
+    let now = time.elapsed_secs();
+    let on = menu.screen == Screen::Assign;
+    let new = occupants(&menu);
+    if let Some(old) = was.filter(|_| on) && old != new {
+        let cards = super::assign::cards(menu.grid.view, menu.players());
+        for q in 0..cards.len() {
+            let Some(o) = new[q].filter(|o| old[q] != Some(*o)) else { continue };
+            if let Some(p) = (0..cards.len()).find(|&p| p != q && old[p] == Some(o) && new[p] != Some(o)) {
+                moves[q] = Some(([cards[p][0] - cards[q][0], cards[p][1] - cards[q][1]], now));
+            }
+        }
+    }
+    *was = Some(new);
+    if !on {
+        *moves = [None; 4];
+    }
+    let want = moves.map(|m| match m {
+        Some((d, t)) if now - t < SLIDE => {
+            // ease out: fast off the old seat, settling on the new one
+            let k = (1.0 - (now - t) / SLIDE).powi(3);
+            [d[0] * k, d[1] * k]
+        }
+        _ => [0.0; 2],
+    });
+    if menu.slide != want {
+        menu.slide = want;
     }
 }
 

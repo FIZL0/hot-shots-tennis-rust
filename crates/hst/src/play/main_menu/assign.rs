@@ -16,7 +16,7 @@ use bevy::prelude::*;
 
 use super::super::controls::Bindings;
 use super::roster::{BG, PX, PY, Seat, band, dashed, ellipsis, hex, ringed, rounded, seat, stats};
-use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, look, pointer};
+use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, legend, look, pointer};
 
 /// The top bar's height, the margins round the cards and the gap between them, a card's padding (mockup px).
 const TOP_BAR: f32 = 60.0;
@@ -107,10 +107,11 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, _bind: &Bindings, pads
     let n = m.players();
     let focus = m.sel.min(n - 1);
     let pending = m.lead_pending().flatten();
+    let mut sliding = Vec::new();
     for (p, card) in cards(m.grid.view, n).into_iter().enumerate() {
         let start = d.out.len();
         glow(d, card, m.flash[p]);
-        seat_card(d, m, text, pads, card, p, p == focus, pending == Some(p));
+        sliding.extend(seat_card(d, m, text, pads, card, p, p == focus, pending == Some(p)));
         bubble(d, m, pads, card, p);
         // P21a: the card shakes while its pad's right stick moves (its hit rects stay put); a held one is lifted
         let lift = if m.held && p == focus { 10.0 * PY } else { 0.0 };
@@ -119,6 +120,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, _bind: &Bindings, pads
             q.dst[1] -= lift;
         });
     }
+    d.out.extend(sliding);
     // B437: 1P's own seat change is pending until they leave, spelled out in the help
     let pending = match m.lead_pending() {
         Some(Some(p)) => format!("Pending: you move to {}P when you leave this screen; until then you keep 1P's controls here. ", p + 1),
@@ -155,7 +157,7 @@ fn keep_layout(d: &mut Draw, m: &Menu) {
 
 /// Seat `p`'s card in `card`: `on` 1P's focus, `yours` where 1P's driver goes when it leaves (B437).
 #[allow(clippy::too_many_arguments)]
-fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4], p: usize, on: bool, yours: bool) {
+fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4], p: usize, on: bool, yours: bool) -> Vec<super::Quad> {
     let s = seat(p);
     let kind = m.assign_kind(p);
     let [x, y, w, h] = card;
@@ -204,13 +206,24 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         figure(d, m, text, &s, [ix, top, iw, fh], p, picked, who);
         style_stats(d, text, [ix, top + fh + 8.0 * PY, iw, body[3] - fh - 8.0 * PY], picked, who);
     }
+    let start = d.out.len();
     foot(d, m, pads, &s, [ix, foot_y, iw, FOOT * PY], p, kind, on, yours);
+    // a controller that just changed seats slides in from the one it left, over the other cards
+    let [dx, dy] = m.slide[p];
+    let chip: Vec<_> = if dx != 0.0 || dy != 0.0 { d.out.drain(start..).collect() } else { Vec::new() };
     // 1P's focus: the lobby's ring round the card (gold while its controller is held) and the menus' pointing hand
     if on {
         let rim = if m.held { GOLD } else { WHITE };
         super::frame::ringed(d, [x - 4.0 * PX, y - 4.0 * PY, w + 8.0 * PX, h + 8.0 * PY], 18.0 * PX, 3.0 * PX, rim, None);
         d.q(super::Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 52.0, y + (BAND * PY - 32.0) / 2.0, 64.0, 32.0], WHITE, 128.0);
     }
+    chip.into_iter()
+        .map(|mut q| {
+            q.dst[0] += dx;
+            q.dst[1] += dy;
+            q
+        })
+        .collect()
 }
 
 /// The face well (the seat's number faint behind the character's face), the character's name, hand and costume under it.
@@ -315,18 +328,7 @@ fn badge(kind: Kind, pads: &[Entity]) -> (String, bool) {
 /// seat and its role (1P controls / Player, how a free seat joins, "Yours when you leave").
 #[allow(clippy::too_many_arguments)]
 fn foot(d: &mut Draw, m: &Menu, pads: &[Entity], s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind: Kind, _on: bool, yours: bool) {
-    let ps = 14.0 * PY;
-    let mut lx = x;
-    if m.can_bot(p) {
-        let (word, rgb) = if m.bots[p] { ("- COM", [120.0, 30.0, 30.0]) } else { ("+ COM", [40.0, 100.0, 40.0]) };
-        let bw = (d.width(word, ps) + 20.0 * PX).min(x + w / 2.0 - lx);
-        if bw > 20.0 * PX {
-            rounded(d, [lx, y, bw, h], 15.0, rgb, 128.0);
-            d.label(word, lx + bw / 2.0, y + (h - ps) / 2.0, ps, bw - 8.0 * PX, WHITE);
-            d.hit([lx, y, bw, h], pointer::Act::Row(p, Press { card: true, ..default() }));
-            lx += bw + 4.0 * PX;
-        }
-    }
+    let lx = x;
     let lead = Some(p) == m.seats[..m.players()].iter().position(|d| *d == m.lead());
     let (fill, ink) = match kind {
         Kind::Device(_) => (s.ring, s.ink),
@@ -340,11 +342,11 @@ fn foot(d: &mut Draw, m: &Menu, pads: &[Entity], s: &Seat, [x, y, w, h]: [f32; 4
         Kind::Com => "Computer".into(),
         Kind::Online => "Online".into(),
     };
-    let role = match kind {
+    let mut role = match kind {
         _ if yours => "Yours when you leave".to_string(),
         Kind::Device(_) if lead => "1P controls".into(),
         Kind::Device(_) => "Player".into(),
-        Kind::Free if can_join(m, p) => dev_name(Some(Dev::Open), pads),
+        Kind::Free if can_join(m, p) => "to join".into(),
         Kind::Free => "Free".into(),
         Kind::Com => "Plays itself".into(),
         Kind::Online => "Another machine".into(),
@@ -380,8 +382,22 @@ fn foot(d: &mut Draw, m: &Menu, pads: &[Entity], s: &Seat, [x, y, w, h]: [f32; 4
     let (ds, rs) = (15.0 * PY, 12.0 * PY);
     let ty = y + (h - ds - rs - 1.0 * PY) / 2.0;
     d.text(&ellipsis(d, &device, ds, tw), tx, ty, ds, ink);
+    let mut rx = tx;
+    if matches!(kind, Kind::Free) && can_join(m, p) {
+        // the button that joins, in its device's own art: an unseated pad's ✕, else the keyboard's Enter
+        let seated: Vec<Entity> = m.seats.iter().filter_map(|s| if let Some(Dev::Pad(e)) = s { Some(*e) } else { None }).collect();
+        let style = legend::unseated_styles(&seated).first().copied().or((!m.seats.contains(&Some(Dev::Keys))).then_some(legend::Style::Keys));
+        if let Some(style) = style {
+            let ih = rs * 1.5;
+            let iw = legend::ok_aspect(style) * ih;
+            d.q(super::Tex::Button(style), [0.0; 4], [rx, ty + ds + 1.0 * PY + rs / 2.0 - ih / 2.0, iw, ih], WHITE, 128.0);
+            rx += iw + 3.0 * PX;
+        } else {
+            role = "Free".into();
+        }
+    }
     let start = d.out.len();
-    d.text(&ellipsis(d, &role, rs, tw), tx, ty + ds + 1.0 * PY, rs, ink);
+    d.text(&ellipsis(d, &role, rs, tx + tw - rx), rx, ty + ds + 1.0 * PY, rs, ink);
     d.out[start..].iter_mut().for_each(|q| q.alpha = 100.0);
 }
 

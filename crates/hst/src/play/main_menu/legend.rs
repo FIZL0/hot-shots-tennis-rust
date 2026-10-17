@@ -66,16 +66,17 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.push((if m.assign_per() < m.players() { Act::Move } else { Act::LeftRight }, "Move"));
             let p = m.sel.min(m.players() - 1);
             if m.pickable(p) {
-                v.push((Act::Ok, "Pick up"));
-            } else if !m.paused {
-                v.push((Act::Ok, "Start"));
+                v.push((Act::Ok, "Select"));
             }
             if m.droppable(m.sel.min(m.players() - 1)) {
                 v.push((Act::Page, "Remove"));
             }
             if m.can_bot(m.sel.min(m.players() - 1)) {
                 let p = m.sel.min(m.players() - 1);
-                v.push((Act::Card, if m.bots[p] { "Remove COM" } else { "Add COM" }));
+                // a computer player's seat empties with Remove
+                if !m.bots[p] {
+                    v.push((Act::Card, "Add COM"));
+                }
             }
             v.extend([(Act::Name, if m.paused { "Done" } else { "Start" }), (Act::Back, "Back")]);
         }

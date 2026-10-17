@@ -579,6 +579,9 @@ struct Menu {
     /// P21a: each seat's card's sideways offset on the controller assignment while its pad's right stick moves
     /// (`assign_shake.rs`).
     shake: [f32; 4],
+    /// Each seat's controller chip's offset (640×448 units) while it slides over from the seat it came from
+    /// (`assign_shake.rs`).
+    slide: [[f32; 2]; 4],
     /// B564: how bright each seat's press-to-find flash is (1 just pressed, fading to 0), `assign_shake.rs`.
     flash: [f32; 4],
     /// M124: the assignment over an online match's pause: the seats another machine plays. Only this machine's own
@@ -643,6 +646,7 @@ impl Default for Menu {
             p1: None,
             splash: default(),
             shake: [0.0; 4],
+            slide: [[0.0; 2]; 4],
             flash: [0.0; 4],
             net_pause: None,
             takeover: default(),
@@ -994,7 +998,9 @@ impl Menu {
     fn droppable(&self, p: usize) -> bool {
         let dev = |s: &Option<Dev>| matches!(s, Some(Dev::Keys | Dev::Pad(_)));
         let first = self.seats.iter().position(Option::is_some) == Some(p);
-        self.net_pause.is_none() && dev(&self.seats[p]) && (!first || self.paused || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
+        // a computer player's seat empties too (before a local match)
+        let com = self.screen == Screen::Assign && self.bots[p] && self.seats[p].is_none() && !self.paused && !self.online();
+        com || self.net_pause.is_none() && dev(&self.seats[p]) && (!first || self.paused || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
     }
 
     /// The device driving the menu's 1P screens: 1P's, except on the controller assignment after it moved its own
@@ -1037,9 +1043,10 @@ impl Menu {
         (seated != Some(q) && (free || pad_1p)).then_some(q)
     }
 
-    /// Whether 1P's ✕ picks up seat `p`'s controller: a device on it that can move at least one way.
+    /// Whether 1P's ✕ picks up seat `p`'s controller: a device on it (or, before a match, a computer player) that can
+    /// move at least one way.
     fn pickable(&self, p: usize) -> bool {
-        matches!(self.seats[p], Some(Dev::Keys | Dev::Pad(_))) && (self.swap_at(p, false).is_some() || self.swap_at(p, true).is_some())
+        (matches!(self.seats[p], Some(Dev::Keys | Dev::Pad(_))) || self.bots[p] && !self.paused) && (self.swap_at(p, false).is_some() || self.swap_at(p, true).is_some())
     }
 
     /// [`host_swap`](Self::host_swap) from seat `p`.
@@ -1058,7 +1065,9 @@ impl Menu {
         }
         let f = self.first_seat();
         let empties_1p = q == f && self.seats[p].is_none() || p == f && self.seats[q].is_none();
-        (!empties_1p && self.seats[p] != self.seats[q]).then_some((p, q))
+        // before a match a computer player moves too
+        let differ = self.seats[p] != self.seats[q] || !self.paused && self.bots[p] != self.bots[q];
+        (!empties_1p && differ).then_some((p, q))
     }
 
     /// Leaves the assignment: `keep` on to the character select (over a match, back to it with the new seats),
@@ -1091,6 +1100,11 @@ impl Menu {
     fn drop_seat(&mut self, p: usize) -> bool {
         if !self.droppable(p) {
             return false;
+        }
+        if self.seats[p].is_none() {
+            // a computer player's seat
+            self.bots[p] = false;
+            return true;
         }
         if p == 0 && self.screen == Screen::Assign && !self.paused {
             // the next seated device becomes 1P (the menu's driver)
@@ -1351,8 +1365,8 @@ impl Menu {
                         // ✕ picks up the focused seat's controller, or puts it down
                         self.held = !self.held;
                         out.push(Sound(if self.held { 2 } else { 1 }));
-                    } else if k.ok && !self.paused || k.name {
-                        // Start (a pad's Start, N), or ✕ on a seat with nothing to pick up before a match
+                    } else if k.name {
+                        // Start (a pad's Start, N); ✕ only selects
                         self.assign_leave(true, host, &mut out);
                     } else if self.held && (k.left || k.right) {
                         // the held controller trades places with the next seat that way (1P is never left empty)
@@ -4254,7 +4268,7 @@ mod tests {
         assert_eq!((&m.seats[..2], m.lead_pending()), (&[Some(Dev::Keys), None][..], Some(None)));
         m.step(pa, press(|p| &mut p.right));
         assert_eq!(m.seats[0], Some(Dev::Keys));
-        m.step(pa, press(|p| &mut p.ok));
+        m.step(pa, press(|p| &mut p.name)); // Start (✕ only selects)
         assert_eq!((m.screen, m.lead()), (Screen::Chars, Some(Dev::Keys)));
         assert!(!m.droppable(0)); // the select's driver stays
     }
