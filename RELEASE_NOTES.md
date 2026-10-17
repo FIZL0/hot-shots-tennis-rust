@@ -1,17 +1,1 @@
 <!-- What's new since the last release, for players, in plain English: one "- " line per change. tools/release.sh puts this in the release and empties it. -->
-- New lobby: local and online play now share one player select. The court, umpire and match settings sit under the roster, and players join, leave and ready up on the same screen.
-- Online, a second pad on the same machine can join the lobby's open seats, and each player's card shows what its buttons do (Leave, Remove, Kick).
-- Player 1 can leave their seat; the others keep theirs and the next one to join takes over as player 1.
-- The character grid moves like a grid: down skips short rows, left and right stop at the row's ends.
-- Name picker: a Caps key and a Remove hint; a player who leaves frees their name, and names show on the pre-serve panel and bigger on the score.
-- The keyboard's Esc backs out of the player select even when it isn't playing (handy when a controller is unplugged).
-- In the court and umpire pickers the mouse wheel scrolls along the row, and hovering a row picks it.
-- Computer players now dive for balls just out of reach.
-- Mod characters no longer leave stray footprints or dust after a point.
-- Phones and laptops check for updates when you come back to the game; iPhone and Android show how to install them.
-- Mods screen: the cursor starts on the first mod, and up goes to the mod-type tabs.
-- Mod store pictures no longer flicker, and ones you've seen load instantly.
-- Roster pictures no longer show zoomed in while loading.
-- Online lobbies: whoever presses a button first joins as player 1, and you can copy the lobby link while connecting.
-- Lobby cards: no more X button (no accidental kicks), and the cursor stays put after picking a computer's character.
-- Player select shows which button renames you.
