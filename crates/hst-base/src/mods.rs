@@ -1610,6 +1610,36 @@ mod tests {
         }
     }
 
+    /// B561: the same over Fore!, Open Tee 2 and Get a Grip (~10 s, skipped without them; `--nocapture` prints the
+    /// table): every donor face finds a target or stand-in but the faces with nothing to show it (`left`).
+    #[test]
+    fn golf_faces_all() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods");
+        let mut ids: Vec<_> = std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| ["fore_", "opentee2_", "getagrip_"].iter().any(|p| n.starts_with(p))).collect();
+        ids.sort();
+        let eyes = "\"anger_eye\", \"doki_eye\", \"joy_eye\", \"sorrow_eye\"";
+        let all = "\"anger_eye\", \"anger_mouth\", \"blink_eye\", \"doki_eye\", \"doki_mouth\", \"joy_eye\", \"joy_mouth\", \"sorrow_eye\", \"sorrow_mouth\"";
+        let left = |id: &str| match id {
+            // no face targets / a mask
+            "fore_pc11_z" | "getagrip_pc14_helghast" => all.to_string(),
+            // eyes behind opaque glasses
+            "fore_pc17_tbone" => eyes.to_string(),
+            "fore_pc19_louise" => "\"anger_eye\", \"blink_eye\", \"doki_eye\", \"joy_eye\", \"sorrow_eye\", \"wink_eye\"".into(),
+            // nothing glaring or sad among their eyes
+            "fore_pc15_kamala" => "\"anger_eye\"".into(),
+            "fore_pc23_jak" => "\"sorrow_eye\"".into(),
+            // no surprised face (every open mouth frowns)
+            "opentee2_pc05_cj" | "opentee2_pc15_montcalm" | "opentee2_pc17_mifune" | "opentee2_pc18_lee" => "\"doki_mouth\"".into(),
+            _ => String::new(),
+        };
+        for id in ids {
+            let r = oob_faces_follow_the_donor(&mut iso, &id).unwrap();
+            eprintln!("{r}");
+            assert!(r.ends_with(&format!("no target for {{{}}}", left(&id))), "{r}");
+        }
+    }
+
     /// A motions file keying a joint only some costumes have still loads the others (B99: Phoebe's costumes 4–7 lack
     /// `Body`, which her motions key).
     #[test]
