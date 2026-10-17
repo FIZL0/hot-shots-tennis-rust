@@ -1021,6 +1021,16 @@ impl Menu {
         self.swap_at(self.sel.min(self.players() - 1), right)
     }
 
+    /// The seat the keyboard's ✕ takes on the assignment when it isn't the driver: the focused one (the mouse's hover
+    /// moves it) if it's free, or 1P's when a pad has it (the keyboard and mouse may always take 1P over).
+    fn keys_target(&self, seated: Option<usize>) -> Option<usize> {
+        let q = self.sel.min(self.players() - 1);
+        let mine = !(self.online() && q >= self.local_max());
+        let free = self.open(q) && mine;
+        let pad_1p = q == self.first_seat() && matches!(self.seats[q], Some(Dev::Pad(_))) && self.net_pause.is_none_or(|r| !r[q]);
+        (seated != Some(q) && (free || pad_1p)).then_some(q)
+    }
+
     /// Whether 1P's ✕ picks up seat `p`'s controller: a device on it that can move at least one way.
     fn pickable(&self, p: usize) -> bool {
         matches!(self.seats[p], Some(Dev::Keys | Dev::Pad(_))) && (self.swap_at(p, false).is_some() || self.swap_at(p, true).is_some())
@@ -1330,6 +1340,10 @@ impl Menu {
                             self.keep = None;
                             out.push(Sound(1));
                         }
+                    } else if k.ok && seated.is_none() && self.open(p) && !(self.online() && p >= self.local_max()) {
+                        // a driver that gave up its seat takes the focused free one back
+                        self.seats[p] = Some(dev);
+                        out.push(Sound(2));
                     } else if k.ok && (self.held || self.pickable(p)) {
                         // ✕ picks up the focused seat's controller, or puts it down
                         self.held = !self.held;
@@ -1378,6 +1392,19 @@ impl Menu {
                     } else if k.back {
                         self.assign_leave(false, host, &mut out);
                     }
+                } else if k.ok && dev == Dev::Keys && let Some(q) = self.keys_target(seated) {
+                    // the keyboard's ✕ takes the seat the pointer / 1P's focus is on: a free one, or 1P's from a pad
+                    // (which goes to the keyboard's old seat, else the first free one, else off)
+                    let bumped = self.seats[q].take();
+                    if let Some(s) = seated {
+                        self.seats[s] = bumped;
+                    } else if let Some(f) = (0..n).find(|&f| self.open(f) && f != q && !(self.online() && f >= self.local_max())) {
+                        self.seats[f] = bumped;
+                    }
+                    self.seats[q] = Some(dev);
+                    self.assign_lead = None;
+                    self.held = false;
+                    out.push(Sound(2));
                 } else if k.ok && seated.is_none() {
                     let n = if self.online() { self.local_max() } else { n };
                     if let Some(p) = (0..n).find(|&p| self.seats[p].is_none() && !self.bots[p]) {
@@ -4145,6 +4172,40 @@ mod tests {
         assert_eq!((m.screen, m.seats), (Screen::Main, [Some(Dev::Keys), None, None, None]));
     }
 
+    /// The keyboard (and the mouse, its pointer) takes 1P over from a pad, and the free seat 1P's focus or the mouse
+    /// is on, not only the first free one; a driver that gave up its seat takes a free one back.
+    #[test]
+    fn the_keyboard_takes_1p_or_the_focused_free_seat() {
+        let [pa, pb] = [5, 6].map(|n| Dev::Pad(Entity::from_raw_u32(n).unwrap()));
+        let ok = press(|p| &mut p.ok);
+        let mut m = Menu { screen: Screen::Assign, doubles: true, seats: [Some(pa), Some(pb), None, None], ..default() };
+        m.step(Dev::Keys, ok); // focus on 1P: the keyboard takes it, the pad goes to the first free seat
+        assert_eq!(m.seats, [Some(Dev::Keys), Some(pb), Some(pa), None]);
+        assert_eq!(m.lead(), Some(Dev::Keys));
+        // pb taken off 2P
+        m.sel = 1;
+        m.step(Dev::Keys, press(|p| &mut p.page));
+        assert_eq!(m.seats, [Some(Dev::Keys), None, Some(pa), None]);
+        // a pad drives again: the mouse hovers 4P and clicks, the keyboard sits there (not on the first free, 2P)
+        let mut m = Menu { screen: Screen::Assign, doubles: true, seats: [Some(pa), None, Some(pb), None], ..default() };
+        m.point(pa, pointer::Act::Row(3, Press::default()), true);
+        assert_eq!(m.seats, [Some(pa), None, Some(pb), Some(Dev::Keys)]);
+        // 1P's focus on 2P, the keyboard's Enter moves it there
+        m.sel = 1;
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.seats, [Some(pa), Some(Dev::Keys), Some(pb), None]);
+        // the driver moved itself off and was taken off: its ✕ on a free seat sits it back down
+        let mut m = Menu { screen: Screen::Assign, doubles: true, seats: [Some(Dev::Keys), Some(pa), None, None], ..default() };
+        m.step(Dev::Keys, ok); // pick up
+        m.step(Dev::Keys, press(|p| &mut p.right)); // carry to 2P (pa up to 1P), the keyboard still drives
+        m.step(Dev::Keys, ok); // put down
+        m.step(Dev::Keys, press(|p| &mut p.page)); // take itself off 2P
+        assert_eq!((m.seats, m.lead()), ([Some(pa), None, None, None], Some(Dev::Keys)));
+        m.sel = 2;
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.seats, [Some(pa), None, Some(Dev::Keys), None]);
+    }
+
     #[test]
     fn dropping_1p_moves_the_next_device_up() {
         let pa = Dev::Pad(Entity::from_raw_u32(5).unwrap());
@@ -4153,7 +4214,9 @@ mod tests {
         m.step(pa, press(|p| &mut p.ok));
         assert!(m.point(Dev::Keys, pointer::Act::Drop(0), true).contains(&Effect::Sound(1)));
         assert_eq!(m.seats, [Some(pa), None, None, None]);
-        m.step(Dev::Keys, press(|p| &mut p.ok)); // the keyboard rejoins as 2P
+        m.sel = 1;
+        m.step(Dev::Keys, press(|p| &mut p.ok)); // the keyboard rejoins as 2P (1P's focus on it)
+        m.sel = 0;
         assert_eq!(m.seats[..2], [Some(pa), Some(Dev::Keys)]);
         // 1P (now the pad) focuses 2P and swaps it back up; B437: the pad drives on, its move pending, until it leaves
         m.step(pa, press(|p| &mut p.right));

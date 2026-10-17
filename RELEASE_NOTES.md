@@ -46,3 +46,4 @@
 - The match results screen shows only the usual button legend along the bottom, no more PlayStation-style ✕ Continue / Score Screen prompts above it.
 - Mod characters now cheer (or groan) in their own voice at the end-of-match trophy ceremony instead of staying silent.
 - Holding an emote key (or a pad button bound to one) plays the emote once instead of repeating it; press again for another.
+- Controllers screen: the selected seat has a pointing hand and a clear ring, the cards are smaller, the keyboard can take over player 1 from a controller or join any empty seat (Enter or a click on it), and the Start button in the corner is gone (Start is in the key bar).

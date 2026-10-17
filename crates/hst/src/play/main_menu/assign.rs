@@ -3,7 +3,9 @@
 //! name, hand and costume, the play style and stats), with what drives it. Characters can't be changed here; the
 //! devices move between the seats' characters. Local, 1P focuses a card (the arrows, a tap), picks up its device (✕, a
 //! tap), carries it to the next seats (←→, the card's arrows; it swaps with theirs) and puts it down (✕), takes it off (□ / Tab, the ✕ on the band; 1P's own too) or adds a computer player;
-//! the other devices join a free seat with ✕ and leave with ○. Online (the pause over an online match,
+//! the other devices join a free seat with ✕ and leave with ○; the keyboard (the mouse its pointer) takes the free seat the
+//! focus or the mouse is on, or 1P's from a pad. The focus: a white ring and the menus' pointing hand; no Start button
+//! (the key legend has it). The cards are at most the lobby's compact card's size, centred. Online (the pause over an online match,
 //! [`Menu::net_pause`]) only this machine's own seats can take or swap its pads: the other machines' and the
 //! computer's cards are fixed, and nobody is taken off. Over a match, ○ after a change asks Keep / Undo.
 //!
@@ -18,8 +20,9 @@ use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NA
 
 /// The top bar's height, the margins round the cards and the gap between them, a card's padding (mockup px).
 const TOP_BAR: f32 = 60.0;
-const MARGIN: f32 = 24.0;
-const GAP: f32 = 12.0;
+const MARGIN: f32 = 64.0;
+/// Room between the cards for the pointing hand on the focused one's left.
+const GAP: f32 = 64.0;
 const PAD: f32 = 10.0;
 const BAND: f32 = 50.0;
 const FOOT: f32 = 30.0;
@@ -28,6 +31,9 @@ const OVER_BAR: f32 = 34.0;
 /// The face well's tallest (mockup px): a portrait, not the card; and the name lines under it (screen units).
 const FACE: f32 = 96.0;
 const FIGURE_LINES: f32 = 46.0 * PY;
+/// A card's largest (mockup px): the lobby's compact card's width, as tall as the band, face, stats and foot need.
+const CARD_W: f32 = 300.0;
+const CARD_H: f32 = 460.0;
 
 /// The cards' boxes for `n` seats on `view` (left, top, right, bottom): one row, or two rows of two when four share
 /// a view taller than wide.
@@ -38,9 +44,12 @@ pub(super) fn cards(view: [f32; 4], n: usize) -> Vec<[f32; 4]> {
     // on screen a unit across is 14/15 of one down
     let rows = if n == 4 && w * 14.0 / 15.0 < h { 2 } else { 1 };
     let per = n.div_ceil(rows).max(1);
-    let cw = (w - GAP * PX * (per - 1) as f32) / per as f32;
-    let ch = (h - GAP * PY * (rows - 1) as f32) / rows as f32;
-    (0..n).map(|p| [l + MARGIN * PX + (cw + GAP * PX) * (p % per) as f32, top + (ch + GAP * PY) * (p / per) as f32, cw, ch]).collect()
+    // the lobby's compact card's size at most (`roster::COMPACT_W`), the group centred in what's left
+    let cw = ((w - GAP * PX * (per - 1) as f32) / per as f32).min(CARD_W * PX);
+    let ch = ((h - GAP * PY * (rows - 1) as f32) / rows as f32).min(CARD_H * PY);
+    let x0 = l + MARGIN * PX + (w - cw * per as f32 - GAP * PX * (per - 1) as f32) / 2.0;
+    let y0 = top + (h - ch * rows as f32 - GAP * PY * (rows - 1) as f32) / 2.0;
+    (0..n).map(|p| [x0 + (cw + GAP * PX) * (p % per) as f32, y0 + (ch + GAP * PY) * (p / per) as f32, cw, ch]).collect()
 }
 
 /// What a seat is, for its card: someone on this machine (a device), nobody yet, the computer, another machine's player.
@@ -82,15 +91,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads:
     let title = "Controllers";
     d.outlined(|d| d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE));
     d.hit([l, t, d.width(title, size) + 40.0, TOP_BAR * PY], pointer::press(|k| k.back = true));
-    // Done (over a match) / Start on the right: 1P's ✕, for the pointer
-    let ok = if m.paused { "Done" } else { "Start" };
-    let (bs, bh) = (16.0 * PY, 30.0 * PY);
-    let bw = d.width(ok, bs) + 36.0 * PX;
-    let (bx, by) = (r - MARGIN * PX - bw, t + 16.0 * PY);
-    rounded(d, [bx, by, bw, bh], 15.0, WHITE, 128.0);
-    rounded(d, [bx + 2.0 * PX, by + 2.0 * PY, bw - 4.0 * PX, bh - 4.0 * PY], 13.0, hex(0x2f7d4f), 128.0);
-    d.centred(ok, bx + bw / 2.0, by + 7.0 * PY, bs, WHITE);
-    d.hit([bx, by, bw, bh], pointer::press(|k| k.name = true));
+    // no Start / Done button: the key legend carries Start
+    let (bx, by) = (r - MARGIN * PX, t + 16.0 * PY);
     let what = if m.net_pause.is_some() {
         "Only your own controllers can move".to_string()
     } else {
@@ -172,12 +174,6 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
     let kind = m.assign_kind(p);
     let [x, y, w, h] = card;
     let human = matches!(kind, Kind::Device(_) | Kind::Online);
-    // 1P's focus: a gold ring round the card
-    if on {
-        let g = 4.0;
-        // a held controller's card rings white
-        rounded(d, [x - g * PX, y - g * PY, w + 2.0 * g * PX, h + 2.0 * g * PY], 18.0, if m.held { WHITE } else { GOLD }, 128.0);
-    }
     if human {
         ringed(d, card, 14.0, look::RIM, hex(look::INK), s.bg);
     } else {
@@ -185,7 +181,7 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         dashed(d, card, 14.0, look::RIM, hex(look::INK), s.bg);
     }
     // a tap focuses it and picks up (or puts down) its controller
-    let pick = if m.held { on } else { m.pickable(p) };
+    let pick = if m.held { on } else { m.pickable(p) || m.open(p) && m.lead().is_some_and(|l| !m.seats.contains(&Some(l))) };
     d.hit(card, pointer::Act::Row(p, if pick { pointer::OK } else { Press::default() }));
     let pl = m.players[p];
     let picked = !pl.random || pl.ready;
@@ -223,6 +219,12 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         style_stats(d, text, [ix, top + fh + 8.0 * PY, iw, body[3] - fh - 8.0 * PY], picked, who);
     }
     foot(d, m, &s, [ix, foot_y, iw, FOOT * PY], p, kind, on, yours);
+    // 1P's focus: the lobby's ring round the card (gold while its controller is held) and the menus' pointing hand
+    if on {
+        let rim = if m.held { GOLD } else { WHITE };
+        super::frame::ringed(d, [x - 4.0 * PX, y - 4.0 * PY, w + 8.0 * PX, h + 8.0 * PY], 18.0 * PX, 3.0 * PX, rim, None);
+        d.q(super::Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [x - 52.0, y + (BAND * PY - 32.0) / 2.0, 64.0, 32.0], WHITE, 128.0);
+    }
 }
 
 /// The face well (the seat's number faint behind the character's face), the character's name, hand and costume under it.
