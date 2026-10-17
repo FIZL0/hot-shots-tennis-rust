@@ -380,6 +380,7 @@ fn materials(doc: &gltf::Document, blob: &[u8], s: &mut Store, role: Role) -> Re
             None => (bytes, ImageType::MimeType(mime_type)),
         };
         let mut img = Image::from_buffer(bytes, ty, CompressedImageFormats::NONE, true, sampler(), RenderAssetUsages::RENDER_WORLD).map_err(|e| format!("image {}: {e}", im.index()))?;
+        crate::textures::fit(&mut img);
         // the GS works on the stored values
         img.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
         tex.push(s.images.add(img));

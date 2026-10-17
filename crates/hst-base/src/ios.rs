@@ -16,6 +16,8 @@ pub fn log_to_documents(docs: &std::path::Path) {
     // the frame-rate log (`main.rs` log_fps, log_assets; `graphics.rs` log_draws) every 5 s: the phone's only profiler
     crate::FPS_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
     eprintln!("Hot Shots Tennis {} (build {})", env!("CARGO_PKG_VERSION"), option_env!("HST_BUILD").unwrap_or("?"));
+    eprintln!("start: {}", memory());
+    watch_memory_warnings();
     // a close with no log line and no crash report says nothing: these say which kind of end it was
     unsafe {
         libc::atexit(on_exit);
@@ -83,20 +85,76 @@ extern "C" fn on_exception(e: *mut std::ffi::c_void) {
     eprintln!("Objective-C exception {}: {}", text(e, c"name"), text(e, c"reason"));
 }
 
-/// The first frame, a heartbeat every 5 s, quits asked for and iOS lifecycle changes, in the log.
-pub fn heartbeat(time: Res<Time<Real>>, mut frames: Local<u64>, mut last: Local<f32>, mut exits: MessageReader<AppExit>, mut life: MessageReader<bevy::window::AppLifecycle>) {
+/// The first frame, a heartbeat every 5 s, quits asked for and iOS lifecycle changes, in the log; with the memory
+/// iOS counts against the app (B538), and each new high of it 64 MB over the last.
+pub fn heartbeat(time: Res<Time<Real>>, mut frames: Local<u64>, mut last: Local<f32>, mut high: Local<u64>, mut exits: MessageReader<AppExit>, mut life: MessageReader<bevy::window::AppLifecycle>) {
     *frames += 1;
     let t = time.elapsed_secs();
+    let mem = memory();
     if *frames == 1 || t - *last >= 5.0 {
         *last = t;
-        eprintln!("frame {} at {t:.1}s", *frames);
+        eprintln!("frame {} at {t:.1}s; {}", *frames, mem);
+    }
+    if mem.now > *high + (64 << 20) {
+        *high = mem.now;
+        eprintln!("memory high at {t:.1}s: {mem}");
     }
     for e in exits.read() {
         eprintln!("AppExit {e:?} at frame {}", *frames);
     }
     for l in life.read() {
-        eprintln!("lifecycle {l:?} at {t:.1}s");
+        eprintln!("lifecycle {l:?} at {t:.1}s; {mem}");
     }
+}
+
+/// B538: the app's memory as iOS counts it for its limit (the phys footprint: heap, GPU buffers and textures, all of
+/// it), its peak so far, and what's left before iOS closes the app.
+pub struct Memory {
+    pub now: u64,
+    pub peak: u64,
+    pub left: u64,
+}
+
+impl std::fmt::Display for Memory {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mb = |b: u64| b >> 20;
+        write!(f, "memory {} MB (peak {} MB), {} MB left before iOS closes the app", mb(self.now), mb(self.peak), mb(self.left))
+    }
+}
+
+unsafe extern "C" {
+    static mach_task_self_: u32;
+    fn task_info(task: u32, flavor: i32, info: *mut i32, count: *mut u32) -> i32;
+    fn os_proc_available_memory() -> usize;
+}
+
+/// [`Memory`] now: `task_info(TASK_VM_INFO)`'s phys_footprint and (rev 3+) its peak, `os_proc_available_memory`.
+pub fn memory() -> Memory {
+    static PEAK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // task_vm_info_data_t as u64s: phys_footprint is the 19th (byte 144), ledger_phys_footprint_peak the 22nd (168)
+    let mut info = [0u64; 48];
+    let mut count = (std::mem::size_of_val(&info) / 4) as u32;
+    const TASK_VM_INFO: i32 = 22;
+    // SAFETY: `info` holds `count` natural_t's; the kernel writes at most that many and sets `count`
+    let ok = unsafe { task_info(mach_task_self_, TASK_VM_INFO, info.as_mut_ptr().cast(), &mut count) } == 0;
+    let now = if ok { info[18] } else { 0 };
+    let ledger = if ok && count >= 44 { info[21] } else { 0 };
+    let peak = PEAK.fetch_max(now.max(ledger), std::sync::atomic::Ordering::Relaxed).max(now).max(ledger);
+    // SAFETY: a plain query (iOS 13+)
+    Memory { now, peak, left: unsafe { os_proc_available_memory() } as u64 }
+}
+
+/// B538: iOS's memory warnings, logged with the memory then (the last sign before it closes the app for memory).
+fn watch_memory_warnings() {
+    use objc2::runtime::AnyObject;
+    objc2::rc::autoreleasepool(|_| unsafe {
+        let name = objc2_foundation::NSString::from_str("UIApplicationDidReceiveMemoryWarningNotification");
+        let block = block2::RcBlock::new(|_: std::ptr::NonNull<AnyObject>| eprintln!("iOS memory warning: {}", memory()));
+        let center: *mut AnyObject = objc2::msg_send![objc2::class!(NSNotificationCenter), defaultCenter];
+        let observer: *mut AnyObject = objc2::msg_send![center, addObserverForName: &*name, object: std::ptr::null_mut::<AnyObject>(), queue: std::ptr::null_mut::<AnyObject>(), usingBlock: &*block];
+        // kept for the process: the center holds the observer, the observer the block
+        let _: *mut AnyObject = objc2::msg_send![observer, retain];
+    });
 }
 
 /// `LogPlugin::custom_layer`: the engine's log as text on stderr (bevy only sends it to os_log on iOS).

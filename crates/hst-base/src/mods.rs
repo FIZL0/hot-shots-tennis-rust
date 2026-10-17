@@ -705,7 +705,8 @@ fn materials_of(
             Some(b) => (&b[..], ImageType::Extension("png")),
             None => (bytes, ImageType::MimeType(mime_type)),
         };
-        let img = Image::from_buffer(bytes, ty, CompressedImageFormats::NONE, true, sampler(), RenderAssetUsages::RENDER_WORLD).map_err(|e| format!("image {}: {e}", im.index()))?;
+        let mut img = Image::from_buffer(bytes, ty, CompressedImageFormats::NONE, true, sampler(), RenderAssetUsages::RENDER_WORLD).map_err(|e| format!("image {}: {e}", im.index()))?;
+        crate::textures::fit(&mut img);
         let mut raw = img.clone();
         raw.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
         tex.push((images.add(img), images.add(raw)));
@@ -772,7 +773,8 @@ fn texture_face(
         let bytes = crate::modfs::read(&dir.join(p)).map_err(|e| err(format!("`{p}`: {e}")))?;
         let ext = Path::new(p).extension().and_then(|e| e.to_str()).unwrap_or("png");
         let sampler = ImageSampler::Descriptor(ImageSamplerDescriptor { address_mode_u: ImageAddressMode::Repeat, address_mode_v: ImageAddressMode::Repeat, ..ImageSamplerDescriptor::linear() });
-        let img = Image::from_buffer(&bytes, ImageType::Extension(ext), CompressedImageFormats::NONE, true, sampler, RenderAssetUsages::RENDER_WORLD).map_err(|e| err(format!("`{p}`: {e}")))?;
+        let mut img = Image::from_buffer(&bytes, ImageType::Extension(ext), CompressedImageFormats::NONE, true, sampler, RenderAssetUsages::RENDER_WORLD).map_err(|e| err(format!("`{p}`: {e}")))?;
+        crate::textures::fit(&mut img);
         let mut raw = img.clone();
         raw.texture_descriptor.format = bevy::render::render_resource::TextureFormat::Rgba8Unorm;
         let t = (images.add(img), images.add(raw));

@@ -3,3 +3,4 @@
 - Online lobbies show how far along a download of another player's mod is, instead of a message that never changes.
 - The iPhone app can host, find and join online lobbies (going online no longer fails when the phone blocks local-network discovery).
 - The online lobby is now one screen: pick your player right in the lobby, with the court, rules, Leave and Start underneath.
+- iPhone and Android: high-resolution texture packs and mod textures are scaled down to fit the phone's memory, so the game should no longer close itself and reload mid-match.
