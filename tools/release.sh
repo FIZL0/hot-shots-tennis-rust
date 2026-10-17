@@ -6,6 +6,7 @@
 #   opentennis-windows-x86_64.zip  opentennis-linux-x86_64.tar.gz  opentennis-ios.ipa  opentennis-android.apk   what players download
 #   opentennis-windows-x86_64.exe  opentennis-linux-x86_64             the bare binaries the updater fetches (plan/B374.md)
 #   SHA256SUMS  SHA256SUMS.sig
+#   web.tar.gz                                                         the website, which pages.yml deploys as built here
 # VERSION with a suffix (1.1.0-rc.1) is a pre-release, never Latest. notes.md is the "New in …" list (Markdown
 # bullets); without it, the commit subjects since the last v* tag (required for the first release). A draft unless
 # `publish` is given: check it on GitHub and publish there. Publishing puts the release on opentennis.dev when the repo
@@ -64,6 +65,10 @@ cp dist/linux/opentennis "$out/opentennis-linux-x86_64"
 cp dist/windows/opentennis.exe "$out/opentennis-windows-x86_64.exe"
 cp dist/ios/opentennis-ios.ipa "$out/opentennis-ios.ipa"
 cp dist/opentennis.apk "$out/opentennis-android.apk"
+# the website too: pages.yml deploys this release's web.tar.gz in ~1 min instead of building it for ~20 (opentennis.dev,
+# no HST_SITE: its links are the main site's)
+env -u HST_SITE HST_COMMIT=$HST_COMMIT tools/web.sh
+tar -czf "$out/web.tar.gz" -C web .
 (cd "$out" && sha256sum opentennis-* > SHA256SUMS)
 minisign -S -s "$key" -m "$out/SHA256SUMS" -x "$out/SHA256SUMS.sig" -t "OpenTennis $tag"
 # the game checks against the key built into it (update.rs): refuse a release it would turn down
@@ -107,5 +112,5 @@ body=$out/notes.md
 } > "$body"
 git push -q origin HEAD
 gh release create "$tag" --target "$(git rev-parse HEAD)" --title "OpenTennis $version" \
-    --notes-file "$body" $pre $publish "$out"/opentennis-* "$out"/SHA256SUMS "$out"/SHA256SUMS.sig
+    --notes-file "$body" $pre $publish "$out"/opentennis-* "$out"/web.tar.gz "$out"/SHA256SUMS "$out"/SHA256SUMS.sig
 echo "$tag: $([ "$publish" = --draft ] && echo "draft, publish it on GitHub" || echo published)"

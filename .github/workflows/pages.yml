@@ -8,6 +8,7 @@
 #   release        only published releases (tools/release.sh): `gh variable set SITE_FROM --body release`
 # tools/ship-local.sh builds the website on the dev machine and runs this with `prebuilt`: that run only deploys the
 # uploaded web/ (the build jobs are skipped) to opentennis.dev, or to the beta site when SITE_FROM is release.
+# A release made by tools/release.sh carries its own web.tar.gz, which its run deploys without building (~1 min).
 name: pages
 on:
   push:
@@ -37,28 +38,35 @@ jobs:
     if: ${{ github.event_name != 'release' || vars.SITE_FROM == 'release' && github.event.release.tag_name != 'web-prebuilt' }}
     runs-on: ubuntu-latest
     steps:
-      - if: ${{ inputs.prebuilt }}
+      # a site built elsewhere: ship-local.sh's web-prebuilt, or the web.tar.gz tools/release.sh attaches to a release
+      # (an older release without one is built here as before)
+      - id: pre
+        if: ${{ inputs.prebuilt || github.event_name == 'release' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: mkdir web && gh release download web-prebuilt -R "${{ github.repository }}" -p web.tar.gz -O - | tar xz -C web
-      - if: ${{ !inputs.prebuilt }}
+          TAG: ${{ inputs.prebuilt && 'web-prebuilt' || github.event.release.tag_name }}
+        run: |
+          mkdir web
+          if gh release download "$TAG" -R "${{ github.repository }}" -p web.tar.gz -O - | tar xz -C web; then echo got=1 >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.prebuilt }}" = true ]; then exit 1; else rm -rf web; fi
+      - if: ${{ !steps.pre.outputs.got }}
         uses: actions/checkout@v4
-      - if: ${{ !inputs.prebuilt }}
+      - if: ${{ !steps.pre.outputs.got }}
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - if: ${{ !inputs.prebuilt }}
+      - if: ${{ !steps.pre.outputs.got }}
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target-wasm"  # tools/web.sh builds there, not in target/
-      - if: ${{ !inputs.prebuilt }}
+      - if: ${{ !steps.pre.outputs.got }}
         name: Tools
         run: |
           cargo install wasm-bindgen-cli --locked --version "$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')"
           # Ubuntu's binaryen is too old for rustc's wasm features
           curl -sL https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz | tar xz
           echo "$PWD/binaryen-version_123/bin" >> "$GITHUB_PATH"
-      - if: ${{ !inputs.prebuilt }}
+      - if: ${{ !steps.pre.outputs.got }}
         # M22: the online build id's commit, the same as the Linux and Windows jobs' (crates/hst/build.rs)
         run: HST_COMMIT=${GITHUB_SHA::7} tools/web.sh
         env:
