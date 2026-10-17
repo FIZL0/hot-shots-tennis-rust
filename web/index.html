@@ -187,6 +187,21 @@ if (!('game' in document.documentElement.dataset))
   </div></header>
 
   <section id="play"><div class="wrap">
+    <!-- M123: iPhone/iPad Safari in a tab (site.js a2hs): how to add the game to the home screen, where it runs full
+         screen with no address bar -->
+    <div class="panel a2hs" id="a2hs" hidden>
+      <span class="head sky">Play full screen on iPhone</span>
+      <p>Safari keeps its address bar over the game. Add OpenTennis to your home screen and open it from there: it runs
+        full screen, like an app. The home-screen app keeps its own storage, so pick your ISO once more in it.</p>
+      <ol class="steps">
+        <li><div><b>Tap Share <svg class="ios" viewBox="0 0 24 24" aria-label="(the square with an arrow)"><path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M8 10H5.5v10.5h13V10H16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></b>
+          <span id="a2hs-where">At the bottom of the screen. If you don't see it, tap ⋯ first.</span></div></li>
+        <li><div><b>Tap Add to Home Screen <svg class="ios" viewBox="0 0 24 24" aria-label="(the square with a plus)"><rect x="3.5" y="3.5" width="17" height="17" rx="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 8v8M8 12h8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></b>
+          Scroll down the list to find it (tap View More if it isn't there), leave Open as Web App on if it's there, then tap Add.</div></li>
+        <li><div><b>Open OpenTennis from your home screen</b>Its icon starts the game full screen.</div></li>
+      </ol>
+      <button class="pill small" id="a2hs-ok">Got it</button>
+    </div>
     <div class="pick" data-new>
       <div class="panel">
         <span class="head gold">Play in your browser</span>

@@ -56,6 +56,7 @@ export async function landing(dir, hasPack) {
   // B457: storage refused (a private window): said once, beside the ISO
   if (dir.memory && !document.getElementById('nostore')) $('#status').before(el('p', { id: 'nostore', className: 'note', textContent: MEMORY_NOTE }));
   const parts = { dir, have, hasPack };
+  homeScreen();
   username();
   account();
   prefs();
@@ -83,6 +84,28 @@ export async function landing(dir, hasPack) {
     for (const a of root.querySelectorAll('.band [data-have]')) a.onclick = e => { e.preventDefault(); go(); };
     importer(go, dir);
   });
+}
+
+// ---------------------------------------------------------------- Add to Home Screen
+
+// M123: iPhone / iPad Safari in a tab has no Fullscreen API for pages, so the game shares the screen with its address
+// bar; a home-screen web app runs full screen. The steps show there only: not in the home-screen app itself
+// (`navigator.standalone`), not in other iOS browsers or in-app views (their share sheets differ), not elsewhere, and
+// not again once dismissed. iPadOS asks for desktop pages, so an iPad reads as a Mac with a touch screen.
+function homeScreen() {
+  const box = $('#a2hs');
+  const ua = navigator.userAgent;
+  const ipad = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const ios = ipad || /iPhone|iPod/.test(ua);
+  const safari = /Safari\//.test(ua) && /Version\//.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|GSA\/|DuckDuckGo|YaBrowser|Brave/.test(ua);
+  const app = navigator.standalone === true || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+  box.hidden = !ios || !safari || app || get('hst-a2hs') === '0';
+  if (box.hidden) return;
+  if (ipad) {
+    box.querySelector('.head').textContent = 'Play full screen on iPad';
+    $('#a2hs-where').textContent = 'At the top right, beside the address bar. If you don\'t see it, tap ⋯ first.';
+  }
+  $('#a2hs-ok').onclick = () => { put('hst-a2hs', '0'); box.hidden = true; };
 }
 
 // ---------------------------------------------------------------- the ISO
