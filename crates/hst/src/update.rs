@@ -105,7 +105,7 @@ pub fn latest() -> Option<String> {
             (None, Some(sha)) => Err(sha),
             (None, None) => return,
         };
-        std::thread::spawn(move || {
+        let t = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             let api = std::env::var("HST_UPDATE_API").unwrap_or_else(|_| "https://api.github.com/repos/FIZL0/opentennis/releases/latest".into());
             loop {
@@ -126,9 +126,12 @@ pub fn latest() -> Option<String> {
                         Err(e) => bevy::log::info!("update check: {e}"),
                     },
                 }
-                std::thread::sleep(std::time::Duration::from_secs(30 * 60));
+                // B567: [`recheck`] wakes it early (a phone app comes back from the background: iOS resumes it for days
+                // rather than starting it again, and a suspended app's half hour can be hours)
+                std::thread::park_timeout(std::time::Duration::from_secs(30 * 60));
             }
         });
+        let _ = CHECKER.set(t.thread().clone());
     });
     let s = STATE.lock().unwrap();
     // an install under way stays on show
@@ -136,6 +139,19 @@ pub fn latest() -> Option<String> {
         return None;
     }
     s.found.as_ref().map(|f| f.tag.clone()).or_else(|| s.commit.clone())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static CHECKER: std::sync::OnceLock<std::thread::Thread> = std::sync::OnceLock::new();
+
+/// B567: the app came back to the foreground: check again now rather than at the half hour.
+pub fn recheck(mut life: bevy::prelude::MessageReader<bevy::window::AppLifecycle>) {
+    if life.read().any(|l| *l == bevy::window::AppLifecycle::WillResume) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(t) = CHECKER.get() {
+            t.unpark();
+        }
+    }
 }
 
 /// The commit the "Beta" release was built from (GitHub's API asks for a User-Agent).

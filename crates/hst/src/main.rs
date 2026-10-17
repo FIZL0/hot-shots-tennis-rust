@@ -417,6 +417,7 @@ fn start(argv: Vec<String>) {
     if quiet {
         seats::ignore_input(&mut app);
     }
+    app.add_systems(Last, update::recheck);
     #[cfg(target_os = "ios")]
     app.add_systems(Last, ios::heartbeat);
     #[cfg(target_os = "android")]

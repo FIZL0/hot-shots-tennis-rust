@@ -1,0 +1,13 @@
+# B567 iOS 1.0 IPA doesn't offer 1.1.0 — FINAL
+
+Checked: the release side is fine (v1.1.0 is "latest", has the IPA); the shipped v1.0.0 IPA's binary has
+`HST_VERSION=v1.0.0` and the releases/latest check; reqwest on iOS verifies through rustls-platform-verifier
+(Security.framework), and the iOS notice only needs a found tag (no asset: Download opens the release page).
+
+Cause: the check runs at launch, then `thread::sleep(30 min)`. 1.0.0 went out 00:38, 1.1.0 07:45; iOS resumes a
+suspended app instead of relaunching it, and a sleeping phone's suspended time doesn't count, so the half hour
+can be hours and an app opened before 1.1.0 never asks again.
+
+Fix: the checker parks (`park_timeout`) instead of sleeping; `update::recheck` (Last, every platform) unparks it on
+`AppLifecycle::WillResume`. Not verified on a device (no iPhone here); `hst-log.txt` in Files → OpenTennis shows
+an `update check:` line if the request itself fails.
