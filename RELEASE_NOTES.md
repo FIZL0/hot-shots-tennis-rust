@@ -26,3 +26,5 @@
 - Mod store: updating a mod that was re-uploaded within the last hour no longer fails with a size mismatch; the new version installs.
 - Online lobbies no longer slow to a crawl on phones when you've picked a large custom character.
 - Phones with very sharp screens use much less graphics memory in the menus and in matches, and the browser game warms up the match graphics while you wait in an online lobby, so online matches load faster on phones.
+- Online lobby: a player who picks Random shows as Random to everyone else, not as the character their cursor was on.
+- Online: locking in your character plays their voice line again (it was silent when you were the last on your machine to pick).

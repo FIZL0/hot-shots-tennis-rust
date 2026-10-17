@@ -93,7 +93,7 @@ impl Menu {
     }
 
     /// Seat `i` is this machine's player's.
-    pub(super) fn mine(&self, i: usize) -> bool {
+    pub(in super::super) fn mine(&self, i: usize) -> bool {
         let me = if self.net.me.is_empty() && self.net.hosting { "host" } else { self.net.me.as_str() };
         self.net.room.as_ref().is_some_and(|r| r.seats.get(i).is_some_and(|s| s.as_ref().is_some_and(|s| s.peer == me)))
     }

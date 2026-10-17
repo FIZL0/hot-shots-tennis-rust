@@ -1185,7 +1185,9 @@ fn voice(act: Act, who: Who, costume: usize, mods: &[Mod], banks: &mut HashMap<S
 fn picked(menu: Res<Menu>, mut was: Local<[bool; 4]>, (args, sound, mut voices): (Res<Args>, Option<Res<Sound>>, ResMut<Voices>)) {
     let ready = std::array::from_fn(|p| menu.players[p].ready);
     // not for the Random card: its pick stays a surprise
-    for p in (0..4).filter(|&p| menu.screen == Screen::Chars && ready[p] && !was[p] && !menu.players[p].random) {
+    // online, the last of this machine's players to lock in goes straight on to the lobby (`online_ready`) the same update
+    let picking = |p: usize| menu.screen == Screen::Chars || (menu.screen == Screen::Lobby && menu.mine(p));
+    for p in (0..4).filter(|&p| picking(p) && ready[p] && !was[p] && !menu.players[p].random) {
         let Some(s) = &sound else { break };
         if let Some((bank, play)) = pick_voice(menu.pick(p).0, voices.next_line, &menu.mods, &mut voices.banks, Path::new(&args.iso)) {
             s.stop(voices.playing[p]);
