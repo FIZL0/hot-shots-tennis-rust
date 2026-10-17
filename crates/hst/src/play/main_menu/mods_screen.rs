@@ -432,6 +432,8 @@ impl View {
         self.relist();
         if let Some(i) = was.and_then(|k| self.items().iter().position(|e| e.key() == k)) {
             *sel = self.acts() + i;
+        } else if !self.refreshing && self.page == Page::Browse && *sel == 0 && !self.tiles().is_empty() {
+            *sel = self.acts();
         }
     }
 
@@ -531,6 +533,10 @@ impl Menu {
         self.add.b.show = grid::Show::All;
         self.mods_page(Page::Browse, 0);
         self.go(Screen::Mods, out);
+        // the cursor starts on the first mod (↑: the kind tab, ↑ again: Browse); a listing still on its way puts it there
+        if !self.add.tiles().is_empty() {
+            self.sel = self.add.acts();
+        }
     }
 
     /// B425: player `p`'s rail ends in the Get more chip: 1P's only (another local player mustn't open the store by
@@ -2255,8 +2261,8 @@ mod tests {
         assert_eq!([go(&mut m, l), go(&mut m, l), go(&mut m, r), go(&mut m, d), go(&mut m, d), go(&mut m, d)], [t0, t0, t0 + 1, t0 + 2, t0 + 3, t0 + 4]);
         assert_eq!([go(&mut m, d), go(&mut m, u)], [2, t0 + 4]);
         m.sel = t0 + 1;
-        // (stacked strip: ↑ from the filter the kind tab, ↓ from it the sort)
-        assert_eq!([go(&mut m, u), go(&mut m, r), go(&mut m, u), go(&mut m, d), go(&mut m, d)], [p0 + 5, p0 + 6, p0 + 7, p0 + 5, t0 + 1]);
+        // (stacked strip: ↑ from the tiles the kind tab, → the sort, ↑ the kind tab, ↓ the sort)
+        assert_eq!([go(&mut m, u), go(&mut m, r), go(&mut m, u), go(&mut m, d), go(&mut m, d)], [p0 + 7, p0 + 5, p0 + 7, p0 + 5, t0 + 1]);
         // B471: the search box at the top bar's right: ← the last Show tab, → stays; the Show tabs' ↓ the strip;
         // Upload in the footer, ← the footer's last word
         m.sel = 0;
@@ -2337,9 +2343,9 @@ mod tests {
         m.add.list = vec![a_mod("a", "A")];
         let mut out = Vec::new();
         m.mods_open(&mut out);
-        // Browse first (the search box, words and rail, then the tiles)
+        // Browse first (the search box, words and rail, then the tiles), on the first tile
         let t0 = m.add.browse_acts();
-        assert_eq!((m.add.page, m.sel, m.add.rows()), (Page::Browse, 0, t0 + 3));
+        assert_eq!((m.add.page, m.sel, m.add.rows()), (Page::Browse, t0, t0 + 3));
         let tags: Vec<_> = m.add.entries().iter().map(|x| m.add.state(x)).collect();
         assert_eq!(tags, [Some("Installed"), Some("Update"), None]);
         // an installed tile's press offers Remove, not a download
@@ -2807,6 +2813,21 @@ mod tests {
         m.mods_step(Press { back: true, ..default() }, &mut out);
         assert_eq!(m.screen, Screen::Main);
         assert!(modstore::newer("1.10", "1.9") && !modstore::newer("1.0", "1") && !modstore::newer("", "1") && modstore::newer("2", ""));
+    }
+
+    /// The Mods screen opens on the first mod; ↑ is the open kind tab (Characters), ↑ again Browse.
+    #[test]
+    fn mods_open_on_the_first_mod() {
+        let e = |id: &str, kind: Kind| Entry { meta: Meta { id: id.into(), name: id.into(), kind, ..Default::default() }, rev: "main".into(), verified: true };
+        let mut m = Menu::default();
+        m.add.store = Some(vec![e("c1", Kind::Character), e("court", Kind::Court)]);
+        m.mods_open(&mut Vec::new());
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Tile(0));
+        m.mods_step(Press { up: true, ..default() }, &mut Vec::new());
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(0));
+        m.mods_step(Press { up: true, ..default() }, &mut Vec::new());
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Pill(0));
+        assert_eq!(m.add.pills()[0], grid::Pill::Show(grid::Show::All));
     }
 
     /// The kind tabs are cursor stops in the panel's strip (touch has no L2 / R2): ← from Sort reaches the last, ✕

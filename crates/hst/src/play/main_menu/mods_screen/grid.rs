@@ -805,10 +805,10 @@ impl Menu {
         // a narrow panel stacks the strip: the kind tabs' row over the sort and filter's, so ↑ / ↓ pass through both
         let stacked = nk > 0 && np > ns && lay_of(self).stack;
         // nothing remembered yet (a Show tab's index): ↑ from the tiles is the open kind tab, the strip's first stop
-        // (stacked: the sort, the row right over the tiles)
+        // (stacked too, over the sort's row: ↑ from the first mod is the kind, then Browse)
         let strip = match v.b.pill_at {
             i if i >= np && nk > 0 => k0 + (i - np).min(nk - 1),
-            i if np > ns && (i >= ns || stacked || nk == 0) => p0 + i.clamp(ns, np - 1),
+            i if np > ns && (i >= ns || nk == 0) => p0 + i.clamp(ns, np - 1),
             _ if nk > 0 => kind,
             _ => shown,
         };
