@@ -798,15 +798,17 @@ impl Menu {
         let shown = p0 + SHOWS.iter().position(|s| *s == v.b.show).unwrap_or(0);
         // the panel's strip: the kind tabs, then the sort and filter; `pill_at` np.. is a kind tab
         let kind = k0 + kinds.iter().position(|k| *k == v.kind).unwrap_or(0);
+        // a narrow panel stacks the strip: the kind tabs' row over the sort and filter's, so ↑ / ↓ pass through both
+        let stacked = nk > 0 && np > ns && lay_of(self).stack;
+        // nothing remembered yet (a Show tab's index): ↑ from the tiles is the open kind tab, the strip's first stop
+        // (stacked: the sort, the row right over the tiles)
         let strip = match v.b.pill_at {
             i if i >= np && nk > 0 => k0 + (i - np).min(nk - 1),
-            i if np > ns => p0 + i.clamp(ns, np - 1),
+            i if np > ns && (i >= ns || stacked || nk == 0) => p0 + i.clamp(ns, np - 1),
             _ if nk > 0 => kind,
             _ => shown,
         };
         let under = if nw > 0 { w0 } else { 1 };
-        // a narrow panel stacks the strip: the kind tabs' row over the sort and filter's, so ↑ / ↓ pass through both
-        let stacked = nk > 0 && np > ns && lay_of(self).stack;
         let to = match v.slot(self.sel) {
             Slot::Pill(i) if stacked && i < ns && k.down => kind,
             Slot::Search if stacked && k.down => kind,

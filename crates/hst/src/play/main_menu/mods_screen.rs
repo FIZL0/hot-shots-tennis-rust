@@ -3274,4 +3274,19 @@ mod kind_tabs_nav {
         }
         assert!(stacked > 0, "no aspect stacks the strip");
     }
+
+    /// One strip line (a wide panel): ↑ from the first tile, nothing remembered yet, is the open kind tab on the
+    /// strip's left (it used to jump to the sort on the right).
+    #[test]
+    fn up_from_the_tiles_is_the_kind_tab() {
+        let mut m = Menu { screen: Screen::Mods, grid: super::super::Grid::fit(16.0 / 9.0), ..Default::default() };
+        let e = |i: usize| Entry { meta: Meta { id: format!("m{i:03}"), name: format!("M{i:03}"), kind: K::Character, ..Default::default() }, rev: "main".into(), verified: true };
+        m.add.store = Some((0..8).map(e).collect());
+        m.mods_page(Page::Browse, 0);
+        m.add.relist();
+        assert!(!grid::lay_of(&m).stack);
+        m.sel = (0..m.add.rows()).find(|&s| m.add.slot(s) == grid::Slot::Tile(0)).unwrap();
+        m.mods_step(Press { up: true, ..Default::default() }, &mut Vec::new());
+        assert_eq!(m.add.slot(m.sel), grid::Slot::Kind(0));
+    }
 }
