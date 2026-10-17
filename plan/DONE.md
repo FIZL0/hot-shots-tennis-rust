@@ -809,6 +809,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M122** Online lobby: show every player a notice when someone is still downloading a mod, so they know why that player isn't ready (builds on B537's progress; crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
 - [x] **B539** iOS Safari (in the browser, not the home-screen web app): play full screen with no tab/address bar, as far as iPhone Safari allows (it has no Fullscreen API for pages; check what minimal-ui/scroll tricks still work, else lean on M123's home-screen tutorial) (web/index.html, web/site.js)
 - [x] **M123** Website front page: on iOS Safari only (not already a home-screen app), show a short tutorial for Add to Home Screen (Share → Add to Home Screen) so the game runs full screen (web/index.html, web/site.js, web/site.css)
+- [x] **B540** After swapping controllers in the pause menu's controller select, whoever holds P1's seat drives the menus once the match is left (results, back to the front-end); today menu control goes back to the original P1 pad (crates/hst/src/play/main_menu/pause.rs, crates/hst/src/play/menu.rs, crates/hst-base/src/seats.rs, crates/hst/src/play/main_menu.rs)
 
 
 ### Shots

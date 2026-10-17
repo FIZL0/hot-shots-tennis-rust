@@ -2091,6 +2091,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     }
     if !fresh && menu.screen != Screen::Lobby {
         menu.after_match();
+        pause::seats_back(&mut menu);
     } else if menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
