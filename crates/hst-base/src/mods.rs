@@ -873,6 +873,62 @@ fn joints_of(doc: &gltf::Document, blob: &[u8]) -> Vec<Joint> {
         .collect()
 }
 
+/// Per joint, the foot (0 left, 1 right) whose subtree (`Bip01?Foot` and below) it is in.
+fn foot_sides(joints: &[Joint]) -> Vec<Option<usize>> {
+    let feet = ["Bip01LFoot", "Bip01RFoot"].map(|n| joints.iter().position(|j| j.name == n));
+    (0..joints.len())
+        .map(|mut j| loop {
+            if let Some(s) = feet.iter().position(|f| *f == Some(j)) {
+                break Some(s);
+            }
+            j = joints[j].parent?;
+        })
+        .collect()
+}
+
+/// B543 (looks only: the skeleton and its rest are untouched): each foot's mesh bound as if its joint had the
+/// donor's (`body`'s) bind orientation, and the [`character::Feet`] that set it down where the donor's foot is.
+/// Rerig turns a foot's frame so its bone points at the costume's own toe joint; the donor's foot keys then tilt
+/// the sole by that turn (toes through the court, heels up). Turning the binds of the foot and all below it back
+/// about the ankle lays the sole as the donor's lies. `ground`: per foot the lowest point of its vertices at bind
+/// (game y, down).
+fn level_feet(joints: &mut [Joint], sides: &[Option<usize>], ground: [f32; 2], body: &hst_data::mdl::Model) -> Option<character::Feet> {
+    let at = |joints: &[Joint], n: &str| joints.iter().position(|j| j.name == n);
+    let theirs = |n: &str| body.node_names.iter().position(|x| x == n);
+    let bind = |i: usize| Mat4::from_cols_array_2d(&body.node_bind[i]);
+    let root = at(joints, "Bip01")?;
+    // the donor's joint of each name: rest, and its bone over the costume's as `Clip::new` measures them
+    let donor = joints
+        .iter()
+        .map(|j| {
+            let i = theirs(&j.name)?;
+            let (_, rest, t) = Mat4::from_cols_array_2d(&body.node_local[i]).to_scale_rotation_translation();
+            let len = |v: Vec3| if j.name == "Bip01" { v.y.abs() } else { v.length() };
+            let bone = if j.name == "Bip01Pelvis" || len(j.rest.translation) == 0.0 { 1.0 } else { len(t) / len(j.rest.translation) };
+            Some((rest, t, bone))
+        })
+        .collect();
+    let mut feet = Vec::new();
+    for (side, s) in ["L", "R"].iter().enumerate() {
+        let (f, t) = (at(joints, &format!("Bip01{s}Foot"))?, at(joints, &format!("Bip01{s}Toe0"))?);
+        let (df, dt) = (theirs(&format!("Bip01{s}Foot"))?, theirs(&format!("Bip01{s}Toe0"))?);
+        let (_, rot, ankle) = joints[f].inverse_bind.inverse().to_scale_rotation_translation();
+        let toe = joints[t].inverse_bind.inverse().w_axis.truncate();
+        let (_, want, _) = bind(df).to_scale_rotation_translation();
+        let back = (Mat4::from_translation(ankle) * Mat4::from_quat(want * rot.inverse()) * Mat4::from_translation(-ankle)).inverse();
+        for j in (0..joints.len()).filter(|&j| sides[j] == Some(side)) {
+            joints[j].inverse_bind *= back;
+        }
+        // heel below the ankle, toe below the toe joint
+        let g = if ground[side].is_finite() { ground[side] } else { 0.0 };
+        let sole = [ankle, toe].map(|p| joints[f].inverse_bind.transform_point3(Vec3::new(p.x, g, p.z)));
+        let (da, dtoe) = (bind(df).w_axis.truncate(), bind(dt).w_axis.truncate());
+        let theirs = [da, dtoe].map(|p| bind(df).inverse().transform_point3(Vec3::new(p.x, 0.0, p.z)));
+        feet.push((f, sole, theirs));
+    }
+    Some(character::Feet { root, donor, feet: [feet[0], feet[1]] })
+}
+
 fn skeleton_of(joints: &[Joint]) -> Skeleton {
     Skeleton {
         names: joints.iter().map(|j| j.name.clone()).collect(),
@@ -938,8 +994,10 @@ pub fn load_with(
     }
     let w = worlds(&doc);
     let space = doc.default_scene().or_else(|| doc.scenes().next()).and_then(|s| s.nodes().next()).map_or(Mat4::IDENTITY, |r| w[r.index()].inverse());
-    let joints = joints_of(&doc, &blob);
+    let mut joints = joints_of(&doc, &blob);
     let skeleton = skeleton_of(&joints);
+    let sides = foot_sides(&joints);
+    let mut ground = [f32::NAN; 2];
 
     let mut gs = HashMap::new();
     let handles = materials_of(&doc, &blob, upscaled_dir(m, &file).as_deref(), images, materials, &mut gs).map_err(ctx)?;
@@ -986,6 +1044,13 @@ pub fn load_with(
                 v.morph.iter_mut().flat_map(|t| t.1.iter_mut()).for_each(|d| *d = to.transform_vector3(Vec3::from(*d)).into());
                 v.joints.fill([j as u16, 0, 0, 0]);
                 v.weights.fill([1.0, 0.0, 0.0, 0.0]);
+            }
+            // each foot's lowest point at bind (its vertices' strongest joint below the ankle)
+            for ((p, j), w) in v.pos.iter().zip(&v.joints).zip(&v.weights) {
+                let top = (0..4).fold(0, |a, k| if w[k] > w[a] { k } else { a });
+                if let Some(side) = sides.get(j[top] as usize).copied().flatten() {
+                    ground[side] = if ground[side].is_nan() { p[1] } else { ground[side].max(p[1]) };
+                }
             }
             let count = v.pos.len();
             // the joints the part's vertices ride (a disc packet's palette): a `.UVA` track on one of them moves it
@@ -1070,10 +1135,11 @@ pub fn load_with(
         Some(f) => own_motions(&m.dir.join(f), &skeleton, &motions, only)?,
         None => HashMap::new(),
     };
+    let feet = level_feet(&mut joints, &sides, ground, &character::disc_body(iso, m.donor)?);
     let binds = crate::character::part_skins(&joints, &parts, meshes, bindposes);
     let springs = crate::spring::masses(&nodes, &joints);
     let noise = (!swaying.is_empty() || !springs.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying, springs }));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: names, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: names, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual, feet })
 }
 
 /// `mod.json`'s `disc_racket` (§6, M1r): the disc character (0..13) whose racket it holds when it ships no
@@ -1904,5 +1970,88 @@ mod tests {
         }
         eprintln!("{} of {n} costumes of {} mods load", n - bad, dirs.len());
         assert_eq!(bad, 0);
+    }
+
+    /// The lowest point (game space, y down: the largest y) of each foot's heel (vertices mostly on `Bip01?Foot`)
+    /// and toe (on `Bip01?Toe0`), skinned on the CPU, for motion `id` at time `t`: [L heel, L toe, R heel, R toe].
+    fn soles(c: &CharacterData, meshes: &Assets<Mesh>, id: usize, t: f32) -> [f32; 4] {
+        use bevy::mesh::VertexAttributeValues as V;
+        // the drawn pose as `character::animate` builds it, the feet set down
+        let clip = &c.motions[&id];
+        let mut local: Vec<(Quat, Vec3)> = c.joints.iter().map(|j| (j.rest.rotation, j.rest.translation)).collect();
+        for (k, tr) in clip.tracks.iter().enumerate() {
+            let (rot, pos) = clip.sample_drawn(k, t);
+            if let Some([x, y, z, w]) = rot {
+                local[tr.node].0 = Quat::from_xyzw(-x, -y, -z, w).normalize();
+            }
+            if let Some(p) = pos {
+                local[tr.node].1 = Vec3::from(p);
+            }
+        }
+        if let Some(f) = c.feet.as_ref().filter(|_| std::env::var("HST_NOLIFT").is_err()) {
+            local[f.root].1.y += f.lift(&c.joints, clip, &local);
+        }
+        let mut model: Vec<Option<Mat4>> = vec![None; local.len()];
+        fn world(j: usize, c: &CharacterData, local: &[(Quat, Vec3)], m: &mut [Option<Mat4>]) -> Mat4 {
+            if let Some(w) = m[j] {
+                return w;
+            }
+            let l = Mat4::from_scale_rotation_translation(c.joints[j].rest.scale, local[j].0, local[j].1);
+            let w = c.joints[j].parent.map_or(l, |p| world(p, c, local, m) * l);
+            m[j] = Some(w);
+            w
+        }
+        let model: Vec<Mat4> = (0..local.len()).map(|j| world(j, c, &local, &mut model)).collect();
+        let at = |n: &str| c.skeleton.names.iter().position(|x| x == n);
+        let want = [at("Bip01LFoot"), at("Bip01LToe0"), at("Bip01RFoot"), at("Bip01RToe0")];
+        let mut out = [f32::NAN; 4];
+        for (p, skin) in c.parts.iter().zip(&c.binds) {
+            let Some(m) = meshes.get(&p.0) else { continue };
+            let (Some(V::Float32x3(pos)), Some(V::Uint16x4(js)), Some(V::Float32x4(ws))) = (m.attribute(Mesh::ATTRIBUTE_POSITION), m.attribute(Mesh::ATTRIBUTE_JOINT_INDEX), m.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)) else { continue };
+            for ((v, j), w) in pos.iter().zip(js).zip(ws) {
+                let top = (0..4).max_by(|&a, &b| w[a].total_cmp(&w[b])).unwrap();
+                let Some(k) = want.iter().position(|x| *x == Some(skin.joints[j[top] as usize])) else { continue };
+                let q: Vec3 = (0..4).map(|i| w[i] * (model[skin.joints[j[i] as usize]] * c.joints[skin.joints[j[i] as usize]].inverse_bind).transform_point3(Vec3::from(*v))).sum();
+                out[k] = if out[k].is_nan() { q.y } else { out[k].max(q.y) };
+            }
+        }
+        out
+    }
+
+    /// B543 diagnostic: every mod's feet against its donor's through steps, strokes and serves (mm, + = below the
+    /// ground). `HST_MODS=… tools/check.sh -p hst-base feet_against_the_donor -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn feet_against_the_donor() {
+        let (Ok(mut iso), Ok(root)) = (Iso::open(ISO), std::env::var("HST_MODS")) else { return eprintln!("no ISO or HST_MODS, skipped") };
+        let mut dirs: Vec<_> = std::fs::read_dir(root).unwrap().flatten().map(|e| e.path()).filter(|d| d.join("mod.json").is_file()).collect();
+        dirs.sort();
+        let only = std::env::var("HST_ONLY").ok();
+        let ids = [0usize, 3, 7, 0x10, 0x11, 0x16, 0x1e, 0x20, 0x25];
+        let mut stock: HashMap<usize, (Stores, CharacterData)> = HashMap::new();
+        let stat = |c: &CharacterData, m: &Assets<Mesh>| -> Vec<[f32; 4]> { ids.iter().filter(|i| c.motions.contains_key(i)).flat_map(|&i| (0..12).map(move |k| (i, k as f32 / 11.0))).map(|(i, f)| soles(c, m, i, f * c.motions[&i].length)).collect() };
+        for d in &dirs {
+            let Ok(m) = read(d) else { continue };
+            if only.as_ref().is_some_and(|o| !m.id.contains(o.as_str())) {
+                continue;
+            }
+            let mut s = Stores(default(), default(), default(), default());
+            let Ok(c) = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3) else { continue };
+            let st = stock.entry(m.donor).or_insert_with(|| {
+                let mut s = Stores(default(), default(), default(), default());
+                let c = character::load_disc(&mut iso, m.donor, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+                (s, c)
+            });
+            let (a, b) = (stat(&c, &s.0), stat(&st.1, &st.0.0));
+            // per sample the lower foot's lowest point (the ground contact), mod − stock
+            let low = |r: &[f32; 4]| r.iter().copied().filter(|x| x.is_finite()).fold(f32::MIN, f32::max);
+            let keys: Vec<(usize, f32)> = ids.iter().filter(|i| c.motions.contains_key(i)).flat_map(|&i| (0..12).map(move |k| (i, k as f32 / 11.0))).collect();
+            let diffs: Vec<(f32, usize, f32)> = a.iter().zip(&b).zip(&keys).map(|((x, y), k)| (low(x) - low(y), k.0, k.1)).collect();
+            let mean = diffs.iter().map(|d| d.0).sum::<f32>() / diffs.len().max(1) as f32;
+            let max = diffs.iter().fold((f32::MIN, 0, 0.0), |a, b| if b.0 > a.0 { *b } else { a });
+            let min = diffs.iter().fold((f32::MAX, 0, 0.0), |a, b| if b.0 < a.0 { *b } else { a });
+            let tilt = |r: &[f32; 4]| r[1] - r[0];
+            eprintln!("{:26} d{:2} mean {:+5.0} min {:+5.0} ({:#x} {:.2}) max {:+5.0} ({:#x} {:.2}) stance heel/toe {:+4.0}/{:+4.0} stock {:+4.0}/{:+4.0} tilt {:+4.0}", m.id, m.donor, mean * 1e3, min.0 * 1e3, min.1, min.2, max.0 * 1e3, max.1, max.2, a[0][0] * 1e3, a[0][1] * 1e3, b[0][0] * 1e3, b[0][1] * 1e3, (tilt(&a[0]) - tilt(&b[0])) * 1e3);
+        }
     }
 }

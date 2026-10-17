@@ -809,6 +809,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M122** Online lobby: show every player a notice when someone is still downloading a mod, so they know why that player isn't ready (builds on B537's progress; crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
 - [x] **B539** iOS Safari (in the browser, not the home-screen web app): play full screen with no tab/address bar, as far as iPhone Safari allows (it has no Fullscreen API for pages; check what minimal-ui/scroll tricks still work, else lean on M123's home-screen tutorial) (web/index.html, web/site.js)
 - [x] **M123** Website front page: on iOS Safari only (not already a home-screen app), show a short tutorial for Add to Home Screen (Share → Add to Home Screen) so the game runs full screen (web/index.html, web/site.js, web/site.css)
+- [x] **B543** Mod characters' feet (every mod, not one pack): check whether their feet can move like the stock characters': planted on the ground instead of clipping through it, with ankles/toes bending through steps, lunges and serves. Compare a stock and a mod character side by side (--shot), find why (rerig/retarget of foot/toe bones, missing toe bone mapping, foot height offset, rest-pose differences), fix it for all mods without touching the sim (looks only) (crates/hst-base/src/mods.rs, crates/hst-base/src/character.rs, crates/hst/hst_skeleton.json, ../opentennis-mods/tools) — Every mod this changes gets its mod.json version bumped before re-upload, so the store offers the update (AGENT.md Mod versions).
 
 
 ### Shots
