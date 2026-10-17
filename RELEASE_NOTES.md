@@ -18,6 +18,7 @@
 - Joining an online lobby no longer flashes a "can't join" message for a moment before you get in.
 - Mod characters' feet now stand on the court and lie flat through steps, lunges and serves like the regular players', instead of sinking into the ground or tipping on their toes.
 - Out of Bounds characters now show a face for every reaction: surprised, sad and angry looks that used to stay blank (Sophie, Bjorn, Fernando, Felipe, Bloom, LJ, Kate, Dino, Anya, Suzuki, Jasmine, Alex) play on their nearest expression.
+- Hot Shots Golf Fore! and Open Tee 2 characters now pull surprised, sad and angry faces that used to stay blank (most of them look surprised now; Tiffany, Kamala, Tbone, Sam, Maya and Jak get their missing sad or angry looks, Chaos and Ratchet close their eyes when they smile). Update the mods to get it.
 - Android browsers: when the phone's graphics crash again soon after a first crash, the game restarts on its fallback graphics instead of stopping with a "device lost" error.
 - Online chat on iPhone and Android: the chat button now brings up the keyboard during a match, not just in the lobby.
 - On iPhone and iPad Safari the game now offers a new version even when Safari stops its background download, instead of staying on the old one.
