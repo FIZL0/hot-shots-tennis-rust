@@ -99,8 +99,13 @@ async function visit(n, pick) {
   await send('Page.navigate', { url: `http://localhost:${web}/?${query}` });
   if (pick) {
     for (let i = 0; i < 100 && !(await evaluate("!document.getElementById('disc')?.hidden")); i++) await sleep(200);
-    const doc = await send('DOM.getDocument');
-    const node = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#iso' });
+    // the page can replace its document while it starts (a reload): ask again until the node holds
+    let node;
+    for (let i = 0; i < 50 && !node?.result?.nodeId; i++) {
+      if (i) await sleep(200);
+      const doc = await send('DOM.getDocument');
+      node = await send('DOM.querySelector', { nodeId: doc.result.root.nodeId, selector: '#iso' });
+    }
     await send('DOM.setFileInputFiles', { nodeId: node.result.nodeId, files: [resolve(iso)] });
     for (let i = 0; i < 600; i++) {
       const s = await evaluate("document.getElementById('status').textContent");
