@@ -556,14 +556,14 @@ mod tests {
                     let want = [
                         has(&[Act::Move, Act::UpDown]),
                         has(&[Act::Move, Act::LeftRight]),
-                        has(&[Act::Ok]),
+                        has(&[Act::Ok, Act::Select]),
                         has(&[Act::Back]),
                         has(&[Act::Card]),
                         has(&[Act::Costume]),
                         has(&[Act::Page]),
                         has(&[Act::Hand]),
                         has(&[Act::Kind]),
-                        has(&[Act::Name]),
+                        has(&[Act::Name, Act::Go]),
                         has(&[Act::Settings]),
                     ];
                     assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select L2R2 Start R3] handled vs legend {acts:?}", m.screen, m.sel);

@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use super::super::controls::Bindings;
 use super::tabs::{self, Line, Section};
-use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, drop_button, grades_of, home, legend, look, pointer, shirt, tile_face};
+use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, RANDOM_TILE, STYLE_NAMES, Tex, Text, WHITE, Who, dev_name, grades_of, home, legend, look, pointer, shirt, tile_face};
 
 /// One mockup pixel in the menu's units: down, and across (a unit across is 14/15 of one down on screen: 640 across
 /// a 4:3 screen 448 high).
@@ -526,7 +526,6 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         return;
     }
     // the card: the main menu's panel (B471: off-white in a dark outline), the outline dashed for a computer player
-    let [x, y, w, _] = at.card;
     if human || m.seats[p] == Some(Dev::Open) {
         ringed(d, at.card, 14.0, look::RIM, hex(look::INK), s.bg);
     } else {
@@ -560,15 +559,11 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         _ => None,
     };
     let side = if swap.is_some() { "Swap teams" } else if p < (n / 2).max(1) { "Near" } else { "Far" };
-    band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, m.droppable(p));
+    band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, false);
     if mine && m.seats[p].is_some() {
         // B371: a tap on the seat's number or names opens the name picker
         let [hx, hy, hw, hh] = at.head;
         d.hit([hx, hy, hw * 0.6, hh], pointer::press(|k| k.name = true));
-    }
-    // B238: a joined device's ✕ on its column's corner
-    if m.droppable(p) {
-        drop_button(d, p, x + w - 30.0, y - 6.0);
     }
 
     // the pills: the costume (L1 / R1) on the left, the hand (Select) on the right

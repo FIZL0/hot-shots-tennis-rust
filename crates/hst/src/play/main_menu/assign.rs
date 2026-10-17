@@ -121,17 +121,6 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, _bind: &Bindings, pads
         });
     }
     d.out.extend(sliding);
-    // B437: 1P's own seat change is pending until they leave, spelled out in the help
-    let pending = match m.lead_pending() {
-        Some(Some(p)) => format!("Pending: you move to {}P when you leave this screen; until then you keep 1P's controls here. ", p + 1),
-        Some(None) => "Pending: you give up your seat when you leave this screen; until then you keep 1P's controls here. ".to_string(),
-        None => String::new(),
-    };
-    // the key legend carries the buttons; the bar only says when 1P's own seat change is pending
-    // no empty bar: only a pending move has words for it
-    if !pending.is_empty() {
-        d.info(&pending);
-    }
     keep_layout(d, m);
 }
 

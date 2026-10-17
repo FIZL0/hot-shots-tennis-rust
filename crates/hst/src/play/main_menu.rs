@@ -2856,17 +2856,6 @@ fn shirt(d: &mut Draw, [x, y, w, h]: [f32; 4], rgb: [f32; 3], bg: [f32; 3]) {
     }
 }
 
-/// B238: the ✕ that takes seat `p`'s device off it (tapped or clicked; the device's own ○ does it too).
-fn drop_button(d: &mut Draw, p: usize, x: f32, y: f32) {
-    // the cards' dark badge (the band's Near / Far pill), a white rim, a thin white ×
-    d.pill_at([x, y, 28.0, 28.0], [INK, WHITE, INK], 128.0);
-    for a in [std::f32::consts::FRAC_PI_4, -std::f32::consts::FRAC_PI_4] {
-        d.q(Tex::Solid, [0.0; 4], [x + 6.0, y + 12.75, 16.0, 2.5], WHITE, 128.0);
-        d.out.last_mut().unwrap().angle = a;
-    }
-    d.hit([x, y, 28.0, 28.0], pointer::Act::Drop(p));
-}
-
 /// B263: the warm fill behind a face icon.
 const FACE_FILL: [f32; 3] = [110.0, 100.0, 90.0];
 

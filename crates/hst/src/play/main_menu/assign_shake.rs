@@ -252,4 +252,19 @@ mod tests {
         app.world_mut().resource_mut::<Menu>().screen = Screen::Chars;
         assert_eq!(at(&mut app, 5.1).0, [0.0; 4], "only on the assignment");
     }
+
+    /// A controller carried to another seat slides its chip over from the seat it left, easing to nothing in `SLIDE`.
+    #[test]
+    fn a_moved_controller_slides_over() {
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>();
+        app.insert_resource(Menu { screen: Screen::Assign, doubles: true, grid: super::super::Grid::fit(16.0 / 9.0), seats: [Some(Dev::Keys), None, None, None], bots: [false, true, false, false], ..default() });
+        app.add_systems(Update, slide);
+        app.update();
+        assert_eq!(app.world().resource::<Menu>().slide, [[0.0; 2]; 4]);
+        app.world_mut().resource_mut::<Menu>().bots.swap(1, 2);
+        app.update();
+        let s = app.world().resource::<Menu>().slide;
+        assert!(s[2][0] < -10.0 && s[1] == [0.0; 2], "{s:?}");
+    }
 }
