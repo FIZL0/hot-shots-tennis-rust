@@ -16,6 +16,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:
 index out of bounds: the len is 0 but the index is 0"
 - [ ] **B565** Joining from a link (user 2026-10-17, e.g. https://beta.opentennis.dev/?code=VTPP) seats the keyboard as P1. Leave P1 unassigned and give it to the first input that presses something (keyboard or pad), since someone may open the link and then pick up a controller
+- [ ] **B567** iOS app doesn't offer the new update (user 2026-10-17): on the 1.0 IPA no update shows, though 1.1.0 is released. Find why the iOS build doesn't see or offer it (update check, release assets, or how the IPA updates at all) and fix it
 
 ### Netplay and mobile (user 2026-10-09: right after the bugs/priority list, in this order)
 
