@@ -379,6 +379,28 @@ pub(super) fn chip_w(d: &Draw, s: &str, h: f32) -> f32 {
     d.width(s, h * 0.72) + 8.0 * PX
 }
 
+/// Pad `dev`'s art for button `b`, `h` high from `[x, y]`, or the keyboard's key `name` as a [`chip`]; its width.
+fn key(d: &mut Draw, dev: Option<Entity>, b: GamepadButton, name: &str, [x, y]: [f32; 2], h: f32) -> f32 {
+    match (dev, legend::button_glyph(b)) {
+        (Some(e), Some(i)) => {
+            let style = legend::dev_style(Some(e));
+            let w = h * legend::glyph_aspect(style, i);
+            d.q(Tex::Glyph(style, i), [0.0; 4], [x, y, w, h], WHITE, 128.0);
+            w
+        }
+        _ => chip(d, name, [x, y], h, WHITE),
+    }
+}
+
+/// The width of a [`key`].
+fn key_w(d: &Draw, dev: Option<Entity>, b: GamepadButton, name: &str, h: f32) -> f32 {
+    match (dev, legend::button_glyph(b)) {
+        (Some(e), Some(i)) => h * legend::glyph_aspect(legend::dev_style(Some(e)), i),
+        (_, _) if name.is_empty() => 0.0,
+        _ => chip_w(d, name, h),
+    }
+}
+
 /// The character select, one column per player.
 pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
@@ -574,9 +596,10 @@ fn column(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity],
         _ => ("", None),
     };
     let _ = n;
+    // concept: any seat this machine plays names itself, ready or not
     let naming = match m.seats[p] {
-        Some(Dev::Keys) if mine => Some("N"),
-        Some(Dev::Pad(e)) if mine => legend::glyphs(legend::dev_style(Some(e)), &legend::item(legend::Act::Name, "", &[])).into_iter().find_map(|g| if let legend::Glyph::Small(s) = g { Some(s) } else { None }),
+        Some(Dev::Keys) => Some((None, "N")),
+        Some(Dev::Pad(e)) => Some((Some(e), "Start")),
         _ => None,
     };
     band(d, &s, at.head, solid, p, m.player_name(p).as_deref(), &name, &device, side, swap, false, naming);
@@ -1017,7 +1040,7 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 /// pill on the right (`glyph`'s button art before it; left of the ✕ when `drop`; left out when the column is too
 /// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<(legend::Style, u8)>, drop: bool, naming: Option<&str>) {
+pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<(legend::Style, u8)>, drop: bool, naming: Option<(Option<Entity>, &str)>) {
     // B471: the panel's header strip inside the card's outline, a dark rule under it; a computer player's in the
     // seat's light tint with dark words
     let (fill, ink) = if solid { (s.ring, s.ink) } else { (s.sel, hex(look::INK)) };
@@ -1059,16 +1082,16 @@ pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, 
     };
     // concept: the seat's name button (Start / Options / + / N) in a pill like the costume's: [N] Name
     let end = match naming {
-        Some(b) => {
+        Some((dev, b)) => {
             let (ts, gh, ph) = (13.0 * PY, 18.0 * PY, 26.0 * PY);
-            let pw = 8.0 * PX + chip_w(d, b, gh) + 6.0 * PX + d.width("Name", ts) + 10.0 * PX;
+            let pw = 8.0 * PX + key_w(d, dev, GamepadButton::Start, b, gh) + 6.0 * PX + d.width("Name", ts) + 10.0 * PX;
             if end - pw - nx < 48.0 * PX {
                 end
             } else {
                 let (px, py) = (end - pw, y + (h - ph) / 2.0);
                 let grey = hex(look::GREY);
                 look::outlined_pill(d, [px, py, pw, ph], grey, 2.0);
-                let cw = chip(d, b, [px + 8.0 * PX, py + (ph - gh) / 2.0], gh, WHITE);
+                let cw = key(d, dev, GamepadButton::Start, b, [px + 8.0 * PX, py + (ph - gh) / 2.0], gh);
                 d.text("Name", px + 8.0 * PX + cw + 6.0 * PX, py + (ph - ts) / 2.0, ts, WHITE);
                 px - 8.0 * PX
             }
@@ -1251,7 +1274,8 @@ fn tags(d: &mut Draw, [x, y, w, h]: [f32; 4], seats: &[usize]) {
 #[allow(clippy::too_many_arguments)]
 fn pills(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, p: usize, [x, y, w, _]: [f32; 4], stack: bool, mine: bool) {
     let pl = m.players[p];
-    let dev = match m.seats[p] {
+    // a computer player's keys are its driver's (1P's)
+    let dev = match m.seats[p].or_else(|| m.lead()) {
         Some(Dev::Pad(e)) => Some(e),
         _ => None,
     };
@@ -1267,9 +1291,13 @@ fn pills(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, p: usiz
     let icon = 18.0 * PX;
     let pad = 8.0 * PX;
     let gap = 6.0 * PX;
-    let chips = |d: &Draw, a: &str| if keys && !a.is_empty() { chip_w(d, a, gh) + gap } else { 0.0 };
-    let cw_nat = pad + icon + gap + chips(d, &l1) + d.width(&costume, ts) + gap + chips(d, &r1) + pad - gap;
-    let hw_nat = pad + icon + gap + d.width(hand, ts) + gap + chips(d, &sel) + pad - gap;
+    use GamepadButton::{LeftTrigger, RightTrigger, Select};
+    let chips = |d: &Draw, b: GamepadButton, a: &str| match key_w(d, dev, b, a, gh) {
+        w if keys && w > 0.0 => w + gap,
+        _ => 0.0,
+    };
+    let cw_nat = pad + icon + gap + chips(d, LeftTrigger, &l1) + d.width(&costume, ts) + gap + chips(d, RightTrigger, &r1) + pad - gap;
+    let hw_nat = pad + icon + gap + d.width(hand, ts) + gap + chips(d, Select, &sel) + pad - gap;
     // side by side, or the costume over the hand; squeezed to fit
     let (cw, hw) = if stack { (cw_nat.min(w), hw_nat.min(w)) } else {
         let k = ((w - 8.0 * PX) / (cw_nat + hw_nat)).min(1.0);
@@ -1285,14 +1313,14 @@ fn pills(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, p: usiz
     let mut cx = x + pad;
     shirt(d, [cx, cy + 5.0 * PY, icon, 16.0 * PY], s.ring, grey);
     cx += icon + gap;
-    if keys && !l1.is_empty() {
-        cx += chip(d, &l1, [cx, cy + (ph - gh) / 2.0], gh, WHITE) + gap;
+    if chips(d, LeftTrigger, &l1) > 0.0 {
+        cx += key(d, dev, LeftTrigger, &l1, [cx, cy + (ph - gh) / 2.0], gh) + gap;
     }
     let words = fits(cw_nat, cw, d.width(&costume, ts));
     d.label(&costume, cx + words / 2.0, cy + (ph - ts) / 2.0, ts, words, if m.blocked(p) && !pl.random { [70.0; 3] } else { WHITE });
     cx += words + gap;
-    if keys && !r1.is_empty() {
-        chip(d, &r1, [cx, cy + (ph - gh) / 2.0], gh, WHITE);
+    if chips(d, RightTrigger, &r1) > 0.0 {
+        key(d, dev, RightTrigger, &r1, [cx, cy + (ph - gh) / 2.0], gh);
     }
     // the hand pill, at the right end
     let hx = x + w - hw;
@@ -1304,8 +1332,8 @@ fn pills(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, s: &Seat, p: usiz
     let words = fits(hw_nat, hw, d.width(hand, ts));
     d.label(hand, cx + words / 2.0, hy + (ph - ts) / 2.0, ts, words, WHITE);
     cx += words + gap;
-    if keys && !sel.is_empty() {
-        chip(d, &sel, [cx, hy + (ph - gh) / 2.0], gh, WHITE);
+    if chips(d, Select, &sel) > 0.0 {
+        key(d, dev, Select, &sel, [cx, hy + (ph - gh) / 2.0], gh);
     }
     if mine && !pl.ready && !pl.random {
         d.hit([cb[0], cb[1], cb[2] / 2.0, ph], pointer::press(|k| k.prev = true));

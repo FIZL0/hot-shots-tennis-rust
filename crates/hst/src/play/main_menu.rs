@@ -1007,12 +1007,15 @@ impl Menu {
         let first = self.seats.iter().position(Option::is_some) == Some(p);
         // a computer player's seat empties too (before a local match)
         let com = self.screen == Screen::Assign && self.bots[p] && self.seats[p].is_none() && !self.paused && !self.online();
-        com || self.net_pause.is_none() && dev(&self.seats[p]) && (!first || self.paused || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
+        // concept: on the local roster 1P leaves too while someone else plays (who takes 1P over), so a second device
+        // can join and the person carry on with it
+        let others = self.seats.iter().filter(|s| dev(s)).count() > 1;
+        com || self.net_pause.is_none() && dev(&self.seats[p]) && (!first || self.paused || (self.local_roster() || self.screen == Screen::Assign) && others)
     }
 
     /// The device driving the menu's 1P screens: 1P's, except on the controller assignment after it moved its own
     /// seat there (B437: still the one that came in, until it leaves).
-    fn lead(&self) -> Option<Dev> {
+    pub(super) fn lead(&self) -> Option<Dev> {
         self.assign_lead.filter(|_| self.screen == Screen::Assign).or(self.seats[self.first_seat()])
     }
 
@@ -1127,6 +1130,15 @@ impl Menu {
             self.seats[..n].swap(0, q);
             return true;
         }
+        if p == 0 && self.local_roster() {
+            // concept: 1P leaves to switch devices: the next human takes 1P, their pick with them
+            let q = (1..4).find(|&q| matches!(self.seats[q], Some(Dev::Keys | Dev::Pad(_)))).unwrap_or(0);
+            self.seats[0] = self.seats[q].take();
+            self.p1 = self.seats[0];
+            self.players.swap(0, q);
+            self.foot = None;
+            return true;
+        }
         // B331: on a local roster the seat goes back to the computer, open to the next ✕
         self.seats[p] = if self.screen == Screen::Chars && !self.local_roster() { Some(Dev::Open) } else { None };
         self.unready(p);
@@ -1169,8 +1181,9 @@ impl Menu {
 
     /// B331: the local roster (not online): devices join it with ✕; B361: its mode follows them
     /// (singles for one or two devices, doubles from the third).
+    /// Concept: the strip focused (local Confirm) is the same screen, still open to joins.
     fn local_roster(&self) -> bool {
-        self.screen == Screen::Chars && !self.online()
+        matches!(self.screen, Screen::Chars | Screen::Confirm) && !self.online()
     }
 
     /// The seat a device's ✕ on the select takes: one held open for a device (B238), else on a local roster the
@@ -4101,6 +4114,27 @@ mod tests {
         assert_eq!((m.screen, m.sel, m.picking.is_some(), m.foot), (Screen::Confirm, 4, true, Some(pad)));
     }
 
+    /// Concept: a pad joins while 1P has the strip; 1P's ○ then leaves its seat and the pad takes 1P over, its pick
+    /// with it; alone, 1P's ○ leaves the screen.
+    #[test]
+    fn local_join_on_the_strip_and_1p_hands_over() {
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Chars, p1: Some(Dev::Keys), seats: [Some(Dev::Keys), None, None, None], ..default() };
+        let (ok, back) = (press(|p| &mut p.ok), press(|p| &mut p.back));
+        m.step(Dev::Keys, ok);
+        (m.screen, m.sel) = (Screen::Confirm, 1); // 1P on the strip
+        m.step(pad, ok);
+        assert_eq!(m.seats[1], Some(pad), "joined on the strip");
+        m.players[1].cursor = 5;
+        m.step(Dev::Keys, back); // off the strip
+        m.step(Dev::Keys, back); // unready
+        assert!(m.droppable(0));
+        m.step(Dev::Keys, back);
+        assert_eq!((&m.seats[..2], m.p1, m.players[0].cursor, m.screen), (&[Some(pad), None][..], Some(pad), 5, Screen::Chars));
+        m.step(pad, back);
+        assert_eq!(m.screen, Screen::Main);
+    }
+
     /// B297: Start puts a Rematch card at the top of the main menu; it launches the same match flags, Local takes it
     /// off again, and Back from Local lands on the Local row.
     #[test]
@@ -4286,9 +4320,9 @@ mod tests {
         assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), None, Some(pb), None]));
         m.step(pb, ok); // seated already: readies its own, doesn't take a seat
         assert!(m.players[2].ready);
-        // 1P backing out of the roster: the main menu, the other seats freed
+        // concept: 1P's ○ with others seated leaves its seat, the next human (pb) taking 1P over with its pick
         m.step(Dev::Keys, press(|p| &mut p.back));
-        assert_eq!((m.screen, m.seats), (Screen::Main, [Some(Dev::Keys), None, None, None]));
+        assert_eq!((m.screen, m.seats, m.players[0].ready), (Screen::Chars, [Some(pb), None, None, None], true));
     }
 
     /// The keyboard (and the mouse, its pointer) takes 1P over from a pad, and the free seat 1P's focus or the mouse
@@ -4354,7 +4388,7 @@ mod tests {
         assert_eq!(m.seats[0], Some(Dev::Keys));
         m.step(pa, press(|p| &mut p.name)); // Start (✕ only selects)
         assert_eq!((m.screen, m.lead()), (Screen::Chars, Some(Dev::Keys)));
-        assert!(!m.droppable(0)); // the select's driver stays
+        assert!(!m.droppable(0)); // the select's driver stays while alone
     }
 
     #[test]

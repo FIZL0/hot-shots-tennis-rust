@@ -3,9 +3,9 @@
 //! keyboard's Esc dismisses it, a tap or click picks a pill), and the press that opened it does nothing else. Yes
 //! makes the pad 1P (its seat and [`Menu::p1`]: the legend's hints follow it) and frees the keyboard to join as
 //! another player, with a short toast saying so; No, Esc or [`WAIT`] seconds untouched keep the keyboard and that
-//! pad isn't asked again until it's unplugged. Local menus only: not on the splash (its first press takes 1P), the
-//! screens a press joins a player on, online or over a paused match (its controller assignment does it there), nor
-//! on a touch page (a pad's press takes the screen's 1P there, B247).
+//! pad isn't asked again until it's unplugged. Not on the splash (its first press takes 1P), the screens a press
+//! joins a player on (the online lobby among them; the online menus before it do ask), over a paused match (its
+//! controller assignment does it there), nor on a touch page (a pad's press takes the screen's 1P there, B247).
 
 use bevy::prelude::*;
 
@@ -45,14 +45,13 @@ impl Menu {
     fn takeover_here(&self) -> bool {
         let screens = matches!(
             self.screen,
-            Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile | Screen::Mode | Screen::Mods | Screen::Extras
+            Screen::Main | Screen::Display | Screen::Graphics | Screen::Advanced | Screen::Sound | Screen::Controls | Screen::ModSettings | Screen::Mobile | Screen::Mode | Screen::Mods | Screen::Extras | Screen::Online | Screen::Lobbies | Screen::Code
         );
         screens
             && self.p1 == Some(Dev::Keys)
             && matches!(self.seats[0], None | Some(Dev::Keys))
             && !self.paused
             && self.net_pause.is_none()
-            && !self.online()
             && self.rebinding.is_none()
             && self.switch.is_none()
             && self.stale.0.is_none()
@@ -331,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn only_local_menus_with_1p_on_keys() {
+    fn only_menus_with_1p_on_keys() {
         let p = pad(5);
         let may = |m: Menu| m.clone().takeover_open(p, "Pad".into());
         assert!(may(keys_menu()));
@@ -340,9 +339,11 @@ mod tests {
         assert!(!may(Menu { p1: Some(Dev::Pad(pad(9))), ..keys_menu() }));
         assert!(!may(Menu { seats: [Some(Dev::Keys), Some(Dev::Pad(p)), None, None], ..keys_menu() }));
         // the splash, the screens a press joins on, the pause menu, mid-match
-        for screen in [Screen::Press, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Lobby, Screen::Online, Screen::Playing] {
+        for screen in [Screen::Press, Screen::Assign, Screen::Chars, Screen::Confirm, Screen::Lobby, Screen::Playing] {
             assert!(!may(Menu { screen, ..keys_menu() }), "{screen:?}");
         }
+        // the online menus before the lobby ask too
+        assert!(may(Menu { screen: Screen::Online, ..keys_menu() }));
         assert!(!may(Menu { paused: true, ..keys_menu() }));
     }
 
