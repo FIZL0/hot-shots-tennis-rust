@@ -2200,9 +2200,11 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         menu.p1 = Some(Dev::Keys);
         menu.splash.hold();
     }
-    if fresh && matches!(menu.screen, Screen::Press | Screen::Main) {
+    // B565: a lobby link's start leaves 1P open for the first device to press anything (`Menu::step`)
+    let linked = fresh && matches!(menu.screen, Screen::Press | Screen::Main) && {
         online::linked(&mut menu, &args);
-    }
+        menu.screen == Screen::Assign
+    };
     // B297: the main screen with a Rematch card (a singles match against the computer played)
     if fresh && (screen == "rematch" || screen == "rematch-update") {
         menu.rematch = true;
@@ -2243,7 +2245,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     if !fresh && menu.screen != Screen::Lobby {
         menu.after_match();
         pause::seats_back(&mut menu);
-    } else if !lobby && menu.screen != Screen::Main {
+    } else if !lobby && !linked && menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
         // B216: 2P and 3P computer players added, 4P left open
