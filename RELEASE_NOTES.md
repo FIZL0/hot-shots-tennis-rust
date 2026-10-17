@@ -47,3 +47,4 @@
 - Mod characters now cheer (or groan) in their own voice at the end-of-match trophy ceremony instead of staying silent.
 - Holding an emote key, the right stick or a button bound to an emote plays the emote once instead of repeating it; press or flick again for another.
 - The court intro before the first point shows Skip in the usual button legend instead of a PlayStation ✕ in the corner.
+- Online lobby: a player sitting on the Random card shows as Random to everyone, not as the character under it.
