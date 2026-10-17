@@ -91,7 +91,7 @@ fn lin(v: f32) -> f32 {
 /// One game frame: the players' toes and bones as the motion player posed them this tick, and their matrices,
 /// step the sim. The run object updates after the players (it takes their hit events the same frame), so the dive
 /// rings draw from the sound manager's generator after the frame's strokes.
-fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, posed: Res<super::bodyhit::Posed>, bones: Res<super::bodyhit::Bones>, q: Query<(&Figure, &Motion)>, rc: Option<Res<super::replay_camera::ReplayCamera>>) {
+fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>, posed: Res<super::bodyhit::Posed>, bones: Res<super::bodyhit::Bones>, q: Query<(&Figure, &Motion)>, rc: Option<Res<super::replay_camera::ReplayCamera>>, mm: Option<Res<crate::mods::MatchMod>>) {
     let Some(mut fx) = fx else { return };
     let fx = &mut *fx;
     // the game clears the run object as a point is set up
@@ -128,6 +128,8 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
                     dive,
                     lunge,
                     dive_over,
+                    // a mod character's reactions are its own motions: the donor's steps would print out of place
+                    no_prints: m.id as i32 >= hst_sim::motion::id::HIT_BY_BALL && mm.as_ref().is_some_and(|mm| mm.get(i).is_some()),
                     ..Runner::default()
                 },
             ))

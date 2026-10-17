@@ -119,6 +119,8 @@ pub struct Runner {
     pub lunge: f32,
     /// The dive's streak stops (the player's dive is done).
     pub dive_over: bool,
+    /// Leave no footprints (a mod character's own reactions, whose steps the donor's table doesn't match).
+    pub no_prints: bool,
 }
 
 /// A player's dive as the run object reads it from the player: the hit event's dive branch fires on the frame a
@@ -238,7 +240,7 @@ impl Feet {
                         ..Puff::default()
                     });
                 }
-                if step && c.prints {
+                if step && c.prints && !r.no_prints {
                     if self.prints.len() >= PRINTS {
                         self.prints.remove(0);
                     }

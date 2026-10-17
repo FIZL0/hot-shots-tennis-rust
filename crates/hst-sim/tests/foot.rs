@@ -279,6 +279,7 @@ fn foot_extras_s05() {
                     dive: fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3,
                     lunge: f(x, 0),
                     dive_over: x[0x10 + 9] != 0,
+                    no_prints: false,
                 }
             })
             .collect();
@@ -417,6 +418,7 @@ fn foot_debris_s05() {
                         dive: fr[4 + 0x18 + p] != 0 && fr[4 + 0x21 + 8 * p] == 3,
                         lunge: f(x, 0),
                         dive_over: x[0x10 + 9] != 0,
+                        no_prints: false,
                     }
                 })
                 .collect();
