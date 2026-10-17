@@ -6,3 +6,7 @@
 - The original players' roster pictures no longer show up zoomed in and cut off before their full-size icons are ready.
 - The Mods screen opens with the cursor on the first mod; up goes to the Characters tab, then Browse.
 - Computer players now actually dive for balls just out of reach, instead of swinging at thin air.
+- Online lobbies: the "connecting to the relay" notice sits at the very top of the screen, and you can copy the lobby link while it's still connecting.
+- Player select shows which button renames your player, right next to the name.
+- After picking (or backing out of) a computer player's character in an online lobby, the cursor stays on that computer's card instead of jumping back to yours.
+- Lobby cards no longer have an X: the selected card shows a Remove/Kick hint with its button instead, so moving the cursor can't take a player out by accident.
