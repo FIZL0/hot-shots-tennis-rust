@@ -89,10 +89,12 @@ export async function landing(dir, hasPack) {
 
 function importer(done, dir) {
   const input = $('#iso'), status = $('#status'), bar = $('.progress'), fill = bar.firstElementChild;
+  document.querySelectorAll('label[for=iso][role=button]').forEach(l => l.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
   input.onchange = () => {
     const file = input.files[0];
     input.value = '';
     if (!file) return;
+    $('#play').scrollIntoView({ behavior: 'smooth' });  // the hero button opens the picker too: show the progress
     status.className = '';
     // B466: iOS fetches an iCloud file before the worker's first read returns; nothing to count until then
     status.textContent = `Reading ${file.name}…`;
