@@ -473,6 +473,8 @@ pub(in crate::play) fn plugin(app: &mut App) {
     app.add_systems(Update, touch_menu);
     let open = |ps: Res<PauseSettings>| ps.open;
     let live = |ps: Res<PauseSettings>| ps.open && !ps.fresh;
+    // the Controllers screen's shake, press-to-find flash and slides, as in the front-end
+    super::assign_shake::plugin(app);
     app.init_resource::<PauseSettings>()
         .init_resource::<super::pointer::Pending>()
         .init_resource::<super::pointer::Hits>()

@@ -32,7 +32,7 @@ const BUZZ: f32 = 0.2;
 const BUZZ_STRENGTH: f32 = 0.5;
 
 /// How long (seconds) a moved controller's chip slides to its new seat.
-const SLIDE: f32 = 0.5;
+const SLIDE: f32 = 0.3;
 
 /// When each seat's card stops shaking (`Time::elapsed_secs`).
 #[derive(Resource, Default)]
