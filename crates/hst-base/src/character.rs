@@ -131,8 +131,8 @@ pub struct CharacterData {
 
 /// A mod's feet against its donor's (B543, looks only). The donor's clips bind to the costume's own bone lengths
 /// (`ClipTrack::scale`) and hips, so a costume whose legs are long or short for its Bip01 height stands in the court
-/// or above it. Each drawn frame the root moves up or down so the costume's lower foot meets the ground where the
-/// donor's lower foot would: the same rotations on the donor's own skeleton.
+/// or above it. Through each clip the root moves by one steady amount ([`Feet::steady`]: per frame, a walk bobbed),
+/// then each leg bends so its foot meets the height the donor's foot has under the same rotations ([`Feet::plant`]).
 #[derive(Clone, Debug)]
 pub struct Feet {
     /// `Bip01`, the skeleton's root.
@@ -140,30 +140,55 @@ pub struct Feet {
     /// Per joint of the costume, the donor's joint of that name: its rest rotation and translation, and its bone
     /// over the costume's (what a keyed position scales by).
     pub donor: Vec<Option<(Quat, Vec3, f32)>>,
-    /// Per foot: `Bip01?Foot`, then the heel and toe on the ground at rest in the foot's frame, the costume's (in
-    /// its drawn frame, `mods::level_feet`) and the donor's.
-    pub feet: [(usize, [Vec3; 2], [Vec3; 2]); 2],
+    /// Per foot: `Bip01?Foot`, then the heel (in the foot's frame) and toe (in the toe's: it bends at push-off) on
+    /// the ground at rest, the costume's (its lowest vertices, `mods::level_feet`, and its toe's tip, which digs in
+    /// at push-off) and the donor's.
+    pub feet: [(usize, [Vec3; 3], [Vec3; 2]); 2],
+    /// Per foot its `Bip01?Toe0`.
+    pub toes: [usize; 2],
+    /// Per foot its thigh and calf, when the leg is thigh → calf → foot (else that foot isn't bent to the ground).
+    pub legs: [Option<(usize, usize)>; 2],
+    /// Per joint, the foot (0 left, 1 right) whose subtree it is in.
+    pub sides: Vec<Option<usize>>,
+    /// Per foot, the ankle (bind space) and the turn about it that `mods::level_feet` took out of its binds (the
+    /// donor's bind frame, then the sole laid flat): a mod's own clips key the foot in the costume's own frame, so
+    /// [`Feet::unturn`] puts it back while one draws.
+    pub turn: [(Vec3, Quat); 2],
+}
+
+/// One foot's chain worked out by [`Feet::chains`]: the costume's foot (position, rotation) in the drawn pose, and
+/// the lowest of its sole and of the donor's (game y, down).
+pub(crate) struct Chain {
+    at: Vec3,
+    turn: Quat,
+    low: f32,
+    /// The costume's toe tip.
+    tip: f32,
+    pub(crate) donor: f32,
+    /// The donor's foot's and toe's turns.
+    pub(crate) donor_turn: [Quat; 2],
 }
 
 impl Feet {
-    /// How far to move the root down (game y) in the drawn pose `local` (each joint's rotation and translation)
-    /// of `clip`; 0 for the costume's own clips (bound unscaled).
-    pub fn lift(&self, joints: &[Joint], clip: &Clip, local: &[(Quat, Vec3)]) -> f32 {
+    /// Each foot's [`Chain`] in the drawn pose `local` of `clip`; None for the costume's own clips (bound unscaled).
+    pub(crate) fn chains(&self, joints: &[Joint], clip: &Clip, local: &[(Quat, Vec3)]) -> Option<[Chain; 2]> {
+        if Feet::own(clip) {
+            return None;
+        }
         // per joint whether the clip keys its rotation and its position
         let mut keyed = vec![(false, false); joints.len()];
-        let mut own = true;
         for (k, t) in clip.tracks.iter().enumerate() {
             if let Some(o) = keyed.get_mut(t.node) {
                 let (r, p) = clip.keys(k);
                 *o = (r > 0, p > 0);
-                own &= t.scale == 1.0;
             }
         }
-        if own {
-            return 0.0;
-        }
-        let (mut low, mut donor) = (f32::MIN, f32::MIN);
-        for &(f, sole, theirs) in &self.feet {
+        let donor_of = |j: usize, (r, t): (Quat, Vec3)| match self.donor[j] {
+            Some((rest, at, bone)) => (if keyed[j].0 { r } else { rest }, if keyed[j].1 { t * bone } else { at }),
+            None => (r, t),
+        };
+        Some(std::array::from_fn(|i| {
+            let ((f, sole, theirs), toe) = (self.feet[i], self.toes[i]);
             let mut chain = vec![f];
             while let Some(u) = joints[*chain.last().unwrap()].parent {
                 chain.push(u);
@@ -173,27 +198,134 @@ impl Feet {
                 let (r, t) = local[j];
                 p += q * t;
                 q *= r;
-                let (rd, td) = match self.donor[j] {
-                    Some((rest, at, bone)) => (if keyed[j].0 { r } else { rest }, if keyed[j].1 { t * bone } else { at }),
-                    None => (r, t),
-                };
+                let (rd, td) = donor_of(j, (r, t));
                 dp += dq * td;
                 dq *= rd;
             }
-            low = sole.iter().map(|s| (p + q * *s).y).fold(low, f32::max);
-            donor = theirs.iter().map(|s| (dp + dq * *s).y).fold(donor, f32::max);
-        }
-        donor - low
+            let (tp, tq) = (p + q * local[toe].1, q * local[toe].0);
+            let (rd, td) = donor_of(toe, local[toe]);
+            let (dtp, dtq) = (dp + dq * td, dq * rd);
+            let low = (p + q * sole[0]).y.max((tp + tq * sole[1]).y);
+            let tip = (tp + tq * sole[2]).y;
+            let donor = (dp + dq * theirs[0]).y.max((dtp + dtq * theirs[1]).y);
+            Chain { at: p, turn: q, low, tip, donor, donor_turn: [dq, dtq] }
+        }))
     }
 
-    /// [`Feet::lift`] averaged over 16 poses through `clip`: what `animate` moves the root by all through it, so the
-    /// body keeps the donor's bob and the feet meet the ground on average (per frame, a walk bobbed up and down).
+    /// Undo `u` (0 none, 1 all) of the binds' turn in the drawn pose `local`, for a mod's own clip (B563): each
+    /// foot joint drawn turned by its bind's conjugate of the turn back, so its skinning is the unturned bind's.
+    pub fn unturn(&self, joints: &[Joint], local: &mut [(Quat, Vec3)], u: f32) {
+        if u <= 0.0 {
+            return;
+        }
+        // per joint in a foot: inverse_bind · turn⁻ᵘ · inverse_bind⁻¹ (in its own frame)
+        let fix = |j: usize| -> Option<Mat4> {
+            let (a, q) = self.turn[self.sides.get(j).copied().flatten()?];
+            let back = Mat4::from_translation(a) * Mat4::from_quat(Quat::IDENTITY.slerp(q, u)) * Mat4::from_translation(-a);
+            let ib = joints[j].inverse_bind;
+            Some(ib * back * ib.inverse())
+        };
+        let fixes: Vec<Option<Mat4>> = (0..joints.len().min(local.len())).map(fix).collect();
+        for (j, f) in fixes.iter().enumerate() {
+            let Some(f) = f else { continue };
+            let (r, t) = local[j];
+            let mut m = Mat4::from_scale_rotation_translation(joints[j].rest.scale, r, t) * *f;
+            if let Some(p) = joints[j].parent.and_then(|p| fixes[p]) {
+                m = p.inverse() * m;
+            }
+            let (_, r, t) = m.to_scale_rotation_translation();
+            local[j] = (r.normalize(), t);
+        }
+    }
+
+    /// Test only: per foot the donor's sole low and the costume's in pose `local`, whatever the clip.
+    #[cfg(test)]
+    pub(crate) fn chains_any(&self, joints: &[Joint], clip: &Clip, local: &[(Quat, Vec3)]) -> [(f32, f32); 2] {
+        let mut c = clip.clone();
+        c.tracks.iter_mut().for_each(|t| t.scale = 0.5);
+        self.chains(joints, &c, local).unwrap().map(|c| (c.donor, c.low))
+    }
+
+    /// Whether `clip` is the costume's own (bound unscaled), not its donor's.
+    pub fn own(clip: &Clip) -> bool {
+        clip.tracks.iter().all(|t| t.scale == 1.0)
+    }
+
+    /// How far to move the root down (game y) in the drawn pose `local` of `clip` for the lower foot to meet the
+    /// donor's lower foot; 0 for the costume's own clips.
+    pub fn lift(&self, joints: &[Joint], clip: &Clip, local: &[(Quat, Vec3)]) -> f32 {
+        self.chains(joints, clip, local).map_or(0.0, |c| c[0].donor.max(c[1].donor) - c[0].low.max(c[1].low))
+    }
+
+    /// The most [`Feet::lift`] over 16 poses through `clip`: what `animate` moves the root by all through it, so the
+    /// body keeps the donor's bob, and low enough that [`Feet::plant`] can reach the ground with either leg (at the
+    /// mean, a leg too short for the frame stood straight with its foot in the air).
+    /// Only frames with a donor's foot on the ground count (in a dash's stride both are up, and a lifted foot's
+    /// height says nothing about the hips: the root sank and the swing foot dragged).
     pub fn steady(&self, data: &CharacterData, clip: &Clip) -> f32 {
         let mut pose = Vec::new();
-        (0..16).map(|i| {
-            pose_at(data, clip, clip.length * i as f32 / 16.0, &mut pose);
-            self.lift(&data.joints, clip, &pose)
-        }).sum::<f32>() / 16.0
+        let lifts: Vec<(f32, f32)> = (0..16)
+            .filter_map(|i| {
+                pose_at(&data.joints, clip, clip.length * i as f32 / 16.0, &mut pose);
+                let c = self.chains(&data.joints, clip, &pose)?;
+                let (donor, low) = (c[0].donor.max(c[1].donor), c[0].low.max(c[1].low));
+                Some((donor, donor - low))
+            })
+            .collect();
+        let down = lifts.iter().filter(|l| l.0 > -0.04).map(|l| l.1).fold(f32::MIN, f32::max);
+        if down > f32::MIN { down } else { lifts.iter().map(|l| l.1).sum::<f32>() / lifts.len().max(1) as f32 }
+    }
+
+    /// Moves the root of the drawn pose `local` down by `lift` ([`Feet::steady`]'s), then bends each leg so its
+    /// foot is as high as the donor's, the foot keeping its turn: a two-bone IK in the knee's own plane.
+    pub fn plant(&self, joints: &[Joint], clip: &Clip, local: &mut [(Quat, Vec3)], lift: f32) {
+        // the donor's feet from the pose before the root moves (Bip01's keyed position feeds the donor's own)
+        let chains = self.chains(joints, clip, local);
+        local[self.root].1.y += lift;
+        let Some(chains) = chains else { return };
+        for (c, leg) in chains.iter().zip(self.legs) {
+            let Some((thigh, calf)) = leg else { continue };
+            // heel and ball as high as the donor's, the toe tip never under the ground or the donor's foot (y down)
+            let dy = c.donor - c.low - lift;
+            let dy = dy.min(c.donor.max(0.0) - c.tip - lift);
+            if dy.abs() < 1e-4 {
+                continue;
+            }
+            // the thigh's parent in the world, then the hip, knee and ankle
+            let mut up = (Quat::IDENTITY, Vec3::ZERO);
+            let mut chain = Vec::new();
+            let mut j = joints[thigh].parent;
+            while let Some(u) = j {
+                chain.push(u);
+                j = joints[u].parent;
+            }
+            for &u in chain.iter().rev() {
+                up = (up.0 * local[u].0, up.1 + up.0 * local[u].1);
+            }
+            let hip = up.1 + up.0 * local[thigh].1;
+            let tq = up.0 * local[thigh].0;
+            let knee = hip + tq * local[calf].1;
+            let cq = tq * local[calf].0;
+            let ankle = c.at + Vec3::Y * lift;
+            let target = ankle + Vec3::Y * dy;
+            let (a, b) = ((knee - hip).length(), (ankle - knee).length());
+            let d = (target - hip).length().clamp((a - b).abs() + 1e-4, a + b - 1e-4);
+            let dir = (target - hip).normalize_or_zero();
+            // the knee stays on its side of the hip → target line
+            let side = (knee - hip).reject_from_normalized(dir);
+            let Some(side) = side.try_normalize().or_else(|| (knee - hip).cross(ankle - hip).cross(dir).try_normalize()) else { continue };
+            let cos = ((a * a + d * d - b * b) / (2.0 * a * d)).clamp(-1.0, 1.0);
+            let knee2 = hip + a * (cos * dir + (1.0 - cos * cos).sqrt() * side);
+            let r1 = Quat::from_rotation_arc((knee - hip).normalize(), (knee2 - hip).normalize());
+            let r2 = Quat::from_rotation_arc((r1 * (ankle - knee)).normalize(), (hip + dir * d - knee2).normalize());
+            let (tq2, cq2) = (r1 * tq, r2 * r1 * cq);
+            local[thigh].0 = (up.0.inverse() * tq2).normalize();
+            local[calf].0 = (tq2.inverse() * cq2).normalize();
+            let foot = self.feet.iter().find(|f| joints[f.0].parent == Some(calf)).map(|f| f.0);
+            if let Some(f) = foot {
+                local[f].0 = (cq2.inverse() * c.turn).normalize();
+            }
+        }
     }
 }
 
@@ -1030,7 +1162,14 @@ pub fn animate(
             if let Some((other, _, w)) = over {
                 lift += (c.lift(&rig.data, feet, other) - lift) * w;
             }
-            drawn[feet.root].1.y += lift;
+            feet.plant(&rig.data.joints, clip, &mut drawn, lift);
+            // a mod's own clip keys the foot in the costume's own frame: its binds' turn undone (B563)
+            let own = |c: &Clip| rig.data.visual.values().any(|v| std::ptr::eq(v, c)) as u8 as f32;
+            let u = match over {
+                Some((other, _, w)) => own(clip) + (own(other) - own(clip)) * w,
+                None => own(clip),
+            };
+            feet.unturn(&rig.data.joints, &mut drawn, u);
         }
         for (j, joint) in rig.data.joints.iter().enumerate() {
             let (Ok(mut tf), Some(&(rotation, translation))) = (joints.get_mut(rig.joints[j]), drawn.get(j)) else { continue };
@@ -1057,9 +1196,9 @@ pub struct Posing {
 }
 
 /// `clip` at time `t` into `out` (each joint's rotation and translation): unkeyed joints at rest.
-pub(crate) fn pose_at(data: &CharacterData, clip: &Clip, t: f32, out: &mut Vec<(Quat, Vec3)>) {
+pub(crate) fn pose_at(joints: &[Joint], clip: &Clip, t: f32, out: &mut Vec<(Quat, Vec3)>) {
     out.clear();
-    out.extend(data.joints.iter().map(|j| (j.rest.rotation, j.rest.translation)));
+    out.extend(joints.iter().map(|j| (j.rest.rotation, j.rest.translation)));
     for (k, track) in clip.tracks.iter().enumerate() {
         let Some(o) = out.get_mut(track.node) else { continue };
         let (rot, pos) = clip.sample_drawn(k, t);
@@ -1120,7 +1259,7 @@ impl Posing {
     fn sample(&mut self, s: usize, data: &CharacterData, key: PoseKey, clip: &Clip, over: Option<(&Clip, f32, f32)>) {
         let (slot, out) = &mut self.poses[s];
         *slot = Some(key);
-        pose_at(data, clip, f32::from_bits(key.t), out);
+        pose_at(&data.joints, clip, f32::from_bits(key.t), out);
         // ponytail: an unkeyed base track mixes from the rest pose (the game's from whatever its node last held)
         if let Some((other, t, w)) = over {
             for (k, track) in other.tracks.iter().enumerate().take(23) {

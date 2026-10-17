@@ -1,4 +1,5 @@
 <!-- What's new since the last release, for players, in plain English: one "- " line per change. tools/release.sh puts this in the release and empties it. -->
+- Mod characters with their own celebration and reaction animations no longer tip their toes up during them.
 - Matches with mod characters start more smoothly: their models load in the background while the menu fades out, instead of freezing the first frames of the match.
 - Controllers screen: each card shows a badge with its controller's number (KB for the keyboard), and pressing any button on a controller flashes its card and rumbles it so you can see which one is yours.
 - On iPhone and iPad Safari, the website shows how to add OpenTennis to your home screen so the game plays full screen.
@@ -55,3 +56,4 @@
 - After an online match, leaving the results takes everyone back to the same lobby with their seats and characters, ready for another match, instead of dropping you on the home screen.
 - Browser and iPhone: the game no longer freezes just after the first point of a match. The title screen behind "Press Start" now always shows the game's own court pictures.
 - Local matches: a player leaving the character select no longer flips a doubles match back to singles (a third player joining still turns singles into doubles), and a player joining now has its own sound instead of the select sound.
+- Mod characters' feet now stay on the court through runs, swings and celebrations instead of floating above it or sinking into it: their legs bend to put each foot where the original character's would be.
