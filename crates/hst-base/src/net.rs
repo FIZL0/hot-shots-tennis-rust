@@ -1091,9 +1091,11 @@ struct Ctx {
 type Lan = std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<EndpointId, Listing>>>;
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Keep `lan` to the hosts mDNS hears now (a host's record updates when its seats change; gone when it stops).
-fn watch_lan(mdns: MdnsAddressLookup) -> Lan {
+/// Keep `lan` to the hosts mDNS hears now (a host's record updates when its seats change; gone when it stops); none
+/// without mDNS (B536).
+fn watch_lan(mdns: Option<MdnsAddressLookup>) -> Lan {
     let lan = Lan::default();
+    let Some(mdns) = mdns else { return lan };
     let l = lan.clone();
     n0_future::task::spawn(async move {
         let mut events = mdns.subscribe().await;
@@ -1149,7 +1151,7 @@ impl Ctx {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, MdnsAddressLookup), String> {
+pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, Option<MdnsAddressLookup>), String> {
     let mode = match relay {
         Relay::N0 => RelayMode::Default,
         Relay::Own(url) => RelayMode::Custom(url.parse::<RelayUrl>().map_err(|e| format!("relay_url {url}: {e}"))?.into()),
@@ -1166,9 +1168,17 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, MdnsAddressLookup), St
     // and a join wait for it themselves
     let ep = b.bind().await.map_err(|e| e.to_string())?;
     // LAN: bare IDs resolve by mDNS and hosts' listings ride on it (no internet needed)
-    let mdns = MdnsAddressLookup::builder().service_name(MDNS).build(ep.id()).map_err(|e| format!("mDNS: {e}"))?;
-    ep.address_lookup().map_err(|e| e.to_string())?.add(mdns.clone());
+    let mdns = with_mdns(&ep, MdnsAddressLookup::builder().service_name(MDNS).build(ep.id()).map_err(|e| e.to_string()));
     Ok((ep, mdns))
+}
+
+/// B536: mDNS added to the endpoint's lookups if it could be built. An iPhone app may not use multicast without
+/// Apple's multicast entitlement, so its mDNS sockets can fail to bind: that used to fail the whole endpoint (no Host,
+/// Find or Join at all); now it goes online through the relays and the DHT, without LAN lobbies.
+#[cfg(not(target_arch = "wasm32"))]
+fn with_mdns(ep: &Endpoint, mdns: Result<MdnsAddressLookup, String>) -> Option<MdnsAddressLookup> {
+    let added = mdns.and_then(|m| ep.address_lookup().map_err(|e| e.to_string()).map(|l| l.add(m.clone())).map(|_| m));
+    added.inspect_err(|e| bevy::log::warn!("mDNS: {e}: no LAN lobbies on this device")).ok()
 }
 
 // The browser has no UDP: no DHT and no mDNS, only the relays. A code (ticket) carries the host's relay, so joining by
@@ -1214,7 +1224,7 @@ pub async fn endpoint(relay: &Relay) -> Result<(Endpoint, ()), String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn bind(relay: &Relay) -> Result<(Option<Endpoint>, MdnsAddressLookup), String> {
+async fn bind(relay: &Relay) -> Result<(Option<Endpoint>, Option<MdnsAddressLookup>), String> {
     endpoint(relay).await.map(|(ep, m)| (Some(ep), m))
 }
 
@@ -3746,6 +3756,22 @@ mod tests {
         let l = lan_listing(id, Some(&data)).unwrap();
         assert_eq!((l.id, l.name, l.taken, l.seats), (id.to_string(), r.name, 1, 4));
         assert_eq!(lan_listing(id, Some(&"other app".parse().unwrap())), None);
+    }
+
+    /// B536: mDNS that can't bind (an iPhone app without the multicast entitlement) leaves the endpoint up, with
+    /// no LAN list, instead of failing it; one that builds is kept.
+    #[test]
+    fn no_mdns_still_goes_online() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (ep, m) = endpoint(&Relay::Off).await.unwrap();
+            assert!(m.is_some(), "mDNS binds here");
+            assert!(with_mdns(&ep, Err("Cannot bind to IPv4 or IPv6".into())).is_none());
+            assert!(lan_list(&watch_lan(None)).is_empty());
+            let built = MdnsAddressLookup::builder().service_name(MDNS).build(ep.id()).map_err(|e| e.to_string());
+            assert!(with_mdns(&ep, built).is_some());
+            ep.close().await;
+        });
     }
 
     /// LAN play with relays off and no DHT: a host's lobby heard by mDNS, then joined by bare ID (mDNS lookup) and
