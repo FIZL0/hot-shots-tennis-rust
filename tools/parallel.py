@@ -346,14 +346,16 @@ def union(files, tid, cwd=ROOT):
         if f in ('plan/TODO.md', 'plan/DONE.md'):
             done = {m.group(2).rstrip('.') for l in open(os.path.join(cwd, 'plan/DONE.md'))
                     if (m := ITEM.match(l)) and m.group(1) == 'x'} if f == 'plan/TODO.md' else set()
-            out_l, seen, mine = [], {}, git('show', f'task/{tid}:{f}').stdout.splitlines()
+            tids = [tid] if isinstance(tid, str) else tid
+            out_l, seen = [], {}
+            mine = {l for t in tids for l in git('show', f'task/{t}:{f}').stdout.splitlines()}
             for l in text.split('\n'):
                 if m := ITEM.match(l):
                     k = m.group(2).rstrip('.')
                     if k in done:
                         continue
                     if k in seen:
-                        if (k == tid) == (l in mine):
+                        if (k in tids) == (l in mine):
                             out_l[seen[k]] = l
                         continue
                     seen[k] = len(out_l)
@@ -364,15 +366,38 @@ def union(files, tid, cwd=ROOT):
     return True
 
 
+WAITING = []  # finished tasks queued on MERGE: whoever gets it merges them all, built and tested once
+LANDED = set()  # landed by another task's batch: its own merge() has nothing left to do
+SOLO = set()  # was in a batch whose tests failed: merges alone, so the failure lands on the right branch
+
+
 def merge(tid):
+    WAITING.append(tid)
     with MERGE:
+        if tid in LANDED:
+            LANDED.discard(tid)
+            return None
         d = slot('merge')  # the merge is made and tested here; main only moves once it passes (MARK's successor)
-        git('reset', '-q', '--hard', cwd=d), git('clean', '-fdq', cwd=d)
+        # 2026-10-17: one at a time, each retested whenever main moved, 8 finished branches queued ~2 h behind one
+        batch = [tid] if tid in SOLO else [tid] + [t for t in WAITING if t != tid and t not in SOLO]
         try:
-            return merge_locked(tid, d)
+            while True:
+                git('reset', '-q', '--hard', cwd=d), git('clean', '-fdq', cwd=d)
+                why, landed = merge_locked(batch, d)
+                git('merge', '--abort', cwd=d)  # a conflicted merge left there
+                git('checkout', '-q', '--detach', cwd=d)
+                if why and why.startswith('tests fail') and len(batch) > 1:
+                    log(f'{" ".join(batch)}: the batch failed its tests; merging each alone')
+                    SOLO.update(batch)
+                    batch = [tid]
+                    continue
+                for t in landed:
+                    if t != tid:
+                        WAITING.remove(t)
+                        LANDED.add(t)
+                return why if why or tid in landed else 'left out of the batch'
         finally:
-            git('merge', '--abort', cwd=d)  # a conflicted merge left there
-            git('checkout', '-q', '--detach', cwd=d)
+            WAITING.remove(tid)  # landed, failed or left for the master: out of every later batch
 
 
 def check(d, *a):
@@ -390,27 +415,38 @@ def tested_by_cargo(f):
     return not (f.endswith('.md') or f.startswith('.github/') or (f.startswith('tools/') and f != 'tools/check.sh'))
 
 
-def merge_locked(tid, d):
+def merge_locked(tids, d):
     """merge()'s body, under MERGE. Sessions keep committing to main the whole time: the merge is built on a copy of
     main in the merge worktree and tested there, then lands on main as a fast-forward (or, when main moved meanwhile
     with plan/journal edits or after three tries, a merge of the tested commit). Main never holds an untested merge,
-    so nothing in main is refused or rewound (the old .git/runner-merge held main ~37% of 2026-10-16)."""
+    so nothing in main is refused or rewound (the old .git/runner-merge held main ~37% of 2026-10-16).
+    tids[0] is the caller's task; the rest join it when they merge cleanly (a conflicting one is left out, to merge
+    alone later). Returns (why it couldn't land, or None; the tasks that landed)."""
+    tid = tids[0]
     for attempt in range(3):
         base = git('rev-parse', 'main').stdout.strip()
         git('checkout', '-q', '--detach', base, cwd=d)
-        if git('merge', '--no-edit', '-m', f"Merge branch 'task/{tid}'", f'task/{tid}', cwd=d).returncode:
-            files = git('diff', '--name-only', '--diff-filter=U', cwd=d).stdout.split()
-            if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, tid, d):
-                return f'conflicts in {", ".join(files)}'
-            git('commit', '-q', '--no-edit', cwd=d)
-            log(f'{tid}: the runner joined both sides of {", ".join(files)}')
+        batch = []
+        for t in tids:
+            if git('merge', '--no-edit', '-m', f"Merge branch 'task/{t}'", f'task/{t}', cwd=d).returncode:
+                files = git('diff', '--name-only', '--diff-filter=U', cwd=d).stdout.split()
+                if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, t, d):
+                    git('merge', '--abort', cwd=d)
+                    if t == tid:
+                        return f'conflicts in {", ".join(files)}', []
+                    log(f'{t}: conflicts with main in {", ".join(files)}; left out of {tid}\'s batch')
+                    continue
+                git('commit', '-q', '--no-edit', cwd=d)
+                log(f'{t}: the runner joined both sides of {", ".join(files)}')
+            batch.append(t)
+        tids = batch
         sp.run([os.path.join(d, 'tools/ctx.py'), 'archive'], cwd=d, capture_output=True)
         plan = ['plan/TODO.md', 'plan/DONE.md']
         if git('status', '--porcelain', '--', *plan, cwd=d).stdout.strip():
             git('commit', '-qm', f'{tid}: archive ticked tasks into plan/DONE.md', '--', *plan, cwd=d)
         merged = git('rev-parse', 'HEAD', cwd=d).stdout.strip()
         # the agent's done.sh passed the tests on its branch: rerun them only if the merge's code differs from the branch's
-        tested = not any(map(tested_by_cargo, git('diff', '--name-only', f'task/{tid}', merged).stdout.split()))
+        tested = len(tids) == 1 and not any(map(tested_by_cargo, git('diff', '--name-only', f'task/{tid}', merged).stdout.split()))
         chk = sp.CompletedProcess([], 0, '', '') if tested else check(d)
         # ponytail: the net:: tests time out under the slots' load; one rerun of just the failures before it counts
         if chk.returncode and (names := failures(chk)):
@@ -431,39 +467,41 @@ def merge_locked(tid, d):
                     inherited = 'main\'s build already failed' if build else 'already failing on main: ' + ', '.join(names)
                     log(f'{tid}: {inherited}; merged anyway')
             if not inherited:
-                return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400]
+                return 'tests fail after the merge: ' + ' / '.join(chk.stdout.splitlines()[:4])[:400], []
         # main got code commits during the tests: the tested commit doesn't cover them, so build and test again
         # (plan/journal edits don't need it); after three tries it lands anyway, as any two commits on main would
         moved = git('diff', '--name-only', base, 'main').stdout.split()
         if attempt < 2 and any(map(tested_by_cargo, moved)):
-            log(f'{tid}: main got code commits during the tests ({", ".join(moved[:5])}); testing the merge again')
+            log(f'{" ".join(tids)}: main got code commits during the tests ({", ".join(moved[:5])}); testing the merge again')
             continue
         with MAIN:
-            why = land(tid, merged)
+            why = land(tids, merged)
         if why:
             if why == 'conflict' and attempt < 2:
                 continue
-            return why
+            return why, []
         break
     else:
-        return 'main kept changing under the merge (three tries)'
-    git('branch', '-d', f'task/{tid}')
+        return 'main kept changing under the merge (three tries)', []
     pushed = git('push', '-q', 'origin', 'main').returncode == 0
     added = git('diff', base, 'main', '--', 'plan/TODO.md').stdout
-    line = next((l for l in open(os.path.join(ROOT, 'plan/TODO.md')) if f'**{tid}**' in l), '')
-    state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
-    sus = [l[1:].strip()[:200] for l in added.splitlines() if l.startswith('+') and SUSPECT.search(l)]
-    note = f'{tid}: merged by the runner, {state}' + ('' if pushed else ', push failed') + \
-           (f'; tests fail but {inherited}' if inherited else '') + \
-           (f'; SUSPECT BLOCK (PCSX2 runs unattended), recheck: {sus[0]}' if sus else '')
-    open(os.path.join(NOTES, 'master.md'), 'a').write(note + '\n')
-    log(note)
-    return None
+    for t in tids:
+        git('branch', '-d', f'task/{t}')
+        line = next((l for l in open(os.path.join(ROOT, 'plan/TODO.md')) if f'**{t}**' in l), '')
+        state = 'blocked' if line.startswith('- [~]') else 'part' if line else 'ticked'
+        sus = [l[1:].strip()[:200] for l in added.splitlines() if l.startswith('+') and SUSPECT.search(l) and f'**{t}**' in l]
+        note = f'{t}: merged by the runner, {state}' + (f' (with {", ".join(tids)})' if len(tids) > 1 else '') + \
+               ('' if pushed else ', push failed') + (f'; tests fail but {inherited}' if inherited else '') + \
+               (f'; SUSPECT BLOCK (PCSX2 runs unattended), recheck: {sus[0]}' if sus else '')
+        open(os.path.join(NOTES, 'master.md'), 'a').write(note + '\n')
+        log(note)
+    return None, tids
 
 
-def land(tid, merged):
+def land(tids, merged):
     """Move main to the tested merge: seconds, not a test run. None when it landed, 'conflict' when main's new
     commits clash with it (merge() builds it again on top), else why it couldn't."""
+    tid = tids[0]
     t0 = time.time()
     # the master is merging in main, or someone left conflicts there (a stash pop): wait; merging over unmerged
     # paths "resolves" theirs and commits that instead of the branch (B207, 2026-10-13)
@@ -481,14 +519,14 @@ def land(tid, merged):
             + (f' (main fast-forwarded to {cur})' if ff else f' ({cur} does not fast-forward: its commits stay there)'))
     # uncommitted edits in main are never moved: git refuses (before starting) a merge that would change a file
     # someone is editing, so wait for them to commit it; stashing it lost work (2026-10-15)
-    msg = ['-m', f'{tid}: its tested merge, onto commits main got during the tests']
+    msg = ['-m', f'{" ".join(tids)}: the tested merge, onto commits main got during the tests']
     while git('merge', '-q', *msg, merged).returncode and not os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD')):
         if time.time() - t0 > 60 * 60:
             return 'uncommitted edits in main to files the merge changes, for 60 min'
         time.sleep(10)
     if os.path.exists(os.path.join(ROOT, '.git', 'MERGE_HEAD')):
         files = git('diff', '--name-only', '--diff-filter=U').stdout.split()
-        if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, tid, ROOT):
+        if [f for f in files if not PLAIN.fullmatch(f)] or not union(files, tids, ROOT):
             git('merge', '--abort')
             return 'conflict'
         git('commit', '-q', '--no-edit')
