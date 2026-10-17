@@ -67,6 +67,8 @@ pub struct View {
     pub rewired: Option<u32>,
     /// B281: what this machine last told the host about still choosing about a mod.
     pub deciding: bool,
+    /// M122: what this machine last told the host about downloading mods' looks (how far, in 5 % steps).
+    pub fetching: Option<u8>,
     /// This machine hosts the lobby; as a guest, it said it's ready.
     pub hosting: bool,
     pub prepared: bool,
@@ -118,6 +120,8 @@ pub(super) struct Facts {
     pub rank: Option<String>,
     /// M95: a human's platform and input.
     pub device: Option<crate::device::Device>,
+    /// M122: its machine still downloading a mod's looks, this far (percent).
+    pub fetching: Option<u8>,
 }
 
 /// What an Online press asks of the app.
@@ -585,7 +589,7 @@ impl Menu {
         if !st.human() {
             let rank = super::com_rank(&text.ranks, st.pick.char, st.pick.costume, r.doubles);
             let rank = super::RANK_NAMES.get(rank).copied().unwrap_or("COM").trim_start_matches("Tennis ");
-            return Some(Facts { owner: "Computer".into(), ping: None, state: "Ready", rank: Some(rank.to_string()), device: None });
+            return Some(Facts { owner: "Computer".into(), ping: None, state: "Ready", rank: Some(rank.to_string()), device: None, fetching: None });
         }
         let me = if self.net.hosting { "host" } else { self.net.me.as_str() };
         let ping = if st.peer == "host" { r.ping.get(me) } else { r.ping.get(&st.peer) }.copied();
@@ -594,7 +598,8 @@ impl Menu {
             lobby::State::Waiting => "Not ready",
             lobby::State::Open | lobby::State::Ready => "Ready",
         };
-        Some(Facts { owner: seat_name(self, r, p, &st.peer), ping, state, rank: None, device: r.devices.get(&st.peer).copied() })
+        let fetching = r.fetching.get(&st.peer).copied();
+        Some(Facts { owner: seat_name(self, r, p, &st.peer), ping, state, rank: None, device: r.devices.get(&st.peer).copied(), fetching })
     }
 
     /// B201: lobby seat `p` when another peer's player or the computer has it (this machine's players are in their
@@ -905,6 +910,7 @@ impl Menu {
         (self.net.ask, self.net.ready, self.net.hosting, self.net.prepared, self.net.deciding) = (None, None, false, false, false);
         self.net.wanted.clear();
         self.net.progress.clear();
+        self.net.fetching = None;
         self.net.pick_next = true;
         self.net.fail = None;
         (self.net.me, self.net.sent) = (if go == Go::Host { "host".into() } else { String::new() }, None);
@@ -1701,6 +1707,16 @@ impl Menu {
         }
     }
 
+    /// M122: how far this machine's downloads of mods' looks are, all of them together (one not started counts as
+    /// none in), in 5 % steps; `None` when it waits for none.
+    pub(super) fn fetching(&self) -> Option<u8> {
+        if self.net.room.is_none() || self.net.started || self.net.wanted.is_empty() {
+            return None;
+        }
+        let sum: u64 = self.net.wanted.iter().map(|h| self.net.progress.get(h).map_or(0, |&(got, len)| (got * 100 / len.max(1)).min(100))).sum();
+        Some((sum / self.net.wanted.len() as u64 / 5 * 5) as u8)
+    }
+
     /// A mod's looks arrived: checked and kept, or refused (a stand-in plays it).
     fn got_pack(&mut self, iso: &str, h: u64, pack: &[u8]) {
         self.net.progress.remove(&h);
@@ -1730,6 +1746,14 @@ pub(super) fn seat_name(m: &Menu, r: &Room, i: usize, peer: &str) -> String {
 
 fn name_of(r: &Room, peer: &str) -> String {
     r.names.get(peer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| if peer == "host" { "Host".into() } else { peer.chars().take(6).collect() })
+}
+
+/// M122: who in the lobby is still downloading a mod's looks and how far ("you" for this machine), for the chat box
+/// and Start / Ready; `None` when nobody is.
+pub(super) fn downloading(m: &Menu, r: &Room) -> Option<String> {
+    let me = if m.net.hosting { "host" } else { m.net.me.as_str() };
+    let who: Vec<String> = r.fetching.iter().map(|(p, pct)| format!("{} {pct}%", if p == me { "you".into() } else { name_of(r, p) })).collect();
+    (!who.is_empty()).then(|| who.join(", "))
 }
 
 /// B281: after Start, who the match waits for to choose about a mod, and for how long.
@@ -1928,6 +1952,8 @@ pub(super) fn status_line(m: &Menu) -> Option<String> {
     let room = m.net.room.as_ref();
     match () {
         _ if let Some(r) = room.filter(|r| r.wait > 0) => Some(waiting(r)),
+        // M122: why a player isn't ready yet: their mods' looks still coming
+        _ if let Some(who) = room.filter(|_| !m.net.started).and_then(|r| downloading(m, r)) => Some(format!("Still downloading a mod: {who}.")),
         _ if !m.net.status.is_empty() => Some(m.net.status.clone()),
         // B526: a browser's LAN guest waiting for the host says how its answer gets there
         _ if room.is_none() && shared(&m.net).is_some() => Some(GUEST_LAN.into()),
@@ -2394,6 +2420,11 @@ pub(super) fn poll(
             menu.net.deciding = d;
             net.send(Cmd::Deciding(d));
         }
+        let f = menu.fetching();
+        if f != menu.net.fetching {
+            menu.net.fetching = f;
+            net.send(Cmd::Fetching(f));
+        }
         if let Some(mut art) = art {
             menu.borrow(&mut art.2);
         }
@@ -2611,6 +2642,10 @@ pub(super) fn sample(m: &mut Menu) {
         let r = m.net.room.as_mut().unwrap();
         r.deciding.insert(peers[0].into());
         r.wait = 7;
+    }
+    // M122: Sunny Day still downloading a mod's looks
+    if menu == "lobby-fetching" {
+        m.net.room.as_mut().unwrap().fetching.insert(peers[0].into(), 45);
     }
     if std::env::var("HST_MENU").as_deref() == Ok("lobby-ask") {
         // 2P brought a mod this machine doesn't have: the prompt
@@ -3431,6 +3466,20 @@ mod tests {
         b.download_progress(8, 200, 200);
         assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: downloading its looks (50%)"));
         assert!(!b.net.progress.contains_key(&8));
+        // M122: and to the lobby, in 5 % steps over all of them (one not started yet counts as none in)
+        assert_eq!(b.fetching(), Some(50));
+        b.net.wanted.insert(9);
+        assert_eq!(b.fetching(), Some(25));
+        b.net.wanted.remove(&9);
+        // every player sees who is still downloading and how far, on its card and in the chat box and Start
+        let r = b.net.room.as_mut().unwrap();
+        let peer = r.seats[1].as_ref().unwrap().peer.clone();
+        r.fetching.insert(peer.clone(), 45);
+        r.fetching.insert("host".into(), 50);
+        let who = format!("you 50%, {} 45%", name_of(r, &peer));
+        assert_eq!(downloading(&b, b.net.room.as_ref().unwrap()).as_deref(), Some(who.as_str()));
+        assert_eq!(status_line(&b), Some(format!("Still downloading a mod: {who}.")));
+        b.net.room.as_mut().unwrap().fetching.clear();
         b.got_pack(iso, 7, b"not a pack");
         assert_eq!((b.net.progress.get(&7), b.remote_mod_note(1).as_deref()), (None, Some("Emi mod: you'll see a stand-in")), "refused");
         b.net.looks.clear();

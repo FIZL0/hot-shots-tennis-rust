@@ -806,6 +806,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B536** iOS IPA can't find or host online lobbies; likely the same iroh transport issue Safari/web had — compare with the web fix (crates/hst-base/src/net.rs, net/, ios.rs)
 - [x] **M121** Online lobby: put the character select roster inside the lobby instead of two separate menus (crates/hst/src/play/main_menu/, crates/hst-base/src/net.rs)
 - [x] **B538** iOS (iPhone 15 Pro): game keeps reloading/crashing, probably out of memory; find the peak and keep it under iOS's limit (textures, preload, pipelines; crates/hst-base/src/ios.rs, textures.rs, crates/hst-play/src/preload.rs)
+- [x] **M122** Online lobby: show every player a notice when someone is still downloading a mod, so they know why that player isn't ready (builds on B537's progress; crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
 
 
 ### Shots

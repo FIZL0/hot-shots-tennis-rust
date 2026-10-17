@@ -300,6 +300,10 @@ pub struct Room {
     /// M95: each peer's platform and input (its Hello's, then its `Msg::Device`), for the icons by its name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub devices: std::collections::BTreeMap<String, crate::device::Device>,
+    /// M122: peers still downloading a mod's looks, and how far (percent, all of them together), so every player sees
+    /// why one isn't ready yet.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub fetching: std::collections::BTreeMap<String, u8>,
 }
 
 /// B281: how long the host's Start waits for a player still choosing whether to download a mod (ms; tests shorten it).
@@ -531,6 +535,7 @@ impl Room {
         self.devices.retain(|p, _| !away.contains(p));
         self.picking.retain(|p| !away.contains(p));
         self.deciding.retain(|p| !away.contains(p));
+        self.fetching.retain(|p, _| !away.contains(p));
         self.ready.clear();
         (self.rejoin, self.ver) = (false, self.ver + 1);
     }
@@ -549,6 +554,7 @@ impl Room {
         self.ready.remove(peer);
         self.picking.remove(peer);
         self.deciding.remove(peer);
+        self.fetching.remove(peer);
         self.live.remove(peer);
         for s in &mut self.seats {
             if s.as_ref().is_some_and(|s| s.peer == peer) {
@@ -723,6 +729,8 @@ pub enum Msg {
     Device(crate::device::Device),
     /// B522: a guest's player in seat `.0` to the other team (`Room::team_target`).
     Team(u8),
+    /// M122: a guest is downloading a mod's looks, this far (percent), or not any more (`Room::fetching`).
+    Fetching(Option<u8>),
 }
 
 impl Msg {
@@ -908,6 +916,9 @@ pub enum Cmd {
     Device(crate::device::Device),
     /// B522: a guest's player in seat `.0` to the other team (the host's □ is singles / doubles instead).
     Team(usize),
+    /// M122: this machine is downloading a mod's looks, this far (percent), or not any more: everyone in the lobby
+    /// sees it on its seats.
+    Fetching(Option<u8>),
 }
 
 /// What the network tells the app.
@@ -1951,6 +1962,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 }
                 Guest::Said(peer, Msg::Ready(v)) if v == room.ver => drop(ready.insert(peer)),
                 Guest::Said(peer, Msg::Deciding(d)) => deciding(cx, &joined, &mut room, peer, d),
+                Guest::Said(peer, Msg::Fetching(f)) => fetching(cx, &joined, &mut room, peer, f),
                 Guest::Said(peer, Msg::Prepared(p)) => {
                     let changed = if p { room.ready.insert(peer) } else { room.ready.remove(&peer) };
                     auto |= p;
@@ -2106,6 +2118,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
             c = cmds.recv() => match c {
                 Some(Cmd::Ready(v)) if v == room.ver => drop(ready.insert("host".into())),
                 Some(Cmd::Deciding(d)) => deciding(cx, &joined, &mut room, "host".into(), d),
+                Some(Cmd::Fetching(f)) => fetching(cx, &joined, &mut room, "host".into(), f),
                 Some(Cmd::Start) if count.is_none() && !go && starting.is_none() => {
                     auto = false;
                     count = Some(n0_future::time::Instant::now() + Duration::from_millis(COUNTDOWN_MS.load(std::sync::atomic::Ordering::Relaxed)));
@@ -2224,6 +2237,20 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
 /// B281: `peer` still choosing about a mod (or not any more), shown to everyone.
 fn deciding(cx: &Ctx, joined: &[(String, Link, Conn)], room: &mut Room, peer: String, d: bool) {
     if (d && room.names.contains_key(&peer) && room.deciding.insert(peer.clone())) || (!d && room.deciding.remove(&peer)) {
+        broadcast(joined, &Msg::Room(room.clone()));
+        cx.say(Event::Room(room.clone()));
+    }
+}
+
+/// M122: `peer` downloading a mod's looks this far, or done: to everyone when it changes (shown only: no relisting,
+/// no ready reset).
+fn fetching(cx: &Ctx, joined: &[(String, Link, Conn)], room: &mut Room, peer: String, f: Option<u8>) {
+    let changed = match f {
+        Some(pct) if room.names.contains_key(&peer) => room.fetching.insert(peer, pct.min(100)) != Some(pct.min(100)),
+        Some(_) => false,
+        None => room.fetching.remove(&peer).is_some(),
+    };
+    if changed {
         broadcast(joined, &Msg::Room(room.clone()));
         cx.say(Event::Room(room.clone()));
     }
@@ -2653,6 +2680,7 @@ async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unb
                 Some(Cmd::Want(h)) => link.send(&Msg::Want(h)),
                 Some(Cmd::Ready(v)) => link.send(&Msg::Ready(v)),
                 Some(Cmd::Deciding(d)) => link.send(&Msg::Deciding(d)),
+                Some(Cmd::Fetching(f)) if !playing => link.send(&Msg::Fetching(f)),
                 Some(Cmd::Prepared(p)) => link.send(&Msg::Prepared(p)),
                 Some(Cmd::Cancel) => link.send(&Msg::Cancel),
                 Some(Cmd::Live(l)) => link.send(&Msg::Live(l)),
@@ -4010,6 +4038,16 @@ mod tests {
             assert_eq!(seen.court_mod.as_ref().map(|c| (c.looks, c.dir.is_none())), Some((hc, true)));
             gcmd.send(Cmd::Want(hc)).unwrap();
             assert_eq!(next(&gev, |e| matches!(e, Event::Pack(..))).await, Event::Pack(hc, court_pack));
+            // M122: how far the guest's download is reaches everyone (the host's own too), and its end clears it
+            gcmd.send(Cmd::Fetching(Some(40))).unwrap();
+            let fetching = |pcts: &'static [u8]| move |e: &Event| matches!(e, Event::Room(r) if r.fetching.values().copied().eq(pcts.iter().copied()));
+            next(&hev, fetching(&[40])).await;
+            next(&gev, fetching(&[40])).await;
+            hcmd.send(Cmd::Fetching(Some(5))).unwrap();
+            let Event::Room(both) = next(&gev, |e| matches!(e, Event::Room(r) if r.fetching.len() == 2)).await else { unreachable!() };
+            assert_eq!(both.fetching.get("host"), Some(&5));
+            (gcmd.send(Cmd::Fetching(None)).unwrap(), hcmd.send(Cmd::Fetching(None)).unwrap());
+            next(&gev, fetching(&[])).await;
             // ready and started, but the mods aren't settled yet
             gcmd.send(Cmd::Prepared(true)).unwrap();
             hcmd.send(Cmd::Start).unwrap();

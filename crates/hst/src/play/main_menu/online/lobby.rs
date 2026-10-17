@@ -284,8 +284,11 @@ fn start_button(d: &mut Draw, m: &Menu, r: Option<&Room>, g: &frame::Geo, items:
     let Some(k) = items.iter().position(|it| matches!(it, Item::Button("Start" | "Ready"))) else { return };
     let (n, of) = ready_count(r);
     let picking = (0..r.seats.len()).find(|&i| state(r, i) == State::Picking).and_then(|i| r.seats[i].as_ref().map(|s| super::seat_name(m, r, i, &s.peer)));
+    // M122: then a player whose mods' looks are still downloading (the match waits for them)
+    let fetching = super::downloading(m, r);
     let ready = match (&picking, r.open()) {
         (Some(p), _) => format!("{n} of {of} ready · {p} is still picking"),
+        (None, _) if let Some(f) = &fetching => format!("{n} of {of} ready · downloading: {f}"),
         (None, 0) if n == of => "Everyone ready".to_string(),
         (None, 0) => format!("{n} of {of} ready"),
         (None, open) => format!("{n} of {of} ready · +{open} COM"),
@@ -293,7 +296,9 @@ fn start_button(d: &mut Draw, m: &Menu, r: Option<&Room>, g: &frame::Geo, items:
     let (big, small, play) = match items[k] {
         _ if m.counting() > 0 => (format!("Cancel ({})", m.counting()), "The match is starting".to_string(), false),
         Item::Button("Start") => ("Start".into(), ready, true),
+        _ if m.net.prepared && fetching.is_some() => ("Not ready".into(), ready, false),
         _ if m.net.prepared => ("Not ready".into(), format!("{n} of {of} ready · waiting for the host"), false),
+        _ if fetching.is_some() => ("Ready".into(), ready, false),
         _ => ("Ready".into(), format!("{n} of {of} ready · waiting for the host"), false),
     };
     frame::start(d, g, &big, &small, play, on(items[k]));

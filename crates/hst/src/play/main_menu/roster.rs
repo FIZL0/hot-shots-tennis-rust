@@ -803,14 +803,17 @@ fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p
         (None, Who::Disc(_)) => "Disc character".to_string(),
     };
     let (fill, ink) = match f.state {
+        // M122: its machine still downloading a mod: why it isn't ready
+        _ if f.fetching.is_some() => (hex(0xffd23f), hex(look::INK)),
         "Ready" => (hex(0x3f9d2e), WHITE),
         "Picking..." => (hex(look::INK), WHITE),
         _ => (s.well, hex(look::INK)),
     };
+    let state = f.fetching.map_or_else(|| f.state.to_string(), |pct| format!("Downloading {pct}%"));
     let ps = 14.0 * PY;
-    let pw = (d.width(f.state, ps) + 20.0 * PX).min(iw * 0.55);
+    let pw = (d.width(&state, ps) + 20.0 * PX).min(iw * 0.55);
     rounded(d, [ix + iw - pw, foot_y, pw, foot_h], 15.0, fill, 128.0);
-    d.label(f.state, ix + iw - pw / 2.0, foot_y + (foot_h - ps) / 2.0, ps, pw - 12.0 * PX, ink);
+    d.label(&state, ix + iw - pw / 2.0, foot_y + (foot_h - ps) / 2.0, ps, pw - 12.0 * PX, ink);
     let ws = 13.0 * PY;
     let what = ellipsis(d, &what, ws, iw - pw - 8.0 * PX);
     d.text(&what, ix, foot_y + (foot_h - ws) / 2.0, ws, s.soft);
