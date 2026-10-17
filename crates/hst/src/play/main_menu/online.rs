@@ -2868,9 +2868,11 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
         });
         let iso = w.resource::<crate::Args>().iso.clone();
         let mode = crate::play::netplay::mode(crate::match_mode(&iso, &flags, back), net, room, me);
+        // B550: their costumes loaded in the background from here, as the disc characters
+        let early_mods = crate::online_mod_lineup(&iso, &flags, &mm);
         let mode = if mm.0.is_empty() { mode } else { mode.and(move |app| {
             app.insert_resource(mm);
-        }) };
+        }).early(move |w| crate::preload::mods(w, &iso, &early_mods)) };
         w.insert_resource(crate::mode::Next(Some(mode)));
     });
 }

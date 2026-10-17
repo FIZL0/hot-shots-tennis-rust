@@ -58,9 +58,16 @@ impl Mode {
     }
 
     /// P50: what to start in the background as soon as the switch to this mode begins (before the old mode's fade
-    /// and the loading screen): its start waits for [`crate::preload::busy`] before each system.
+    /// and the loading screen): its start waits for [`crate::preload::busy`] before each system. A second call adds
+    /// to the first.
     pub fn early(mut self, f: impl FnOnce(&mut World) + Send + Sync + 'static) -> Self {
-        self.early = Some(Box::new(f));
+        self.early = Some(match self.early.take() {
+            Some(first) => Box::new(move |world: &mut World| {
+                first(world);
+                f(world);
+            }),
+            None => Box::new(f),
+        });
         self
     }
 
