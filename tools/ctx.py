@@ -105,9 +105,28 @@ def _mark(ls, i, box):
     ls[i] = re.sub(r'^- \[.\]', f'- [{box}]', ls[i])
 
 
+def _child(parent, tid):
+    # P17 -> P17a, P11k -> P11k1: the parent's id plus a character of the other kind (so P170 isn't P17's)
+    rest = tid[len(parent):]
+    return tid.startswith(parent) and rest and rest[0].isdigit() != parent[-1].isdigit()
+
+
+def _close_parents(ls, dl):
+    """Tick each "(split into …)" parent whose subtasks are all done: some in DONE.md, none open here."""
+    items = [(m.group(3).rstrip('.'), m.group(2)) for m in map(ITEM.match, ls + dl) if m]
+    for i, line in enumerate(ls):
+        m = ITEM.match(line)
+        if m and not m.group(1) and m.group(2) != 'x' and '(split into' in line:
+            kids = [box for t, box in items if _child(m.group(3).rstrip('.'), t)]
+            if kids and all(box == 'x' for box in kids):
+                _mark(ls, i, 'x')
+
+
 def archive(todo, done):
-    """Move every top-level [x] task (with its sub-lines) from todo into done, under the same ### heading."""
+    """Move every top-level [x] task (with its sub-lines) from todo into done, under the same ### heading; a split
+    parent goes too once its subtasks are all done."""
     ls, dl, sec, moved = list(lines(todo)), list(lines(done)), '', 0
+    _close_parents(ls, dl)
     i = 0
     while i < len(ls):
         if _level(ls[i]):

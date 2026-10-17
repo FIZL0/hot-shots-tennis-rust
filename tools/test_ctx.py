@@ -25,4 +25,12 @@ assert open(done).read() == '# Done\n\n### S\n\n- [x] **A0** zero\n- [x] **A1** 
 assert open(own).read() == '- [x] **A1** one\n'
 ctx.block(todo, 'A3', 'no tiebreak')
 assert ctx.section(todo, 'A3') == ['- [~] **A3** three BLOCKED: no tiebreak']
+# a split parent goes once its subtasks are all done, not while one is open/blocked; P170 isn't P17's
+open(todo, 'w').write('# T\n\n### S\n\n- [ ] **P17** (split into P17a–b)\n- [x] **P17b** b\n- [ ] **P170** x\n'
+                      '- [ ] **Q1** (split into Q1a–b)\n- [~] **Q1a** a\n')
+open(done, 'w').write('# Done\n\n### S\n\n- [x] **P17a** a\n- [x] **Q1b** b\n')
+ctx._cache.clear()  # files rewritten behind ctx's TTL cache
+ctx.archive(todo, done)
+assert open(todo).read() == '# T\n\n### S\n\n- [ ] **P170** x\n- [ ] **Q1** (split into Q1a–b)\n- [~] **Q1a** a\n', open(todo).read()
+assert '- [x] **P17** (split into P17a–b)' in open(done).read()
 print('ok')
