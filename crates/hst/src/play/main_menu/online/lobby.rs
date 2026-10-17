@@ -138,8 +138,16 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
         }
     };
     let rm = m.net.room.as_ref();
-    let own = m.room();
-    top_bar(d, m, rm.unwrap_or(&own), &g, &on, &hit);
+    // B548: the room this machine would host only before one has come (`room` builds every pick's wire)
+    let own;
+    let r = match rm {
+        Some(r) => r,
+        None => {
+            own = m.room();
+            &own
+        }
+    };
+    top_bar(d, m, r, &g, &on, &hit);
     // the seats: on the lobby the cursor, the host's ✕, a carried card over the select's own columns
     let s = g.k * g.s;
     for (i, &rect) in g.plates.iter().enumerate().filter(|_| lobby) {
@@ -242,8 +250,8 @@ fn carried(d: &mut Draw, m: &Menu, r: &Room, i: usize, rect: [f32; 4], s: f32) {
 fn strip(d: &mut Draw, m: &Menu, r: Option<&Room>, g: &frame::Geo, on: &dyn Fn(Item) -> bool, hit: &dyn Fn(&mut Draw, Item, [f32; 4], Press)) {
     let text = d.text;
     let host = m.net.hosting;
-    let own = m.room();
-    let Some(r) = r.or(host.then_some(&own)) else {
+    let own = (r.is_none() && host).then(|| m.room());
+    let Some(r) = r.or(own.as_ref()) else {
         let cell = |label| Cell { label, value: "...".into(), arrows: false, sel: false, thumb: Thumb::None };
         return frame::strip(d, m, g, &[cell("COURT"), cell("UMPIRE"), cell("SETS"), cell("GAMES"), cell("MODS")]);
     };

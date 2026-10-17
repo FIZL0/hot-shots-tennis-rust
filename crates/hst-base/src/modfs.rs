@@ -137,6 +137,37 @@ pub fn size(p: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
     std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| (m.len(), m.modified().ok()))
 }
 
+/// B548: a cheap stamp of every file under folder `dir` (path, size, and on disk its modified time, in memory its
+/// buffer, in the browser's storage only that), so what is worked out from its bytes can be kept until one changes.
+// ponytail: an in-memory file rewritten with the same size into a freed buffer's address keeps its stamp
+pub fn stamp(dir: &Path) -> u64 {
+    fn add(h: &mut u64, b: &[u8]) {
+        *h = b.iter().fold(*h, |h, &x| (h ^ x as u64).wrapping_mul(0x100_0000_01b3));
+    }
+    fn walk(d: &Path, h: &mut u64) {
+        for p in read_dir(d) {
+            let k = key(&p);
+            let mem = MEM.lock().unwrap().get(&k).map(|b| (b.len() as u64, b.as_ptr() as u64, 0u8));
+            let lazy = || LAZY.lock().unwrap().get(&k).map(|&n| (n, 0, 1));
+            let disk = || {
+                let m = std::fs::metadata(&p).ok().filter(|m| m.is_file())?;
+                let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |t| t.as_nanos() as u64);
+                Some((m.len(), t, 2))
+            };
+            match mem.or_else(lazy).or_else(disk) {
+                Some((n, t, kind)) => {
+                    add(h, k.as_bytes());
+                    add(h, &[&n.to_le_bytes()[..], &t.to_le_bytes(), &[kind]].concat());
+                }
+                None => walk(&p, h),
+            }
+        }
+    }
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    walk(dir, &mut h);
+    h
+}
+
 /// The files and folders in folder `p`, sorted.
 pub fn read_dir(p: &Path) -> Vec<PathBuf> {
     let pre = format!("{}/", key(p));
