@@ -9,6 +9,10 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 ### Next (user priorities, in order)
 
 - [~] **B510** Post-point camera inside an object (user 2026-10-16): a post-point camera sat inside something (court/view not yet given; ask the user for court + screenshot). B240's eye-buried test and B303's in_front fallback miss it. Reproduce with bot matches logging the drawn camera vs nearby props/umpire chair/court walls, compare with the original at the same moment, hide/move as the original does (else B303's fallback) → play/net_hide.rs · hst-sim/src/cutaway.rs · play/cutaway.rs | j: 2026-10-13-b240-near-camera-props BLOCKED: user 2026-10-16: it happened on a modded court (a mod's props/geometry, not stock); needs the mod court + screenshot from the user to reproduce — skipped by user 2026-10-16; agent stopped mid-work, WIP parked on wip/B510 (stash commit: net_hide.rs, stage.rs, main.rs; untracked files in its 3rd parent) — wip/B510 (TEMP HST_CAMLOG probe in net_hide.rs) deleted 2026-10-16; rewrite the probe if the mod court turns up
+- [ ] **B536** iOS IPA can't find or host online lobbies; likely the same iroh transport issue Safari/web had — compare with the web fix (crates/hst-base/src/net.rs, net/, ios.rs)
+- [ ] **M121** Online lobby: put the character select roster inside the lobby instead of two separate menus (crates/hst/src/play/main_menu/, crates/hst-base/src/net.rs)
+- [ ] **B537** Online lobby: progress of downloading a joined player's mods may not update on screen (crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
+- [ ] **B538** iOS (iPhone 15 Pro): game keeps reloading/crashing, probably out of memory; find the peak and keep it under iOS's limit (textures, preload, pipelines; crates/hst-base/src/ios.rs, textures.rs, crates/hst-play/src/preload.rs)
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:
 index out of bounds: the len is 0 but the index is 0"
 
