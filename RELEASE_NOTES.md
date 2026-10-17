@@ -11,3 +11,4 @@
 - The Controllers screen (pause menu) now shows every player's character card with their stats, so you can see who you're handing a controller to; in an online match with two players on your machine you can swap your controllers between them from the pause menu.
 - Player names now look like the game's own "1P"–"4P" tags: the same lettering, colours and outline over your player's head, on your select card and on the score and stats screens. Names are now up to 6 characters so they fit where the tag goes.
 - Out of Bounds mod characters (Sophie, Kate, Gloria and others) now smile, wink and pull the rest of their faces in a match where they used to stay blank, wherever their model has a matching expression.
+- Out of Bounds characters now show a face for every reaction: surprised, sad and angry looks that used to stay blank (Sophie, Bjorn, Fernando, Felipe, Bloom, LJ, Kate, Dino, Anya, Suzuki, Jasmine, Alex) play on their nearest expression.
