@@ -1,4 +1,5 @@
 <!-- What's new since the last release, for players, in plain English: one "- " line per change. tools/release.sh puts this in the release and empties it. -->
+- Matches with mod characters start more smoothly: their models load in the background while the menu fades out, instead of freezing the first frames of the match.
 - On iPhone and iPad Safari, the website shows how to add OpenTennis to your home screen so the game plays full screen.
 - The website's "Pick your ISO" button at the top now opens the file picker straight away.
 - Online lobbies show how far along a download of another player's mod is, instead of a message that never changes.

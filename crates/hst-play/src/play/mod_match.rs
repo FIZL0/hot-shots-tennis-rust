@@ -26,11 +26,11 @@ pub(super) fn load(
 ) -> Arc<CharacterData> {
     let mut d = if m.costumes.is_empty() {
         // an online mod whose looks this machine declined (M2i): the plain donor (B489: no recolour)
-        crate::character::load_disc(iso, m.donor, outfit, meshes, materials, images, bindposes)
+        crate::preload::load_disc(iso, m.donor, outfit, meshes, materials, images, bindposes)
             .or_else(|_| crate::character::load_disc(iso, m.donor, 0, meshes, materials, images, bindposes))
             .unwrap_or_else(|e| panic!("mod {} stand-in: {e}", m.id))
     } else {
-        mods::load(iso, m, outfit % m.costumes.len(), meshes, materials, images, bindposes).unwrap_or_else(|e| panic!("mod {}: {e}", m.id))
+        crate::preload::load_mod(iso, m, outfit % m.costumes.len(), meshes, materials, images, bindposes).unwrap_or_else(|e| panic!("mod {}: {e}", m.id))
     };
     if let Some(sk) = &m.skeleton {
         // online: every peer poses the owner's skeleton for the game (contacts, toss, body hits), whatever it draws
