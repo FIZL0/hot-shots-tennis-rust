@@ -16,7 +16,7 @@ use bevy::prelude::*;
 
 use super::super::controls::Bindings;
 use super::roster::{BG, PX, PY, Seat, band, dashed, ellipsis, hex, ringed, rounded, seat, stats};
-use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, legend, look, pointer, tile_face};
+use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, look, pointer};
 
 /// The top bar's height, the margins round the cards and the gap between them, a card's padding (mockup px).
 const TOP_BAR: f32 = 60.0;
@@ -84,7 +84,7 @@ impl Menu {
 }
 
 /// The assignment screen.
-pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
+pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, _bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
     super::look::backdrop(d);
     let size = 30.0 * PY;
@@ -125,24 +125,8 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads:
         Some(None) => "Pending: you give up your seat when you leave this screen; until then you keep 1P's controls here. ".to_string(),
         None => String::new(),
     };
-    // 1P's buttons in its own device's names and bindings; the others' devices vary, so theirs go by what they do
-    let dev = match m.seats[0] {
-        Some(Dev::Pad(e)) => Some(e),
-        _ => None,
-    };
-    let b = |a: legend::Act| legend::button_names(dev, a, bind).join(" / ");
-    let (ok, back, page, card) = (b(legend::Act::Ok), b(legend::Act::Back), b(legend::Act::Page), b(legend::Act::Card));
-    let start = b(legend::Act::Name);
-    let help = if m.held {
-        format!("1P: Left/Right carries this controller to the next seat (it swaps with that seat's), {ok} puts it down.")
-    } else if m.net_pause.is_some() {
-        format!("1P: the arrows pick one of your seats, {ok} picks up its controller to move it, {start} keeps the change, {back} asks to keep or undo it. Another of your controllers: its OK button takes your seat that has none.")
-    } else if m.paused {
-        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes a controller off its seat, {start} keeps the change, {back} asks to keep or undo it. Others: OK takes a free seat, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat, any of its buttons flashes it.")
-    } else {
-        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes it off, {card} adds or removes a computer player, {start} goes on (empty seats are filled then). Others: OK joins, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat, any of its buttons flashes it.")
-    };
-    d.info(&format!("{pending}{help}"));
+    // the key legend carries the buttons; the bar only says when 1P's own seat change is pending
+    d.info(&pending);
     keep_layout(d, m);
 }
 
@@ -239,15 +223,16 @@ fn figure(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, [x, y, w, h]: [f32; 4],
     let start = d.out.len();
     d.centred(&num, x + w / 2.0, y + (wh - big) / 2.0, big, s.ring);
     d.out[start..].iter_mut().for_each(|q| q.alpha = 26.0);
-    // a square face (on screen) as big as the well allows
-    let fh = (wh - 10.0 * PY).min((w - 10.0 * PX) * PY / PX);
-    let fw = fh * PX / PY;
-    let face = [x + (w - fw) / 2.0, y + (wh - fh) / 2.0, fw, fh];
     if picked {
-        let (tex, src) = tile_face(Some(who));
-        d.q(tex, src, face, WHITE, 128.0);
-        d.out.last_mut().unwrap().round = [8.0 * PX; 4];
+        // the select's baked portrait (`previews.rs`, mods' too): its 128×160, its shape on screen
+        let k = 0.8 * PX / PY;
+        let rh = wh - 4.0 * PY;
+        let rw = (rh * k).min(w);
+        let rh = rw / k;
+        d.q(super::Tex::Preview(p), [0.0; 4], [x + (w - rw) / 2.0, y + (wh - rh) / 2.0, rw, rh], WHITE, 128.0);
     } else {
+        let fh = (wh - 10.0 * PY).min((w - 10.0 * PX) * PY / PX);
+        let fw = fh * PX / PY;
         let tw = fw.min(fh * 92.0 / 68.0);
         d.q(C02, RANDOM_TILE, [x + (w - tw) / 2.0, y + (wh - tw * 68.0 / 92.0) / 2.0, tw, tw * 68.0 / 92.0], WHITE, 128.0);
     }
@@ -292,28 +277,26 @@ fn glow(d: &mut Draw, [x, y, w, h]: [f32; 4], f: f32) {
     }
 }
 
-/// B564: over a pressed controller's card, "Controller N pressed - this is you" in a bubble pointing down at it.
-fn bubble(d: &mut Draw, m: &Menu, pads: &[Entity], [x, y, w, _]: [f32; 4], p: usize) {
+/// B564: a pressed controller's card: a solid gold ring over it and, above it, a gold "Controller N pressed - this is
+/// you" bubble pointing down at it (the concept board's), shown while `m.flash` is lit.
+fn bubble(d: &mut Draw, m: &Menu, pads: &[Entity], [x, y, w, h]: [f32; 4], p: usize) {
     let f = m.flash[p];
     let Kind::Device(dv) = m.assign_kind(p) else { return };
     if f <= 0.0 {
         return;
     }
+    super::frame::ringed(d, [x - 7.0 * PX, y - 7.0 * PY, w + 14.0 * PX, h + 14.0 * PY], 20.0 * PX, 4.0 * PX, GOLD, None);
     let says = format!("{} pressed - this is you", dev_name(Some(dv), pads));
     let s = 14.0 * PY;
-    let bw = (d.width(&says, s) + 24.0 * PX).min(w + 20.0 * PX);
+    let bw = (d.width(&says, s) + 24.0 * PX).min(w + 40.0 * PX);
     let (bh, cx) = (26.0 * PY, x + w / 2.0);
-    let by = y - 18.0 * PY;
-    let a = 128.0 * f.min(0.25) * 4.0;
+    let by = y - bh - 16.0 * PY;
     // the tail: a small square turned on its corner under the bubble
-    let t = 7.0;
-    d.q(super::Tex::Solid, [0.0; 4], [cx - t * PX, by + bh - t * PY, 2.0 * t * PX, 2.0 * t * PY], GOLD, a);
-    d.out.last_mut().unwrap().round = [t * PX; 4];
-    rounded(d, [cx - bw / 2.0 - 2.0 * PX, by - 2.0 * PY, bw + 4.0 * PX, bh + 4.0 * PY], 15.0, GOLD, a);
-    rounded(d, [cx - bw / 2.0, by, bw, bh], 13.0, hex(look::INK), a);
-    let start = d.out.len();
-    d.label(&says, cx, by + (bh - s) / 2.0, s, bw - 12.0 * PX, WHITE);
-    d.out[start..].iter_mut().for_each(|q| q.alpha = a);
+    let t = 6.0;
+    d.q(super::Tex::Solid, [0.0; 4], [cx - t * PX, by + bh - t * PY, 2.0 * t * PX, 2.0 * t * PY], GOLD, 128.0);
+    d.out.last_mut().unwrap().angle = std::f32::consts::FRAC_PI_4;
+    rounded(d, [cx - bw / 2.0, by, bw, bh], 12.0, GOLD, 128.0);
+    d.label(&says, cx, by + (bh - s) / 2.0, s, bw - 12.0 * PX, hex(look::INK));
 }
 
 /// B564: what a seat's badge shows: the controller's number (`pad` true: over a pad's outline), KB, COM, or - when
@@ -327,25 +310,13 @@ fn badge(kind: Kind, pads: &[Entity]) -> (String, bool) {
     }
 }
 
-/// The card's foot: on the left 1P's buttons for it (swap arrows on the focused card, + / - COM); the rest a chip in
+/// The card's foot: on the left 1P's + / - COM button; the rest a chip in
 /// the seat's colour (B564): a dark badge with the controller's number (KB, COM, - when free) beside what drives the
 /// seat and its role (1P controls / Player, how a free seat joins, "Yours when you leave").
 #[allow(clippy::too_many_arguments)]
-fn foot(d: &mut Draw, m: &Menu, pads: &[Entity], s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind: Kind, on: bool, yours: bool) {
+fn foot(d: &mut Draw, m: &Menu, pads: &[Entity], s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind: Kind, _on: bool, yours: bool) {
     let ps = 14.0 * PY;
     let mut lx = x;
-    if on && m.held {
-        // the held controller's arrows: they carry it the way 1P's ←→ do
-        for (right, arrow) in [(false, "<"), (true, ">")] {
-            if m.host_swap(right).is_some() && lx + h * PX / PY <= x + w / 2.0 {
-                let r = [lx, y, h * PX / PY, h];
-                rounded(d, r, 15.0, hex(look::INK), 128.0);
-                d.centred(arrow, lx + r[2] / 2.0, y + (h - 18.0 * PY) / 2.0, 18.0 * PY, WHITE);
-                d.hit(r, pointer::Act::Row(p, if right { Press { right: true, ..default() } } else { Press { left: true, ..default() } }));
-                lx += r[2] + 4.0 * PX;
-            }
-        }
-    }
     if m.can_bot(p) {
         let (word, rgb) = if m.bots[p] { ("- COM", [120.0, 30.0, 30.0]) } else { ("+ COM", [40.0, 100.0, 40.0]) };
         let bw = (d.width(word, ps) + 20.0 * PX).min(x + w / 2.0 - lx);

@@ -536,8 +536,8 @@ fn sync(
     // the cards follow the select's slide in (`slide.rs`; no fade on a 3D card), and wait while the last screen leaves
     let mut quads = match slide.incoming() {
         // B192: and the confirm screen's players
-        // B370: and the lobby's seat cards
-        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm | Screen::Lobby) => layout(&menu, &art.2, &bind, &[], 0.0).0,
+        // B370: and the lobby's seat cards; the Controllers screen's
+        Some(_) if matches!(menu.screen, Screen::Chars | Screen::Confirm | Screen::Lobby | Screen::Assign) => layout(&menu, &art.2, &bind, &[], 0.0).0,
         _ => Vec::new(),
     };
     let dx = slide.incoming().map_or(0.0, |s| s.0);
@@ -808,12 +808,12 @@ fn bake(
         }
         _ => Vec::new(),
     };
-    if menu.screen != Screen::Chars && asked.is_none() && home.is_empty() && lent.is_empty() && baker.job.is_none() && baker.warmed {
+    if !matches!(menu.screen, Screen::Chars | Screen::Assign) && asked.is_none() && home.is_empty() && lent.is_empty() && baker.job.is_none() && baker.warmed {
         return;
     }
     // a hovered card without a PNG jumps the queue
     let now: Vec<Key> = match menu.screen {
-        Screen::Chars => (0..menu.players()).map(|p| menu.pick(p)).collect(),
+        Screen::Chars | Screen::Assign => (0..menu.players()).map(|p| menu.pick(p)).collect(),
         Screen::Main => home.iter().rev().copied().collect(),
         Screen::Mods => home.iter().rev().copied().chain(asked).collect(),
         Screen::Lobby | Screen::Confirm => lent.clone(),
