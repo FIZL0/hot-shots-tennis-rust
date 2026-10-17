@@ -29,3 +29,4 @@
 - Online lobby: a player who picks Random shows as Random to everyone else, not as the character their cursor was on.
 - Online: locking in your character plays their voice line again (it was silent when you were the last on your machine to pick).
 - Online lobbies download another player's mod from the mod store when it's published there, instead of from that player's device, so it arrives faster and their phone no longer slows down while sending it.
+- Online: if your browser page reloads or the game crashes mid-match, starting it again puts you straight back into the match in your old seat after one button press; the others now wait up to two minutes for you (the countdown says so). If the host reloads, the match still ends.
