@@ -14,7 +14,7 @@ use bevy::prelude::*;
 
 use super::super::controls::Bindings;
 use super::roster::{BG, PX, PY, Seat, band, dashed, ellipsis, hex, ringed, rounded, seat, stats};
-use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, home, legend, look, pointer, tile_face};
+use super::{C02, CHAR_NAMES, Dev, Draw, GOLD, Menu, Press, RANDOM_TILE, STYLE_NAMES, Text, WHITE, Who, dev_name, grades_of, legend, look, pointer, tile_face};
 
 /// The top bar's height, the margins round the cards and the gap between them, a card's padding (mockup px).
 const TOP_BAR: f32 = 60.0;
@@ -22,7 +22,7 @@ const MARGIN: f32 = 24.0;
 const GAP: f32 = 12.0;
 const PAD: f32 = 10.0;
 const BAND: f32 = 50.0;
-const FOOT: f32 = 30.0;
+const FOOT: f32 = 38.0;
 /// The cards stop this far over the view's bottom (the room's 432 on 4:3), over the description bar pinned to it.
 const OVER_BAR: f32 = 34.0;
 /// The face well's tallest (mockup px): a portrait, not the card; and the name lines under it (screen units).
@@ -107,7 +107,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads:
     let pending = m.lead_pending().flatten();
     for (p, card) in cards(m.grid.view, n).into_iter().enumerate() {
         let start = d.out.len();
+        glow(d, card, m.flash[p]);
         seat_card(d, m, text, pads, card, p, p == focus, pending == Some(p));
+        bubble(d, m, pads, card, p);
         // P21a: the card shakes while its pad's right stick moves (its hit rects stay put); a held one is lifted
         let lift = if m.held && p == focus { 10.0 * PY } else { 0.0 };
         d.out[start..].iter_mut().for_each(|q| {
@@ -134,9 +136,9 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads:
     } else if m.net_pause.is_some() {
         format!("1P: the arrows pick one of your seats, {ok} picks up its controller to move it, {start} keeps the change, {back} asks to keep or undo it. Another of your controllers: its OK button takes your seat that has none.")
     } else if m.paused {
-        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes a controller off its seat, {start} keeps the change, {back} asks to keep or undo it. Others: OK takes a free seat, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
+        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes a controller off its seat, {start} keeps the change, {back} asks to keep or undo it. Others: OK takes a free seat, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat, any of its buttons flashes it.")
     } else {
-        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes it off, {card} adds or removes a computer player, {start} goes on (empty seats are filled then). Others: OK joins, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
+        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes it off, {card} adds or removes a computer player, {start} goes on (empty seats are filled then). Others: OK joins, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat, any of its buttons flashes it.")
     };
     d.info(&format!("{pending}{help}"));
     keep_layout(d, m);
@@ -222,7 +224,7 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         figure(d, m, text, &s, [ix, top, iw, fh], p, picked, who);
         style_stats(d, text, [ix, top + fh + 8.0 * PY, iw, body[3] - fh - 8.0 * PY], picked, who);
     }
-    foot(d, m, &s, [ix, foot_y, iw, FOOT * PY], p, kind, on, yours);
+    foot(d, m, pads, &s, [ix, foot_y, iw, FOOT * PY], p, kind, on, yours);
 }
 
 /// The face well (the seat's number faint behind the character's face), the character's name, hand and costume under it.
@@ -278,28 +280,62 @@ fn style_stats(d: &mut Draw, text: &Text, [x, y, w, h]: [f32; 4], picked: bool, 
     stats(d, grades, [x, y + sh + 4.0 * PY, w, (h - sh - 4.0 * PY).clamp(0.0, 170.0 * PY)]);
 }
 
-/// The card's foot: what drives the seat in a pill on the right; on the left 1P's buttons for it (swap arrows on the
-/// focused card, + / - COM), the join prompt on a free seat, or "Yours when you leave".
+/// B564: a pressed controller's card glows: gold rings round it, fading with `f` (1 just pressed, 0 gone).
+fn glow(d: &mut Draw, [x, y, w, h]: [f32; 4], f: f32) {
+    if f <= 0.0 {
+        return;
+    }
+    for (g, a) in [(14.0, 30.0), (10.0, 55.0), (7.0, 128.0)] {
+        rounded(d, [x - g * PX, y - g * PY, w + 2.0 * g * PX, h + 2.0 * g * PY], 14.0 + g, GOLD, a * f);
+    }
+}
+
+/// B564: over a pressed controller's card, "Controller N pressed - this is you" in a bubble pointing down at it.
+fn bubble(d: &mut Draw, m: &Menu, pads: &[Entity], [x, y, w, _]: [f32; 4], p: usize) {
+    let f = m.flash[p];
+    let Kind::Device(dv) = m.assign_kind(p) else { return };
+    if f <= 0.0 {
+        return;
+    }
+    let says = format!("{} pressed - this is you", dev_name(Some(dv), pads));
+    let s = 14.0 * PY;
+    let bw = (d.width(&says, s) + 24.0 * PX).min(w + 20.0 * PX);
+    let (bh, cx) = (26.0 * PY, x + w / 2.0);
+    let by = y - 18.0 * PY;
+    let a = 128.0 * f.min(0.25) * 4.0;
+    // the tail: a small square turned on its corner under the bubble
+    let t = 7.0;
+    d.q(super::Tex::Solid, [0.0; 4], [cx - t * PX, by + bh - t * PY, 2.0 * t * PX, 2.0 * t * PY], GOLD, a);
+    d.out.last_mut().unwrap().round = [t * PX; 4];
+    rounded(d, [cx - bw / 2.0 - 2.0 * PX, by - 2.0 * PY, bw + 4.0 * PX, bh + 4.0 * PY], 15.0, GOLD, a);
+    rounded(d, [cx - bw / 2.0, by, bw, bh], 13.0, hex(look::INK), a);
+    let start = d.out.len();
+    d.label(&says, cx, by + (bh - s) / 2.0, s, bw - 12.0 * PX, WHITE);
+    d.out[start..].iter_mut().for_each(|q| q.alpha = a);
+}
+
+/// B564: what a seat's badge shows: the controller's number (`pad` true: over a pad's outline), KB, COM, or - when
+/// nobody has it.
+fn badge(kind: Kind, pads: &[Entity]) -> (String, bool) {
+    match kind {
+        Kind::Device(Dev::Pad(e)) => (pads.iter().position(|x| *x == e).map_or(0, |i| i + 1).to_string(), true),
+        Kind::Device(_) => ("KB".into(), false),
+        Kind::Com => ("COM".into(), false),
+        Kind::Free | Kind::Online => ("-".into(), false),
+    }
+}
+
+/// The card's foot: on the left 1P's buttons for it (swap arrows on the focused card, + / - COM); the rest a chip in
+/// the seat's colour (B564): a dark badge with the controller's number (KB, COM, - when free) beside what drives the
+/// seat and its role (1P controls / Player, how a free seat joins, "Yours when you leave").
 #[allow(clippy::too_many_arguments)]
-fn foot(d: &mut Draw, m: &Menu, s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind: Kind, on: bool, yours: bool) {
-    let (label, fill, ink) = match kind {
-        Kind::Device(_) if Some(p) == m.seats[..m.players()].iter().position(|d| *d == m.lead()) => ("1P controls", s.ring, s.ink),
-        Kind::Device(_) => ("Player", s.ring, s.ink),
-        Kind::Free if m.paused => ("Free", s.well, hex(look::INK)),
-        Kind::Free => ("Open", s.well, hex(look::INK)),
-        Kind::Com => ("Computer", hex(look::INK), WHITE),
-        Kind::Online => ("Online", hex(BG), WHITE),
-    };
+fn foot(d: &mut Draw, m: &Menu, pads: &[Entity], s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind: Kind, on: bool, yours: bool) {
     let ps = 14.0 * PY;
-    let pw = (d.width(label, ps) + 20.0 * PX).min(w * 0.5);
-    rounded(d, [x + w - pw, y, pw, h], 15.0, fill, 128.0);
-    d.label(label, x + w - pw / 2.0, y + (h - ps) / 2.0, ps, pw - 12.0 * PX, ink);
-    let room = w - pw - 8.0 * PX;
     let mut lx = x;
     if on && m.held {
         // the held controller's arrows: they carry it the way 1P's ←→ do
         for (right, arrow) in [(false, "<"), (true, ">")] {
-            if m.host_swap(right).is_some() && lx + h * PX / PY <= x + room {
+            if m.host_swap(right).is_some() && lx + h * PX / PY <= x + w / 2.0 {
                 let r = [lx, y, h * PX / PY, h];
                 rounded(d, r, 15.0, hex(look::INK), 128.0);
                 d.centred(arrow, lx + r[2] / 2.0, y + (h - 18.0 * PY) / 2.0, 18.0 * PY, WHITE);
@@ -310,7 +346,7 @@ fn foot(d: &mut Draw, m: &Menu, s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind
     }
     if m.can_bot(p) {
         let (word, rgb) = if m.bots[p] { ("- COM", [120.0, 30.0, 30.0]) } else { ("+ COM", [40.0, 100.0, 40.0]) };
-        let bw = (d.width(word, ps) + 20.0 * PX).min(x + room - lx);
+        let bw = (d.width(word, ps) + 20.0 * PX).min(x + w / 2.0 - lx);
         if bw > 20.0 * PX {
             rounded(d, [lx, y, bw, h], 15.0, rgb, 128.0);
             d.label(word, lx + bw / 2.0, y + (h - ps) / 2.0, ps, bw - 8.0 * PX, WHITE);
@@ -318,15 +354,62 @@ fn foot(d: &mut Draw, m: &Menu, s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind
             lx += bw + 4.0 * PX;
         }
     }
-    let left = x + room - lx;
-    if left < 30.0 * PX {
+    let lead = Some(p) == m.seats[..m.players()].iter().position(|d| *d == m.lead());
+    let (fill, ink) = match kind {
+        Kind::Device(_) => (s.ring, s.ink),
+        Kind::Free | Kind::Com => (s.well, hex(look::INK)),
+        Kind::Online => (hex(BG), WHITE),
+    };
+    let device = match kind {
+        Kind::Device(dv) => dev_name(Some(dv), pads),
+        Kind::Free if m.paused => "No controller".into(),
+        Kind::Free => "Open".into(),
+        Kind::Com => "Computer".into(),
+        Kind::Online => "Online".into(),
+    };
+    let role = match kind {
+        _ if yours => "Yours when you leave".to_string(),
+        Kind::Device(_) if lead => "1P controls".into(),
+        Kind::Device(_) => "Player".into(),
+        Kind::Free if can_join(m, p) => dev_name(Some(Dev::Open), pads),
+        Kind::Free => "Free".into(),
+        Kind::Com => "Plays itself".into(),
+        Kind::Online => "Another machine".into(),
+    };
+    let cw = x + w - lx;
+    if cw < 30.0 * PX {
         return;
     }
-    if yours {
-        d.label("Yours when you leave", lx + left / 2.0, y + (h - 13.0 * PY) / 2.0, 13.0 * PY, left, hex(0xb07a00));
-    } else if kind == Kind::Free && can_join(m, p) && !on {
-        home::press_hint(d, " to join", lx + left / 2.0, y + (h - 14.0 * PY) / 2.0, 14.0 * PY, left, hex(look::INK));
+    rounded(d, [lx, y, cw, h], 10.0, fill, 128.0);
+    // the badge: a dark square (on screen) inset in the chip
+    let i = 3.0;
+    let bh = h - 2.0 * i * PY;
+    let bw = bh * PX / PY;
+    let (bx, by) = (lx + i * PX, y + i * PY);
+    rounded(d, [bx, by, bw, bh], 6.0, hex(look::INK), 128.0);
+    let (num, outline) = badge(kind, pads);
+    if outline {
+        // a pad's outline, faint behind the number: the body and its two grips
+        let rim = [s.ring[0] * 0.5 + 20.0, s.ring[1] * 0.5 + 20.0, s.ring[2] * 0.5 + 20.0];
+        let (gw, gh) = (bw * 0.3, bh * 0.45);
+        for gx in [bx + bw * 0.1, bx + bw * 0.6] {
+            rounded(d, [gx, by + bh * 0.42, gw, gh], 4.0, rim, 70.0);
+        }
+        rounded(d, [bx + bw * 0.08, by + bh * 0.22, bw * 0.84, bh * 0.42], 5.0, rim, 70.0);
     }
+    let ns = if num.len() > 1 { bh * 0.42 } else { bh * 0.78 };
+    d.label(&num, bx + bw / 2.0, by + (bh - ns) / 2.0, ns, bw - 2.0 * PX, if outline { s.sel } else { WHITE });
+    let tx = bx + bw + 6.0 * PX;
+    let tw = lx + cw - 6.0 * PX - tx;
+    if tw < 20.0 * PX {
+        return;
+    }
+    let (ds, rs) = (15.0 * PY, 12.0 * PY);
+    let ty = y + (h - ds - rs - 1.0 * PY) / 2.0;
+    d.text(&ellipsis(d, &device, ds, tw), tx, ty, ds, ink);
+    let start = d.out.len();
+    d.text(&ellipsis(d, &role, rs, tw), tx, ty + ds + 1.0 * PY, rs, ink);
+    d.out[start..].iter_mut().for_each(|q| q.alpha = 100.0);
 }
 
 /// Whether a device not seated could take seat `p` with ✕ (it takes the first free one).
@@ -340,11 +423,12 @@ mod tests {
     use super::*;
     use crate::play::main_menu::Screen;
 
-    /// The pause overlay draws on a smaller quad pool than the menu: four full cards fit it on every aspect.
+    /// The pause overlay draws on a smaller quad pool than the menu: four full cards fit it on every aspect, all four
+    /// flashing (B564).
     #[test]
     fn four_cards_fit_the_pause_pool() {
         let t = super::super::pointer::tests::text_with_mods(0);
-        let mut m = Menu { screen: Screen::Assign, doubles: true, paused: true, seats: [Some(Dev::Keys), None, None, None], bots: [false, true, true, false], ..Default::default() };
+        let mut m = Menu { screen: Screen::Assign, doubles: true, paused: true, seats: [Some(Dev::Keys), None, None, None], bots: [false, true, true, false], flash: [1.0; 4], ..Default::default() };
         for p in &mut m.players {
             p.ready = true;
         }
@@ -384,5 +468,16 @@ mod tests {
         m.bots = [false, true, true, false];
         m.net_pause = Some([false, true, false, false]);
         assert_eq!([0, 1, 2, 3].map(|p| m.assign_kind(p)), [Kind::Device(Dev::Keys), Kind::Online, Kind::Com, Kind::Free]);
+    }
+
+    /// B564: the foot's badge: a pad's number in the app's controller order over its outline, KB, COM, - when free.
+    #[test]
+    fn badges() {
+        let mut w = World::new();
+        let pads: Vec<Entity> = (0..3).map(|_| w.spawn_empty().id()).collect();
+        assert_eq!(badge(Kind::Device(Dev::Pad(pads[1])), &pads), ("2".to_string(), true));
+        assert_eq!(badge(Kind::Device(Dev::Keys), &pads), ("KB".to_string(), false));
+        assert_eq!(badge(Kind::Com, &pads).0, "COM");
+        assert_eq!(badge(Kind::Free, &pads).0, "-");
     }
 }

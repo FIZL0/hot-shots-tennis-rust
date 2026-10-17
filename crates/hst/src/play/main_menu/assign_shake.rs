@@ -3,8 +3,13 @@
 //! controller is which before swapping seats. The menus never read the right stick there, so nothing clashes. Only
 //! the card's drawing moves (`Menu::shake`, applied in the Assign layout): no input, nothing of the match's.
 //!
-//! `HST_SHAKE=<seat>` (for `--shot`s): that seat's card is drawn mid-shake.
+//! B564: any button on a seated controller (any key for the keyboard's seat) flashes its card for `GLOW` seconds
+//! (`Menu::flash`, drawn by the Assign layout: a gold glow ring and a "this is you" bubble) and rumbles that pad. It
+//! only watches: the press still does what it does on the screen, the flash itself moves no focus.
+//!
+//! `HST_SHAKE=<seat>` (for `--shot`s): that seat's card is drawn mid-shake; `HST_FLASH=<seat>`: mid-flash.
 
+use bevy::input::gamepad::{GamepadRumbleIntensity, GamepadRumbleRequest};
 use bevy::prelude::*;
 
 use super::{Dev, Menu, Screen};
@@ -18,12 +23,68 @@ const LINGER: f32 = 0.3;
 const SWING: f32 = 6.0;
 const RATE: f32 = 14.0;
 
+/// How long (seconds) a press flashes its card, and the pad's rumble on it (seconds, strength 0..1).
+const GLOW: f32 = 1.0;
+const BUZZ: f32 = 0.2;
+const BUZZ_STRENGTH: f32 = 0.5;
+
 /// When each seat's card stops shaking (`Time::elapsed_secs`).
 #[derive(Resource, Default)]
 struct Shakes([f32; 4]);
 
+/// When each seat's card stops flashing (`Time::elapsed_secs`).
+#[derive(Resource, Default)]
+struct Flashes([f32; 4]);
+
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Shakes>().add_systems(Update, shake.before(super::draw));
+    app.init_resource::<Shakes>().init_resource::<Flashes>().add_systems(Update, (shake, flash).before(super::draw));
+}
+
+/// B564: a press on a seated device restarts its card's flash (and rumbles a pad, once per flash: holding a menu's
+/// arrows down doesn't keep it buzzing); `Menu::flash` fades from 1 to 0 over `GLOW`.
+fn flash(
+    mut menu: ResMut<Menu>,
+    mut flashes: ResMut<Flashes>,
+    pads: Query<(Entity, &Gamepad)>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    time: Res<Time>,
+    mut rumble: MessageWriter<GamepadRumbleRequest>,
+    mut shot: Local<Option<Option<usize>>>,
+) {
+    let now = time.elapsed_secs();
+    if menu.screen != Screen::Assign {
+        flashes.0 = [0.0; 4];
+    } else {
+        let n = menu.players();
+        let seat = |d: Dev| menu.seats[..n].iter().position(|s| *s == Some(d));
+        for (e, g) in pads.iter().filter(|(_, g)| controls::readable(g)) {
+            if g.get_just_pressed().next().is_some()
+                && let Some(p) = seat(Dev::Pad(e))
+            {
+                if flashes.0[p] <= now {
+                    rumble.write(GamepadRumbleRequest::Add {
+                        gamepad: e,
+                        intensity: GamepadRumbleIntensity { strong_motor: BUZZ_STRENGTH, weak_motor: BUZZ_STRENGTH },
+                        duration: std::time::Duration::from_secs_f32(BUZZ),
+                    });
+                }
+                flashes.0[p] = now + GLOW;
+            }
+        }
+        if keys.is_some_and(|k| k.get_just_pressed().next().is_some())
+            && let Some(p) = seat(Dev::Keys)
+        {
+            flashes.0[p] = now + GLOW;
+        }
+    }
+    let fixed = *shot.get_or_insert_with(|| std::env::var("HST_FLASH").ok().and_then(|v| v.parse().ok()).filter(|p: &usize| *p < 4));
+    let mut want = flashes.0.map(|until| ((until - now) / GLOW).clamp(0.0, 1.0));
+    if let Some(p) = fixed.filter(|_| menu.screen == Screen::Assign) {
+        want[p] = 1.0;
+    }
+    if menu.flash != want {
+        menu.flash = want;
+    }
 }
 
 /// Card `p`'s sideways offset at `now`, shaking until `until`: a swing that dies out over its last `LINGER`.
@@ -101,5 +162,50 @@ mod tests {
         stick(&mut app, pad, 1.0, 1.0);
         app.world_mut().resource_mut::<Menu>().screen = Screen::Chars;
         assert_eq!(at(&mut app, quarter + 4.0), [0.0; 4], "the select's right stick is its emotes, B463");
+    }
+
+    /// B564: any button on a seated pad (any key for the keyboard's seat) flashes that card alone, fading over `GLOW`,
+    /// rumbles the pad once per flash, and moves nothing else of the menu; an unseated pad flashes nothing.
+    #[test]
+    fn a_press_flashes_its_card_and_rumbles_its_pad() {
+        let mut app = App::new();
+        app.init_resource::<Flashes>().init_resource::<Time>().init_resource::<ButtonInput<KeyCode>>().add_message::<GamepadRumbleRequest>();
+        let pad = app.world_mut().spawn(Gamepad::default()).id();
+        let loose = app.world_mut().spawn(Gamepad::default()).id();
+        app.insert_resource(Menu { screen: Screen::Assign, doubles: true, seats: [Some(Dev::Keys), None, Some(Dev::Pad(pad)), None], ..default() });
+        app.add_systems(Update, flash);
+        let press = |app: &mut App, e: Entity, b: GamepadButton| {
+            let mut g = app.world_mut().get_mut::<Gamepad>(e).unwrap();
+            g.digital_mut().clear();
+            g.digital_mut().press(b);
+        };
+        let release = |app: &mut App, e: Entity| app.world_mut().get_mut::<Gamepad>(e).unwrap().digital_mut().reset_all();
+        let at = |app: &mut App, t: f32| {
+            let mut time = app.world_mut().resource_mut::<Time>();
+            let now = time.elapsed_secs();
+            time.advance_by(std::time::Duration::from_secs_f32(t - now));
+            app.update();
+            let buzzes: Vec<Entity> = app.world_mut().resource_mut::<Messages<GamepadRumbleRequest>>().drain().map(|r| r.gamepad()).collect();
+            (app.world().resource::<Menu>().flash, buzzes)
+        };
+        let before = (app.world().resource::<Menu>().sel, app.world().resource::<Menu>().held);
+        press(&mut app, loose, GamepadButton::South);
+        assert_eq!(at(&mut app, 1.0), ([0.0; 4], vec![]), "an unseated pad has no card");
+        release(&mut app, loose);
+        press(&mut app, pad, GamepadButton::East);
+        assert_eq!(at(&mut app, 2.0), ([0.0, 0.0, 1.0, 0.0], vec![pad]));
+        release(&mut app, pad);
+        let (f, b) = at(&mut app, 2.0 + GLOW / 2.0);
+        assert!((f[2] - 0.5).abs() < 0.01 && b.is_empty(), "{f:?}");
+        press(&mut app, pad, GamepadButton::DPadUp);
+        assert_eq!(at(&mut app, 2.0 + GLOW * 0.6), ([0.0, 0.0, 1.0, 0.0], vec![]), "a press mid-flash restarts it, no second buzz");
+        release(&mut app, pad);
+        assert_eq!(at(&mut app, 4.0).0, [0.0; 4], "faded");
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+        assert_eq!(at(&mut app, 5.0), ([1.0, 0.0, 0.0, 0.0], vec![]), "the keyboard's seat");
+        let m = app.world().resource::<Menu>();
+        assert_eq!((m.sel, m.held), before, "the flash moves no focus");
+        app.world_mut().resource_mut::<Menu>().screen = Screen::Chars;
+        assert_eq!(at(&mut app, 5.1).0, [0.0; 4], "only on the assignment");
     }
 }

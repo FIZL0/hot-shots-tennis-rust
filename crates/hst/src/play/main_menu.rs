@@ -579,6 +579,8 @@ struct Menu {
     /// P21a: each seat's card's sideways offset on the controller assignment while its pad's right stick moves
     /// (`assign_shake.rs`).
     shake: [f32; 4],
+    /// B564: how bright each seat's press-to-find flash is (1 just pressed, fading to 0), `assign_shake.rs`.
+    flash: [f32; 4],
     /// M124: the assignment over an online match's pause: the seats another machine plays. Only this machine's own
     /// seats (the rest are `bots`, fixed) take or swap its pads, and no device is taken off.
     net_pause: Option<[bool; 4]>,
@@ -641,6 +643,7 @@ impl Default for Menu {
             p1: None,
             splash: default(),
             shake: [0.0; 4],
+            flash: [0.0; 4],
             net_pause: None,
             takeover: default(),
             over: None,
