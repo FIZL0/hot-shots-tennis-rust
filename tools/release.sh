@@ -86,7 +86,7 @@ body=$out/notes.md
     echo "| Platform | File | How to play |"
     echo "|---|---|---|"
     echo "| **Windows** 10/11 | [\`opentennis-windows-x86_64.zip\`](https://github.com/$repo/releases/download/$tag/opentennis-windows-x86_64.zip) | Unzip, then drop your ISO on \`opentennis.exe\` |"
-    echo "| **Linux** / **Steam Deck** | [\`opentennis-linux-x86_64.tar.gz\`](https://github.com/$repo/releases/download/$tag/opentennis-linux-x86_64.tar.gz) | Unpack, then \`./opentennis \"Hot Shots Tennis (USA).iso\"\` |"
+    echo "| **Linux** / **Steam Deck** | [\`opentennis-linux-x86_64.tar.gz\`](https://github.com/$repo/releases/download/$tag/opentennis-linux-x86_64.tar.gz) | Unpack and open \`opentennis\`, then pick your ISO |"
     echo "| **iPhone** / **iPad** (iOS 15+) | [\`opentennis-ios.ipa\`](https://github.com/$repo/releases/download/$tag/opentennis-ios.ipa) | Unsigned: sign and install it yourself (AltStore, Sideloadly…), then put your ISO in Files → On My iPhone → OpenTennis. Touch controls or a controller |"
     echo "| **Android** 8+ | [\`opentennis-android.apk\`](https://github.com/$repo/releases/download/$tag/opentennis-android.apk) | Install it (allow unknown apps), then pick your ISO on first start |"
     echo "| **Browser** | [opentennis.dev](https://opentennis.dev/) | Nothing to install |"
