@@ -1,65 +1,20 @@
 <!-- What's new since the last release, for players, in plain English: one "- " line per change. tools/release.sh puts this in the release and empties it. -->
-- Doubles: players' faces now change during their team celebrations and commiserations after a point, as in the original (they stayed blank before).
-- Mod characters with their own celebration and reaction animations no longer tip their toes up during them.
-- Matches with mod characters start more smoothly: their models load in the background while the menu fades out, instead of freezing the first frames of the match.
-- Controllers screen: each card shows a badge with its controller's number (KB for the keyboard), and pressing any button on a controller flashes its card and rumbles it so you can see which one is yours.
-- On iPhone and iPad Safari, the website shows how to add OpenTennis to your home screen so the game plays full screen.
-- The website's "Pick your ISO" button at the top now opens the file picker straight away.
-- Online lobbies show how far along a download of another player's mod is, instead of a message that never changes.
-- The iPhone app can host, find and join online lobbies (going online no longer fails when the phone blocks local-network discovery).
-- The online lobby is now one screen: pick your player right in the lobby, with the court, rules, Leave and Start underneath.
-- iPhone and Android: high-resolution texture packs and mod textures are scaled down to fit the phone's memory, so the game should no longer close itself and reload mid-match.
-- In an online lobby, everyone now sees who is still downloading a mod and how far along they are, on that player's card, in the chat box and on the Start / Ready button.
-- iPhone Safari: the game asks for one swipe up, which hides Safari's bars so the game fills the screen (or add it to the Home Screen for no bars at all).
-- After swapping controllers in the pause menu, whoever took player 1's seat now also controls the menus once the match is over.
-- The Controllers screen (pause menu) now shows every player's character card with their stats, so you can see who you're handing a controller to; in an online match with two players on your machine you can swap your controllers between them from the pause menu.
-- Player names now look like the game's own "1P"–"4P" tags: the same lettering, colours and outline over your player's head, on your select card and on the score and stats screens. Names are now up to 6 characters so they fit where the tag goes.
-- Out of Bounds mod characters (Sophie, Kate, Gloria and others) now smile, wink and pull the rest of their faces in a match where they used to stay blank, wherever their model has a matching expression.
-- Online chat is smaller and takes less of the screen, in the lobby and in a match; the controllers' preset chat phrases (R2/L2) are gone, so type your chat with Enter or the Chat button.
-- Joining an online lobby no longer flashes a "can't join" message for a moment before you get in.
-- Mod characters' feet now stand on the court and lie flat through steps, lunges and serves like the regular players', instead of sinking into the ground or tipping on their toes.
-- Out of Bounds characters now show a face for every reaction: surprised, sad and angry looks that used to stay blank (Sophie, Bjorn, Fernando, Felipe, Bloom, LJ, Kate, Dino, Anya, Suzuki, Jasmine, Alex) play on their nearest expression.
-- Hot Shots Golf Fore! and Open Tee 2 characters now pull surprised, sad and angry faces that used to stay blank (most of them look surprised now; Tiffany, Kamala, Tbone, Sam, Maya and Jak get their missing sad or angry looks, Chaos and Ratchet close their eyes when they smile). Update the mods to get it.
-- Android browsers: when the phone's graphics crash again soon after a first crash, the game restarts on its fallback graphics instead of stopping with a "device lost" error.
-- Online chat on iPhone and Android: the chat button now brings up the keyboard during a match, not just in the lobby.
-- On iPhone and iPad Safari the game now offers a new version even when Safari stops its background download, instead of staying on the old one.
-- On phones, the choices shown when an online player doesn't come back (a bot plays for them, everyone to the lobby, leave) can be tapped again; the on-screen stick no longer swallows the taps.
-- Online: the game no longer crashes when the "download this mod?" question comes up in the lobby and you answer it.
-- In an online lobby, players who joined see a "Swap team" button in the top right (tap it to move to the other side) instead of the host's Singles / Doubles switch.
-- Online: a match no longer freezes for several seconds after the first point on iPhone Safari.
-- Button hints now show your own controller's buttons (or your keyboard keys) instead of always naming PlayStation buttons: the Singles / Doubles / Swap team button, the Controllers screen's help, the title screen and the mods page.
-- Mod store: updating a mod that was re-uploaded within the last hour no longer fails with a size mismatch; the new version installs.
-- Online lobbies no longer slow to a crawl on phones when you've picked a large custom character.
-- Phones with very sharp screens use much less graphics memory in the menus and in matches, and the browser game warms up the match graphics while you wait in an online lobby, so online matches load faster on phones.
-- Online lobby: a player who picks Random shows as Random to everyone else, not as the character their cursor was on.
-- Online: locking in your character plays their voice line again (it was silent when you were the last on your machine to pick).
-- Online lobbies download another player's mod from the mod store when it's published there, instead of from that player's device, so it arrives faster and their phone no longer slows down while sending it.
-- Online: if your browser page reloads or the game crashes mid-match, starting it again puts you straight back into the match in your old seat after one button press; the others now wait up to two minutes for you (the countdown says so). If the host reloads, the match still ends.
-- Picking up a controller while you're using the keyboard in the menus now asks whether the controller should be player 1; say yes and the keyboard is free for a second player, say no (or wait a few seconds) and it won't ask again until that controller is plugged back in.
-- Mods: after updating a mod it shows as Installed right away, instead of still offering Update until you refresh.
-- Music and ambience now start at half volume on a fresh install (your saved volumes are kept).
-- In the browser, Settings → Display → Renderer now shows which renderer is actually running (WebGPU or WebGL2) and whether your graphics card draws it (Hardware) or the CPU does (Software, much slower), for example "Auto (WebGPU, Hardware)".
-- Online: when a player drops out, you no longer have to sit through the two-minute wait: while waiting you can already choose to let a bot play for them, take everyone back to the lobby, or leave.
-- Every setting with more than two choices (Shadows, Anti-aliasing, Show FPS, Renderer and the rest) is now a dropdown list; On/Off settings still toggle.
-- In the browser, switching renderer is now picked from the Renderer list, and only then asks whether to reload or cancel.
-- Pressing Online while a newer version is out suggests updating first, with a Play anyway button to go online as you are.
-- The white wind swirl on curve serves now trails along the ball's path instead of sticking out sideways, as in the original.
-- Controllers screen: the character faces are smaller. Move along the cards with the arrows, press ✕ to pick up a card's controller, move it left or right, and press ✕ again to put it down. In the pause menu, going back after a change asks whether to keep or undo it.
-- In the browser, the mouse pointer comes back as soon as you move the mouse after using the keyboard or a controller.
-- Settings open from the character select and the online lobby (O on the keyboard, R3 on a controller); Back returns you where you were with your picks and your place in the lobby kept, and the lobby carries on while you're in them.
-- Mod characters no longer bob up and down when they walk or run, and their character select pictures are drawn again so they match how they look in a match.
-- The match results screen shows only the usual button legend along the bottom, no more PlayStation-style ✕ Continue / Score Screen prompts above it.
-- Mod characters now cheer (or groan) in their own voice at the end-of-match trophy ceremony instead of staying silent.
-- Controllers screen: the selected seat has a pointing hand and a clear ring, the cards are smaller, the keyboard can take over player 1 from a controller or join any empty seat (Enter or a click on it), and the Start button in the corner is gone (Start is in the key bar).
-- Holding an emote key, the right stick or a button bound to an emote plays the emote once instead of repeating it; press or flick again for another.
-- The court intro before the first point shows Skip in the usual button legend instead of a PlayStation ✕ in the corner.
-- Online lobby: a player sitting on the Random card shows as Random to everyone, not as the character under it.
-- Online: matches no longer go out of sync when a player couldn't download a mod character's looks, and the red and yellow landing markers no longer vanish after a resync.
-- After an online match, leaving the results takes everyone back to the same lobby with their seats and characters, ready for another match, instead of dropping you on the home screen.
-- Browser and iPhone: the game no longer freezes just after the first point of a match. The title screen behind "Press Start" now always shows the game's own court pictures.
-- Local matches: a player leaving the character select no longer flips a doubles match back to singles (a third player joining still turns singles into doubles), and a player leaving now has its own sound.
-- Mod characters' feet now stay on the court through runs, swings and celebrations instead of floating above it or sinking into it: their legs bend to put each foot where the original character's would be.
-- Online: a host whose lobby code is slow to go online no longer stays stuck on "Connecting to the relay" — it becomes joinable as soon as a friend gets in, and a code that takes too long falls back to the lobby link.
-- Leaving an online lobby and joining it again no longer gets you turned away as "not enough open seats".
-- Get a Grip, Out of Bounds and Open Tee 2 mod characters now cry out when the ball hits them ("Ouch!", "Ow!", "Ugh!"), in their own voice, once you update them from the mod store.
-- Fore! character mods no longer shout gloomy sentences on good strokes or laugh after losing a point: their voice lines are now sorted by what they say (short cries on strokes, cheers when they win a point or set, groans when they lose one).
+- **Online lobby is one screen**: pick your character right in the lobby, with the court, rules, Leave and Start underneath. Guests get a Swap team button, and players on Random show as Random to everyone.
+- **Back to the lobby after a match**: everyone returns to the same lobby with their seats and characters, ready for another match.
+- **Rejoin after a crash or reload**: start the game again and you're put back in your old seat; the others wait up to two minutes. When a player drops out, you can let a bot take over, go back to the lobby or leave without sitting through the wait.
+- **Mods online**: mods download from the mod store when they're published there (faster), and everyone sees who is still downloading and how far along they are. Matches no longer go out of sync when someone couldn't download a mod's looks.
+- **Online fixes**: no more "can't join" flash when joining, no more "not enough open seats" when rejoining a lobby you left, hosts no longer get stuck on "Connecting to the relay", no crash on the "download this mod?" question, and lobbies no longer crawl on phones with a large custom character.
+- **Controllers screen**: every player's character card, a badge with each controller's number, and pressing any button flashes and rumbles that controller's card. Pick up a controller with ✕, move it, put it down; the pause menu asks whether to keep or undo the change. Online, you can swap controllers between your own players.
+- **Controller takeover**: picking up a controller while 1P is on the keyboard asks whether it should be player 1. After swapping controllers in a match, the new player 1 also runs the menus afterwards.
+- **Your buttons, not PlayStation's**: button hints show your own controller's buttons or keyboard keys, and the leftover PlayStation prompts on the results screen and court intro are gone.
+- **Player names** look like the game's 1P–4P tags over your player, on your card and on the score screens, up to 6 characters.
+- **Settings**: open them from the character select and the online lobby (O / R3) without losing your place. Lists of three or more choices are dropdowns. In the browser, Renderer shows what's actually running (e.g. "Auto (WebGPU, Hardware)").
+- **Mod characters**: feet stand flat on the court through every move, no more bobbing when they run, and they cheer or groan in their own voice at the trophy ceremony. Their models load in the background so matches start smoothly.
+- **Mod faces and voices** (update the mods from the store): Out of Bounds, Fore! and Open Tee 2 characters now smile, wink and make surprised, sad and angry faces that used to stay blank. Get a Grip, Out of Bounds and Open Tee 2 characters cry out when the ball hits them, and Fore! characters' voice lines now fit the moment.
+- **Doubles**: players' faces change during team celebrations and commiserations, as in the original.
+- **Curve serves**: the wind swirl now trails along the ball's path, as in the original.
+- **Phones**: big texture packs are scaled down to fit in memory (no more mid-match reloads), sharp screens use far less graphics memory, online matches load faster, and the chat button brings up the keyboard in a match.
+- **iPhone**: the app can host and join online lobbies, and a freeze just after the first point is fixed. In Safari, one swipe up hides the bars (or add the game to your Home Screen), and new versions arrive even when Safari stops the download.
+- **Android browsers** fall back to safer graphics instead of stopping with a "device lost" error.
+- **Chat** is smaller; the controllers' preset phrases are gone (type with Enter or the Chat button).
+- **Smaller things**: holding an emote plays it once, the mouse pointer comes back when you move the mouse, a player leaving the select no longer turns doubles into singles, Online suggests updating when a newer version is out, music and ambience start at half volume on a fresh install, updated mods show as Installed right away, and the website's Pick your ISO button opens the picker at once.
