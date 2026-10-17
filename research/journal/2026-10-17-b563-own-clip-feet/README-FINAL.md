@@ -27,3 +27,8 @@ came out tilted by that same turn, toes up (Fore Hubert's `re_gu`, motion 44).
 - No PCSX2 comparison: mod looks only, there is no original to compare against.
 - The "uncommitted level_feet work (stand/soles, Jak's toes)" from another session was not in this worktree;
   this builds on committed ab6172d8.
+
+## For the level_feet rework (tools-b2, ../opentennis-feet)
+That session is adding a second bind turn per foot after `back` (it flattens the sole). When it merges, `Feet::turn`
+must hold the total turn (`back` then `fix`) as one ankle-centred rigid motion, or `unturn` must undo both. Its
+own-clip check (all track scales 1) can switch to the `visual` pointer test used here.
