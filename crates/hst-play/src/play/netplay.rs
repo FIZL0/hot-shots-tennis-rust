@@ -864,12 +864,35 @@ mod tests {
         }
 
         fn app(room: &Room, me: &str) -> App {
+            app_in(room, me, None)
+        }
+
+        /// The folder with a mod's looks, if this machine has it (`None`: the stand-in, as a peer that declined them).
+        type Looks<'a> = &'a dyn Fn(&crate::mods_online::Wire) -> Option<std::path::PathBuf>;
+
+        /// `app`, or with `looks` the room's own line-up as `flags` starts it (court, costumes, sets, the seats' mods by
+        /// `looks`); the setup's seed and weather stay the harness's (`main.rs` draws those).
+        fn app_in(room: &Room, me: &str, looks: Option<Looks>) -> App {
             let mut app = App::new();
             app.add_plugins((MinimalPlugins, AssetPlugin::default()));
             app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
             app.init_asset::<crate::gs::GsMaterial>();
             let chars = [0, 2, 1, 3].map(|s| room.seats[s].as_ref().unwrap().pick.char).to_vec();
-            app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: room.umpire, sets: 1, games: room.games, pads: None });
+            let mut args = Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: false, chars, outfits: vec![], viewer: None, sound: None, music: false, umpire: room.umpire, sets: 1, games: room.games, pads: None };
+            if let Some(looks) = looks {
+                let order = [0, 2, 1, 3];
+                (args.court, args.stage) = (room.court + 1, Some(room.court as u32 + 1));
+                args.outfits = order.map(|s| room.seats[s].as_ref().unwrap().pick.costume).to_vec();
+                args.sets = ([1, 3, 5][room.sets.min(2)] + 1) / 2;
+                let mut mm = crate::mods::MatchMod::default();
+                for (k, s) in order.into_iter().enumerate() {
+                    if let Some(w) = room.seats[s].as_ref().and_then(|x| x.pick.r#mod.as_deref()) {
+                        mm.set(k, crate::mods_online::for_match(w, looks(w).as_deref()));
+                    }
+                }
+                app.insert_resource(mm);
+            }
+            app.insert_resource(args);
             // the computer plays the seats no person has (B151: started with open seats)
             let human = std::array::from_fn(|i| room.seats[i].as_ref().is_some_and(Seat::human));
             app.insert_resource(Pads { seats: Some(human), autoplay: false, ..default() });
@@ -1111,6 +1134,45 @@ mod tests {
                 last = now;
             }
             std::fs::write(path, out).unwrap();
+        }
+
+        /// B556: a mod character plays the same match on a machine with its looks as on one where its donor stands in
+        /// (a peer whose download failed): the B556 report's line-up (Anya, `mods/hst-mods/oob_pc12_anya`, on 1P),
+        /// every seat mashed, the two machines' state compared every tick for `HST_LOOKS_TICKS` (default 4000).
+        #[test]
+        fn a_mod_plays_alike_with_or_without_its_looks() {
+            const ANYA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mods/hst-mods/oob_pc12_anya");
+            if !Path::new(ISO).is_file() || !Path::new(ANYA).is_dir() {
+                return eprintln!("no ISO or mods/hst-mods/oob_pc12_anya, skipped");
+            }
+            let ticks: u32 = std::env::var("HST_LOOKS_TICKS").map_or(4000, |t| t.parse().unwrap());
+            REPLAYS.set(false);
+            let w = crate::mods_online::Wire::of(&crate::mods::read(Path::new(ANYA)).unwrap(), 0).unwrap();
+            let seat = |char, costume| Some(Seat { peer: "host".into(), pick: Pick::disc(char, costume) });
+            let anya = Some(Seat { peer: "host".into(), pick: Pick { r#mod: Some(Box::new(w)), ..Pick::disc(8, 0) } });
+            let room = Room { doubles: true, games: 4, sets: 0, umpire: 2, court: 3, seats: vec![anya, seat(10, 6), seat(7, 5), seat(8, 1)], seed: 1502962241, ..Default::default() };
+            let mut apps = [Some(ANYA.into()), None].map(|d: Option<std::path::PathBuf>| app_in(&room, "host", Some(&|_| d.clone())));
+            let mut np = apps.each_mut().map(|a| a.world_mut().remove_resource::<Netplay>().unwrap());
+            let mut last = [tick_input::IDLE; 4];
+            for t in 0..ticks {
+                let [a, b] = apps.each_mut().map(|a| super::super::snapshot::state_text(a.world_mut()));
+                if a != b {
+                    let at = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+                    let from = a[..at].char_indices().rev().nth(300).map_or(0, |(i, _)| i);
+                    let cut = |s: &str| s[from..].chars().take(700).collect::<String>();
+                    panic!("tick {t}: the looks and the stand-in differ\nlooks:    {}\nstand-in: {}", cut(&a), cut(&b));
+                }
+                if apps[0].world().resource::<Game>().match_stats.result.is_some() {
+                    break;
+                }
+                np[0].lock.tick = t;
+                let now = [0, 1, 2, 3].map(|s| np[0].mashed(s));
+                for a in &mut apps {
+                    run_on(a.world_mut(), now, last);
+                    a.world_mut().run_schedule(FixedUpdate);
+                }
+                last = now;
+            }
         }
 
         // ---------------------------------------------------------------- rollback (M2h)

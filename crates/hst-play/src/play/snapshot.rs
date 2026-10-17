@@ -95,9 +95,10 @@ pub fn fnv(text: &str) -> u64 {
     h.0
 }
 
-/// What `state_hash` hashes (a desync's report keeps it, to diff the machines').
+/// What `state_hash` hashes (a desync's report keeps it, to diff the machines'). A motion's drawn clock goes as its
+/// gameplay one (B556): it runs a mod's own clip, which a peer without the mod's looks doesn't have, and only draws.
 pub fn state_text(w: &mut World) -> String {
-    let mut figures: Vec<_> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, *m)).collect();
+    let mut figures: Vec<_> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, Motion { drawn: m.clock, drawn_prev: m.prev, ..*m })).collect();
     figures.sort_by_key(|f| f.0);
     format!("{:?}{:?}{:?}", w.get_resource::<Game>(), figures, w.get_resource::<TickPads>())
 }
