@@ -654,8 +654,11 @@ console.log = (...a) => {
   if (/DeviceLost/.test(renderError)) {
     let last = 0;
     try { last = +sessionStorage.getItem('hstLost') || 0; sessionStorage.setItem('hstLost', Date.now()); } catch {}
-    // B511: on the WebGPU build the reload is the WebGL2 one (Android Chromium's GPU process going away, B452)
-    if (Date.now() - last > 60000) { console.warn('hst: GPU device lost, reloading'); if (!window.hstWebGL2?.(renderError)) location.reload(); return; }
+    // B511: on the WebGPU build the reload is the WebGL2 one (Android Chromium's GPU process going away, B452),
+    // however soon after an earlier loss (Android Edge lost it again within the minute and stopped); a plain reload only
+    // once a minute
+    if (window.hstWebGL2?.(renderError)) return;
+    if (Date.now() - last > 60000) { console.warn('hst: GPU device lost, reloading'); location.reload(); return; }
   }
   fail(renderError);
 };
