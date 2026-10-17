@@ -61,3 +61,4 @@
 - Online: a host whose lobby code is slow to go online no longer stays stuck on "Connecting to the relay" — it becomes joinable as soon as a friend gets in, and a code that takes too long falls back to the lobby link.
 - Leaving an online lobby and joining it again no longer gets you turned away as "not enough open seats".
 - Get a Grip, Out of Bounds and Open Tee 2 mod characters now cry out when the ball hits them ("Ouch!", "Ow!", "Ugh!"), in their own voice, once you update them from the mod store.
+- Fore! character mods no longer shout gloomy sentences on good strokes or laugh after losing a point: their voice lines are now sorted by what they say (short cries on strokes, cheers when they win a point or set, groans when they lose one).
