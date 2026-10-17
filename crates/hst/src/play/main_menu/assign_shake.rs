@@ -43,7 +43,7 @@ struct Shakes([f32; 4]);
 struct Flashes([f32; 4]);
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<Shakes>().init_resource::<Flashes>().add_systems(Update, (shake, flash, slide.after(super::step)).before(super::draw));
+    app.init_resource::<Shakes>().init_resource::<Flashes>().add_systems(Update, (shake, flash, slide.after(super::step), columns.after(super::step)).before(super::draw));
 }
 
 /// B564: a press on a seated device restarts its card's flash (and rumbles a pad, once per flash: holding a menu's
@@ -117,17 +117,71 @@ fn slide(mut menu: ResMut<Menu>, time: Res<Time<Real>>, mut was: Local<Option<[O
     if !on {
         *moves = [None; 4];
     }
-    let want = moves.map(|m| match m {
+    let want = moves.map(|m| eased(m, now));
+    if menu.slide != want {
+        menu.slide = want;
+    }
+}
+
+/// Who each player column on the select / lobby shows: online, the room's seat (its machine and pick); locally the
+/// seat's device (a computer player's column has none).
+fn column_ids(m: &Menu) -> [Option<String>; 4] {
+    std::array::from_fn(|p| match m.net.room.as_ref().filter(|_| m.online()) {
+        Some(r) => r.seats.get(p).cloned().flatten().map(|s| format!("{}#{:?}", s.peer, s.pick)),
+        None => m.seats[p].filter(|d| matches!(d, Dev::Keys | Dev::Pad(_))).map(|d| format!("{d:?}")),
+    })
+}
+
+/// A player who changes sides on the select or the online lobby (□ / Tab, the host's swap) slides their whole column
+/// over from the one they left for `SLIDE`; two columns that trade places (a human and a computer one too) both do.
+fn columns(mut menu: ResMut<Menu>, time: Res<Time<Real>>, mut was: Local<Option<[Option<String>; 4]>>, mut moves: Local<[Option<([f32; 2], f32)>; 4]>) {
+    let now = time.elapsed_secs();
+    let on = matches!(menu.screen, Screen::Chars | Screen::Lobby);
+    let new = column_ids(&menu);
+    if let Some(old) = was.as_ref().filter(|_| on)
+        && *old != new
+    {
+        let n = menu.players();
+        let c = menu.columns();
+        let at = |p: usize| c.parts(p).card;
+        let changed: Vec<usize> = (0..n).filter(|&p| old[p] != new[p]).collect();
+        let mut from = [None; 4];
+        if let [p, q] = changed[..]
+            && old[p] == new[q]
+            && old[q] == new[p]
+        {
+            (from[p], from[q]) = (Some(q), Some(p));
+        } else {
+            for &q in &changed {
+                from[q] = new[q].as_ref().and_then(|id| (0..n).find(|&p| p != q && old[p].as_ref() == Some(id)));
+            }
+        }
+        for q in 0..n {
+            if let Some(p) = from[q] {
+                let (a, b) = (at(p), at(q));
+                moves[q] = Some(([a[0] - b[0], a[1] - b[1]], now));
+            }
+        }
+    }
+    *was = Some(new);
+    if !on {
+        *moves = [None; 4];
+    }
+    let want = moves.map(|m| eased(m, now));
+    if menu.cols != want {
+        menu.cols = want;
+    }
+}
+
+/// A move's offset at `now`: all of it at the start, none after `SLIDE`, eased both ends (smoothstep).
+fn eased(m: Option<([f32; 2], f32)>, now: f32) -> [f32; 2] {
+    match m {
         Some((d, t)) if now - t < SLIDE => {
-            // eased both ends (smoothstep), so the whole trip reads
             let u = (now - t) / SLIDE;
             let k = 1.0 - u * u * (3.0 - 2.0 * u);
             [d[0] * k, d[1] * k]
         }
         _ => [0.0; 2],
-    });
-    if menu.slide != want {
-        menu.slide = want;
     }
 }
 
@@ -266,5 +320,21 @@ mod tests {
         app.update();
         let s = app.world().resource::<Menu>().slide;
         assert!(s[2][0] < -10.0 && s[1] == [0.0; 2], "{s:?}");
+    }
+
+    /// A player switching sides on the select slides their column over from the old one, and the computer column they
+    /// traded with slides the other way.
+    #[test]
+    fn a_side_switch_slides_both_columns() {
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>();
+        let pad = app.world_mut().spawn(Gamepad::default()).id();
+        app.insert_resource(Menu { screen: Screen::Chars, doubles: true, grid: super::super::Grid::fit(16.0 / 9.0), seats: [Some(Dev::Keys), Some(Dev::Pad(pad)), None, None], ..default() });
+        app.add_systems(Update, columns);
+        app.update();
+        app.world_mut().resource_mut::<Menu>().seats.swap(1, 2);
+        app.update();
+        let c = app.world().resource::<Menu>().cols;
+        assert!(c[2][0] < -10.0 && c[1][0] > 10.0 && c[0] == [0.0; 2] && c[3] == [0.0; 2], "{c:?}");
     }
 }

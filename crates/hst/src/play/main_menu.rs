@@ -582,6 +582,8 @@ struct Menu {
     /// Each seat's controller chip's offset (640×448 units) while it slides over from the seat it came from
     /// (`assign_shake.rs`).
     slide: [[f32; 2]; 4],
+    /// The select's / lobby's player columns' offsets while a player who changed sides slides over (`assign_shake.rs`).
+    cols: [[f32; 2]; 4],
     /// B564: how bright each seat's press-to-find flash is (1 just pressed, fading to 0), `assign_shake.rs`.
     flash: [f32; 4],
     /// M124: the assignment over an online match's pause: the seats another machine plays. Only this machine's own
@@ -647,6 +649,7 @@ impl Default for Menu {
             splash: default(),
             shake: [0.0; 4],
             slide: [[0.0; 2]; 4],
+            cols: [[0.0; 2]; 4],
             flash: [0.0; 4],
             net_pause: None,
             takeover: default(),

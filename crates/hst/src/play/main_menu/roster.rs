@@ -451,9 +451,21 @@ fn online_chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[En
 fn player_columns(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) -> Columns {
     let c = m.columns();
     let pointer_p = m.driven(pointer::device(m, pads));
+    let mut sliding = Vec::new();
     for p in 0..c.n {
+        let start = d.out.len();
         column(d, m, text, bind, pads, &c, p, pointer_p == Some(p));
+        // a player who just changed sides slides over from their old column, over the others
+        let [dx, dy] = m.cols[p];
+        if dx != 0.0 || dy != 0.0 {
+            sliding.extend(d.out.drain(start..).map(|mut q| {
+                q.dst[0] += dx;
+                q.dst[1] += dy;
+                q
+            }));
+        }
     }
+    d.out.extend(sliding);
     c
 }
 
