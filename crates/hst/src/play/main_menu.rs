@@ -2149,7 +2149,10 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     menu.settings.1.cull = crate::cull::forced().unwrap_or(menu.settings.1.cull);
     commands.insert_resource(menu.settings.1);
     let screen = std::env::var("HST_MENU").unwrap_or_default();
+    // B553: back from an online match into its lobby (`online.rs` `launch`'s way back): that lobby, as it was kept
+    let lobby = !fresh && menu.screen == Screen::Lobby;
     menu.screen = match screen.as_str() {
+        _ if lobby => Screen::Lobby,
         "settings" | "display" | "renderer" => Screen::Display,
         "graphics" | "graphics-list" | "graphics-fps" => Screen::Graphics,
         "advanced" => Screen::Advanced,
@@ -2222,7 +2225,7 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
     if !fresh && menu.screen != Screen::Lobby {
         menu.after_match();
         pause::seats_back(&mut menu);
-    } else if menu.screen != Screen::Main {
+    } else if !lobby && menu.screen != Screen::Main {
         menu.seats[0] = Some(Dev::Keys);
         menu.doubles = true;
         // B216: 2P and 3P computer players added, 4P left open
@@ -3492,6 +3495,34 @@ pub fn plugin(app: &mut App) {
 mod tests {
     use super::*;
     use Effect::*;
+
+    /// B553: back from an online match (`online.rs` `launch`'s way back keeps the menu on its lobby): the menu starts
+    /// on that lobby with its seats, picks and connection state, not on the home screen or the sample lobby.
+    #[test]
+    fn an_online_match_comes_back_to_its_lobby() {
+        use crate::net::{Pick, Room, Seat};
+        let seats = vec![Some(Seat { peer: "host".into(), pick: Pick::disc(3, 0) }), Some(Seat { peer: "g".into(), pick: Pick::disc(8, 1) })];
+        let room = Room { name: "ROOM".into(), seats, names: [("host".into(), "H".into()), ("g".into(), "G".into())].into(), ..Default::default() };
+        let mut kept = Menu { screen: Screen::Lobby, sel: 0, ..default() };
+        (kept.net.room, kept.net.me, kept.net.status) = (Some(room.clone()), "g".into(), "Back in the lobby.".into());
+        let run = |kept: Option<Menu>| {
+            let mut app = App::new();
+            app.insert_resource(crate::parse(std::iter::once("no-disc.iso".to_string())).args).insert_resource(Roster(Vec::new(), "no-mods".into()));
+            if let Some(m) = kept {
+                app.insert_resource(Kept(m));
+            }
+            app.add_systems(Startup, setup);
+            app.update();
+            app.world_mut().remove_resource::<Menu>().unwrap()
+        };
+        let m = run(Some(kept.clone()));
+        assert_eq!(m.screen, Screen::Lobby);
+        assert_eq!((m.net.room.as_ref(), m.net.me.as_str(), m.net.status.as_str()), (Some(&room), "g", "Back in the lobby."));
+        assert_eq!((m.seats, m.doubles, m.bots), (kept.seats, kept.doubles, kept.bots), "no sample seats");
+        // a local match's way back still lands on the home screen
+        kept.screen = Screen::Confirm;
+        assert_eq!(run(Some(kept)).screen, Screen::Main);
+    }
 
     /// B405: the browser's and the iPhone's on-screen pads aren't counted as controllers on the home screen.
     #[test]
