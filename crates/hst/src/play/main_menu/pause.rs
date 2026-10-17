@@ -92,6 +92,26 @@ fn apply(seats: [Option<Dev>; 4], pads: &[Entity], slots: &mut PadSlots) {
     }));
 }
 
+/// M124: the match's characters onto the assignment's seats (seat 1P..4P is match player `[0, 2, 1, 3]`'s in doubles):
+/// each one picked and ready, a mod's from the match's own (`mods` by match player, its play style and grades its
+/// donor's into `extra`, the text's custom rows), `swaps` the hands played the other way.
+fn roster_from_match(menu: &mut Menu, chars: &[i32], outfits: &[usize], mods: Option<&crate::mods::MatchMod>, swaps: [bool; 4], text: Option<&super::Text>, extra: &mut Vec<(usize, [u8; 5])>) {
+    let n = chars.len().min(4);
+    let order: &[usize] = if n == 4 { &[0, 2, 1, 3] } else { &[0, 1] };
+    menu.mods.clear();
+    for (s, &i) in order.iter().enumerate().take(n) {
+        let c = (chars[i].max(0) as usize).min(super::CHARS - 1);
+        let mut pl = super::Player { cursor: super::GRID.iter().position(|g| g.0 == c).unwrap_or(0), costume: outfits.get(i).copied().unwrap_or(0), ready: true, swap: swaps[i], ..default() };
+        if let Some(m) = mods.and_then(|mm| mm.0.get(i)).and_then(Option::as_ref) {
+            (pl.modded, pl.pick) = (true, menu.mods.len());
+            let d = m.base.min(super::CHARS - 1);
+            extra.push(text.map_or((0, [0; 5]), |t| (t.style[d], t.grades[d])));
+            menu.mods.push(m.clone());
+        }
+        menu.players[s] = pl;
+    }
+}
+
 #[derive(Component)]
 pub(in crate::play) struct Root;
 
@@ -100,8 +120,9 @@ pub(in crate::play) struct Root;
 pub(in crate::play) struct Systems;
 
 /// What the overlay draws on: the Settings screens' quads only need the font, the wall and our pill (9 quads
-/// a pill since its rim, ring and fill are layered); B294's tabs and panels take up to ~800 (`options::tests::pages_fit`).
-pub(super) const POOL_HERE: usize = 1400;
+/// a pill since its rim, ring and fill are layered); B294's tabs and panels take up to ~800 (`options::tests::pages_fit`),
+/// M124's four seat cards on Controllers ~2000 (`assign::tests::four_cards_fit_the_pause_pool`).
+pub(super) const POOL_HERE: usize = 2600;
 
 
 
@@ -133,14 +154,28 @@ fn setup(mut commands: Commands, args: Res<Args>, mut images: ResMut<Assets<Imag
     ));
     let font = sheet(&mut iso, "MENU/MENU04.XB0", "/word.tm2");
     let mut art = vec![solid, super::super::menu_art::image(&mut images, &font, "word")];
-    // `Tex::Sheet(k)` is `art[2 + k]`: only the wall the Settings screens draw (Z21: and nothing else), the rest left empty
-    for (k, (xb, name)) in super::SHEETS.iter().enumerate() {
-        art.push(if k == super::WALL { super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name) } else { Handle::default() });
+    // `Tex::Sheet(k)` is `art[2 + k]`: the wall the Settings screens draw, M124: the faces and the stats card's letters
+    // the controller assignment's cards draw (Z21: and nothing else)
+    for (xb, name) in super::SHEETS {
+        art.push(super::super::menu_art::image(&mut images, &sheet(&mut iso, xb, &format!("/{name}.tm2")), name));
     }
     // `Tex::Pill` is the last sheet, as in the main menu
     art.push(super::super::menu_art::pill_layers(&mut images));
     let msg = super::messages(&sheet(&mut iso, "MENU/MENU00B.XB0", "/message0.dat"));
-    let text = Text { msg, glyphs: super::glyphs(&font), grades: [[0; 5]; 14], style: [0; 14], hands: [1.0; 14], ranks: Vec::new(), mods: Vec::new() };
+    // M124: the characters' grades, play styles and hands for the assignment's cards, as the select reads them
+    let grades = match (iso.read("SYSTEM.CNF"), iso.read("ZZBIN/MENU.BIN")) {
+        (Ok(cnf), Ok(bin)) => hst_data::exe::Menu::new(&cnf, &bin).map_or([[0; 5]; 14], |m| m.grades()),
+        _ => [[0; 5]; 14],
+    };
+    let csv = iso
+        .read("PCDATA/PCDATA.XB")
+        .ok()
+        .and_then(|pc| {
+            let pc = hst_data::xb::Archive::parse(&pc).ok()?;
+            pc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("tparam.csv")).and_then(|e| pc.read(e).ok())
+        })
+        .unwrap_or_default();
+    let text = Text { msg, glyphs: super::glyphs(&font), grades, style: super::styles(&csv), hands: super::hands(&csv), ranks: Vec::new(), mods: Vec::new() };
     let bank = SoundBank::load(&mut iso, "SND/SE/SYS/SYS_SE00.XB", "data/sound/SE/sys/sys_se00.hd").map(Arc::new);
     commands.insert_resource(Art(art, bank, text));
     commands.insert_resource(Menu { screen: Screen::Display, ..default() });
@@ -166,15 +201,30 @@ fn opened(
     mut slide: ResMut<slide::Slide>,
     mut root: Query<&mut Visibility, With<Root>>,
     (game, pads, slots): (Option<Res<super::super::Game>>, Option<Res<super::super::Pads>>, Res<PadSlots>),
+    (net, mods, swaps, mut art): (Option<Res<super::super::netplay::Netplay>>, Option<Res<crate::mods::MatchMod>>, Option<Res<super::super::hand_swap::SwapHands>>, Option<ResMut<Art>>),
 ) {
     if ps.fresh {
         let settings = crate::store::read_to_string(Settings::path(&args.iso)).map_or(menu.settings, |t| Settings::parse(&t));
         if ps.seats.is_some() {
-            let n = game.map_or(2, |g| g.players.len());
+            let n = game.as_ref().map_or(2, |g| g.players.len());
             let humans: [bool; 4] = std::array::from_fn(|s| s < n && pads.as_ref().is_some_and(|p| !p.autoplay && p.seats.map_or(s == 0 || p.connected > s, |h| h[s])));
-            let seats = seats_now(humans, &slots);
+            // M124: online, only this machine's seats are its to assign; the other humans are another machine's
+            let mine: Option<[bool; 4]> = net.map(|np| std::array::from_fn(|s| np.lock.mine.contains(&s)));
+            let ours = mine.map_or(humans, |m| std::array::from_fn(|s| humans[s] && m[s]));
+            let seats = seats_now(ours, &slots);
             ps.seats = Some(seats);
-            *menu = Menu { screen: Screen::Assign, settings, doubles: n == 4, seats, bots: humans.map(|h| !h), paused: true, ..default() };
+            let net_pause = mine.map(|m| std::array::from_fn(|s| humans[s] && !m[s]));
+            *menu = Menu { screen: Screen::Assign, settings, doubles: n == 4, seats, bots: ours.map(|h| !h), paused: true, net_pause, ..default() };
+            menu.sel = menu.first_seat();
+            // M124: each seat's character card, as the match plays it
+            if let Some(g) = &game {
+                let swaps = swaps.as_deref().map_or([false; 4], |s| s.0);
+                let mut extra = Vec::new();
+                roster_from_match(&mut menu, &g.chars, &args.outfits, mods.as_deref(), swaps, art.as_deref().map(|a| &a.2), &mut extra);
+                if let Some(art) = art.as_mut() {
+                    art.2.mods = extra;
+                }
+            }
             *slide = slide::Slide::default();
             for mut v in &mut root {
                 v.set_if_neq(Visibility::Inherited);
@@ -540,6 +590,31 @@ mod tests {
         // taken: the next match back with no reassignment leaves the seats alone
         seats_back(&mut front);
         assert!(SWAPPED.lock().unwrap().is_none());
+    }
+
+    /// M124: online doubles, this machine plays 2P (keyboard) and 4P (pad a), the other machine 1P and 3P. The
+    /// keyboard leads (the first local seat), its → swaps the two local players' controllers past the other machine's
+    /// seat, nobody takes themselves off or joins another machine's seat, and the cards are the match's characters.
+    #[test]
+    fn online_swaps_only_its_own_seats() {
+        let [a, b] = [5, 7].map(|n| Entity::from_raw_u32(n).unwrap());
+        let ours = [false, true, false, true];
+        let seats = [None, Some(Dev::Keys), None, Some(Dev::Pad(a))];
+        let mut m = Menu { screen: Screen::Assign, doubles: true, seats, bots: ours.map(|h| !h), paused: true, net_pause: Some([true, false, true, false]), ..default() };
+        m.sel = m.first_seat();
+        assert_eq!((m.sel, m.lead()), (1, Some(Dev::Keys)));
+        assert!((0..4).all(|p| !m.droppable(p)));
+        m.step(Dev::Keys, Press { right: true, ..default() });
+        assert_eq!(m.seats, [None, Some(Dev::Pad(a)), None, Some(Dev::Keys)]);
+        m.step(Dev::Pad(b), Press { ok: true, ..default() });
+        assert!(!m.seats.contains(&Some(Dev::Pad(b))));
+        m.sel = 3;
+        m.step(Dev::Keys, Press { page: true, ..default() });
+        assert_eq!(m.seats[3], Some(Dev::Keys));
+        // match players 0..3 play characters 0, 3, 5, 9; the seats 1P 2P 3P 4P are match players 0 2 1 3
+        roster_from_match(&mut m, &[0, 3, 5, 9], &[0, 1, 2, 3], None, [false, false, true, false], None, &mut Vec::new());
+        let picks: Vec<_> = m.players.iter().map(|p| (super::super::GRID[p.cursor].0, p.costume, p.swap, p.ready)).collect();
+        assert_eq!(picks, [(0, 0, false, true), (5, 2, true, true), (3, 1, false, true), (9, 3, false, true)]);
     }
 
     /// A row changes and saves; Back on a Settings tab goes to `Screen::Main`, which `after` takes as closing.

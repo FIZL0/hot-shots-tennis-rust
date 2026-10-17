@@ -68,6 +68,7 @@ mod court_mods;
 mod court_picker;
 pub(super) mod pause;
 mod plate_emote;
+mod assign;
 mod assign_shake;
 mod previews;
 mod roster;
@@ -566,6 +567,9 @@ struct Menu {
     /// P21a: each seat's card's sideways offset on the controller assignment while its pad's right stick moves
     /// (`assign_shake.rs`).
     shake: [f32; 4],
+    /// M124: the assignment over an online match's pause: the seats another machine plays. Only this machine's own
+    /// seats (the rest are `bots`, fixed) take or swap its pads, and no device is taken off.
+    net_pause: Option<[bool; 4]>,
 }
 
 impl Default for Menu {
@@ -617,6 +621,7 @@ impl Default for Menu {
             p1: None,
             splash: default(),
             shake: [0.0; 4],
+            net_pause: None,
         }
     }
 }
@@ -961,13 +966,18 @@ impl Menu {
     fn droppable(&self, p: usize) -> bool {
         let dev = |s: &Option<Dev>| matches!(s, Some(Dev::Keys | Dev::Pad(_)));
         let first = self.seats.iter().position(Option::is_some) == Some(p);
-        dev(&self.seats[p]) && (!first || self.paused || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
+        self.net_pause.is_none() && dev(&self.seats[p]) && (!first || self.paused || self.screen == Screen::Assign && self.seats.iter().filter(|s| dev(s)).count() > 1)
     }
 
     /// The device driving the menu's 1P screens: 1P's, except on the controller assignment after it moved its own
     /// seat there (B437: still the one that came in, until it leaves).
     fn lead(&self) -> Option<Dev> {
-        self.assign_lead.filter(|_| self.screen == Screen::Assign).or(self.seats[0])
+        self.assign_lead.filter(|_| self.screen == Screen::Assign).or(self.seats[self.first_seat()])
+    }
+
+    /// M124: the seat whose device drives the assignment: 1P's, over an online match this machine's first.
+    fn first_seat(&self) -> usize {
+        self.net_pause.and_then(|_| (0..self.players()).find(|&p| !self.bots[p])).unwrap_or(0)
     }
 
     /// Whether `dev` works the screens only 1P drives: 1P's device ([`lead`](Self::lead)); B516: on the mode and
@@ -980,7 +990,7 @@ impl Menu {
     /// it leaves the screen.
     fn lead_pending(&self) -> Option<Option<usize>> {
         let lead = self.lead()?;
-        (self.seats[0] != Some(lead)).then(|| self.seats[..self.players()].iter().position(|s| *s == Some(lead)))
+        (self.seats[self.first_seat()] != Some(lead)).then(|| self.seats[..self.players()].iter().position(|s| *s == Some(lead)))
     }
 
     /// The seats 1P's ←/→ (`right`) trades on the assignment screen: the focused one and its neighbour that way,
@@ -999,7 +1009,8 @@ impl Menu {
                 q = next(q);
             }
         }
-        let empties_1p = q == 0 && self.seats[p].is_none() || p == 0 && self.seats[q].is_none();
+        let f = self.first_seat();
+        let empties_1p = q == f && self.seats[p].is_none() || p == f && self.seats[q].is_none();
         (!empties_1p && self.seats[p] != self.seats[q]).then_some((p, q))
     }
 
@@ -2610,47 +2621,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
             d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [76.0 + hand_x, 156.0 + 70.0 * m.doubles as u8 as f32, 64.0, 32.0], WHITE, 128.0);
             d.info(text.msg(192));
         }
-        Screen::Assign => {
-            d.frame(2, WALL);
-            for (p, &fill) in CARD_FILL.iter().enumerate().take(m.players()) {
-                let y = 90.0 + 70.0 * p as f32;
-                let card = d.out.len();
-                d.box3([120.0, y, 400.0, 56.0], 10.0, [Some(INK), Some(WHITE), Some(fill)], 128.0);
-                d.hit([120.0, y, 400.0, 56.0], pointer::press(|k| k.ok = true));
-                d.text(&format!("{}P", p + 1), 140.0, y + 10.0, 32.0, WHITE);
-                // B216: a seat with nobody is open (filled at Start) until 1P adds a computer player to it
-                let name = if m.open(p) && !m.online() { "Open".to_string() } else { dev_name(m.seats[p], pads) };
-                d.text(&name, 240.0, y + 12.0, 28.0, if m.seats[p].is_some() { WHITE } else if m.bots[p] { [60.0, 110.0, 40.0] } else { [70.0; 3] });
-                if m.droppable(p) {
-                    drop_button(&mut d, p, 482.0, y + 14.0);
-                }
-                if m.can_bot(p) {
-                    let (label, fill) = if m.bots[p] { ("- COM", [120.0, 30.0, 30.0]) } else { ("+ COM", [40.0, 100.0, 40.0]) };
-                    d.pill_at([430.0, y + 14.0, 76.0, 28.0], [INK, WHITE, fill], 128.0);
-                    d.centred(label, 468.0, y + 18.0, 20.0, WHITE);
-                    d.hit([430.0, y + 14.0, 76.0, 28.0], pointer::Act::Row(p, Press { card: true, ..default() }));
-                }
-                // P21a: the card shakes while its pad's right stick moves (its hit rects stay put)
-                d.out[card..].iter_mut().for_each(|q| q.dst[0] += m.shake[p]);
-            }
-            d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [60.0 + hand_x, 102.0 + 70.0 * m.sel.min(m.players() - 1) as f32, 64.0, 32.0], WHITE, 128.0);
-            // B437: 1P's own seat change is pending until they leave: tagged on its new seat, spelled out in the help
-            let pending = m.lead_pending().map(|at| {
-                if let Some(p) = at {
-                    d.text("Yours when you leave", 240.0, 90.0 + 70.0 * p as f32 + 38.0, 16.0, [250.0, 210.0, 60.0]);
-                }
-                match at {
-                    Some(p) => format!("Pending: you move to {}P when you leave this screen; until then you keep 1P's controls here. ", p + 1),
-                    None => "Pending: you give up your seat when you leave this screen; until then you keep 1P's controls here. ".to_string(),
-                }
-            });
-            let pending = pending.unwrap_or_default();
-            if m.paused {
-                d.info(&format!("{pending}1P: Up/Down picks a seat, Left/Right swaps its device with the next player's, Tab / Square takes a device off its seat, X or Enter keeps the change, O or Esc leaves it. Others: X or Enter takes a free seat, Left/Right changes seat, O or its red X leaves. A controller's right stick shakes its seat."));
-            } else {
-            d.info(&format!("{pending}{} 1P: Up/Down picks a seat, Left/Right swaps it, Tab / Square takes it off, Triangle adds or removes a computer player (empty seats are filled at Start). Others: X or Enter joins, Left/Right changes seat, O or its red X leaves. A controller's right stick shakes its seat.", text.msg(193)));
-            }
-        }
+        // M124: the match roster's cards (`assign.rs`)
+        Screen::Assign => assign::layout(&mut d, m, text, pads),
         Screen::Chars => roster::chars(&mut d, m, text, bind, pads),
         // M121: the lobby is the online select's columns with the lobby around them (`lobby::over`), and its prompts
         Screen::Lobby if m.net.room.is_some() => {
