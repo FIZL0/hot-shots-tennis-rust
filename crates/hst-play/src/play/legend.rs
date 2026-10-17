@@ -68,6 +68,10 @@ pub enum Act {
     Emote,
     /// B558: O / R3: the Settings pages over the character select and the online lobby.
     Settings,
+    /// ✕ / the keyboard's bound Normal key (J), not Enter: the Controllers screen's select.
+    Select,
+    /// Start / Enter: the Controllers screen's Start.
+    Go,
 }
 
 /// A device's button art.
@@ -158,6 +162,8 @@ pub fn menu_keys(act: Act, bind: &Bindings, select: bool) -> Vec<String> {
         Act::UpDown => vec![k(Action::Up), k(Action::Down)],
         Act::LeftRight => vec![k(Action::Left), k(Action::Right)],
         Act::Ok => vec!["Enter".into(), k(Action::Normal)],
+        Act::Select => vec![k(Action::Normal)],
+        Act::Go => vec!["Enter".into()],
         Act::Back => vec!["Esc".into(), k(Action::Cut)],
         Act::Card => vec![k(Action::Lob)],
         Act::Costume => vec!["Q".into(), "E".into()],
@@ -501,7 +507,7 @@ pub fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Move => vec![Glyph::Dpad([true; 4])],
         Act::UpDown => vec![Glyph::Dpad([true, true, false, false])],
         Act::LeftRight => vec![Glyph::Dpad([false, false, true, true])],
-        Act::Ok => vec![Glyph::Face(style, 0)],
+        Act::Ok | Act::Select => vec![Glyph::Face(style, 0)],
         Act::Back => vec![Glyph::Face(style, 1)],
         Act::Page => vec![Glyph::Face(style, 2)],
         Act::Card => vec![Glyph::Face(style, 3)],
@@ -515,7 +521,7 @@ pub fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Emote => vec![Glyph::Stick],
         Act::Settings => vec![button_glyph_of(style, GamepadButton::RightThumb)],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
-        Act::Start | Act::Name => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
+        Act::Start | Act::Name | Act::Go => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
         // the chat is the typed box (T, or the lobby's Chat button): no pad button
         Act::Type | Act::Chat | Act::Cancel | Act::Key => vec![],
     }

@@ -582,6 +582,8 @@ struct Menu {
     /// Each seat's controller chip's offset (640×448 units) while it slides over from the seat it came from
     /// (`assign_shake.rs`).
     slide: [[f32; 2]; 4],
+    /// The select's / lobby's player columns' offsets while a player who changed sides slides over (`assign_shake.rs`).
+    cols: [[f32; 2]; 4],
     /// B564: how bright each seat's press-to-find flash is (1 just pressed, fading to 0), `assign_shake.rs`.
     flash: [f32; 4],
     /// M124: the assignment over an online match's pause: the seats another machine plays. Only this machine's own
@@ -647,6 +649,7 @@ impl Default for Menu {
             splash: default(),
             shake: [0.0; 4],
             slide: [[0.0; 2]; 4],
+            cols: [[0.0; 2]; 4],
             flash: [0.0; 4],
             net_pause: None,
             takeover: default(),
@@ -2856,13 +2859,6 @@ fn shirt(d: &mut Draw, [x, y, w, h]: [f32; 4], rgb: [f32; 3], bg: [f32; 3]) {
     }
 }
 
-/// B238: the ✕ that takes seat `p`'s device off it (tapped or clicked; the device's own ○ does it too).
-fn drop_button(d: &mut Draw, p: usize, x: f32, y: f32) {
-    d.pill_at([x, y, 28.0, 28.0], [INK, WHITE, [120.0, 30.0, 30.0]], 128.0);
-    d.centred("X", x + 14.0, y + 4.0, 20.0, WHITE);
-    d.hit([x, y, 28.0, 28.0], pointer::Act::Drop(p));
-}
-
 /// B263: the warm fill behind a face icon.
 const FACE_FILL: [f32; 3] = [110.0, 100.0, 90.0];
 
@@ -3083,6 +3079,11 @@ fn step(
                 k.kind_prev = keys.just_pressed(KeyCode::Digit1);
                 k.kind_next = keys.just_pressed(KeyCode::Digit3);
                 k.settings = keys.just_pressed(KeyCode::KeyO);
+                // the Controllers screen: Enter starts, the bound Normal key (J) / Space selects
+                if menu.screen == Screen::Assign {
+                    k.name |= keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]);
+                    k.ok = bind.key_just_pressed(&keys, Action::Normal) || keys.just_pressed(KeyCode::Space);
+                }
                 // B463: on the select Q / E are the sections (Settings' tab keys), Z / X the costume; 1–4 its emotes
                 if menu.screen == Screen::Chars {
                     (k.kind_prev, k.kind_next) = (k.prev, k.next);
@@ -3102,6 +3103,10 @@ fn step(
                 k.page = g.just_pressed(GamepadButton::West);
                 k.hand = g.just_pressed(GamepadButton::Select);
                 k.name = g.just_pressed(GamepadButton::Start);
+                // the Controllers screen: Start starts, ✕ selects
+                if menu.screen == Screen::Assign {
+                    k.ok = g.just_pressed(GamepadButton::South);
+                }
                 k.kind_prev = g.just_pressed(GamepadButton::LeftTrigger2);
                 k.kind_next = g.just_pressed(GamepadButton::RightTrigger2);
                 k.settings = g.just_pressed(GamepadButton::RightThumb);

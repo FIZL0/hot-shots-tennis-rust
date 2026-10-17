@@ -3,7 +3,7 @@
 //! held still meanwhile, the way the pause screen holds it (its flare ticks were drawn at setup), so the intro
 //! never touches the sim or its RNG; ✕ skips the flyover (the rest of the intro then runs `SKIPPED` ticks; ✕ does
 //! nothing after the flyover). Over the flyover the court's title plate (`plate`): name, surface and ball ratings
-//! top left, Skip in the key legend, the score panel, balloons and markers hidden till the intro ends. Its last
+//! top left, the device's ✕ (Enter) and "Skip" floating bottom right, the score panel, balloons and markers hidden till the intro ends. Its last
 //! `BANNER` ticks show the "Start the Match!" banner over the match camera (the INPANE model with the "N Sets N
 //! Games" pill and "Set 1"). Its sounds
 //! (`sounds`): the court's BGM (with `--music`) from the intro's start, running on into the match; the gallery's
@@ -138,7 +138,7 @@ struct BannerSlot(usize);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, (start.after(super::setup), system_bank.after(start)))
-        .add_systems(Update, (draw_plate, sounds, legend))
+        .add_systems(Update, (draw_plate, sounds))
         .add_systems(PostUpdate, hide_hud.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(RunFixedMainLoop, hold.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
         .add_systems(Update, show.after(crate::character::animate)) // after the match camera, as the ceremony (B246)
@@ -385,8 +385,9 @@ const SURFACE: [[u8; 3]; 3] = [[41, 120, 25], [114, 72, 31], [26, 100, 127]];
 
 /// The title plate on intro frame `f` (drawn from 1) for a court's plate row (surface, ball ratings): a dark bar
 /// across the top at half alpha, the name fading in over 15 frames, its underline, the tinted surface label and the
-/// two rows of 4 balls (bright up to the rating, dark after). The plate keeps its distance from the left edge as a
-/// whole, the bar spans the window. The original's "✕ Skip" is our key legend's (`legend`).
+/// two rows of 4 balls (bright up to the rating, dark after); once the name is in, the original's "Skip" bottom right
+/// after the button that skips (sheet 3: the connected device's own art, drawn by `draw_plate`). The plate keeps its
+/// distance from the left edge as a whole, the bar spans the window and the prompt keeps to the right edge.
 fn plate([surface, a, b]: [u8; 3], f: u32) -> Vec<Quad> {
     let fade = 16u32.saturating_sub(f) as i32;
     let alpha = (128 - fade * 128 / 15).max(0) as u8;
@@ -407,23 +408,23 @@ fn plate([surface, a, b]: [u8; 3], f: u32) -> Vec<Quad> {
             q.push((0, [u, 0.0, 24.0, 21.0], [x + 48.0 + 24.0 * i as f32, 52.0, 24.0, 21.0], on, l));
         }
     }
-    q
-}
-
-/// ✕ Skip in the key legend once the plate's name is in, while the flyover runs (the original's own bottom-right prompt).
-fn legend(intro: Option<Res<Intro>>, last: Res<super::legend::Last>, mut out: ResMut<super::legend::Legend>) {
-    use super::legend::{Act, item};
-    if intro.is_some_and(|i| i.showing() && i.at >= 16) {
-        out.one(*last, vec![item(Act::Ok, "Skip", &["Enter", "J"])]);
+    if f >= 16 {
+        q.push((3, [0.0; 4], [512.0, 404.0, 24.0, 24.0], on, Anchor::Sides));
+        q.push((0, [0.0, 72.0, 80.0, 32.0], [544.0, 400.0, 80.0, 32.0], on, Anchor::Sides));
     }
+    q
 }
 
 fn draw_plate(
     intro: Option<Res<Intro>>,
     art: Option<Res<PlateArt>>,
+    buttons: Option<Res<super::legend::Buttons>>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut q: Query<(&PlateSlot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
+    // the button that skips: a connected pad's ✕ in its own art, else the keyboard's Enter
+    let style = super::legend::join_styles().first().copied().unwrap_or(super::legend::Style::Keys);
+    let button = buttons.as_ref().and_then(|b| b.0.get(&style)).cloned();
     let Some(art) = art else { return };
     let quads = intro.filter(|i| i.showing() && i.at > 0).map_or(vec![], |i| plate(art.1, i.at));
     let share = widescreen::window_share(&window);
@@ -432,8 +433,19 @@ fn draw_plate(
             vis.set_if_neq(Visibility::Hidden);
             continue;
         };
-        img.image = art.0[sheet].clone();
-        img.rect = Some(Rect::new(u, v, u + w, v + h));
+        if sheet == 3 {
+            let Some((image, aspect)) = button.clone() else {
+                vis.set_if_neq(Visibility::Hidden);
+                continue;
+            };
+            img.image = image;
+            img.rect = None;
+            // its own width, its right edge where the original's ✕ ended
+            (x, dw) = (536.0 - dh * aspect, dh * aspect);
+        } else {
+            img.image = art.0[sheet].clone();
+            img.rect = Some(Rect::new(u, v, u + w, v + h));
+        }
         if sheet == 1 && art.2 {
             // a court mod's name row, whole, centred over the underline (16–504)
             (img.rect, x, dw) = (None, 260.0 - 128.0, 256.0);

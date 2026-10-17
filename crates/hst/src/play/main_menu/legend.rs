@@ -61,12 +61,12 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         }
         Screen::Mode if host => v.extend([(Act::Move, "Singles / Doubles"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
         Screen::Assign if host && m.keep.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
-        Screen::Assign if host && m.held => v.extend([(Act::LeftRight, "Move controller"), (Act::Ok, "Put down"), (Act::Back, "Put down")]),
+        Screen::Assign if host && m.held => v.extend([(Act::LeftRight, "Move controller"), (Act::Select, "Put down"), (Act::Back, "Put down")]),
         Screen::Assign if host => {
             v.push((if m.assign_per() < m.players() { Act::Move } else { Act::LeftRight }, "Move"));
             let p = m.sel.min(m.players() - 1);
             if m.pickable(p) {
-                v.push((Act::Ok, "Select"));
+                v.push((Act::Select, "Select"));
             }
             if m.droppable(m.sel.min(m.players() - 1)) {
                 v.push((Act::Page, "Remove"));
@@ -78,7 +78,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                     v.push((Act::Card, "Add COM"));
                 }
             }
-            v.extend([(Act::Name, if m.paused { "Done" } else { "Start" }), (Act::Back, "Back")]);
+            v.extend([(Act::Go, if m.paused { "Done" } else { "Start" }), (Act::Back, "Back")]);
         }
         Screen::Assign => {
             let n = m.players();
@@ -556,14 +556,14 @@ mod tests {
                     let want = [
                         has(&[Act::Move, Act::UpDown]),
                         has(&[Act::Move, Act::LeftRight]),
-                        has(&[Act::Ok]),
+                        has(&[Act::Ok, Act::Select]),
                         has(&[Act::Back]),
                         has(&[Act::Card]),
                         has(&[Act::Costume]),
                         has(&[Act::Page]),
                         has(&[Act::Hand]),
                         has(&[Act::Kind]),
-                        has(&[Act::Name]),
+                        has(&[Act::Name, Act::Go]),
                         has(&[Act::Settings]),
                     ];
                     assert_eq!(got, want, "{:?} sel {} {dev:?}: [↕ ↔ ✕ ○ △ L1R1 □ Select L2R2 Start R3] handled vs legend {acts:?}", m.screen, m.sel);
