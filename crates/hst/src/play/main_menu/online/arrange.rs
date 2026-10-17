@@ -88,7 +88,7 @@ impl Menu {
         self.net.grab.filter(|&i| self.movable(i))
     }
 
-    /// Where the carried card would go: the chosen card's seat (its ✕ counts as the card).
+    /// Where the carried card would go: the chosen card's seat.
     pub(in super::super) fn target_seat(&self) -> Option<usize> {
         match self.items().get(self.sel) {
             Some(&Item::Seat(t)) => Some(t),

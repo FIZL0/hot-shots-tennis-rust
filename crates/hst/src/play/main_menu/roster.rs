@@ -382,6 +382,8 @@ pub(super) fn chip_w(d: &Draw, s: &str, h: f32) -> f32 {
 /// The character select, one column per player.
 pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
+    // online, the relay's notice band (if any) along the very top, the top bar under it
+    let t = t + super::online::band_h(m, r - l - 2.0 * MARGIN * PX);
     // the background over the whole window
     super::look::backdrop(d);
     // the top bar: the title (Back for the pointer, after the "<" `drawn` puts over it), the players and the mode
@@ -430,11 +432,11 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     names(d, m, &c);
 }
 
-/// M121: the online select, which is the lobby: the relay's notice band, the columns, the lobby around them (its top
+/// M121: the online select, which is the lobby: the relay's notice band (over the top bar), the columns, the lobby around them (its top
 /// bar's buttons, the strip, Leave, the chat box and Start: `lobby::over`), the name pickers over it all.
 fn online_chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     let [l, t, r, _] = m.grid.view;
-    super::online::band(d, m, l + MARGIN * PX, t + TOP_BAR * PY, r - l - 2.0 * MARGIN * PX);
+    super::online::band(d, m, l + MARGIN * PX, t + 8.0 * PY, r - l - 2.0 * MARGIN * PX);
     let c = player_columns(d, m, text, bind, pads);
     super::online::lobby_over(d, m);
     names(d, m, &c);

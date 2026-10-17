@@ -864,7 +864,7 @@ impl Menu {
 
     /// B368: the select's player columns on this window.
     fn columns(&self) -> roster::Columns {
-        // B519: online, the relay's notice band under the top bar pushes the columns down
+        // B519: online, the relay's notice band over the top bar pushes the columns down
         let [l, t, r, b] = self.grid.view;
         let band = online::band_h(self, r - l - 2.0 * roster::MARGIN * roster::PX);
         // M121: online, the lobby's strip and bottom row under them
@@ -1568,9 +1568,7 @@ impl Menu {
                         out.push(Sound(1));
                     } else if self.online() && self.net.edit == Some(p) {
                         // B216: the host leaves its computer player as it was in the lobby
-                        self.net.edit = None;
-                        self.go(Screen::Lobby, &mut out);
-                        self.sel_seat(p);
+                        self.bot_to_lobby(p, &mut out);
                         out.push(Sound(1));
                     } else if self.seats[p].is_none() {
                         // player 1 driving a computer player (one added or an open seat's COM card): back to the last
