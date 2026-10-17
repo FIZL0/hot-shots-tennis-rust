@@ -55,6 +55,7 @@ impl Menu {
             && !self.online()
             && self.rebinding.is_none()
             && self.switch.is_none()
+            && self.stale.0.is_none()
             && self.listing.is_none()
             && self.add.ask.is_none()
     }

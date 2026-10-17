@@ -27,6 +27,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         _ if m.takeover_asking() && dev == Dev::Keys => v.push((Act::Back, "Keep keyboard")),
         _ if m.takeover_asking() => {}
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose")]),
+        Screen::Main if m.stale.0.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
         _ if m.mod_asking() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Stand-in")]),
         _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
         Screen::Main if m.main_rows().get(s) == Some(&super::home::Row::Update) => v.extend([(Act::UpDown, "Move"), (Act::Ok, crate::update::button()), (Act::Back, "Later")]),
@@ -528,7 +529,7 @@ mod tests {
                     let has = |a: &[Act]| acts.iter().any(|(x, _)| a.contains(x));
                     let h = |f| handled(&m, dev, f);
                     // ✕ there reloads the game, opens a file picker or reaches the store: taken as handled
-                    let ok = matches!(m.screen, Screen::Mods) && !m.add.empty_kind() || m.screen == Screen::Main && m.add.ask.is_some() || h(|p| &mut p.ok);
+                    let ok = matches!(m.screen, Screen::Mods) && !m.add.empty_kind() || m.screen == Screen::Main && (m.add.ask.is_some() || m.stale.0 == Some(0)) || h(|p| &mut p.ok);
                     let got = [
                         h(|p| &mut p.up) || h(|p| &mut p.down),
                         h(|p| &mut p.left) || h(|p| &mut p.right),

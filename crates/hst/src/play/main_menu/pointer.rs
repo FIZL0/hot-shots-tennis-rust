@@ -121,6 +121,7 @@ impl Menu {
     fn choose(&mut self, i: usize) -> bool {
         let was = match self.screen {
             Screen::Main if self.add.ask.is_some() => self.add.ask.replace(i),
+            Screen::Main if self.stale.0.is_some() => self.stale.0.replace(i),
             _ if self.switch.is_some() => self.switch.as_mut().map(|s| std::mem::replace(&mut s.1, i)),
             // B498: an open dropdown's choices
             _ if self.listing.is_some() => self.listing.replace(i),
@@ -590,6 +591,20 @@ pub(super) mod tests {
         let fx = m.point(super::super::Dev::Keys, Act::Row(1, OK), true);
         assert_eq!((m.add.ask, m.screen), (None, Screen::Main));
         assert_eq!(fx.last(), Some(&Effect::Sound(1)));
+    }
+
+    /// The newer-version popup on Online: a tap off it closes it on the main menu; Play anyway goes online.
+    #[test]
+    fn stale_popup() {
+        let keys = super::super::Dev::Keys;
+        let mut m = Menu { stale: (Some(0), true), ..default() };
+        assert!(hits(&m).1.is_some());
+        m.point(keys, hits(&m).1.unwrap(), true);
+        assert_eq!((m.stale.0, m.screen), (None, Screen::Main));
+        m.stale.0 = Some(0);
+        m.step(keys, Press { down: true, ..default() });
+        m.step(keys, OK);
+        assert_eq!((m.stale.0, m.screen), (None, Screen::Online));
     }
 
     /// The system itself: a window, a finger down and up on a row, a drag, a click off everything.

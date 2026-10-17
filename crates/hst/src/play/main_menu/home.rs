@@ -7,7 +7,7 @@
 //! uniformly at any aspect ratio.
 
 use super::{
-    CARD_FILL, CHAR_NAMES, COURTS, Draw, GOLD, INK, Menu, SETS, Screen, Tex, Text, WHITE, Who, face_frame, legend, mods_screen, options, pointer,
+    CARD_FILL, CHAR_NAMES, COURTS, Dev, Draw, Effect, Press, GOLD, INK, Menu, SETS, Screen, Tex, Text, WHITE, Who, face_frame, legend, mods_screen, options, pointer,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -203,6 +203,68 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, pads: usize, hand_x: f
         mods_screen::news(d, m, [sx, TOP, STORE_W, FOOT - TOP]);
     }
     mods_screen::ask_layout(d, m, hand_x);
+    stale_layout(d, m, hand_x);
+}
+
+const STALE_TOP: f32 = 226.0;
+
+impl Menu {
+    /// One press while the newer-version popup is up (it takes them all): any arrow swaps Update / Play anyway, ✕
+    /// picks, ○ closes it on the main menu. Returns whether it was up.
+    pub(super) fn stale_step(&mut self, dev: Dev, k: Press, out: &mut Vec<Effect>) -> bool {
+        let Some(a) = self.stale.0 else { return false };
+        if k.up || k.down || k.left || k.right {
+            self.stale.0 = Some(1 - a);
+            out.push(Effect::Sound(0));
+        } else if k.ok {
+            self.stale.0 = None;
+            out.push(Effect::Sound(2));
+            if a == 0 {
+                crate::update::act();
+            } else {
+                self.go_online(dev, out);
+            }
+        } else if k.back {
+            self.stale.0 = None;
+            out.push(Effect::Sound(1));
+        }
+        true
+    }
+
+    /// Main → Online, as `dev`.
+    pub(super) fn go_online(&mut self, dev: Dev, out: &mut Vec<Effect>) {
+        self.rematch = false;
+        self.seats = [Some(self.p1.unwrap_or(dev)), None, None, None];
+        self.net.status.clear();
+        out.push(Effect::Online(super::online::Fx::Load));
+        self.go(Screen::Online, out);
+    }
+}
+
+/// The newer-version popup over a dimmed main menu, in the Mods-changed popup's style (`mods_screen::ask_layout`).
+fn stale_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
+    let Some(a) = m.stale.0 else { return };
+    use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
+    if let Some(i) = d.out.iter().rposition(|q| q.tex == Tex::Cursor) {
+        d.out.remove(i);
+    }
+    // a tap off the popup is ○
+    d.popup(Some(pointer::Act::Row(0, Press { ok: false, back: true, ..pointer::OK })));
+    d.anchor = super::Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
+    d.anchor = super::Anchor::Centre;
+    d.box3([160.0, STALE_TOP - 70.0, 320.0, 70.0 + 72.0 + 16.0], 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
+    d.outlined(|d| d.label("A new version is out.", 320.0, STALE_TOP - 56.0, 22.0, 288.0, WHITE));
+    d.outlined(|d| d.label("Online play works best on it.", 320.0, STALE_TOP - 32.0, 18.0, 288.0, WHITE));
+    for (k, word) in [crate::update::button(), "Play anyway"].into_iter().enumerate() {
+        let y = STALE_TOP + 40.0 * k as f32;
+        let on = k == a;
+        d.pill_at([176.0, y, 288.0, 32.0], [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
+        d.hit([176.0, y, 288.0, 32.0], pointer::Act::Row(k, pointer::OK));
+        d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
+    }
+    d.q(Tex::Cursor, [0.0, 0.0, 64.0, 32.0], [116.0 + hand_x, STALE_TOP + 40.0 * a as f32, 64.0, 32.0], WHITE, 128.0);
+    d.said = "A new version is out. Online play works best on it.".into();
 }
 
 fn name(r: Row) -> &'static str {

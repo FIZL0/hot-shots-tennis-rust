@@ -551,6 +551,9 @@ struct Menu {
     editing: Option<Settings>,
     /// B327: the Renderer switch's confirm popup is up: the renderer it would switch to and the chosen pill (0 Switch).
     switch: Option<(u8, usize)>,
+    /// Online pressed while a newer version is out: the suggestion popup's chosen pill (0 Update, 1 Play anyway), and
+    /// whether it has been shown this run (it asks once; Play anyway always goes on).
+    stale: (Option<usize>, bool),
     /// B498: a many-choice Settings row's dropdown is open (row `sel`, `editing` set): the highlighted choice.
     listing: Option<usize>,
     /// B369: the select's favorite characters (`favorites.txt`).
@@ -616,6 +619,7 @@ impl Default for Menu {
             calls: 0,
             editing: None,
             switch: None,
+            stale: (None, false),
             listing: None,
             favs: default(),
             names: default(),
@@ -1158,7 +1162,7 @@ impl Menu {
             return out;
         }
         let host = self.lead();
-        if self.screen == Screen::Main && self.ask_step(k, &mut out) {
+        if self.screen == Screen::Main && (self.ask_step(k, &mut out) || self.stale_step(dev, k, &mut out)) {
             return out;
         }
         // B484: the other side's mod asked about over the select / the confirm (drawn over everything)
@@ -1196,13 +1200,11 @@ impl Menu {
                         }
                         // B516: whoever chose it, 1P is the splash's
                         Row::Local => self.local_start(self.p1.unwrap_or(dev), &mut out),
-                        Row::Online => {
-                            self.rematch = false;
-                            self.seats = [Some(self.p1.unwrap_or(dev)), None, None, None];
-                            self.net.status.clear();
-                            out.push(Effect::Online(online::Fx::Load));
-                            self.go(Screen::Online, &mut out);
+                        Row::Online if !self.stale.1 && crate::update::latest().is_some() => {
+                            self.stale = (Some(0), true);
+                            out.push(Effect::Sound(2));
                         }
+                        Row::Online => self.go_online(dev, &mut out),
                         Row::Settings => self.go(Screen::Display, &mut out),
                         Row::Mods => self.mods_open(&mut out),
                         Row::Extras => self.go(Screen::Extras, &mut out),
@@ -2070,6 +2072,9 @@ fn setup(mut commands: Commands, args: Res<Args>, kept: Option<Res<Kept>>, mut r
         "" if fresh => Screen::Press,
         _ => Screen::Main,
     };
+    if screen == "main-stale" {
+        menu.stale = (Some(0), true);
+    }
     if screen == "press-claimed" {
         menu.p1 = Some(Dev::Keys);
         menu.splash.hold();
@@ -2658,7 +2663,7 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
     online::draw_ask_over(&mut d, m);
     takeover::layout(&mut d, m, hand_x);
     // B221: the screens with no Back row show the title tab's Back (B449: the confirm screen has its own)
-    if matches!(m.screen, Screen::Main | Screen::Mode | Screen::Assign | Screen::Chars) && m.picking.is_none() && m.add.ask.is_none() {
+    if matches!(m.screen, Screen::Main | Screen::Mode | Screen::Assign | Screen::Chars) && m.picking.is_none() && m.add.ask.is_none() && m.stale.0.is_none() {
         d.anchor = Anchor::Span;
         d.outlined(|d| d.text("<", 10.0, 5.0, 30.0, WHITE));
         d.anchor = Anchor::Centre;
