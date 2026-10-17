@@ -1297,7 +1297,7 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
                     tokio::select! {
                         list = f.next(&cx) => match list {
                             // B467: none found because the lobby list couldn't be read: say why, not "none open"
-                            Some(_) if f.failed().is_some() => cx.say(Event::Failed(format!("Couldn't read the lobby list: {}.", f.failed().unwrap()))),
+                            Some(_) if f.failed().is_some() => cx.say(Event::Failed(format!("{LIST_UNREAD}: {}.", f.failed().unwrap()))),
                             Some(list) => cx.say(Event::Found(list)),
                             None => break,
                         },
@@ -1357,6 +1357,9 @@ async fn run(cfg: Online, mut cmds: amp::UnboundedReceiver<Cmd>, ev: mpsc::Sende
         ep.close().await;
     }
 }
+
+/// B467: how a Find's failure (`Event::Failed`) starts: none found because the lobby list couldn't be read.
+pub const LIST_UNREAD: &str = "Couldn't read the lobby list";
 
 /// How many lists Find sends (`Event::Found`): native the LAN's, the DHT board's and the short-code slots', each
 /// merged with those in so far; the browser only the slots'.

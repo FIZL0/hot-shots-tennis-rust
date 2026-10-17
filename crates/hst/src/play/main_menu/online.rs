@@ -1506,6 +1506,11 @@ impl Menu {
             // the lobby's gone (refused, taken out, the host left, or it couldn't open): only Leave is left
             // the Online screen's own search failing: its card says none found
             Event::Failed(s) if self.screen == Screen::Online && v.finding > 0 => (v.finding, v.why) = (0, s),
+            // B545: a dropped search's last answer, come in after a lobby was chosen: not this join's failure
+            Event::Failed(s) if v.pick_next && v.finding == 0 && s.starts_with(crate::net::LIST_UNREAD) => {}
+            // B545: Quickplay's join of one lobby found failing: it tries the next, else opens one (`Hosting` first, so
+            // a failure while hosting is still the real one)
+            Event::Failed(s) if v.go == Some(Go::Quick) && v.pick_next && !v.hosting && v.finding == 0 => v.status = crate::update::refused(s),
             Event::Failed(s) => {
                 v.status = crate::update::refused(s);
                 v.fail = Some(match v.go {
@@ -1530,6 +1535,8 @@ impl Menu {
             Event::Code(c) => v.code = c,
             Event::Short(c) => v.short = c,
             Event::Joinable => v.joinable = true,
+            // B545: a dropped search's list, come in after a lobby was chosen
+            Event::Found(_) if v.finding == 0 && (v.pick_next || v.room.is_some()) => {}
             Event::Found(l) => {
                 v.finding = v.finding.saturating_sub(1);
                 v.why.clear();
@@ -2729,6 +2736,13 @@ pub(super) fn sample(m: &mut Menu) {
             (m.net.room, m.net.short, m.net.go, m.net.hosting, m.net.me) = (None, String::new(), Some(Go::Host), true, "host".into());
             (m.net.pick_next, m.net.first, m.doubles) = (true, true, false);
             m.net.status = "Opening the lobby...".into();
+            m.seats[0] = Some(super::Dev::Keys);
+        }
+        // B545: a guest's join on its way in, the host's line-up still to come
+        "chars-joining" => {
+            (m.net.room, m.net.short, m.net.go, m.net.hosting, m.net.me) = (None, String::new(), Some(Go::Find), false, String::new());
+            (m.net.pick_next, m.net.first, m.doubles) = (true, true, false);
+            m.net.status = "Joining 1ea1b5db...".into();
             m.seats[0] = Some(super::Dev::Keys);
         }
         _ => {}
@@ -4077,6 +4091,59 @@ mod tests {
         m.screen = Screen::Chars;
         m.heard(Event::Failed("Refused: full".into()));
         assert_eq!(m.screen, Screen::Lobby);
+    }
+
+    /// B545: while a join is on its way in nothing says it can't join: the open seat says it's joining (not the host's
+    /// "friends can join once the relay is up"), a dropped search's late answers don't touch it, and Quickplay's
+    /// failed try at one lobby isn't the end of it (it goes on to the next, or opens one).
+    #[test]
+    fn joining_shows_no_failure_before_it_fails() {
+        let dev = super::super::Dev::Keys;
+        let ok = Press { ok: true, ..default() };
+        let l = Listing { id: "S".into(), name: "Kim".into(), doubles: false, court: 1, taken: 1, seats: 2, time: 0, code: String::new(), build: crate::handshake::build().into() };
+        let mut m = Menu { screen: Screen::Lobbies, seats: [Some(dev), None, None, None], net: View { cfg: Some(Online::default()), finding: 2, ..default() }, ..default() };
+        m.heard(Event::Found(vec![l.clone()]));
+        m.step(dev, ok);
+        assert_eq!((m.screen, m.net.pick_next), (Screen::Chars, true));
+        let joining = |m: &Menu| {
+            assert_eq!((m.screen, m.net.fail), (Screen::Chars, None));
+            assert_eq!(reach(&m.net), Reach::Connecting);
+            assert!(reach_line(&m.net).is_some_and(|(t, _)| t == "Joining the lobby..."), "{:?}", reach_line(&m.net));
+            assert_eq!(super::super::roster::open_line(m), "Joining the lobby...");
+        };
+        joining(&m);
+        // the Find it cut short, still answering
+        m.heard(Event::Found(vec![]));
+        m.heard(Event::Failed(format!("{}: busy.", crate::net::LIST_UNREAD)));
+        joining(&m);
+        assert!(m.net.status.is_empty(), "{}", m.net.status);
+        m.heard(Event::Status("Joining Kim...".into()));
+        joining(&m);
+        // the host's line-up: in
+        let mut r = Room { seats: vec![None; 2], ..Default::default() };
+        r.seats[0] = Some(Seat { peer: "host".into(), pick: m.picks()[0].clone() });
+        r.seats[1] = Some(Seat { peer: "me".into(), pick: m.picks()[0].clone() });
+        m.heard(Event::Room(r));
+        assert_eq!((m.screen, reach(&m.net)), (Screen::Chars, Reach::Up));
+        // a real refusal still says so
+        m.net.room = None;
+        m.screen = Screen::Lobbies;
+        m.sel = 0;
+        m.net.list = vec![l];
+        m.step(dev, ok);
+        m.heard(Event::Failed("Refused: full".into()));
+        assert_eq!((m.screen, m.net.fail), (Screen::Lobby, Some("Couldn't join the lobby")));
+        // Quickplay: one stale lobby unreachable, then this machine hosts
+        m.back_to_online(&mut Vec::new());
+        m.sel = 0;
+        m.step(dev, ok);
+        assert_eq!((m.net.go, m.screen), (Some(Go::Quick), Screen::Chars));
+        assert_eq!(super::super::roster::open_line(&m), "Finding a lobby...");
+        m.heard(Event::Failed("Couldn't find the host's address".into()));
+        assert_eq!((m.screen, m.net.fail, m.net.pick_next), (Screen::Chars, None, true));
+        m.heard(Event::Hosting);
+        m.heard(Event::Failed("relay down".into()));
+        assert_eq!((m.screen, m.net.fail), (Screen::Lobby, Some("Couldn't find or create a lobby")));
     }
 
     /// B496: Find's list comes from discovery (late, stale or different per player): Join by Code is a row under
