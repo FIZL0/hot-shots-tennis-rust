@@ -59,7 +59,7 @@ pub enum Act {
     Cancel,
     /// B301: a match key hint, keycaps only (`key_hints.rs`).
     Key,
-    /// B320: text chat in an online lobby (`chat.rs`): T (B512: no pad entry; a pad's R2/L2 phrases are the match's).
+    /// B320: text chat in an online lobby (`chat.rs`): T (a pad has no chat key: the lobby's Chat button).
     Chat,
     /// B373: L2 / R2 (keyboard 1 / 3): the Mods pages' kind tab; B382: the character select's sections.
     Kind,
@@ -512,7 +512,7 @@ pub fn glyphs(style: Style, it: &Item) -> Vec<Glyph> {
         Act::Emote => vec![Glyph::Stick],
         Act::Hand => vec![Glyph::Small(if ps { "Create" } else if sw { "-" } else { "Select" })],
         Act::Start | Act::Name => vec![Glyph::Small(if ps { "Options" } else if sw { "+" } else if generic { "Start" } else { "Menu" })],
-        // B512: the menus' chat is the typed box (T, or the lobby's Chat button): a pad's quick-chat phrases are the match's
+        // the chat is the typed box (T, or the lobby's Chat button): no pad button
         Act::Type | Act::Chat | Act::Cancel | Act::Key => vec![],
     }
 }
@@ -934,7 +934,7 @@ mod tests {
         }
         let it = |act| Item { act, label: String::new(), keys: vec![], dim: [false; 2] };
         assert_eq!(glyphs(Style::Switch, &it(Act::Costume)), [Glyph::Shoulder("L"), Glyph::Shoulder("R")]);
-        assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [], "B512: no quick-chat shoulders in the menus");
+        assert_eq!(glyphs(Style::Switch, &it(Act::Chat)), [], "a pad has no chat button");
         assert!(chip(&[Style::Ps], &it(Act::Chat)).is_none(), "nor a Chat entry for a pad alone");
         assert_eq!(glyphs(Style::Switch, &it(Act::Kind)), [Glyph::Shoulder("ZL"), Glyph::Shoulder("ZR")]);
         assert_eq!(glyphs(Style::Ps, &it(Act::Kind)), [Glyph::Shoulder("L2"), Glyph::Shoulder("R2")]);

@@ -75,7 +75,7 @@ Short codes (B104): a hosted lobby shows a 4-character code (lobby screen, QR = 
 on-screen picker, keyboard: type, phone: OS keyboard) or takes a pasted code/link; "Copy Link" (OK on the lobby) gives
 `https://opentennis.dev/?code=<code>`, which opens straight into that lobby's character pick
 (desktop: `HST_CODE=<code> hst`). CLI: `hst net host` prints `Short("…")`, `hst net join <short>`.
-Chat (M20): in an online lobby, character select or match, Enter (or tapping "Chat") opens a line, Enter sends, Esc closes; pads: R2 steps preset phrases (and Mute/Unmute per sender), L2 says it; `/mute NAME` `/unmute NAME`; Settings → Mods → Chat off hides it. Through the host, outside the input stream.
+Chat (M20): in an online lobby, character select or match, Enter (or tapping "Chat") opens a line, Enter sends, Esc closes; pads: the lobby's Chat button opens the line; `/mute NAME` `/unmute NAME`; Settings → Mods → Chat off hides it. Through the host, outside the input stream.
 Lobby emotes (B460): in the online lobby and on Ready to play?, flick the right stick (keys 1–4; touch pad L1/R1) and your card's model plays that emote with its voice; online every peer sees it (through the host, outside the input stream).
 Mods in the browser (M16): main menu → Mods → Add mod picks a mod `.zip` (checked whole by `modfs::install`, kept in
 OPFS `mods/<id>/`, loaded into memory at start); ✕ on a mod → Remove (B202's child buttons beside the row; ○ or a tap elsewhere closes them) removes it; Reload brings changes into the select.
