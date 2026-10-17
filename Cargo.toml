@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 # hst and hst-base share it (`net::BUILD` and the handshake read it): tools/release.sh bumps it here
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 
 # B492: what players get stays the stock release profile, spelled out so nobody flips it for a test: no debug
 # assertions, no overflow checks (both on in dev and test builds, where they catch bugs), no debug info. Dev-only
