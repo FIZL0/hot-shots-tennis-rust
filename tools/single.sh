@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Unattended runner: keeps starting `claude "continue"` (= do the next open task in plan/TODO.md) until no
-# unchecked prompts remain. Any exit — finished prompt, error, usage limit — just waits and starts again.
+# Unattended runner: keeps starting `claude "continue"` (= do the next open task in plan/TODO.md); with none open
+# it checks again every minute (Ctrl-C to quit). Any exit — finished prompt, error, usage limit — just waits and starts again.
 # It's the normal TUI, so attach to watch or type to it; it can't ask questions (AskUserQuestion disabled), and
 # tools/agent-stop.sh ends each session after HST_IDLE (90) idle seconds — typing something resets that.
 #
@@ -42,7 +42,13 @@ open() {
   [ -z "$HST_ONLY" ] && { grep -q '^- \[ \]' plan/TODO.md; return; }
   for t in $HST_ONLY; do grep -q "^- \[ \] \*\*$t\*\*" plan/TODO.md && return 0; done; return 1
 }
-while open; do
+while :; do
+  if ! open; then
+    [ -n "$HST_ONLY" ] && break
+    [ -n "$idle" ] || echo "=== $(date -Is) no open task: checking plan/TODO.md every minute" | tee -a "$log"
+    idle=1; sleep 60; continue
+  fi
+  idle=
   # PCSX2, screenshots and --shot need this user's Wayland session; after a reboot SDDM's greeter has the only one
   if ! compgen -G "/run/user/$(id -u)/wayland-[0-9]*" >/dev/null; then
     echo "=== $(date -Is) no desktop session: waiting for a login (from a shell: tools/desktop-login.sh)" | tee -a "$log"
@@ -84,4 +90,4 @@ $(tools/ctx.py brief "$tid")" --session-id "$id" --permission-mode bypassPermiss
   fi
   sleep "$wait"
 done
-echo "=== all PLAN tasks checked off at $(date -Is)" | tee -a "$log"
+echo "=== HST_ONLY tasks checked off at $(date -Is)" | tee -a "$log"

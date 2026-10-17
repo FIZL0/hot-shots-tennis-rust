@@ -61,7 +61,8 @@ Examples:
 HST_LEAN=0 tools/parallel.sh …    agents get full Claude Code (plugins, subagents); default is lean (4 tools, ~17k
                                   vs ~50k tokens per turn). Either way they are normal TUIs: attach, watch, type.
 
-While it runs: type s + Enter to stop starting new tasks (again to undo). Log: context/notes/overnight.log
+While it runs: type s + Enter to stop starting new tasks and quit once the running ones finish (again to undo); with no
+open task it doesn't quit but checks plan/TODO.md every minute. Log: context/notes/overnight.log
 """
 _args = sys.argv[1:]
 if not _args or any(a in ('-h', '--help', 'help') for a in _args):
@@ -174,6 +175,22 @@ def left(tid):
     except OSError:
         return False
     return bool(lines) and lines[-1].startswith(f'{tid}: left')
+
+
+IDLE = {'until': 0.0, 'logged': False}  # no task to start: look again in a minute (new ones get added while it runs)
+
+
+def pick_or_wait(running, tried):
+    if time.time() < IDLE['until']:
+        return None
+    if task := pick(running, tried):
+        IDLE['logged'] = False
+        return task
+    IDLE['until'] = time.time() + 60
+    if not IDLE['logged']:
+        IDLE['logged'] = True
+        log('no task to start: checking plan/TODO.md every minute (s + Enter quits once the running ones finish)')
+    return None
 
 
 def pick(running, tried):
@@ -766,7 +783,7 @@ def main():
                     stall_logged.add(old[1])
                     log(f'slot {n}: an untracked session (pid {old[1]}, pane {old[0]}) still runs there; slot held')
                 continue
-            if not stopping and n <= SLOTS and n not in procs and datetime.now() >= free_at[n] and (task := pick(running, tried)):
+            if not stopping and n <= SLOTS and n not in procs and datetime.now() >= free_at[n] and (task := pick_or_wait(running, tried)):
                 if capped():
                     if not cap_logged:
                         log(f'weekly usage {weekly()}% >= {WEEKLY_MAX}%: waiting for the weekly reset (restart with f to go on now)')
@@ -788,7 +805,7 @@ def main():
                 procs[n], running[n] = start(n, task), task
         merging = [t for t in merging if t.is_alive()]
         # merges still queued (they wait on each other and the master's reports): RUN DONE only once they're in
-        if not done and not procs and not merging and (stopping or not pick(running, tried) and all(datetime.now() >= t for t in free_at.values())):
+        if not done and not procs and not merging and stopping:  # never done just for lack of tasks: wait for new ones
             done = True
             if 'master' in panes() or queued():
                 report('RUN DONE')
