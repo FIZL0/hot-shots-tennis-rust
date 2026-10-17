@@ -46,3 +46,4 @@
 - The match results screen shows only the usual button legend along the bottom, no more PlayStation-style ✕ Continue / Score Screen prompts above it.
 - Mod characters now cheer (or groan) in their own voice at the end-of-match trophy ceremony instead of staying silent.
 - Holding an emote key (or a pad button bound to one) plays the emote once instead of repeating it; press again for another.
+- Fore! character mods no longer shout gloomy sentences on good strokes or laugh after losing a point: their voice lines are now sorted by what they say (short cries on strokes, cheers when they win a point or set, groans when they lose one).
