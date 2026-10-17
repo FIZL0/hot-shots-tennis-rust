@@ -45,7 +45,7 @@ pub struct Wire {
 impl Wire {
     /// Mod `m` in costume `costume` (reads its files: the costume's skeleton and the pack's hash).
     pub fn of(m: &Mod, costume: usize) -> Result<Wire, String> {
-        let sk = mods::skeleton(m, costume % m.costumes.len().max(1))?;
+        let (sk, looks) = kept(m, costume % m.costumes.len().max(1))?;
         Ok(Wire {
             id: m.id.clone(),
             name: m.name.clone(),
@@ -57,7 +57,7 @@ impl Wire {
             names: sk.names,
             parent: sk.parent,
             rest: sk.rest.iter().map(|r| std::array::from_fn(|k| r[k / 4][k % 4].to_bits())).collect(),
-            looks: hash(&pack(&m.dir)?),
+            looks,
             dir: Some(m.dir.clone()),
         })
     }
@@ -121,6 +121,39 @@ pub fn for_match(w: &Wire, looks: Option<&Path>) -> Mod {
     m.skeleton = Some(Arc::new(w.skeleton()));
     m
 }
+
+/// B548: mod `m`'s costume `costume` skeleton and its pack's hash, worked out once per folder while its files stay the
+/// same ([`modfs::stamp`](crate::modfs::stamp)): the lobby builds its picks' wires often, and a phone took ~200 ms
+/// to pack and hash a 24 MB mod.
+fn kept(m: &Mod, costume: usize) -> Result<(Skeleton, u64), String> {
+    type Kept = std::collections::HashMap<(PathBuf, String), (u64, Result<(Skeleton, u64), String>)>;
+    static KEPT: std::sync::LazyLock<std::sync::Mutex<Kept>> = std::sync::LazyLock::new(Default::default);
+    let key = (m.dir.clone(), m.costumes.get(costume).cloned().unwrap_or_default());
+    let stamp = crate::modfs::stamp(&m.dir);
+    if let Some((_, got)) = KEPT.lock().unwrap().get(&key).filter(|(s, _)| *s == stamp) {
+        return got.clone();
+    }
+    let got = mods::skeleton(m, costume).and_then(|sk| Ok((sk, looks(&m.dir)?)));
+    KEPT.lock().unwrap().insert(key, (stamp, got.clone()));
+    got
+}
+
+/// Mod folder `dir`'s pack hash, worked out once while its files stay the same (as [`kept`]).
+pub fn looks(dir: &Path) -> Result<u64, String> {
+    static LOOKS: std::sync::Mutex<std::collections::BTreeMap<PathBuf, (u64, Result<u64, String>)>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let stamp = crate::modfs::stamp(dir);
+    if let Some((_, got)) = LOOKS.lock().unwrap().get(dir).filter(|(s, _)| *s == stamp) {
+        return got.clone();
+    }
+    #[cfg(test)]
+    PACKED.lock().unwrap().push(dir.to_path_buf());
+    let got = pack(dir).map(|b| hash(&b));
+    LOOKS.lock().unwrap().insert(dir.to_path_buf(), (stamp, got.clone()));
+    got
+}
+
+#[cfg(test)]
+static PACKED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 /// 64-bit FNV-1a.
 pub fn hash(b: &[u8]) -> u64 {
@@ -270,7 +303,7 @@ pub fn find(w: &Wire, roster: &[Mod], cache: &Path) -> Option<PathBuf> {
     if crate::modfs::is_file(&got.join("mod.json")) {
         return Some(got);
     }
-    roster.iter().filter(|m| m.id == w.id).find(|m| pack(&m.dir).is_ok_and(|p| hash(&p) == w.looks)).map(|m| m.dir.clone())
+    roster.iter().filter(|m| m.id == w.id).find(|m| looks(&m.dir) == Ok(w.looks)).map(|m| m.dir.clone())
 }
 
 /// What to do with a remote mod's looks.
@@ -367,6 +400,15 @@ mod tests {
             crate::modfs::add(&mem.join(f), std::fs::read(src.join(f)).unwrap().into());
         }
         assert_eq!(pack(&mem).unwrap(), p);
+        // B548: hashed once while its files stay the same; a changed file (same size too) is hashed again
+        let packed = || PACKED.lock().unwrap().iter().filter(|d| **d == mem).count();
+        let n = packed();
+        assert_eq!((looks(&mem), looks(&mem), packed() - n), (Ok(hash(&p)), Ok(hash(&p)), 1));
+        crate::modfs::add(&mem.join("voice/0_0.wav"), [1, 2, 4].into());
+        let q = pack(&mem).unwrap();
+        assert_eq!((looks(&mem), looks(&mem), packed() - n), (Ok(hash(&q)), Ok(hash(&q)), 2));
+        assert_ne!(hash(&q), hash(&p));
+        crate::modfs::add(&mem.join("voice/0_0.wav"), [1, 2, 3].into());
         // a changed byte, a path out of the folder, a cut-off pack: refused
         let mut q = p.clone();
         *q.last_mut().unwrap() ^= 1;
