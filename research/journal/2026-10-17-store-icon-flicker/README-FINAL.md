@@ -1,5 +1,14 @@
 # B566 — mods store pictures flickered while loading
 
+## The flicker the user saw (second pass, after their note: "when they're loading the first time")
+The loading tiles' shimmer pulsed on `Browse::tick`, a count of rendered frames. The user's settings are
+`vsync = off`, `frame_limit = uncapped`: the menu draws hundreds of frames a second, so the shimmer (0.12 rad a
+frame, about 0.9 s a pulse at 60 fps) strobed on every tile still waiting for its first picture. `tick` is now 60 Hz
+frames of real time (`Browse::clock`, advanced in `roll_time`), and the shimmer reads the clock itself; the
+downloads' spinner, the search caret and a pack's before/after sweep, all written for 60 fps, keep their pace too.
+
+## First pass (below): cached pictures stuck behind the fetches — a real but smaller issue
+
 ## Cause
 `browse_pictures` read cached tile pictures only through `grid::want`, which stops once `cap` pictures are being
 fetched (Downloads at Once, at least two; one while installs run). Any uncached tile earlier in the plan order took

@@ -152,8 +152,10 @@ pub(super) struct Browse {
     pub pill_at: usize,
     /// The tile a tap chose: a tap on it again installs (a first tap only chooses).
     pub tapped: Option<usize>,
-    /// Frames since the page opened (the loading tiles' shimmer, the downloads' spinner).
+    /// 60 Hz frames since the page opened (the loading tiles' shimmer, the downloads' spinner), B566: counted from
+    /// `clock`, so they keep their pace at any refresh rate (a frame count pulsed the shimmer into a flicker at 144 Hz+).
     pub tick: u32,
+    pub clock: f32,
     /// B444: seconds the cursor has been on `Menu::sel` `.1` (a long title's slide starts over on every move).
     pub roll: (f32, usize),
     /// M5d: where a pointer put the before/after divider on a pack's picture (its share across; None: it sweeps).
@@ -1256,7 +1258,7 @@ fn tile(d: &mut Draw, m: &Menu, a: [f32; 3], rect @ [x, y, w, h]: [f32; 4], on: 
     let sub = if pack.is_some() { SUB_LINE } else { 0.0 };
     let pic = [x + inset * PX, y + inset * PY, w - 2.0 * inset * PX, h - 2.0 * inset * PY - (16.0 + sub) * PY];
     if loading {
-        let k = 60.0 + 30.0 * (m.add.b.tick as f32 * 0.12 + x * 0.02).sin();
+        let k = 60.0 + 30.0 * (m.add.b.clock * 60.0 * 0.12 + x * 0.02).sin();
         rounded(d, pic, 6.0, look::c(look::RULE), k);
     }
     draw_face(d, m, f, pic, a);
@@ -1426,6 +1428,9 @@ pub(super) fn roll_time(mut menu: ResMut<Menu>, time: Res<Time>) {
     let sel = menu.sel;
     let r = &mut menu.add.b.roll;
     *r = if r.1 == sel { (r.0 + time.delta_secs(), sel) } else { (0.0, sel) };
+    let b = &mut menu.add.b;
+    b.clock += time.delta_secs();
+    b.tick = (b.clock * 60.0) as u32;
 }
 
 /// B471: the footer's status: the last action's outcome (a mod list's uploader while there's none), else "2

@@ -1982,7 +1982,6 @@ fn thumb_image(png: &[u8]) -> Option<(Image, f32)> {
 /// of the rest, fetched a few at a time: one while installs run, else Downloads at Once, at least two), far-off ones
 /// dropped.
 fn browse_pictures(menu: &mut Menu, shelf: &mut Shelf, images: &mut Assets<Image>) {
-    menu.add.b.tick = menu.add.b.tick.wrapping_add(1);
     if menu.add.store.is_none() {
         return;
     }
