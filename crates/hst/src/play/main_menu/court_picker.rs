@@ -186,6 +186,7 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text) {
         let n = row.len();
         let (i, first, last) = win[r];
         d.box3(g.band[r], 10.0, [None, if r == cr { Some([60.0, 70.0, 96.0]) } else { None }, Some(BAND)], 128.0);
+        d.hit(g.band[r], pointer::Act::Band(r));
         // the head: the row's name, "< a–b of N >" at its right
         let [hx, hy, hw, _] = g.head[r];
         let name = if r == 0 { "COURTS" } else { "MOD COURTS" };
@@ -298,6 +299,21 @@ mod tests {
         assert_eq!(m.court, COURTS + 30, "R1 stops at the end");
         m.step(Dev::Keys, press(|p| &mut p.ok));
         assert_eq!((m.court, m.picking), (COURTS + 30, None), "✕ keeps it");
+    }
+
+    /// The wheel walks the focused row (down: right); the pointer over a row or its card focuses that row.
+    #[test]
+    fn wheel_and_hover() {
+        use pointer::Act;
+        let mut m = picker(3, 4.0 / 3.0);
+        m.point(Dev::Keys, Act::Wheel(true), true);
+        assert_eq!(m.court, STRIP[0], "down: right");
+        m.point(Dev::Keys, Act::Pick(COURTS + 2), false);
+        assert_eq!(m.court, COURTS + 1, "hovering a mod card: the mods row, from its first");
+        m.point(Dev::Keys, Act::Wheel(true), true);
+        assert_eq!(m.court, COURTS + 2);
+        m.point(Dev::Keys, Act::Band(0), false);
+        assert_eq!(m.court, STRIP[0], "back where the disc row was");
     }
 
     /// The panel inside the players' area, its rows and cards inside the panel and apart, at any aspect.

@@ -57,6 +57,10 @@ pub(super) enum Act {
     /// M5d: a strip across a texture pack's before / after picture: the pointer over it (or a tap) puts the divider
     /// there (`i` of `grid::WIPES`).
     Wipe(u8),
+    /// A court / umpire picker's row `r` (its band): the pointer over it focuses that row.
+    Band(usize),
+    /// A wheel notch (`true` down) away from the select columns: ↑↓, or ←→ along an open picker's row.
+    Wheel(bool),
 }
 
 /// ✕.
@@ -227,7 +231,25 @@ impl Menu {
                     out.push(Effect::Sound(0));
                 }
             }
-            Act::Pick(_) => {}
+            // concept: hovering a card focuses its row (choosing it still takes a tap)
+            Act::Pick(v) => {
+                let rows = if self.sel == 1 { super::court_picker::rows(self) } else { super::umpire_picker::rows(self) };
+                if let Some(r) = (0..2).find(|&r| rows[r].contains(&v)) {
+                    out = self.point(dev, Act::Band(r), false);
+                }
+            }
+            Act::Band(r) if self.screen == Screen::Confirm && self.picking.is_some() && matches!(self.sel, 1 | 4) => {
+                out = self.step(dev, Press { up: r == 0, down: r != 0, ..Press::default() });
+            }
+            Act::Band(_) => {}
+            Act::Wheel(down) => {
+                let k = if self.screen == Screen::Confirm && self.picking.is_some() && matches!(self.sel, 1 | 4) {
+                    Press { left: !down, right: down, ..Press::default() }
+                } else {
+                    Press { up: !down, down, ..Press::default() }
+                };
+                out = self.step(dev, k);
+            }
             Act::Drop(p) if tap && self.drop_seat(p) => out.push(Effect::Sound(1)),
             Act::Drop(_) => {}
             Act::Tab(i) if self.screen == Screen::Mods => {
@@ -315,8 +337,6 @@ pub(super) struct State {
     hovered: Option<Act>,
     finger: Option<(u64, Vec2, Vec2, bool)>,
     wheel: f32,
-    /// the wheel's sideways part-notches (a tilt wheel, a touchpad): ← / → (the court and umpire rows)
-    hwheel: f32,
     touched: f32,
 }
 
@@ -424,13 +444,6 @@ pub(in crate::play) fn pointer(
     }
     for e in wheel.read() {
         st.wheel += if e.unit == MouseScrollUnit::Line { e.y } else { e.y / 40.0 };
-        st.hwheel += if e.unit == MouseScrollUnit::Line { e.x } else { e.x / 40.0 };
-    }
-    // winit: x > 0 moves the content right, i.e. scrolls left
-    while st.hwheel.abs() >= 1.0 {
-        let left = st.hwheel > 0.0;
-        st.hwheel -= st.hwheel.signum();
-        out(Some(press(|k| (k.left, k.right) = (left, !left))), true);
     }
     while st.wheel.abs() >= 1.0 {
         let up = st.wheel > 0.0;
@@ -438,7 +451,7 @@ pub(in crate::play) fn pointer(
         // B368: over a select column, the wheel scrolls its grid
         match st.mouse.and_then(|c| column(at(c, SLOP))) {
             Some(p) => out(Some(Act::Scroll(p, if up { -1 } else { 1 })), true),
-            None => out(Some(press(|k| (k.up, k.down) = (up, !up))), true),
+            None => out(Some(Act::Wheel(!up)), true),
         }
     }
 }

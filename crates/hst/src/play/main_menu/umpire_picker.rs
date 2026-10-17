@@ -187,6 +187,7 @@ fn draw(d: &mut Draw, m: &Menu, text: &Text) {
         let first = view(m.umpire_pick.first[r], i, n, g.page);
         let last = (first + g.page).min(n);
         d.box3(g.band[r], 10.0, [None, if r == cr { Some([60.0, 70.0, 96.0]) } else { None }, Some(BAND)], 128.0);
+        d.hit(g.band[r], pointer::Act::Band(r));
         // the head: the row's name, "< a–b of N >" at its right
         let [hx, hy, hw, _] = g.head[r];
         let name = if r == 0 { "UMPIRES" } else { "MOD UMPIRES" };
