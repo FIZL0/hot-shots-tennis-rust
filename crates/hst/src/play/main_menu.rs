@@ -2829,15 +2829,13 @@ fn cell_face(c: Option<Who>) -> (Tex, [f32; 4]) {
     }
 }
 
-/// B306: a roster tile's picture cropped to fill a square: a face icon zoomed past its round frame (a little above
-/// its middle, where the face is), the Random tile's middle square.
+/// B306: a roster tile's picture cropped to fill a square: a face icon whole (the disc sheet's squares are already
+/// close-ups, and a baked icon ignores `src`), the Random tile's middle square.
 fn tile_face(c: Option<Who>) -> (Tex, [f32; 4]) {
-    let (tex, [x, y, w, h]) = cell_face(c);
-    let src = match c {
-        None => random_cover([1.0, 1.0]),
-        Some(_) => [x + w * 0.13, y + h * 0.09, w * 0.74, h * 0.74],
-    };
-    (tex, src)
+    match c {
+        None => (C02, random_cover([1.0, 1.0])),
+        Some(_) => cell_face(c),
+    }
 }
 
 /// B306: a T-shirt drawn from quads in `rgb` with an ink outline, filling `[x, y, w, h]`: the body, two sleeves
