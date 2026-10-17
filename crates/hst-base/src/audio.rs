@@ -1075,9 +1075,9 @@ mod tests {
             assert!(half > full * 0.4 && half < full * 0.6, "{group:?} at half master: {half} of {full}");
         }
         assert_eq!(Volumes::parse(&Volumes([3, 0, 10, 7, 4]).text()), Volumes([3, 0, 10, 7, 4]));
-        assert_eq!(Volumes::parse("music_volume = 99\nbogus = 1\n"), Volumes([10; 5]));
-        // a settings.txt from before the ambience slider: ambience full
-        assert_eq!(Volumes::parse("master_volume = 6\nvoice_volume = 2\n"), Volumes([6, 10, 10, 2, 10]));
+        assert_eq!(Volumes::parse("music_volume = 99\nbogus = 1\n"), Volumes([10, 10, 10, 10, 5]));
+        // a settings.txt from before the ambience slider: ambience at its default
+        assert_eq!(Volumes::parse("master_volume = 6\nvoice_volume = 2\n"), Volumes([6, 5, 10, 2, 5]));
         assert_eq!(Group::of(1), Group::Voices);
         assert_eq!(Group::of(0x16), Group::Voices);
         assert_eq!(Group::of(6), Group::Sfx);
