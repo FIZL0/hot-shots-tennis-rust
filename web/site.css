@@ -33,7 +33,9 @@ html[data-game] #disc { display: none !important; }
 /* the logo band: the badge on the left, the title beside it, over a darkened court */
 #disc .band { position: relative; color: #fff; border-bottom: 6px solid var(--gold); background: #17311f; overflow: hidden; }
 /* the band fades through the celebration close-ups (docs/screenshots/celebrate-*.jpg), 6 s each */
-#disc .band .slides { position: absolute; inset: 0; filter: brightness(.42) saturate(1.1); }
+/* darkened by an overlay, not a filter: a filter over the fading slides left a stale, stretched layer after a resize */
+#disc .band .slides { position: absolute; inset: 0; }
+#disc .band .slides::after { content: ''; position: absolute; inset: 0; background: #00000094; }
 #disc .band .slides i { position: absolute; inset: 0; background: center 30% / cover no-repeat; opacity: 0; animation: band-fade 30s infinite; }
 #disc .band .slides i:nth-child(1) { background-image: url(shots/celebrate-carol.jpg); }
 #disc .band .slides i:nth-child(2) { background-image: url(shots/celebrate-anya.jpg); animation-delay: 6s; }
