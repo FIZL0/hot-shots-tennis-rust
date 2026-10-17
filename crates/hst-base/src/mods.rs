@@ -2164,18 +2164,11 @@ mod tests {
         use bevy::mesh::VertexAttributeValues as V;
         // the drawn pose as `character::animate` builds it, the feet set down
         let clip = &c.motions[&id];
-        let mut local: Vec<(Quat, Vec3)> = c.joints.iter().map(|j| (j.rest.rotation, j.rest.translation)).collect();
-        for (k, tr) in clip.tracks.iter().enumerate() {
-            let (rot, pos) = clip.sample_drawn(k, t);
-            if let Some([x, y, z, w]) = rot {
-                local[tr.node].0 = Quat::from_xyzw(-x, -y, -z, w).normalize();
-            }
-            if let Some(p) = pos {
-                local[tr.node].1 = Vec3::from(p);
-            }
-        }
+        let mut local = Vec::new();
+        character::pose_at(c, clip, t, &mut local);
+        // HST_LIFT=frame: B543's first lift, worked out per frame (it bobbed walks)
         if let Some(f) = c.feet.as_ref().filter(|_| std::env::var("HST_NOLIFT").is_err()) {
-            local[f.root].1.y += f.lift(&c.joints, clip, &local);
+            local[f.root].1.y += if std::env::var("HST_LIFT").is_ok_and(|v| v == "frame") { f.lift(&c.joints, clip, &local) } else { f.steady(c, clip) };
         }
         let mut model: Vec<Option<Mat4>> = vec![None; local.len()];
         fn world(j: usize, c: &CharacterData, local: &[(Quat, Vec3)], m: &mut [Option<Mat4>]) -> Mat4 {

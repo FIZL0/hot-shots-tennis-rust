@@ -182,6 +182,16 @@ impl Feet {
         }
         donor - low
     }
+
+    /// [`Feet::lift`] averaged over 16 poses through `clip`: what `animate` moves the root by all through it, so the
+    /// body keeps the donor's bob and the feet meet the ground on average (per frame, a walk bobbed up and down).
+    pub fn steady(&self, data: &CharacterData, clip: &Clip) -> f32 {
+        let mut pose = Vec::new();
+        (0..16).map(|i| {
+            pose_at(data, clip, clip.length * i as f32 / 16.0, &mut pose);
+            self.lift(&data.joints, clip, &pose)
+        }).sum::<f32>() / 16.0
+    }
 }
 
 /// Disc character `n`'s body model (costume 0; every costume shares the skeleton).
@@ -1006,7 +1016,11 @@ pub fn animate(
         if let Some(feet) = &rig.data.feet
             && drawn.len() == rig.data.joints.len()
         {
-            let lift = feet.lift(&rig.data.joints, clip, &drawn);
+            // one lift per clip, not per frame: re-pinning the lower foot each frame bobbed a walk up and down
+            let mut lift = c.lift(&rig.data, feet, clip);
+            if let Some((other, _, w)) = over {
+                lift += (c.lift(&rig.data, feet, other) - lift) * w;
+            }
             drawn[feet.root].1.y += lift;
         }
         for (j, joint) in rig.data.joints.iter().enumerate() {
@@ -1029,6 +1043,25 @@ pub struct Posing {
     frame: u32,
     /// This frame's drawn pose (each joint's rotation and translation), kept for its allocation.
     drawn: Vec<(Quat, Vec3)>,
+    /// A mod's [`Feet::lift`] averaged over each clip it has played (by the clip's address, as [`PoseKey`]).
+    lifts: HashMap<usize, f32>,
+}
+
+/// `clip` at time `t` into `out` (each joint's rotation and translation): unkeyed joints at rest.
+pub(crate) fn pose_at(data: &CharacterData, clip: &Clip, t: f32, out: &mut Vec<(Quat, Vec3)>) {
+    out.clear();
+    out.extend(data.joints.iter().map(|j| (j.rest.rotation, j.rest.translation)));
+    for (k, track) in clip.tracks.iter().enumerate() {
+        let Some(o) = out.get_mut(track.node) else { continue };
+        let (rot, pos) = clip.sample_drawn(k, t);
+        // a rotation key is the conjugate of the joint's local rotation
+        if let Some([x, y, z, w]) = rot {
+            o.0 = Quat::from_xyzw(-x, -y, -z, w).normalize();
+        }
+        if let Some(p) = pos {
+            o.1 = Vec3::from(p);
+        }
+    }
 }
 
 /// What a sampled pose depends on: the character, the clip and its time, and the crossfade's clip, time and weight.
@@ -1069,24 +1102,16 @@ impl Posing {
         at.map(|s| s.unwrap())
     }
 
+    /// [`Feet::steady`] for `clip`, worked out once.
+    fn lift(&mut self, data: &CharacterData, feet: &Feet, clip: &Clip) -> f32 {
+        *self.lifts.entry(clip as *const Clip as usize).or_insert_with(|| feet.steady(data, clip))
+    }
+
     /// Sample `clip` at the key's time into slot `s`: unkeyed joints at rest, the crossfade mixed over.
     fn sample(&mut self, s: usize, data: &CharacterData, key: PoseKey, clip: &Clip, over: Option<(&Clip, f32, f32)>) {
         let (slot, out) = &mut self.poses[s];
         *slot = Some(key);
-        out.clear();
-        out.extend(data.joints.iter().map(|j| (j.rest.rotation, j.rest.translation)));
-        let t = f32::from_bits(key.t);
-        for (k, track) in clip.tracks.iter().enumerate() {
-            let Some(o) = out.get_mut(track.node) else { continue };
-            let (rot, pos) = clip.sample_drawn(k, t);
-            // a rotation key is the conjugate of the joint's local rotation
-            if let Some([x, y, z, w]) = rot {
-                o.0 = Quat::from_xyzw(-x, -y, -z, w).normalize();
-            }
-            if let Some(p) = pos {
-                o.1 = Vec3::from(p);
-            }
-        }
+        pose_at(data, clip, f32::from_bits(key.t), out);
         // ponytail: an unkeyed base track mixes from the rest pose (the game's from whatever its node last held)
         if let Some((other, t, w)) = over {
             for (k, track) in other.tracks.iter().enumerate().take(23) {

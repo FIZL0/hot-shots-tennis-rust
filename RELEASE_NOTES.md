@@ -42,3 +42,4 @@
 - Controllers screen: the character faces are smaller. Move along the cards with the arrows, press ✕ to pick up a card's controller, move it left or right, and press ✕ again to put it down. In the pause menu, going back after a change asks whether to keep or undo it.
 - In the browser, the mouse pointer comes back as soon as you move the mouse after using the keyboard or a controller.
 - Settings open from the character select and the online lobby (O on the keyboard, R3 on a controller); Back returns you where you were with your picks and your place in the lobby kept, and the lobby carries on while you're in them.
+- Mod characters no longer bob up and down when they walk or run, and their character select pictures are drawn again so they match how they look in a match.
