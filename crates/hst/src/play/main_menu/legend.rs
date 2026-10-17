@@ -60,10 +60,15 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
             v.extend([(Act::UpDown, "Action"), (Act::Ok, "Rebind"), (Act::Kind, if m.keys_tab { "Controller" } else { "Keyboard & Mouse" }), (Act::Costume, "Page"), (Act::Back, "Back")]);
         }
         Screen::Mode if host => v.extend([(Act::Move, "Singles / Doubles"), (Act::Ok, "Choose"), (Act::Back, "Back")]),
+        Screen::Assign if host && m.keep.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),
+        Screen::Assign if host && m.held => v.extend([(Act::LeftRight, "Move controller"), (Act::Ok, "Put down"), (Act::Back, "Put down")]),
         Screen::Assign if host => {
-            v.push((Act::UpDown, "Move"));
-            if m.host_swap(false).is_some() || m.host_swap(true).is_some() {
-                v.push((Act::LeftRight, "Swap"));
+            v.push((if m.assign_per() < m.players() { Act::Move } else { Act::LeftRight }, "Move"));
+            let p = m.sel.min(m.players() - 1);
+            if m.pickable(p) {
+                v.push((Act::Ok, "Pick up"));
+            } else if !m.paused {
+                v.push((Act::Ok, "Start"));
             }
             if m.droppable(m.sel.min(m.players() - 1)) {
                 v.push((Act::Page, "Remove"));
@@ -72,7 +77,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 let p = m.sel.min(m.players() - 1);
                 v.push((Act::Card, if m.bots[p] { "Remove COM" } else { "Add COM" }));
             }
-            v.extend([(Act::Ok, if m.paused { "Done" } else { "Start" }), (Act::Back, "Back")]);
+            v.extend([(Act::Name, if m.paused { "Done" } else { "Start" }), (Act::Back, "Back")]);
         }
         Screen::Assign => {
             let n = m.players();

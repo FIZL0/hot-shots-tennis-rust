@@ -1,11 +1,11 @@
 //! M124: the controller assignment (`Screen::Assign`, from the menu and the pause menu's "Controllers") as the match
 //! roster: one card per seat in the character select's style (`roster.rs`: the seat's band, its character's face,
 //! name, hand and costume, the play style and stats), with what drives it. Characters can't be changed here; the
-//! devices move between the seats' characters. Local, 1P focuses a card (↑↓, a tap) and swaps its device with the next
-//! seat's (←→, the card's arrows), takes it off (□ / Tab, the ✕ on the band; 1P's own too) or adds a computer player;
+//! devices move between the seats' characters. Local, 1P focuses a card (the arrows, a tap), picks up its device (✕, a
+//! tap), carries it to the next seats (←→, the card's arrows; it swaps with theirs) and puts it down (✕), takes it off (□ / Tab, the ✕ on the band; 1P's own too) or adds a computer player;
 //! the other devices join a free seat with ✕ and leave with ○. Online (the pause over an online match,
 //! [`Menu::net_pause`]) only this machine's own seats can take or swap its pads: the other machines' and the
-//! computer's cards are fixed, and nobody is taken off.
+//! computer's cards are fixed, and nobody is taken off. Over a match, ○ after a change asks Keep / Undo.
 //!
 //! The cards share the view across (two rows of two in a view taller than it is wide); a card wider than tall puts the
 //! stats beside the face instead of under it.
@@ -25,6 +25,9 @@ const BAND: f32 = 50.0;
 const FOOT: f32 = 30.0;
 /// The cards stop this far over the view's bottom (the room's 432 on 4:3), over the description bar pinned to it.
 const OVER_BAR: f32 = 34.0;
+/// The face well's tallest (mockup px): a portrait, not the card; and the name lines under it (screen units).
+const FACE: f32 = 96.0;
+const FIGURE_LINES: f32 = 46.0 * PY;
 
 /// The cards' boxes for `n` seats on `view` (left, top, right, bottom): one row, or two rows of two when four share
 /// a view taller than wide.
@@ -51,6 +54,13 @@ pub(super) enum Kind {
 }
 
 impl Menu {
+    /// The cards in a row: all of them, or two of four on a view taller than wide.
+    pub(super) fn assign_per(&self) -> usize {
+        let n = self.players();
+        let c = cards(self.grid.view, n);
+        if c[0][1] != c[n - 1][1] { n / 2 } else { n }
+    }
+
     /// M124: seat `p`'s kind on the assignment.
     pub(super) fn assign_kind(&self, p: usize) -> Kind {
         match self.seats[p] {
@@ -80,7 +90,7 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads:
     rounded(d, [bx, by, bw, bh], 15.0, WHITE, 128.0);
     rounded(d, [bx + 2.0 * PX, by + 2.0 * PY, bw - 4.0 * PX, bh - 4.0 * PY], 13.0, hex(0x2f7d4f), 128.0);
     d.centred(ok, bx + bw / 2.0, by + 7.0 * PY, bs, WHITE);
-    d.hit([bx, by, bw, bh], pointer::press(|k| k.ok = true));
+    d.hit([bx, by, bw, bh], pointer::press(|k| k.name = true));
     let what = if m.net_pause.is_some() {
         "Only your own controllers can move".to_string()
     } else {
@@ -98,8 +108,12 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads:
     for (p, card) in cards(m.grid.view, n).into_iter().enumerate() {
         let start = d.out.len();
         seat_card(d, m, text, pads, card, p, p == focus, pending == Some(p));
-        // P21a: the card shakes while its pad's right stick moves (its hit rects stay put)
-        d.out[start..].iter_mut().for_each(|q| q.dst[0] += m.shake[p]);
+        // P21a: the card shakes while its pad's right stick moves (its hit rects stay put); a held one is lifted
+        let lift = if m.held && p == focus { 10.0 * PY } else { 0.0 };
+        d.out[start..].iter_mut().for_each(|q| {
+            q.dst[0] += m.shake[p];
+            q.dst[1] -= lift;
+        });
     }
     // B437: 1P's own seat change is pending until they leave, spelled out in the help
     let pending = match m.lead_pending() {
@@ -114,14 +128,41 @@ pub(super) fn layout(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads:
     };
     let b = |a: legend::Act| legend::button_names(dev, a, bind).join(" / ");
     let (ok, back, page, card) = (b(legend::Act::Ok), b(legend::Act::Back), b(legend::Act::Page), b(legend::Act::Card));
-    let help = if m.net_pause.is_some() {
-        format!("1P: Up/Down picks one of your seats, Left/Right swaps its controller with your next player's, {ok} keeps the change, {back} leaves it. Another of your controllers: its OK button takes your seat that has none.")
+    let start = b(legend::Act::Name);
+    let help = if m.held {
+        format!("1P: Left/Right carries this controller to the next seat (it swaps with that seat's), {ok} puts it down.")
+    } else if m.net_pause.is_some() {
+        format!("1P: the arrows pick one of your seats, {ok} picks up its controller to move it, {start} keeps the change, {back} asks to keep or undo it. Another of your controllers: its OK button takes your seat that has none.")
     } else if m.paused {
-        format!("1P: Up/Down picks a seat, Left/Right swaps its controller with the next player's, {page} takes a controller off its seat, {ok} keeps the change, {back} leaves it. Others: OK takes a free seat, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
+        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes a controller off its seat, {start} keeps the change, {back} asks to keep or undo it. Others: OK takes a free seat, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
     } else {
-        format!("1P: Up/Down picks a seat, Left/Right swaps it, {page} takes it off, {card} adds or removes a computer player (empty seats are filled at Start). Others: OK joins, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
+        format!("1P: the arrows pick a seat, {ok} picks up its controller to move it, {page} takes it off, {card} adds or removes a computer player, {start} goes on (empty seats are filled then). Others: OK joins, Left/Right changes seat, Back or its red X leaves. A controller's right stick shakes its seat.")
     };
     d.info(&format!("{pending}{help}"));
+    keep_layout(d, m);
+}
+
+/// Over a match, ○ after a change: Keep / Undo, in the newer-version popup's style (`home::stale_layout`).
+fn keep_layout(d: &mut Draw, m: &Menu) {
+    use super::super::menu::{CHOSEN, PANEL, UNCHOSEN};
+    use super::{Anchor, INK, Tex};
+    let Some(a) = m.keep else { return };
+    // a tap off the popup is ○ (stay on the screen)
+    d.popup(Some(pointer::Act::Row(a, Press { back: true, ..default() })));
+    d.anchor = Anchor::Span;
+    d.q(Tex::Solid, [0.0, 0.0, 1.0, 1.0], [0.0, 0.0, 640.0, 448.0], [0.0; 3], 80.0);
+    d.anchor = Anchor::Centre;
+    let top = 226.0;
+    d.box3([160.0, top - 56.0, 320.0, 56.0 + 72.0 + 16.0], 16.0, [Some(INK), Some(WHITE), Some(PANEL)], 128.0);
+    d.outlined(|d| d.label("Keep the controller changes?", 320.0, top - 40.0, 22.0, 288.0, WHITE));
+    for (k, word) in ["Keep", "Undo"].into_iter().enumerate() {
+        let y = top + 40.0 * k as f32;
+        let on = k == a;
+        d.pill_at([176.0, y, 288.0, 32.0], [INK, WHITE, if on { CHOSEN } else { UNCHOSEN }], 128.0);
+        d.hit([176.0, y, 288.0, 32.0], pointer::Act::Row(k, pointer::OK));
+        d.label(word, 320.0, y + 6.0, 20.0, 160.0, if on { WHITE } else { UNCHOSEN.map(|c| c * 1.4) });
+    }
+    d.said = "Keep the controller changes?".into();
 }
 
 /// Seat `p`'s card in `card`: `on` 1P's focus, `yours` where 1P's driver goes when it leaves (B437).
@@ -134,7 +175,8 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
     // 1P's focus: a gold ring round the card
     if on {
         let g = 4.0;
-        rounded(d, [x - g * PX, y - g * PY, w + 2.0 * g * PX, h + 2.0 * g * PY], 18.0, GOLD, 128.0);
+        // a held controller's card rings white
+        rounded(d, [x - g * PX, y - g * PY, w + 2.0 * g * PX, h + 2.0 * g * PY], 18.0, if m.held { WHITE } else { GOLD }, 128.0);
     }
     if human {
         ringed(d, card, 14.0, look::RIM, hex(look::INK), s.bg);
@@ -142,8 +184,9 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         rounded(d, card, 14.0, s.bg, 128.0);
         dashed(d, card, 14.0, look::RIM, hex(look::INK), s.bg);
     }
-    // a tap focuses it (1P's ←→ then swap it)
-    d.hit(card, pointer::Act::Row(p, Press::default()));
+    // a tap focuses it and picks up (or puts down) its controller
+    let pick = if m.held { on } else { m.pickable(p) };
+    d.hit(card, pointer::Act::Row(p, if pick { pointer::OK } else { Press::default() }));
     let pl = m.players[p];
     let picked = !pl.random || pl.ready;
     let who = m.pick(p).0;
@@ -175,7 +218,7 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         figure(d, m, text, &s, [ix, top, half, body[3]], p, picked, who);
         style_stats(d, text, [ix + half + 8.0 * PX, top, half, body[3]], picked, who);
     } else {
-        let fh = (body[3] * 0.5).max(body[3] - 190.0 * PY);
+        let fh = (body[3] * 0.5).max(body[3] - 190.0 * PY).min(FACE * PY + FIGURE_LINES);
         figure(d, m, text, &s, [ix, top, iw, fh], p, picked, who);
         style_stats(d, text, [ix, top + fh + 8.0 * PY, iw, body[3] - fh - 8.0 * PY], picked, who);
     }
@@ -185,8 +228,7 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
 /// The face well (the seat's number faint behind the character's face), the character's name, hand and costume under it.
 #[allow(clippy::too_many_arguments)]
 fn figure(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, [x, y, w, h]: [f32; 4], p: usize, picked: bool, who: Who) {
-    let lines = 24.0 * PY + 2.0 * PY + 14.0 * PY + 6.0 * PY;
-    let wh = (h - lines).max(30.0 * PY);
+    let wh = (h - FIGURE_LINES).clamp(30.0 * PY, FACE * PY);
     rounded(d, [x, y, w, wh], 10.0, s.tile, 128.0);
     let num = format!("{}P", p + 1);
     let big = (wh * 0.78).min(w * 0.9 * 32.0 / d.width(&num, 32.0));
@@ -232,7 +274,8 @@ fn style_stats(d: &mut Draw, text: &Text, [x, y, w, h]: [f32; 4], picked: bool, 
     };
     d.label(style, x + w / 2.0, y + 5.0 * PY, 14.0 * PY, w - 10.0 * PX, hex(0xffd23f));
     let grades = (picked && !matches!(who, Who::Mod(i) if i >= text.mods.len())).then(|| grades_of(text, who));
-    stats(d, grades, [x, y + sh + 4.0 * PY, w, (h - sh - 4.0 * PY).max(0.0)]);
+    // rows as the select's, not stretched down a tall card
+    stats(d, grades, [x, y + sh + 4.0 * PY, w, (h - sh - 4.0 * PY).clamp(0.0, 170.0 * PY)]);
 }
 
 /// The card's foot: what drives the seat in a pill on the right; on the left 1P's buttons for it (swap arrows on the
@@ -253,8 +296,8 @@ fn foot(d: &mut Draw, m: &Menu, s: &Seat, [x, y, w, h]: [f32; 4], p: usize, kind
     d.label(label, x + w - pw / 2.0, y + (h - ps) / 2.0, ps, pw - 12.0 * PX, ink);
     let room = w - pw - 8.0 * PX;
     let mut lx = x;
-    if on {
-        // the focused seat's swap: the arrows send its device the way 1P's ←→ do
+    if on && m.held {
+        // the held controller's arrows: they carry it the way 1P's ←→ do
         for (right, arrow) in [(false, "<"), (true, ">")] {
             if m.host_swap(right).is_some() && lx + h * PX / PY <= x + room {
                 let r = [lx, y, h * PX / PY, h];

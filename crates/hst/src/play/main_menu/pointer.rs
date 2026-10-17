@@ -9,7 +9,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
@@ -273,10 +273,11 @@ pub(in crate::play) fn mouse_idle(
     keys: Res<ButtonInput<KeyCode>>,
     pads: Query<&Gamepad>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut motion: MessageReader<MouseMotion>,
+    mut motion: MessageReader<bevy::window::CursorMoved>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    let moved = motion.read().map(|m| m.delta).sum::<Vec2>().length() > 2.0 || mouse.get_just_pressed().next().is_some();
+    // the window's cursor moves, not raw MouseMotion: a browser sends that only while the canvas has focus
+    let moved = motion.read().filter_map(|m| m.delta).sum::<Vec2>().length() > 2.0 || mouse.get_just_pressed().next().is_some();
     let pressed = keys.get_just_pressed().next().is_some() || pads.iter().any(|g| g.get_just_pressed().next().is_some() || g.left_stick().length() > 0.5);
     let idle = if moved { false } else if pressed { true } else { MOUSE_IDLE.load(Ordering::Relaxed) };
     MOUSE_IDLE.store(idle, Ordering::Relaxed);

@@ -565,6 +565,11 @@ struct Menu {
     /// B437: the device that drives the controller assignment once it has moved or taken off a seat there: it keeps
     /// driving it (its own seat change pending, shown on the screen) until it leaves, where the new 1P takes over.
     assign_lead: Option<Dev>,
+    /// The assignment: 1P has picked up the focused card's controller (✕); ←→ carry it, ✕ puts it down.
+    held: bool,
+    /// The assignment's seats and computer players as it opened, and over a match the Keep / Undo popup's pill.
+    assign_was: Option<([Option<Dev>; 4], [bool; 4])>,
+    keep: Option<usize>,
     /// B516: the device that took 1P on the splash (`splash.rs`), the one that drives 1P's player.
     p1: Option<Dev>,
     splash: splash::Splash,
@@ -625,6 +630,9 @@ impl Default for Menu {
             names: default(),
             court_pick: default(),
             assign_lead: None,
+            held: false,
+            assign_was: None,
+            keep: None,
             p1: None,
             splash: default(),
             shake: [0.0; 4],
@@ -1004,8 +1012,17 @@ impl Menu {
     /// The seats 1P's ←/→ (`right`) trades on the assignment screen: the focused one and its neighbour that way,
     /// unless that would leave 1P empty or changes nothing.
     fn host_swap(&self, right: bool) -> Option<(usize, usize)> {
+        self.swap_at(self.sel.min(self.players() - 1), right)
+    }
+
+    /// Whether 1P's ✕ picks up seat `p`'s controller: a device on it that can move at least one way.
+    fn pickable(&self, p: usize) -> bool {
+        matches!(self.seats[p], Some(Dev::Keys | Dev::Pad(_))) && (self.swap_at(p, false).is_some() || self.swap_at(p, true).is_some())
+    }
+
+    /// [`host_swap`](Self::host_swap) from seat `p`.
+    fn swap_at(&self, p: usize, right: bool) -> Option<(usize, usize)> {
         let n = self.players();
-        let p = self.sel.min(n - 1);
         let next = |q: usize| if right { (q + 1) % n } else { (q + n - 1) % n };
         let mut q = next(p);
         // B254: over a match the computer's seats stay put
@@ -1020,6 +1037,32 @@ impl Menu {
         let f = self.first_seat();
         let empties_1p = q == f && self.seats[p].is_none() || p == f && self.seats[q].is_none();
         (!empties_1p && self.seats[p] != self.seats[q]).then_some((p, q))
+    }
+
+    /// Leaves the assignment: `keep` on to the character select (over a match, back to it with the new seats),
+    /// else back with the seats as they were (`host`, B437: the driver, as 1P).
+    fn assign_leave(&mut self, keep: bool, host: Option<Dev>, out: &mut Vec<Effect>) {
+        if keep {
+            for p in &mut self.players {
+                *p = Player::fresh();
+            }
+            self.scroll = [0; 4];
+            if self.online() {
+                // B195: into the lobby first (seats held), then its character select
+                self.online_open(out);
+            } else {
+                self.go(Screen::Chars, out);
+            }
+            return;
+        }
+        self.seats = [host, None, None, None];
+        self.bots = [false; 4];
+        self.screen = match self.net.go {
+            Some(online::Go::Find) => Screen::Lobbies,
+            Some(online::Go::Code) => Screen::Code,
+            _ => Screen::Mode,
+        };
+        out.push(Effect::Sound(1));
     }
 
     /// B238: seat `p`'s device off it: free in the assignment, held open on the select for another device to join.
@@ -1130,7 +1173,9 @@ impl Menu {
         let mut out = Vec::new();
         // B437: left the assignment: its seats stand, 1P's device drives from here
         if self.screen != Screen::Assign {
-            self.assign_lead = None;
+            (self.assign_lead, self.held, self.assign_was, self.keep) = (None, false, None, None);
+        } else if self.assign_was.is_none() {
+            self.assign_was = Some((self.seats, self.bots));
         }
         // M127: the pad takeover prompt takes every press while it's up
         if let Some(fx) = self.takeover_step(dev, k) {
@@ -1261,22 +1306,29 @@ impl Menu {
                 let n = self.players();
                 let seated = self.seats[..n].iter().position(|s| *s == Some(dev));
                 if host == Some(dev) {
-                    if k.ok {
-                        for p in &mut self.players {
-                            *p = Player::fresh();
+                    let p = self.sel.min(n - 1);
+                    self.held &= self.pickable(p);
+                    if let Some(a) = self.keep {
+                        // over a match, ○ after a change: Keep / Undo (○ again stays on the screen)
+                        if k.up || k.down || k.left || k.right {
+                            self.keep = Some(1 - a);
+                            out.push(Sound(0));
+                        } else if k.ok {
+                            self.keep = None;
+                            self.assign_leave(a == 0, host, &mut out);
+                        } else if k.back {
+                            self.keep = None;
+                            out.push(Sound(1));
                         }
-                        self.scroll = [0; 4];
-                        if self.online() {
-                            // B195: into the lobby first (seats held), then its character select
-                            self.online_open(&mut out);
-                        } else {
-                            self.go(Screen::Chars, &mut out);
-                        }
-                    } else if k.up || k.down {
-                        // 1P focuses a seat to swap or take off
-                        rows(n, &mut self.sel, &mut out);
-                    } else if k.left || k.right {
-                        // the focused seat's device trades places with the next seat that way (1P is never left empty)
+                    } else if k.ok && (self.held || self.pickable(p)) {
+                        // ✕ picks up the focused seat's controller, or puts it down
+                        self.held = !self.held;
+                        out.push(Sound(if self.held { 2 } else { 1 }));
+                    } else if k.ok && !self.paused || k.name {
+                        // Start (a pad's Start, N), or ✕ on a seat with nothing to pick up before a match
+                        self.assign_leave(true, host, &mut out);
+                    } else if self.held && (k.left || k.right) {
+                        // the held controller trades places with the next seat that way (1P is never left empty)
                         if let Some((p, q)) = self.host_swap(k.right) {
                             // B437: the swap is shown at once, but this device drives the screen until it leaves
                             self.assign_lead = host;
@@ -1287,23 +1339,34 @@ impl Menu {
                             self.sel = q;
                             out.push(Sound(0));
                         }
-                    } else if k.page && self.drop_seat(self.sel.min(n - 1)) {
+                    } else if self.held && k.back {
+                        self.held = false;
                         out.push(Sound(1));
-                    } else if k.card && self.can_bot(self.sel.min(n - 1)) {
+                    } else if !self.held && (k.left || k.right || k.up || k.down) {
+                        // the focus goes about the cards as they lie (two rows of two on a tall view)
+                        let per = self.assign_per();
+                        let (row, col) = (p / per, p % per);
+                        self.sel = if k.left || k.right {
+                            row * per + if k.right { (col + 1) % per } else { (col + per - 1) % per }
+                        } else if per < n {
+                            (p + per) % n
+                        } else {
+                            p
+                        };
+                        if self.sel != p {
+                            out.push(Sound(0));
+                        }
+                    } else if k.page && self.drop_seat(p) {
+                        out.push(Sound(1));
+                    } else if k.card && self.can_bot(p) {
                         // B216: △ adds a computer player to the focused empty seat (or takes it off)
-                        let p = self.sel.min(n - 1);
                         self.bots[p] = !self.bots[p];
                         out.push(Sound(if self.bots[p] { 2 } else { 1 }));
+                    } else if k.back && self.paused && self.assign_was.is_some_and(|w| w != (self.seats, self.bots)) {
+                        self.keep = Some(0);
+                        out.push(Sound(2));
                     } else if k.back {
-                        // B437: the driver goes back as 1P, whatever seat it had moved to
-                        self.seats = [host, None, None, None];
-                        self.bots = [false; 4];
-                        self.screen = match self.net.go {
-                            Some(online::Go::Find) => Screen::Lobbies,
-                            Some(online::Go::Code) => Screen::Code,
-                            _ => Screen::Mode,
-                        };
-                        out.push(Sound(1));
+                        self.assign_leave(false, host, &mut out);
                     }
                 } else if k.ok && seated.is_none() {
                     let n = if self.online() { self.local_max() } else { n };
@@ -4045,7 +4108,7 @@ mod tests {
         m.step(pa, ok);
         assert_eq!(m.seats[1], Some(pa));
         // on the local roster (B331): back to the computer, the next device's ✕ takes it
-        m.step(Dev::Keys, ok);
+        m.step(Dev::Keys, press(|p| &mut p.name));
         assert_eq!(m.screen, Screen::Chars);
         m.step(pb, ok);
         assert!(m.players[2].ready);
@@ -4081,14 +4144,16 @@ mod tests {
         m.step(Dev::Keys, press(|p| &mut p.ok)); // the keyboard rejoins as 2P
         assert_eq!(m.seats[..2], [Some(pa), Some(Dev::Keys)]);
         // 1P (now the pad) focuses 2P and swaps it back up; B437: the pad drives on, its move pending, until it leaves
-        m.step(pa, press(|p| &mut p.down));
+        m.step(pa, press(|p| &mut p.right));
+        m.step(pa, press(|p| &mut p.ok));
         m.step(pa, press(|p| &mut p.left));
         assert_eq!((&m.seats[..2], m.sel, m.lead(), m.lead_pending()), (&[Some(Dev::Keys), Some(pa)][..], 0, Some(pa), Some(Some(1))));
         m.step(Dev::Keys, press(|p| &mut p.down));
         m.step(Dev::Keys, press(|p| &mut p.page));
         assert_eq!((&m.seats[..2], m.sel), (&[Some(Dev::Keys), Some(pa)][..], 0), "the keyboard doesn't drive yet");
         // the pad takes itself off; an empty seat never goes to 1P
-        m.step(pa, press(|p| &mut p.down));
+        m.step(pa, press(|p| &mut p.ok)); // put down
+        m.step(pa, press(|p| &mut p.right));
         m.step(pa, press(|p| &mut p.page));
         assert_eq!((&m.seats[..2], m.lead_pending()), (&[Some(Dev::Keys), None][..], Some(None)));
         m.step(pa, press(|p| &mut p.right));

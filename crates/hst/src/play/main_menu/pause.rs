@@ -533,6 +533,7 @@ mod tests {
         let seats = seats_now(humans, &slots);
         assert_eq!(seats, [Some(Dev::Keys), None, Some(Dev::Pad(a)), None]);
         let mut m = Menu { screen: Screen::Assign, doubles: true, seats, bots: humans.map(|h| !h), paused: true, ..default() };
+        m.step(Dev::Keys, Press { ok: true, ..default() });
         m.step(Dev::Keys, Press { right: true, ..default() });
         assert_eq!((m.seats, m.bots, m.sel), ([Some(Dev::Pad(a)), None, Some(Dev::Keys), None], [false, true, false, true], 2));
         assert_eq!((m.lead(), m.lead_pending()), (Some(Dev::Keys), Some(Some(2))));
@@ -557,7 +558,7 @@ mod tests {
         assert_eq!(m.seats, [Some(Dev::Pad(a)), None, Some(Dev::Pad(b)), None]);
         // 1P alone may take itself off too (no moving up over the computer's seats)
         assert!(m.droppable(0) && m.droppable(2));
-        m.step(Dev::Keys, Press { ok: true, ..default() });
+        m.step(Dev::Keys, Press { name: true, ..default() });
         assert_eq!(m.screen, Screen::Chars);
         assert_eq!(m.lead(), Some(Dev::Pad(a)), "left: pad a is 1P");
         apply(m.seats, &[a, b], &mut slots);
@@ -576,8 +577,9 @@ mod tests {
         let humans = [true, true, false, false];
         let slots = PadSlots([None, Some(a), None, None], Some([Some(Seat::Keys), Some(Seat::Pad(0)), None, None]));
         let mut m = Menu { screen: Screen::Assign, seats: seats_now(humans, &slots), bots: humans.map(|h| !h), paused: true, ..default() };
-        m.step(Dev::Keys, Press { right: true, ..default() });
         m.step(Dev::Keys, Press { ok: true, ..default() });
+        m.step(Dev::Keys, Press { right: true, ..default() });
+        m.step(Dev::Keys, Press { name: true, ..default() });
         assert_eq!((m.screen, m.seats), (Screen::Chars, [Some(Dev::Pad(a)), Some(Dev::Keys), None, None]));
         *SWAPPED.lock().unwrap() = Some(swapped(&m));
         front.after_match();
@@ -594,6 +596,42 @@ mod tests {
         assert!(SWAPPED.lock().unwrap().is_none());
     }
 
+    /// Over a match: ←→ only move the focus until ✕ picks up its controller; ←→ then carry it, ✕ puts it down.
+    /// ○ after a change asks Keep / Undo: ○ again stays, Undo leaves the match's seats, Keep applies them.
+    #[test]
+    fn pick_up_carry_and_keep_or_undo() {
+        let a = Entity::from_raw_u32(5).unwrap();
+        let seats = [Some(Dev::Keys), Some(Dev::Pad(a)), None, None];
+        let fresh = || Menu { screen: Screen::Assign, seats, bots: [false, false, true, true], paused: true, ..default() };
+        let key = |m: &mut Menu, k: Press| drop(m.step(Dev::Keys, k));
+        let (ok, back, right) = (Press { ok: true, ..default() }, Press { back: true, ..default() }, Press { right: true, ..default() });
+        let mut m = fresh();
+        key(&mut m, right);
+        assert_eq!((m.seats, m.sel, m.held), (seats, 1, false), "the focus moved, nothing swapped");
+        key(&mut m, Press { left: true, ..default() });
+        key(&mut m, ok);
+        key(&mut m, right);
+        assert_eq!((&m.seats[..2], m.sel, m.held), (&[Some(Dev::Pad(a)), Some(Dev::Keys)][..], 1, true));
+        key(&mut m, ok);
+        key(&mut m, back);
+        assert_eq!((m.keep, m.screen), (Some(0), Screen::Assign));
+        key(&mut m, back);
+        assert_eq!((m.keep, m.screen), (None, Screen::Assign));
+        key(&mut m, back);
+        key(&mut m, Press { down: true, ..default() });
+        key(&mut m, ok);
+        assert_eq!(m.screen, Screen::Mode, "undone: the match's seats stand");
+        let mut m = fresh();
+        for k in [ok, right, ok, back, ok] {
+            key(&mut m, k);
+        }
+        assert_eq!((m.screen, &m.seats[..2]), (Screen::Chars, &[Some(Dev::Pad(a)), Some(Dev::Keys)][..]), "kept");
+        // no change: ○ just leaves
+        let mut m = fresh();
+        key(&mut m, back);
+        assert_eq!((m.keep, m.screen), (None, Screen::Mode));
+    }
+
     /// M124: online doubles, this machine plays 2P (keyboard) and 4P (pad a), the other machine 1P and 3P. The
     /// keyboard leads (the first local seat), its → swaps the two local players' controllers past the other machine's
     /// seat, nobody takes themselves off or joins another machine's seat, and the cards are the match's characters.
@@ -606,6 +644,7 @@ mod tests {
         m.sel = m.first_seat();
         assert_eq!((m.sel, m.lead()), (1, Some(Dev::Keys)));
         assert!((0..4).all(|p| !m.droppable(p)));
+        m.step(Dev::Keys, Press { ok: true, ..default() });
         m.step(Dev::Keys, Press { right: true, ..default() });
         assert_eq!(m.seats, [None, Some(Dev::Pad(a)), None, Some(Dev::Keys)]);
         m.step(Dev::Pad(b), Press { ok: true, ..default() });
