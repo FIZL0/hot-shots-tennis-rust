@@ -1015,7 +1015,6 @@ fn heading(d: &mut Draw, sec: &Section, [x, y, w, h]: [f32; 4], s: &Seat) {
 /// pill on the right (`glyph`'s button art before it; left of the ✕ when `drop`; left out when the column is too
 /// narrow for it and a name).
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, p: usize, own: Option<&str>, name: &str, device: &str, side: &str, glyph: Option<(legend::Style, u8)>, drop: bool, naming: Option<&str>) {
     // B471: the panel's header strip inside the card's outline, a dark rule under it; a computer player's in the
     // seat's light tint with dark words
