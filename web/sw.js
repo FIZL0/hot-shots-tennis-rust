@@ -106,10 +106,14 @@ self.addEventListener('fetch', e => {
   e.respondWith((async () => {
     if (req.mode === 'navigate' && (path === '' || path === 'index.html')) await promote();
     const active = await get('active');
-    if (!active) return fetch(req);
+    // no build kept (the page dropped the caches for a Refresh the background download never finished): the network,
+    // and the shell of the deployed build cached as on install
+    if (!active) { e.waitUntil(first().catch(() => {})); return fetch(req); }
     // version.txt: the build this page is (served from the cache, so the page pins its pkg to it); `?next` the build
     // a Refresh would open: the ready one once downloaded, else this one (and the check for a newer one starts)
     if (path === 'version.txt') {
+      // `?server`: the deployed build, straight from the server
+      if (url.searchParams.has('server')) return new Response((await latest()) ?? active);
       if (url.searchParams.has('next')) {
         e.waitUntil(stage());
         return new Response((await get('ready')) ?? active);

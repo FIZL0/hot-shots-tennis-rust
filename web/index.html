@@ -753,9 +753,18 @@ navigator.serviceWorker?.register('sw.js').catch(() => {});
 const read = (q = '') => fetch('version.txt' + q, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').then(t => t.trim(), () => '');
 const loaded = await read();
 {
+  const build = v => loaded && v && v !== loaded && /^[0-9a-f]{7,40}$/.test(v);
+  let behind = 0;
   const check = async () => {
     const now = await read('?next');
-    if (loaded && now && now !== loaded && /^[0-9a-f]{7,40}$/.test(now)) window.hstLatest = now;
+    if (build(now)) { window.hstLatest = now; window.hstFresh = false; return; }
+    // iOS Safari stops the service worker during its background download (a ~70 MB wasm), so `?next` stayed on this
+    // build for good: the server's newer one is offered anyway after 3 min, and Refresh drops the caches first
+    // (`hstReload`) so the reload comes from the network
+    const server = await read('?server');
+    if (!build(server)) { behind = 0; return; }
+    behind ||= Date.now();
+    if (Date.now() - behind > 180000) { window.hstLatest = server; window.hstFresh = true; }
   };
   // every minute (was 10: a phone's short sessions and throttled timers never saw it), and soon after load; each
   // `?next` is a tiny read that also keeps sw.js's background download going (a phone stops an idle service worker)
@@ -1049,6 +1058,7 @@ async function start() {
     const until = Date.now() + 120000;
     if (pending.size) { boot.hidden = false; say('Saving mods before reloading…'); }
     while (pending.size && Date.now() < until) await Promise.race([Promise.allSettled([...pending]), new Promise(r => setTimeout(r, until - Date.now()))]);
+    if (window.hstFresh) try { for (const k of await caches.keys()) if (k.startsWith('hst')) await caches.delete(k); } catch {}
     if (site) { const q = new URLSearchParams(location.search); q.set('site', ''); location.search = q; } else location.reload();
   };
   window.hstModDrop = id => track(mods.removeEntry(id, { recursive: true }).catch(e => console.warn(`hst: removing mod ${id}: ${e}`)));
