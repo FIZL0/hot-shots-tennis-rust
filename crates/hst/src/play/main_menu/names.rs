@@ -22,9 +22,10 @@ const KEEP: usize = 40;
 /// The on-screen grid's letters, eight to a row.
 const KEYS: &[u8; 40] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -.!";
 const COLS: usize = 8;
-/// The grid's Back and OK buttons, after the letters.
+/// The grid's Back, Caps and OK buttons, after the letters.
 const BACK: usize = KEYS.len();
-const OK: usize = KEYS.len() + 1;
+const CAPS: usize = KEYS.len() + 1;
+const OK: usize = KEYS.len() + 2;
 const FILE: &str = "names.txt";
 
 /// The names: those saved, each device's pick and each seat's open picker.
@@ -38,6 +39,8 @@ pub(super) struct Names {
     pub(super) open: [Option<Picker>; 4],
     /// `saved` changed since it was written (`persist`).
     dirty: bool,
+    /// Each seat's grid types lower case (Caps off).
+    pub(super) lower: [bool; 4],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -92,7 +95,7 @@ impl Names {
     }
 
     /// `d` takes name `n` (`None`: no name); a name is saved at the top of the list.
-    fn set(&mut self, d: Dev, n: Option<String>) {
+    pub(super) fn set(&mut self, d: Dev, n: Option<String>) {
         self.chosen.retain(|(x, _)| *x != d);
         if let Some(n) = n {
             self.saved.retain(|s| !s.eq_ignore_ascii_case(&n));
@@ -230,11 +233,12 @@ impl Menu {
                 let rows = KEYS.len() / COLS;
                 let mut to = sel;
                 if k.left || k.right {
-                    to = if sel < KEYS.len() { sel / COLS * COLS + (sel % COLS + if k.right { 1 } else { COLS - 1 }) % COLS } else { BACK + OK - sel };
+                    to = if sel < KEYS.len() { sel / COLS * COLS + (sel % COLS + if k.right { 1 } else { COLS - 1 }) % COLS } else { BACK + (sel - BACK + if k.right { 1 } else { 2 }) % 3 };
                 } else if k.up || k.down {
-                    let (row, col) = if sel < KEYS.len() { (sel / COLS, sel % COLS) } else { (rows, (sel - BACK) * COLS / 2) };
+                    // the three buttons under columns 1, 3 and 6 (each under its third of the columns)
+                    let (row, col) = if sel < KEYS.len() { (sel / COLS, sel % COLS) } else { (rows, (sel - BACK) * COLS / 3 + 1) };
                     let row = (row + if k.down { 1 } else { rows }) % (rows + 1);
-                    to = if row == rows { BACK + col * 2 / COLS } else { row * COLS + col };
+                    to = if row == rows { BACK + col * 3 / COLS } else { row * COLS + col };
                 }
                 if to != sel {
                     self.names.open[p] = Some(Picker::Typing(entry, to));
@@ -251,13 +255,17 @@ impl Menu {
                     self.names.set(d, Some(n).filter(|n| !n.is_empty()));
                     self.names.open[p] = None;
                     out.push(Sound(2));
+                } else if k.ok && sel == CAPS {
+                    self.names.lower[p] = !self.names.lower[p];
+                    out.push(Sound(0));
                 } else if k.ok && sel == BACK || k.back {
                     let at = self.names.saved.len();
                     self.names.open[p] = Some(Picker::List(at));
                     out.push(Sound(1));
                 } else if k.ok {
                     if entry.chars().count() < MAX {
-                        entry.push(KEYS[sel] as char);
+                        let c = KEYS[sel] as char;
+                        entry.push(if self.names.lower[p] { c.to_ascii_lowercase() } else { c });
                         self.names.open[p] = Some(Picker::Typing(entry, sel));
                     } else {
                         // full: on to OK
@@ -295,7 +303,7 @@ impl Menu {
                     v.push((Key::Ok, "Select"));
                 }
                 if *sel < self.names.saved.len() {
-                    v.push((Key::Page, "Forget"));
+                    v.push((Key::Page, "Remove"));
                 }
                 v.push((Key::Back, "Cancel"));
             }
@@ -304,7 +312,12 @@ impl Menu {
                     v.push((Key::Type, "Type"));
                 }
                 // ✕ types the letter under the cursor, or presses the grid's OK / Back
-                v.extend([(Key::Move, "Letter"), (Key::Ok, if *sel == OK { "OK" } else if *sel == BACK { "Back" } else { "Type" })]);
+                v.extend([(Key::Move, "Letter"), (Key::Ok, match *sel {
+                    OK => "OK",
+                    BACK => "Back",
+                    CAPS => "Caps",
+                    _ => "Type",
+                })]);
                 if !entry.is_empty() {
                     v.push((Key::Page, "Delete"));
                 }
@@ -351,7 +364,21 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, p: usize, [x, y, w, h]: [f32; 4]) {
             let mut rows: Vec<(String, bool)> = m.names.saved.iter().enumerate().map(|(i, n)| (n.clone(), m.taken(p, i))).collect();
             rows.extend([("New name...".into(), false), ("No name".into(), false)]);
             let (top, pitch) = (y + 36.0, 30.0);
-            let fit = (((y + h - 8.0 - top) / pitch).floor() as usize).max(1);
+            // concept: a saved name's Remove hint along the bottom
+            let hint = *sel < m.names.saved.len();
+            let bottom = y + h - 8.0 - if hint { 26.0 } else { 0.0 };
+            if hint {
+                let dev = match m.name_dev(p) {
+                    Some(Dev::Pad(e)) => Some(e),
+                    _ => None,
+                };
+                let (gh, ts) = (18.0, 15.0);
+                let kw = super::roster::key_w(d, dev, GamepadButton::West, "Tab", gh);
+                let x0 = x + (w - kw - 6.0 - d.width("Remove", ts)) / 2.0;
+                super::roster::key(d, dev, GamepadButton::West, "Tab", [x0, y + h - 30.0], gh);
+                d.label("Remove", x0 + kw + 6.0 + d.width("Remove", ts) / 2.0, y + h - 29.0, ts, w, WHITE);
+            }
+            let fit = (((bottom - top) / pitch).floor() as usize).max(1);
             let first = (*sel + 1).saturating_sub(fit).min(rows.len().saturating_sub(fit));
             let now = m.player_name(p);
             for (i, (n, taken)) in rows.iter().enumerate().skip(first).take(fit) {
@@ -373,7 +400,7 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, p: usize, [x, y, w, h]: [f32; 4]) {
                     d.centred("^", x + w - 14.0, top - 18.0, 16.0, WHITE);
                 }
                 if first + fit < rows.len() {
-                    d.centred("v", x + w - 14.0, y + h - 18.0, 16.0, WHITE);
+                    d.centred("v", x + w - 14.0, bottom - 10.0, 16.0, WHITE);
                 }
             }
         }
@@ -391,17 +418,21 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, p: usize, [x, y, w, h]: [f32; 4]) {
                 let (kx, ky) = (ix + kw * (i % COLS) as f32, top + kh * (i / COLS) as f32);
                 let on = *sel == i;
                 d.box3([kx + 1.0, ky + 1.0, kw - 2.0, kh - 2.0], 4.0, [Some(INK), None, Some(if on { ON } else { OFF })], 128.0);
-                let label = if *c == b' ' { "_".to_string() } else { (*c as char).to_string() };
+                let c = if m.names.lower[p] { c.to_ascii_lowercase() } else { *c };
+                let label = if c == b' ' { "_".to_string() } else { (c as char).to_string() };
                 d.label(&label, kx + kw / 2.0, ky + kh * 0.15, kh * 0.7, kw - 4.0, if on { WHITE } else { [100.0; 3] });
                 d.hit([kx, ky, kw, kh], Act::Name(p, i));
             }
             let by = top + kh * rows as f32 + 4.0;
-            for (i, l) in [(BACK, "Back"), (OK, "OK")] {
-                let bx = ix + iw / 2.0 * (i - BACK) as f32;
+            let bw = iw / 3.0;
+            for (i, l) in [(BACK, "Back"), (CAPS, "Caps"), (OK, "OK")] {
+                let bx = ix + bw * (i - BACK) as f32;
                 let on = *sel == i;
-                d.pill_at([bx + 1.0, by, iw / 2.0 - 2.0, 26.0], [INK, WHITE, if on { ON } else { OFF }], 128.0);
-                d.label(l, bx + iw / 4.0, by + 4.0, 18.0, iw / 2.0 - 12.0, if on { WHITE } else { [100.0; 3] });
-                d.hit([bx, by, iw / 2.0, 26.0], Act::Name(p, i));
+                d.pill_at([bx + 1.0, by, bw - 2.0, 26.0], [INK, WHITE, if on { ON } else { OFF }], 128.0);
+                // Caps lit gold while it's on
+                let rgb = if i == CAPS && !m.names.lower[p] { GOLD } else if on { WHITE } else { [100.0; 3] };
+                d.label(l, bx + bw / 2.0, by + 4.0, 18.0, bw - 12.0, rgb);
+                d.hit([bx, by, bw, 26.0], Act::Name(p, i));
             }
         }
     }
@@ -579,20 +610,39 @@ mod tests {
         assert_eq!(m.names.open[1], Some(Picker::Typing("JZ".into(), 25)));
         // □ deletes
         press(&mut m, 1, |k| k.page = true);
-        // down twice to the buttons (col 1: Back), right: OK
+        // down twice to the buttons (col 1: Back), right: Caps off
         press(&mut m, 1, |k| k.down = true);
         press(&mut m, 1, |k| k.down = true);
         press(&mut m, 1, |k| k.right = true);
         press(&mut m, 1, |k| k.ok = true);
-        assert_eq!(m.seat_tag(1), "J");
-        assert_eq!(m.names.saved, ["J", "ANNA", "Bo"]);
-        assert_eq!(m.name_flags(&[0, 1]), ["--names", ",J"]);
+        assert!(m.names.lower[1]);
+        // up four from Caps (col 3): L, typed lower case; down four back to Caps, right: OK
+        (0..4).for_each(|_| _ = press(&mut m, 1, |k| k.up = true));
+        press(&mut m, 1, |k| k.ok = true);
+        (0..4).for_each(|_| _ = press(&mut m, 1, |k| k.down = true));
+        assert_eq!(m.names.open[1], Some(Picker::Typing("Jl".into(), CAPS)));
+        press(&mut m, 1, |k| k.right = true);
+        press(&mut m, 1, |k| k.ok = true);
+        assert_eq!(m.seat_tag(1), "Jl");
+        assert_eq!(m.names.saved, ["Jl", "ANNA", "Bo"]);
+        assert_eq!(m.name_flags(&[0, 1]), ["--names", ",Jl"]);
         // No name, last on the list
         press(&mut m, 1, |k| k.name = true);
         press(&mut m, 1, |k| k.up = true);
         press(&mut m, 1, |k| k.ok = true);
         assert_eq!(m.seat_tag(1), "2P");
         assert!(m.name_flags(&[0, 1]).is_empty());
+    }
+
+    /// 1P leaving the local select frees its name for another player's list.
+    #[test]
+    fn a_device_that_leaves_frees_its_name() {
+        let mut m = menu();
+        m.names.saved = vec!["ANNA".into()];
+        m.names.set(Dev::Keys, Some("ANNA".into()));
+        assert!(m.taken(1, 0));
+        assert!(m.drop_seat(0));
+        assert!(!m.taken(1, 0));
     }
 
     #[test]

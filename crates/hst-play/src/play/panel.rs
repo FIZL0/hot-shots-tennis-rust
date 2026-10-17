@@ -571,6 +571,7 @@ fn setup(mut commands: Commands, args: Res<Args>, g: Res<Game>, mut images: ResM
                     Visibility::Hidden,
                 ));
             }
+            super::name_tags::pool(p, super::name_tags::PANEL);
         });
 }
 
@@ -586,6 +587,7 @@ fn draw(
     colours: Option<Res<Colours>>,
     cam: Query<&Transform, With<crate::Orbit>>,
     window: Query<&Window>,
+    (names, mut plates): (Option<Res<super::name_tags::Names>>, ResMut<super::name_tags::Plates>),
     mut q: Query<(&Slot, &mut ImageNode, &mut Node, &mut Visibility)>,
 ) {
     let (Some(art), Some(colours)) = (art, colours) else {
@@ -617,7 +619,10 @@ fn draw(
         info: game_info(s, &g.rules, [0, 1].map(|t| (t..n).step_by(2).any(|i| slot(i) < 4))),
         clock: *clock,
     };
-    let quads = layout(&view);
+    let mut quads = layout(&view);
+    // named players' slot labels give way to their names; the points sit 48 px past a label
+    let label = |q: &Quad| matches!(q.tex, Tex::Slot).then(|| (q.src[0] / 40.0) as usize);
+    plates.0[super::name_tags::PANEL] = super::name_tags::take(&mut quads, names.as_deref(), &view.slots[..n], 8.0, label, |q| (q.dst, q.src, q.rgb, q.alpha));
     let aspect = window.single().map_or(4.0 / 3.0, crate::play::widescreen::aspect);
     let share = super::widescreen::share(aspect);
     for (Slot(i), mut img, mut node, mut vis) in &mut q {

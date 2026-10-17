@@ -71,6 +71,8 @@ const CONDENSE: f32 = 0.7;
 const PAD: f32 = 1.0;
 /// The head tag's cell (`i_playerinfo`): no narrower than the original's, as tall.
 const HEAD: [f32; 2] = [40.0, 32.0];
+/// A pill's name over its label and the (human's empty) rank row: this much the label's height.
+const BIG: f32 = 1.4;
 
 /// `name` set as `style`'s tag: its size in disc px (the head tag's pointer tip mid-bottom) and how far above the
 /// tag's own top an accent reaches (the image's extra rows, included in the size).
@@ -164,15 +166,19 @@ pub(super) struct Plate {
     src: [f32; 4],
     rgb: [f32; 3],
     alpha: f32,
+    /// Disc px right of the label's cell that are clear for a left-half name (a human's row has no rank under it).
+    extra: f32,
 }
 
 /// Which HUD a pool of labels is on.
 pub(super) const BOARDS: usize = 0;
 pub(super) const RESULT: usize = 1;
+/// The score panel before a serve (`panel.rs`): pinned to the screen's sides, as its quads.
+pub(super) const PANEL: usize = 2;
 
-/// Each HUD's plates this frame (`BOARDS`, `RESULT`).
+/// Each HUD's plates this frame (`BOARDS`, `RESULT`, `PANEL`).
 #[derive(Resource, Default)]
-pub(super) struct Plates(pub(super) [Vec<Plate>; 2]);
+pub(super) struct Plates(pub(super) [Vec<Plate>; 3]);
 
 /// A name label in a HUD's pool: the HUD and its index.
 #[derive(Component)]
@@ -192,6 +198,7 @@ pub(super) fn take<Q>(
     quads: &mut Vec<Q>,
     names: Option<&Names>,
     slots: &[usize],
+    extra: f32,
     label: impl Fn(&Q) -> Option<usize>,
     parts: impl Fn(&Q) -> ([f32; 4], [f32; 4], [f32; 3], f32),
 ) -> Vec<Plate> {
@@ -201,7 +208,7 @@ pub(super) fn take<Q>(
         let player = label(q).filter(|&s| s < 4).and_then(|s| slots.iter().position(|&x| x == s)).filter(|&i| names.get(i).is_some());
         let Some(player) = player else { return true };
         let (dst, src, rgb, alpha) = parts(q);
-        out.push(Plate { player, dst, src, rgb, alpha });
+        out.push(Plate { player, dst, src, rgb, alpha, extra });
         false
     });
     out
@@ -222,15 +229,18 @@ fn place(p: &Plate, size: [f32; 2], above: f32) -> ([f32; 4], f32) {
     let ([x, y, w, h], [_, _, sw, sh]) = (p.dst, p.src);
     let (kx, ky) = (w / sw, h / sh);
     let [l, t, r] = ink(p.src);
+    // a pill's label (`inpane_p`): a named player is human, so no rank row under it; the name takes both rows
+    let (big, t) = if sw == 40.0 { (BIG, sh - PLATE_H / 2.0) } else { (1.0, t) };
+    let (size, above) = ([size[0] * big, size[1] * big], above * big);
     let right = x + w / 2.0 > 320.0;
-    let room = if right { r + PAD } else { sw - l + PAD };
+    let room = if right { r + PAD } else { sw - l + PAD + p.extra };
     // in twentieths (down), so a HUD's few cells make few images
     let squeeze = ((room / size[0] * 20.0 + 1e-3).floor() / 20.0).clamp(CONDENSE, 1.0);
     let f = (room / (size[0] * squeeze)).min(1.0);
     let tw = size[0] * squeeze * f * kx;
     let left = if right { x + (r + PAD) * kx - tw } else { x + (l - PAD) * kx };
     let mid = y + (t + PLATE_H / 2.0) * ky;
-    ([left, mid - (above + PLATE_H / 2.0) * f * ky, tw, size[1] * f * ky], squeeze)
+    ([left, mid - (above + big * PLATE_H / 2.0) * f * ky, tw, size[1] * f * ky], squeeze)
 }
 
 /// Sets each HUD's plates' names where their labels were ([`place`]), in the label's tint.
@@ -242,7 +252,9 @@ fn labels(
     mut sizes: Local<std::collections::HashMap<String, ([f32; 2], f32)>>,
     mut made: Local<std::collections::HashMap<(String, u8), Handle<Image>>>,
     mut q: Query<(&Label, &mut Node, &mut ImageNode, &mut Visibility)>,
+    window: Query<&Window>,
 ) {
+    let aspect = window.single().map_or(4.0 / 3.0, super::widescreen::aspect);
     for (Label(h, k), mut node, mut img, mut vis) in &mut q {
         let Some((p, name)) = plates.0[*h].get(*k).and_then(|p| Some((p, names.as_ref()?.get(p.player)?))) else {
             vis.set_if_neq(Visibility::Hidden);
@@ -251,8 +263,14 @@ fn labels(
         let (size, above) = *sizes.entry(name.to_string()).or_insert_with(|| tag_size(name, Style::Plate));
         let ([x, y, w, hh], squeeze) = place(p, size, above);
         let handle = made.entry((name.to_string(), (squeeze * 20.0).round() as u8)).or_insert_with(|| images.add(tag_image(name, Style::Plate, squeeze))).clone();
-        let placed = Node { left: Val::Percent(x / 6.4), top: Val::Percent(y / 4.48), width: Val::Percent(w / 6.4), height: Val::Percent(hh / 4.48), ..node.clone() };
-        node.set_if_neq(placed);
+        if *h == PANEL {
+            let (left, width) = super::widescreen::pin(x, w, super::widescreen::share(aspect));
+            let (top, height) = super::widescreen::vplace(y, hh, aspect, super::widescreen::Anchor::Sides);
+            super::widescreen::put(&mut node, left, top, width, height);
+        } else {
+            let placed = Node { left: Val::Percent(x / 6.4), top: Val::Percent(y / 4.48), width: Val::Percent(w / 6.4), height: Val::Percent(hh / 4.48), ..node.clone() };
+            node.set_if_neq(placed);
+        }
         if img.image != handle {
             img.image = handle;
         }
@@ -361,29 +379,31 @@ mod tests {
         let names = Names::parse("ANNA,,BO");
         // players 0..3 on slots 1, 0, 4 (COM), and slot labels for each plus another quad
         let mut quads = vec![(Some(1), 10.0), (Some(0), 20.0), (Some(4), 30.0), (None, 40.0)];
-        let got = take(&mut quads, Some(&names), &[1, 0, 4], |q| q.0, |q| ([q.1, 0.0, 40.0, 24.0], [0.0, 0.0, 40.0, 24.0], [128.0; 3], 128.0));
+        let got = take(&mut quads, Some(&names), &[1, 0, 4], 0.0, |q| q.0, |q| ([q.1, 0.0, 40.0, 24.0], [0.0, 0.0, 40.0, 24.0], [128.0; 3], 128.0));
         assert_eq!(got.iter().map(|p| (p.player, p.dst[0])).collect::<Vec<_>>(), [(0, 10.0)]);
         assert_eq!(quads.iter().map(|q| q.1).collect::<Vec<_>>(), [20.0, 30.0, 40.0]);
-        assert!(take(&mut quads, None, &[1, 0, 4], |q| q.0, |q| ([q.1; 4], [0.0; 4], [0.0; 3], 0.0)).is_empty());
+        assert!(take(&mut quads, None, &[1, 0, 4], 0.0, |q| q.0, |q| ([q.1; 4], [0.0; 4], [0.0; 3], 0.0)).is_empty());
     }
 
     /// B541: "1P" set as either tag comes out the size of the disc's own (the head cell 40×32; the plate's words
     /// 25–28 px across with their outline, 19 tall), a six-letter name is wider but no taller, and an accent or a
     /// descender gets its own rows. `HST_TAG_ART=DIR` saves the tags as PNGs to look at.
-    /// A plate's name starts where the label's words did (left half) or ends where they did (right half); a long
-    /// one shrinks into the cell's room round the words' middle.
+    /// A plate's name starts where the label's words did (left half) or ends where they did (right half), 1.4× the
+    /// label's words over the label and the (empty) rank row; a long one shrinks into the cell's room round the
+    /// middle.
     #[test]
     fn plates_fit_their_cells() {
-        let plate = |x: f32| Plate { player: 0, dst: [x, 100.0, 80.0, 48.0], src: [0.0, 0.0, 40.0, 24.0], rgb: [128.0; 3], alpha: 128.0 };
-        assert_eq!(place(&plate(100.0), [30.0, PLATE_H], 0.0), ([108.0, 108.0, 60.0, 38.0], 1.0));
-        let ([l, _, w, _], _) = place(&plate(400.0), [30.0, PLATE_H], 0.0);
-        assert_eq!(l + w, 400.0 + 34.0 * 2.0);
-        // 45 wide, 36 of room: condensed to 0.8, full height
-        assert_eq!(place(&plate(100.0), [45.0, PLATE_H], 0.0), ([108.0, 108.0, 72.0, 38.0], 0.8));
-        // 72 wide: condensed to 0.7, then 36 / 50.4 of the height, its middle where the words' was
-        let ([l, t, w, h], squeeze) = place(&plate(100.0), [72.0, PLATE_H], 0.0);
-        assert_eq!((l, w, squeeze), (108.0, 72.0, 0.7));
-        assert!((h - 38.0 * 36.0 / 50.4).abs() < 1e-3 && (t + h / 2.0 - (108.0 + 19.0)).abs() < 1e-3, "{t} {h}");
+        let plate = |x: f32, extra: f32| Plate { player: 0, dst: [x, 100.0, 80.0, 48.0], src: [0.0, 0.0, 40.0, 24.0], rgb: [128.0; 3], alpha: 128.0, extra };
+        let close = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
+        // 30 wide at 1.4 = 42 in 36 + 40 of room: whole, its middle on the label's bottom edge (the pill's middle)
+        let (r, squeeze) = place(&plate(100.0, 40.0), [30.0, PLATE_H], 0.0);
+        assert!(close(r, [108.0, 148.0 - 26.6, 84.0, 53.2]) && squeeze == 1.0, "{r:?}");
+        // right half: no extra, condensed to 0.8 of 42 into 34, ending where the words did
+        let ([l, _, w, _], squeeze) = place(&plate(400.0, 40.0), [30.0, PLATE_H], 0.0);
+        assert!((l + w - (400.0 + 34.0 * 2.0)).abs() < 1e-3 && squeeze == 0.8);
+        // 72 wide (100.8) in 36: condensed to 0.7, then shrunk, its middle still the pill's
+        let ([_, t, _, h], squeeze) = place(&plate(100.0, 0.0), [72.0, PLATE_H], 0.0);
+        assert!(squeeze == 0.7 && (h - 2.0 * 26.6 * 36.0 / 70.56).abs() < 1e-3 && (t + h / 2.0 - 148.0).abs() < 1e-3, "{t} {h}");
     }
 
     #[test]

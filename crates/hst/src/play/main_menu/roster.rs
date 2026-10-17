@@ -380,7 +380,7 @@ pub(super) fn chip_w(d: &Draw, s: &str, h: f32) -> f32 {
 }
 
 /// Pad `dev`'s art for button `b`, `h` high from `[x, y]`, or the keyboard's key `name` as a [`chip`]; its width.
-fn key(d: &mut Draw, dev: Option<Entity>, b: GamepadButton, name: &str, [x, y]: [f32; 2], h: f32) -> f32 {
+pub(super) fn key(d: &mut Draw, dev: Option<Entity>, b: GamepadButton, name: &str, [x, y]: [f32; 2], h: f32) -> f32 {
     match (dev, legend::button_glyph(b)) {
         (Some(e), Some(i)) => {
             let style = legend::dev_style(Some(e));
@@ -393,7 +393,7 @@ fn key(d: &mut Draw, dev: Option<Entity>, b: GamepadButton, name: &str, [x, y]: 
 }
 
 /// The width of a [`key`].
-fn key_w(d: &Draw, dev: Option<Entity>, b: GamepadButton, name: &str, h: f32) -> f32 {
+pub(super) fn key_w(d: &Draw, dev: Option<Entity>, b: GamepadButton, name: &str, h: f32) -> f32 {
     match (dev, legend::button_glyph(b)) {
         (Some(e), Some(i)) => h * legend::glyph_aspect(legend::dev_style(Some(e)), i),
         (_, _) if name.is_empty() => 0.0,

@@ -1008,8 +1008,7 @@ impl Menu {
         // a computer player's seat empties too (before a local match)
         let com = self.screen == Screen::Assign && self.bots[p] && self.seats[p].is_none() && !self.paused && !self.online();
         // concept: on the local roster 1P leaves too (its seat waits open; the others keep theirs)
-        let others = self.seats.iter().filter(|s| dev(s)).count() > 1;
-        com || self.net_pause.is_none() && dev(&self.seats[p]) && (!first || self.paused || self.local_roster() || self.screen == Screen::Assign && others)
+        com || self.net_pause.is_none() && dev(&self.seats[p]) && (!first || self.paused || self.local_roster() || self.screen == Screen::Assign)
     }
 
     /// The device driving the menu's 1P screens: 1P's, except on the controller assignment after it moved its own
@@ -1120,9 +1119,19 @@ impl Menu {
             self.bots[p] = false;
             return true;
         }
+        // concept: a device that leaves gives up its name for the others to pick
+        if let Some(d) = self.seats[p] {
+            self.names.set(d, None);
+        }
         if p == 0 && self.screen == Screen::Assign && !self.paused {
-            // the next seated device becomes 1P (the menu's driver)
+            // the next seated device becomes 1P (the menu's driver); alone, 1P's seat waits for another controller's
+            // ✕ while this one still drives
             let n = self.players();
+            if self.humans() == 1 {
+                self.assign_lead = self.seats[0];
+                self.seats[0] = None;
+                return true;
+            }
             self.seats[..n].rotate_left(1);
             self.seats[n - 1] = None;
             let q = self.seats[..n].iter().position(Option::is_some).unwrap_or(0);
@@ -1292,6 +1301,7 @@ impl Menu {
         }
         // concept: on the lobby another local player's ○ leaves its seat (held open here for another pad), not the lobby
         if k.back && self.screen == Screen::Lobby && self.online() && let Some(p) = (0..4).find(|&p| self.seats[p] == Some(dev)).filter(|&p| self.droppable(p)) {
+            self.names.set(dev, None);
             self.seats[p] = Some(Dev::Open);
             self.unready(p);
             out.push(Sound(LEAVE_SOUND));
@@ -1470,6 +1480,10 @@ impl Menu {
                 } else if k.ok && seated.is_none() {
                     let n = if self.online() { self.local_max() } else { n };
                     if let Some(p) = (0..n).find(|&p| self.seats[p].is_none() && !self.bots[p]) {
+                        if p == 0 {
+                            // concept: a new controller takes 1P (left by the old one): it drives from here
+                            (self.assign_lead, self.p1) = (None, Some(dev));
+                        }
                         self.seats[p] = Some(dev);
                         out.push(Sound(2));
                     }
@@ -4391,10 +4405,11 @@ mod tests {
     fn dropping_1p_moves_the_next_device_up() {
         let pa = Dev::Pad(Entity::from_raw_u32(5).unwrap());
         let mut m = Menu { screen: Screen::Assign, seats: [Some(Dev::Keys), None, None, None], ..default() };
-        assert!(!m.droppable(0)); // alone: stays
-        m.step(pa, press(|p| &mut p.ok));
+        // alone too: 1P's seat waits for another controller, the keyboard still driving; the pad's ✕ takes it over
         assert!(m.point(Dev::Keys, pointer::Act::Drop(0), true).contains(&Effect::Sound(1)));
-        assert_eq!(m.seats, [Some(pa), None, None, None]);
+        assert_eq!((m.seats[0], m.lead()), (None, Some(Dev::Keys)));
+        m.step(pa, press(|p| &mut p.ok));
+        assert_eq!((m.seats, m.lead(), m.p1), ([Some(pa), None, None, None], Some(pa), Some(pa)));
         m.sel = 1;
         m.step(Dev::Keys, press(|p| &mut p.ok)); // the keyboard rejoins as 2P (1P's focus on it)
         m.sel = 0;

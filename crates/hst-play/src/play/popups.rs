@@ -768,7 +768,8 @@ fn draw(
     // B371: named players' slot labels give way to their names
     let slots: Vec<usize> = (0..n).map(|i| pads.slot_of(i, n).unwrap_or(4)).collect();
     let label = |q: &Quad| matches!(q.tex, Tex::Slot).then(|| (q.src[0] / 40.0) as usize);
-    plates.0[super::name_tags::BOARDS] = super::name_tags::take(&mut quads, names.as_deref(), &slots, label, |q| (q.dst, q.src, q.rgb, q.alpha));
+    // the rank row's width (label + 8 + 64) is clear on a human's pill
+    plates.0[super::name_tags::BOARDS] = super::name_tags::take(&mut quads, names.as_deref(), &slots, 32.0, label, |q| (q.dst, q.src, q.rgb, q.alpha));
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             vis.set_if_neq(Visibility::Hidden);
