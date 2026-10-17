@@ -302,7 +302,9 @@ Never touch the worktrees, never do task work yourself. When the runner says `RU
 master.md with a short summary for the human at the top."""
 
 
-MERGE = threading.Lock()  # one merge into main at a time
+MERGE = threading.Lock()  # one runner merge built and tested at a time (in the merge worktree, minutes)
+MAIN = threading.Lock()  # moving main: the runner's land() (seconds) or handing the master a report; MERGE starved
+# the master while merges queued back to back (B503's report sat 30+ min, 2026-10-16)
 SUSPECT = re.compile(r'BLOCKED:.*(pcsx2|capture|unattended|screenshot|not launched|recording)', re.I)
 
 
@@ -346,8 +348,6 @@ def union(files, tid, cwd=ROOT):
 
 
 def merge(tid):
-    if queued():
-        log(f'{tid}: the master has not taken its queued reports in 30 min; merging without waiting')
     with MERGE:
         d = slot('merge')  # the merge is made and tested here; main only moves once it passes (MARK's successor)
         git('reset', '-q', '--hard', cwd=d), git('clean', '-fdq', cwd=d)
@@ -421,7 +421,9 @@ def merge_locked(tid, d):
         if attempt < 2 and any(map(tested_by_cargo, moved)):
             log(f'{tid}: main got code commits during the tests ({", ".join(moved[:5])}); testing the merge again')
             continue
-        if why := land(tid, merged):
+        with MAIN:
+            why = land(tid, merged)
+        if why:
             if why == 'conflict' and attempt < 2:
                 continue
             return why
@@ -571,12 +573,12 @@ def flush():
     if not (q := queued()):
         return
     master()  # (re)open it at once, even while a merge holds main
-    if master_busy() or not MERGE.acquire(blocking=False):
-        return  # one merge into main at a time: the master's report, or the runner's own merge
+    if master_busy() or not MAIN.acquire(blocking=False):
+        return  # one change to main at a time: the master's report, or the runner landing a tested merge
     try:
         hand(q)
     finally:
-        MERGE.release()
+        MAIN.release()
 
 
 def hand(q):
