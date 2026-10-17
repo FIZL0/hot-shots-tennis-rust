@@ -45,4 +45,4 @@
 - Mod characters no longer bob up and down when they walk or run, and their character select pictures are drawn again so they match how they look in a match.
 - The match results screen shows only the usual button legend along the bottom, no more PlayStation-style ✕ Continue / Score Screen prompts above it.
 - Mod characters now cheer (or groan) in their own voice at the end-of-match trophy ceremony instead of staying silent.
-- Holding an emote key (or a pad button bound to one) plays the emote once instead of repeating it; press again for another.
+- Holding an emote key, the right stick or a button bound to an emote plays the emote once instead of repeating it; press or flick again for another.

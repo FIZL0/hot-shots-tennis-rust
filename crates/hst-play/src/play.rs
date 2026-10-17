@@ -1711,6 +1711,8 @@ pub fn read_input(
     mut pads: ResMut<Pads>,
     bind: Res<controls::Bindings>,
     mut held: ResMut<controls::PadSlots>,
+    // each pad's right-stick flick last frame: a held flick emotes once
+    mut flicked: Local<std::collections::HashMap<Entity, u8>>,
 ) {
     use controls::Action as A;
     let mut now = [SlotPad::default(); 4];
@@ -1743,7 +1745,7 @@ pub fn read_input(
     let touch: Vec<_> = gamepads.iter().filter(|(_, _, n)| n.is_some_and(|n| emote::is_touch(n))).map(|(e, ..)| e).collect();
     held.update_with(&list, &touch);
     for (slot, e) in held.0.iter().enumerate() {
-        let Some(Ok((_, g, name))) = e.map(|e| gamepads.get(e)) else {
+        let Some(Ok((e, g, name))) = e.map(|e| gamepads.get(e)) else {
             continue;
         };
         let s = &mut now[slot];
@@ -1758,7 +1760,13 @@ pub fn read_input(
             .find(|(a, _)| bind.pad_just_pressed(g, *a))
             .map(|(_, k)| k));
         s.serve |= bind.pad_just_pressed(g, A::Replay);
-        s.emote = s.emote.or(emote::bound(g, &bind)).or(emote::flick(g.right_stick())).or(emote::touch(g, name));
+        let flick = emote::flick(g.right_stick());
+        let new_flick = flick.filter(|d| flicked.get(&e) != Some(d));
+        match flick {
+            Some(d) => flicked.insert(e, d),
+            None => flicked.remove(&e),
+        };
+        s.emote = s.emote.or(emote::bound(g, &bind)).or(new_flick).or(emote::touch(g, name));
     }
     pads.connected = held.connected();
     for (slot, n) in pads.slots.iter_mut().zip(now) {

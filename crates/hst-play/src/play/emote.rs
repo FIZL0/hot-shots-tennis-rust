@@ -32,10 +32,10 @@ pub fn flick(v: Vec2) -> Option<u8> {
 }
 
 /// B271: the browser's touch pad (web/touch.js) has no right stick, so its L1 / R1 stand in for the left / right
-/// flick, held as a stick is. Only that pad: a real pad's shoulders never emote.
+/// flick, on press (held, it doesn't repeat). Only that pad: a real pad's shoulders never emote.
 pub fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
     name.is_some_and(|n| is_touch(n))
-        .then(|| [(GamepadButton::LeftTrigger, 2), (GamepadButton::RightTrigger, 3)].into_iter().find(|(b, _)| g.pressed(*b)))
+        .then(|| [(GamepadButton::LeftTrigger, 2), (GamepadButton::RightTrigger, 3)].into_iter().find(|(b, _)| g.just_pressed(*b)))
         .flatten()
         .map(|(_, d)| d)
 }
