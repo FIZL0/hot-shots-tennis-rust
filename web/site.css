@@ -120,6 +120,11 @@ html[data-game] #disc { display: none !important; }
 #disc ol.steps li::before { content: counter(s); display: grid; place-items: center; width: 2em; height: 2em; border: 3px solid var(--ink);
   border-radius: 50%; background: var(--gold-hi); font-weight: 800; }
 #disc ol.steps b { display: block; font-weight: 800; }
+/* M123: Add to Home Screen steps (iOS Safari only, site.js homeScreen), above the play section's panels */
+#disc .a2hs { margin-top: clamp(18px, 3vw, 28px); }
+#disc .a2hs > p { margin-top: 0; max-width: 46em; }
+#disc .a2hs ol.steps { margin: .8em 0 1em; }
+#disc .a2hs svg.ios { width: 1.25em; height: 1.25em; vertical-align: -.25em; color: #0a84ff; }
 
 /* about */
 #disc .card h3 { font-size: 1.35em; margin-bottom: .3em; }

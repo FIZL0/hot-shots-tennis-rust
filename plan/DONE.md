@@ -806,6 +806,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B536** iOS IPA can't find or host online lobbies; likely the same iroh transport issue Safari/web had — compare with the web fix (crates/hst-base/src/net.rs, net/, ios.rs)
 - [x] **M121** Online lobby: put the character select roster inside the lobby instead of two separate menus (crates/hst/src/play/main_menu/, crates/hst-base/src/net.rs)
 - [x] **B538** iOS (iPhone 15 Pro): game keeps reloading/crashing, probably out of memory; find the peak and keep it under iOS's limit (textures, preload, pipelines; crates/hst-base/src/ios.rs, textures.rs, crates/hst-play/src/preload.rs)
+- [x] **M123** Website front page: on iOS Safari only (not already a home-screen app), show a short tutorial for Add to Home Screen (Share → Add to Home Screen) so the game runs full screen (web/index.html, web/site.js, web/site.css)
 
 
 ### Shots
