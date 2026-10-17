@@ -706,16 +706,24 @@ pub(super) fn remove_rect([x, y, _, _]: [f32; 4]) -> [f32; 4] {
     [x + (PAD + 6.0) * PX, y + (BAND + PAD + 6.0) * PY, 26.0 * PX, 26.0 * PY]
 }
 
+/// An open seat's line on the online select.
+pub(super) fn open_line(m: &Menu) -> &'static str {
+    use super::online::{Go, Reach};
+    match super::online::reach(&m.net) {
+        // B526: a browser's LAN lobby says how it's joined
+        _ if m.lan_host() => super::online::HOST_LAN,
+        Reach::Up => "Waiting for a player",
+        // B545: a guest still on its way in: the host's seats aren't known yet (not a lobby friends can't join)
+        Reach::Connecting if !m.net.hosting && m.net.go == Some(Go::Quick) => "Finding a lobby...",
+        Reach::Connecting if !m.net.hosting => "Joining the lobby...",
+        // B519: nobody can take it till the relay's up
+        _ => "Not open yet: friends can join once the relay is up",
+    }
+}
+
 fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p: usize) {
     let Some(f) = m.card_facts(text, p) else {
-        // B519: nobody can take it till the relay's up
-        // B526: a browser's LAN lobby says how it's joined
-        let line = match super::online::reach(&m.net) {
-            _ if m.lan_host() => super::online::HOST_LAN,
-            super::online::Reach::Up => "Waiting for a player",
-            _ => "Not open yet: friends can join once the relay is up",
-        };
-        return open_seat_saying(d, s, card, p, false, line);
+        return open_seat_saying(d, s, card, p, false, open_line(m));
     };
     let [x, y, w, h] = card;
     let com = f.rank.is_some();

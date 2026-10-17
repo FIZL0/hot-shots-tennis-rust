@@ -12,3 +12,4 @@
 - Player names now look like the game's own "1P"–"4P" tags: the same lettering, colours and outline over your player's head, on your select card and on the score and stats screens. Names are now up to 6 characters so they fit where the tag goes.
 - Out of Bounds mod characters (Sophie, Kate, Gloria and others) now smile, wink and pull the rest of their faces in a match where they used to stay blank, wherever their model has a matching expression.
 - Online chat is smaller and takes less of the screen, in the lobby and in a match; the controllers' preset chat phrases (R2/L2) are gone, so type your chat with Enter or the Chat button.
+- Joining an online lobby no longer flashes a "can't join" message for a moment before you get in.
