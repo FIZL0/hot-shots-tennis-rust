@@ -3,20 +3,22 @@
 //! it never enters the match's input, so the sim, its generators and the replays never see it.
 //!
 //! The box: T opens it on the keyboard (typed keys go to it, not to the menu or the match), Enter sends, Esc
-//! closes; in a match a pad's R2 opens the preset phrases and steps through them, L2 says the one shown (they close by
-//! themselves after a few seconds). B512: not in the menus (R2/L2 are the select's there): the lobby's Chat button
-//! opens (and closes) the typed box on a pad or a touch screen too, and the menus' legend strip shows only T as Chat. On a touch screen a
+//! closes. A pad has no chat of its own (B544: the preset phrases on R2/L2 are gone): the lobby's Chat button opens
+//! (and closes) the typed box on a pad or a touch screen too, and the menus' legend strip shows only T as Chat. On a touch screen a
 //! speech-bubble button on the on-screen pad opens the box (the phone's keyboard): beside Start in the browser
 //! (`web/touch.js`, B312), beside Select in the phone apps (`play/touch_pad.rs`, [`BUTTON`]). B531: one tap brings the box
 //! and the keyboard up together (the page focuses its input in the tap's own lift; the apps' system keyboard follows
 //! [`OPEN`]), and the button stays up wherever chat is on, the box open too: a tap then brings the keyboard back. The chat itself takes no
 //! clicks or taps: nothing of it shows until a line is said, then the last few show at the bottom left, fading out,
 //! over the menus and the HUD alike.
-//! `/mute NAME` and `/unmute NAME` (or the phrases' Mute/Unmute rows) hide a player's lines on this machine. Settings
+//! `/mute NAME` and `/unmute NAME` hide a player's lines on this machine. Settings
 //! → Online & Mods → Chat off hides all of it.
 //!
-//! `HST_CHAT=lines|open|phrase` (for `--shot`s): chat shown outside a room, a few lines held at fixed ages (one
-//! fading), with the box open on a draft / the pads' phrase up.
+//! B544: small, at the bottom left: a few short lines and the input line, on the 4:3 screen's height like the FPS
+//! counter, so they read on a phone and scale at any window shape.
+//!
+//! `HST_CHAT=lines|open` (for `--shot`s): chat shown outside a room, a few lines held at fixed ages (one fading), with
+//! the box open on a draft.
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -34,20 +36,14 @@ const WINDOW: Duration = Duration::from_secs(8);
 /// How long a line stays up (seconds; its last [`FADE`] fading), and how many show.
 const LIFE: f32 = 12.0;
 const FADE: f32 = 2.0;
-const SHOWN: usize = 6;
-/// The pads' phrases close after this long with no R2/L2 (seconds).
-const PICK: f32 = 4.0;
-pub const PHRASES: [&str; 8] = ["Good luck!", "Nice shot!", "Oops!", "Well played!", "Good game!", "Thanks!", "Ready?", "Rematch?"];
+const SHOWN: usize = 4;
 
 /// Settings → Chat off (`main_menu::Settings`).
 pub static HIDDEN: AtomicBool = AtomicBool::new(false);
 
-/// B396: the lobby's Chat button asks for the box (1: the typed line, a second ask closes it) or the pads' phrases (2);
+/// B396: the lobby's Chat button asks for the box (1: the typed line, a second ask closes it);
 /// B531: the on-screen pad's chat button asks with 3 (opens the box, or brings the phone's keyboard back while it's open).
 pub static ASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
-/// B512: the menus showed this frame (`main_menu::online::poll` sets it, [`input`] takes it): no quick-chat phrases.
-pub static MENUS: AtomicBool = AtomicBool::new(false);
 
 /// The on-screen pad's chat button is up: wherever chat is on, the box open or not (B531); a tap on it stores 3 in
 /// [`ASK`].
@@ -67,8 +63,8 @@ pub static TOUCH: AtomicBool = AtomicBool::new(false);
 /// B449: the last two lines heard (who, words; a note's who is empty), kept after they fade, for the lobby's chat box.
 pub static RECENT: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
-/// B449: the lobby drew its chat box this frame: the lines show there, not at the bottom left (the box and the phrase
-/// still do, while typing).
+/// B449: the lobby drew its chat box this frame: the lines show there, not at the bottom left (the input line still
+/// does, while typing).
 pub static BOXED: AtomicBool = AtomicBool::new(false);
 
 /// `text` as a chat line: control and bidi-override characters out, spaces trimmed, at most [`MAX`] characters;
@@ -103,8 +99,6 @@ struct Chat {
     /// The keyboard's box is open, with what's typed so far.
     open: bool,
     draft: String,
-    /// The pads' phrase shown, and how long until it closes.
-    phrase: Option<(usize, f32)>,
     /// Who has said something (peer → name), and the peers muted.
     names: BTreeMap<String, String>,
     muted: BTreeSet<String>,
@@ -114,12 +108,6 @@ struct Chat {
 impl Chat {
     fn note(&mut self, text: &str) {
         self.lines.push(Line { name: String::new(), text: text.into(), age: 0.0 });
-    }
-
-    /// The phrases, then Mute/Unmute for each player heard.
-    fn phrases(&self) -> Vec<String> {
-        let mute = self.names.iter().map(|(p, n)| format!("{} {n}", if self.muted.contains(p) { "Unmute" } else { "Mute" }));
-        PHRASES.iter().map(|p| p.to_string()).chain(mute).collect()
     }
 
     /// Mute (or unmute) peer `peer`.
@@ -179,17 +167,14 @@ fn sample(mut chat: ResMut<Chat>) {
     ];
     chat.open = how == "open";
     chat.draft = if chat.open { "sure, best of three".into() } else { String::new() };
-    chat.phrase = (how == "phrase").then_some((3, PICK));
 }
 
 /// The lines heard, and this machine's typing: while the box is open the keyboard's keys are the box's alone.
-#[allow(clippy::too_many_arguments)]
 fn input(
     net: Option<Res<Net>>,
     mut chat: ResMut<Chat>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut typed: MessageReader<KeyboardInput>,
-    pads: Query<&Gamepad>,
     time: Res<Time<Real>>,
     mut was: Local<bool>,
 ) {
@@ -204,7 +189,7 @@ fn input(
         return phone(&mut was, false);
     };
     if !on {
-        (chat.open, chat.phrase) = (false, None);
+        chat.open = false;
         chat.draft.clear();
         net.chats();
         typed.clear();
@@ -218,7 +203,6 @@ fn input(
         }
     }
     let ask = ASK.swap(0, Ordering::Relaxed);
-    let menus = MENUS.swap(false, Ordering::Relaxed);
     #[cfg(target_arch = "wasm32")]
     let tapped = crate::web::chat_tapped() && !chat.open;
     #[cfg(not(target_arch = "wasm32"))]
@@ -269,27 +253,6 @@ fn input(
     }
     let open = chat.open;
     phone(&mut was, open);
-    // the pads: R2 shows / steps the phrases, L2 says the one shown (in a match only, B512)
-    let pads: Vec<_> = pads.iter().filter(|g| crate::seats::readable(g) && !menus).collect();
-    let next = pads.iter().any(|g| g.just_pressed(GamepadButton::RightTrigger2)) || ask == 2;
-    let say = pads.iter().any(|g| g.just_pressed(GamepadButton::LeftTrigger2));
-    let n = chat.phrases().len();
-    chat.phrase = match chat.phrase {
-        _ if menus => None,
-        _ if next => Some((chat.phrase.map_or(0, |(i, _)| (i + 1) % n), PICK)),
-        Some((i, _)) if say => {
-            match chat.names.keys().nth(i.wrapping_sub(PHRASES.len())).cloned() {
-                Some(peer) => {
-                    let on = !chat.muted.contains(&peer);
-                    chat.mute(&peer, on);
-                }
-                None => chat.say(&net, PHRASES[i]),
-            }
-            None
-        }
-        Some((i, left)) => (left > dt).then_some((i, left - dt)),
-        None => None,
-    };
 }
 
 /// The phone's keyboard (the browser's code-entry input; the apps' system keyboard, [`OPEN`]) up while the box is
@@ -302,8 +265,8 @@ fn phone(was: &mut bool, on: bool) {
     }
 }
 
-/// The lines (fading), and the box or the phrase; sized on the 4:3 screen's height as the FPS counter
-/// (`graphics::fps_counter`), so they scale uniformly at any window shape.
+/// The lines (fading), and the input line; sized on the 4:3 screen's height as the FPS counter
+/// (`graphics::fps_counter`), never under [`LEAST`] px, so they scale uniformly at any window shape.
 fn draw(
     mut commands: Commands,
     net: Option<Res<Net>>,
@@ -353,12 +316,14 @@ fn draw(
     if place.top != top || place.bottom != bottom {
         (place.top, place.bottom) = (top, bottom);
     }
-    let tall = window.single().is_ok_and(|w| w.width() * 3.0 < w.height() * 4.0);
-    let px = |n: f32| if tall { bevy::text::FontSize::Vw(n / 448.0 * 75.0) } else { bevy::text::FontSize::Vh(n / 448.0 * 100.0) };
-    let val = |n: f32| if tall { Val::Vw(n / 448.0 * 75.0) } else { Val::Vh(n / 448.0 * 100.0) };
+    // B544: the 4:3 screen's height in logical px; the text at least [`LEAST`] px (a phone's), the rest in step
+    let screen = window.single().map_or(448.0, |w| w.height().min(w.width() * 0.75));
+    let k = (screen / 448.0).max(LEAST / SIZE);
+    let px = |n: f32| bevy::text::FontSize::Px(n * k);
+    let val = |n: f32| Val::Px(n * k);
     let start = chat.lines.len().saturating_sub(SHOWN);
     let shown = &chat.lines[start..];
-    let busy = chat.open || chat.phrase.is_some();
+    let busy = chat.open;
     for (row, mut text, mut font, mut colour, mut shadow, mut node, mut back) in &mut rows {
         let (s, alpha, c) = match row.0 {
             i if i < SHOWN => match shown.get(i) {
@@ -370,17 +335,15 @@ fn draw(
                 }
                 None => (String::new(), 0.0, Color::WHITE),
             },
-            // the box, or the pads' phrase
-            _ => match (chat.open, chat.phrase) {
-                (true, _) => (format!("Say: {}_", chat.draft), 1.0, Color::srgb(0.6, 1.0, 0.6)),
-                (_, Some((i, _))) => (format!("R2 next, L2 say: {}", chat.phrases()[i]), 1.0, Color::srgb(0.6, 1.0, 0.6)),
-                _ => (String::new(), 0.0, Color::WHITE),
-            },
+            // the input line
+            _ if chat.open => (format!("Say: {}_", chat.draft), 1.0, Color::srgb(0.6, 1.0, 0.6)),
+            _ => (String::new(), 0.0, Color::WHITE),
         };
         if text.0 != s {
             text.0 = s;
         }
-        let size = px(15.0);
+        // B544: smaller (was 15 on the 448)
+        let size = px(SIZE);
         if font.font_size != size {
             font.font_size = size;
         }
@@ -400,12 +363,16 @@ fn draw(
             back.0 = bc;
         }
         let display = if text.0.is_empty() || alpha <= 0.0 { Display::None } else { Display::Flex };
-        let (pad, radius, gap) = (UiRect::axes(val(7.0), val(2.0)), BorderRadius::all(val(7.0)), UiRect::bottom(val(3.0)));
+        let (pad, radius, gap) = (UiRect::axes(val(5.0), val(1.5)), BorderRadius::all(val(5.0)), UiRect::bottom(val(2.0)));
         if node.display != display || node.padding != pad || node.border_radius != radius || node.margin != gap {
             (node.display, node.padding, node.border_radius, node.margin) = (display, pad, radius, gap);
         }
     }
 }
+
+/// B544: the lines' text on the 4:3 screen's 448 lines, and its least size in logical px (still readable on a phone).
+const SIZE: f32 = 10.0;
+const LEAST: f32 = 11.0;
 
 /// The lines' backing at full strength (B398): dark, translucent enough to keep the screen under it.
 const BACKING: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
@@ -415,7 +382,7 @@ fn spawn(commands: &mut Commands) {
         position_type: PositionType::Absolute,
         left: Val::Percent(1.5),
         bottom: Val::Percent(18.0),
-        max_width: Val::Percent(48.0),
+        max_width: Val::Percent(36.0),
         flex_direction: FlexDirection::Column,
         ..default()
     };
@@ -431,7 +398,7 @@ fn spawn(commands: &mut Commands) {
 mod tests {
     use super::*;
 
-    /// The tests that run the plugin share its statics (`ASK`, `MENUS`, `BUTTON`...): one at a time.
+    /// The tests that run the plugin share its statics (`ASK`, `BUTTON`...): one at a time.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -470,31 +437,20 @@ mod tests {
         assert!(!app.world().resource::<Chat>().open);
     }
 
-    /// B512: in the menus a pad's R2 brings up no quick-chat phrase (in a match it does), and the lobby's Chat button
-    /// opens the typed box and, pressed again, closes it.
+    /// The lobby's Chat button opens the typed box and, pressed again, closes it.
     #[test]
-    fn no_quick_chat_in_the_menus() {
+    fn the_chat_button_toggles_the_box() {
         let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_message::<KeyboardInput>().init_resource::<ButtonInput<KeyCode>>().add_plugins(plugin);
         let (net, _rx) = Net::wired();
         net.enter_room();
         app.insert_resource(net);
-        // no InputPlugin: the press stays just pressed every frame
-        let mut g = Gamepad::default();
-        g.digital_mut().press(GamepadButton::RightTrigger2);
-        app.world_mut().spawn(g);
-        MENUS.store(true, Ordering::Relaxed);
         app.update();
-        assert_eq!(app.world().resource::<Chat>().phrase, None, "the lobby: no phrase");
-        app.update();
-        assert!(app.world().resource::<Chat>().phrase.is_some(), "a match: R2 shows a phrase");
         for want in [true, false] {
-            MENUS.store(true, Ordering::Relaxed);
             ASK.store(1, Ordering::Relaxed);
             app.update();
-            let chat = app.world().resource::<Chat>();
-            assert_eq!((chat.open, chat.phrase), (want, None), "the Chat button toggles the typed box");
+            assert_eq!(app.world().resource::<Chat>().open, want, "the Chat button toggles the typed box");
         }
     }
 

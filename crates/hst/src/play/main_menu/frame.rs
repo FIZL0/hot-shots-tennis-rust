@@ -81,6 +81,9 @@ const MODE_W: f32 = 160.0;
 const BACK_W: f32 = 170.0;
 const START_W: f32 = 340.0;
 const CHAT_MIN: f32 = 220.0;
+/// B544: the chat box's most width and its height (smaller than the row's buttons: it's a glance, not a control).
+const CHAT_MAX: f32 = 380.0;
+const CHAT_H: f32 = 40.0;
 /// The strip's cells' shares (Court, Umpire, Sets, Games, Mods / Handicap) and its least width.
 const GROW: [f32; 5] = [2.2, 1.6, 1.0, 1.0, 1.3];
 const STRIP_MIN: f32 = 680.0;
@@ -222,8 +225,19 @@ fn layout_in([l, t, r, b]: [f32; 4], spec: Spec, turned: bool) -> Geo {
     // the bottom row
     let back = [l, foot, x(BACK_W), y(FOOT_H)];
     let start = [r - x(START_W), foot, x(START_W), y(FOOT_H)];
-    let chat = if spec.chat { [back[0] + back[2] + x(12.0), foot, start[0] - x(12.0) - (back[0] + back[2] + x(12.0)), y(FOOT_H)] } else { [back[0] + back[2], foot, 0.0, 0.0] };
+    let chat = chat_box(back, start, spec.chat, &x, &y);
     Geo { k, s, turned, title, pill, code, copy, public, mode, stage, court, labels, vs, plates, strip, cells, back, chat, start }
+}
+
+/// B544: the chat box between Leave and Start: at most [`CHAT_MAX`] wide and [`CHAT_H`] high, centred in the gap
+/// (zero wide without one).
+fn chat_box(back: [f32; 4], start: [f32; 4], on: bool, x: &dyn Fn(f32) -> f32, y: &dyn Fn(f32) -> f32) -> [f32; 4] {
+    let (l, r) = (back[0] + back[2] + x(12.0), start[0] - x(12.0));
+    if !on {
+        return [back[0] + back[2], back[1], 0.0, 0.0];
+    }
+    let (w, h) = ((r - l).min(x(CHAT_MAX)), y(CHAT_H));
+    [l + (r - l - w) / 2.0, back[1] + (back[3] - h) / 2.0, w, h]
 }
 
 /// M121: the lobby's lower rows alone along the bottom of `reach`: the strip, then Leave, the chat box and Start, as
@@ -247,7 +261,7 @@ pub(super) fn foot([l, t, r, b]: [f32; 4], chat: bool) -> Geo {
     });
     let back = [l, foot, x(BACK_W), y(FOOT_H)];
     let start = [r - x(START_W), foot, x(START_W), y(FOOT_H)];
-    let chat = if chat { [back[0] + back[2] + x(12.0), foot, start[0] - x(12.0) - (back[0] + back[2] + x(12.0)), y(FOOT_H)] } else { [back[0] + back[2], foot, 0.0, 0.0] };
+    let chat = chat_box(back, start, chat, &x, &y);
     let none = [l, t, 0.0, 0.0];
     Geo { k, s: 1.0, turned: false, title: none, pill: none, code: none, copy: none, public: none, mode: none, stage, court: stage, labels: [none; 2], vs: none, plates: Vec::new(), strip, cells, back, chat, start }
 }
@@ -814,24 +828,25 @@ pub(super) fn chat(d: &mut Draw, g: &Geo, lines: &[(String, String)], sel: bool)
     if w <= 0.0 {
         return;
     }
-    rounded(d, g.chat, g.x(12.0), PANEL, 128.0);
+    rounded(d, g.chat, g.x(10.0), PANEL, 128.0);
     if sel {
-        focus(d, g.chat, g.x(12.0), g.x(4.0), g.x(3.0));
+        focus(d, g.chat, g.x(10.0), g.x(4.0), g.x(3.0));
     }
-    let size = g.y(14.0);
-    let pitch = size * 1.25 + g.y(2.0);
+    // B544: small, two lines in the box's 40
+    let size = g.y(12.0);
+    let pitch = size * 1.2 + g.y(1.0);
     let n = lines.len().min(2);
     let top = y + (h - pitch * n as f32) / 2.0;
     for (k, (who, words)) in lines.iter().rev().take(2).rev().enumerate() {
         let ly = top + pitch * k as f32;
-        let mut lx = x + g.x(16.0);
-        let room = w - g.x(32.0);
+        let mut lx = x + g.x(12.0);
+        let room = w - g.x(24.0);
         if !who.is_empty() {
             let ww = d.width(who, size).min(room * 0.5);
             super::left(d, who, lx, ly, size, ww, GOLD);
             lx += ww + g.x(6.0);
         }
-        let rest = ellipsis(d, words, size, x + w - g.x(16.0) - lx);
+        let rest = ellipsis(d, words, size, x + w - g.x(12.0) - lx);
         d.text(&rest, lx, ly, size, CHAT);
     }
 }

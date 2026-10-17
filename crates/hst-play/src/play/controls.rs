@@ -310,7 +310,7 @@ fn load(mut commands: Commands, args: Res<crate::Args>, pads: Option<ResMut<supe
     }
 }
 
-// What drives a seat and which pads are read: in hst-base (`Args` and the chat use them)
+// What drives a seat and which pads are read: in hst-base (`Args` uses them)
 pub use hst_base::seats::{Seat, readable};
 
 /// Controller slots 1P..4P: the gamepad entity holding each. A slot is kept while its pad stays connected.
