@@ -865,7 +865,7 @@ impl Menu {
         let [l, t, r, b] = self.grid.view;
         let band = online::band_h(self, r - l - 2.0 * roster::MARGIN * roster::PX);
         // M121: online, the lobby's strip and bottom row under them
-        let b = match self.online() {
+        let b = match self.online() || matches!(self.screen, Screen::Chars | Screen::Confirm) {
             true => {
                 let [_, y, _, h] = self.lobby_foot().stage;
                 y + h
@@ -2789,8 +2789,8 @@ fn drawn<'a>(m: &Menu, text: &'a Text, bind: &Bindings, pads: &[Entity], control
         }
         // the match starts from the confirm screen, which stays up under the switch's zoom-out
         // B451: the umpire picker over the players
-        Screen::Confirm if m.picking.is_some() && m.sel == 4 => umpire_picker::draw_over(&mut d, m, text, pads, hand_x),
-        Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, pads, hand_x),
+        Screen::Confirm if m.picking.is_some() && m.sel == 4 => umpire_picker::draw_over(&mut d, m, text, bind, pads),
+        Screen::Confirm | Screen::Playing => confirm(&mut d, m, text, bind, pads),
         Screen::Online | Screen::Lobbies | Screen::Lobby | Screen::Code => online::layout(&mut d, m, hand_x),
         Screen::Mods => mods_screen::layout(&mut d, m, hand_x),
         Screen::Extras => extras::layout(&mut d, m, hand_x),
@@ -2917,17 +2917,17 @@ fn left(d: &mut Draw, s: &str, x: f32, y: f32, size: f32, max: f32, rgb: [f32; 3
 
 /// The confirm screen (B397, `confirm.rs`); the court picker over its players (B450; opened from the lobby: over the
 /// lobby's), the umpire select as its own screen.
-fn confirm(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
+fn confirm(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
     match m.sel {
         1 if m.picking.is_some() => {
             if m.net.venue {
                 online::lobby_behind(d, &m.venue_under());
             } else {
-                confirm::draw(d, m, text, pads, hand_x);
+                confirm::draw(d, m, text, bind, pads);
             }
             court_picker::draw(d, m, text);
         }
-        _ => confirm::draw(d, m, text, pads, hand_x),
+        _ => confirm::draw(d, m, text, bind, pads),
     }
 }
 

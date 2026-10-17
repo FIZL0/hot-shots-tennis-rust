@@ -152,7 +152,7 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
         let Some(r) = rm else { break };
         hit(d, Item::Seat(i), rect, OK);
         if on(Item::Seat(i)) {
-            frame::focus(d, rect, 16.0 * PX, 4.0 * PX, 3.0 * PX);
+            frame::focus(d, rect, 14.0 * PX, 4.0 * PX, 3.0 * PX);
         }
         carried(d, m, r, i, rect, s);
     }

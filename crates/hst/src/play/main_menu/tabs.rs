@@ -614,9 +614,14 @@ mod tests {
         m.players[1] = super::super::Player::fresh();
         m.mods.truncate(3);
         m.mods.extend((0..8).map(|i| a_mod(i, "Hot Shots Golf Fore! 5")));
-        m.grid = Grid::fit_at(0.68, 1.2);
+        // a tall phone's height where the grid's last whole line is the heading
+        let fits = (100..160).map(|k| k as f32 / 100.0).find(|&h| {
+            m.grid = Grid::fit_at(0.68, h);
+            let v = m.view(0);
+            v.lines[v.end - 1] == Line::Head(1)
+        });
+        m.grid = Grid::fit_at(0.68, fits.expect("some height ends on the heading"));
         let v = m.view(0);
-        assert_eq!(v.lines[v.end - 1], Line::Head(1));
         let c = m.columns();
         let [_, gy, _, gh] = c.parts(0).grid;
         let first = flat(&v.secs, 1, 0);

@@ -159,11 +159,11 @@ pub(super) fn axes(m: &Menu) -> (bool, bool, bool) {
 }
 
 /// The picker over the screen it was opened from (the confirm screen's players, or the lobby's).
-pub(super) fn draw_over(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], hand_x: f32) {
+pub(super) fn draw_over(d: &mut Draw, m: &Menu, text: &Text, bind: &super::super::controls::Bindings, pads: &[Entity]) {
     if m.net.venue {
         super::online::lobby_behind(d, &m.lobby_under_umpire());
     } else {
-        super::confirm::draw(d, m, text, pads, hand_x);
+        super::confirm::draw(d, m, text, bind, pads);
     }
     // what the panel hides isn't drawn (the players' cards would take most of the menu's quad pool)
     let [px, py, pw, ph] = m.umpire_picker_geo().panel;

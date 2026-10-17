@@ -9,10 +9,19 @@
 use super::frame::{self, Cell, Chip, Plate, Spec, Thumb};
 use super::{CHAR_NAMES, CONFIRM_ROWS, Draw, Menu, Press, RANK_NAMES, SETS, Text, UMPIRES, Who};
 use super::pointer;
+use super::super::controls::Bindings;
 use bevy::prelude::{Entity, default};
 
 impl Menu {
     pub(super) fn confirm_geo(&self) -> frame::Geo {
+        if !self.online() {
+            // concept: local, the confirm screen is the select's columns with the lobby's strip and Start under them
+            let mut g = self.lobby_foot();
+            let c = self.columns();
+            g.plates = (0..c.n).map(|p| c.parts(p).card).collect();
+            frame::spread(&mut g, 4);
+            return g;
+        }
         let mut g = frame::layout(self.grid.reach(), Spec { n: self.players(), code: false, public: false, chat: false });
         // Handicap is hidden until handicaps work (B482; B40g1 brings it back)
         frame::spread(&mut g, 4);
@@ -45,7 +54,10 @@ pub(super) fn rects(m: &Menu) -> Vec<[f32; 4]> {
 }
 
 /// The confirm screen (the court and umpire selects open over it as their own screens).
-pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], _hand_x: f32) {
+pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: &[Entity]) {
+    if !m.online() {
+        return super::roster::chars(d, m, text, bind, pads);
+    }
     frame::ground(d);
     let g = m.confirm_geo();
     let picking = m.picking.is_some();
@@ -89,6 +101,49 @@ pub(super) fn draw(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], _hand_x
     }
 }
 
+/// Concept: the local select's foot, as the online lobby's: Court, Umpire, Sets, Games inline with Start. On the
+/// select it shows what's set and how many are ready; once everyone is (the confirm screen) the arrows reach it.
+pub(super) fn local_foot(d: &mut Draw, m: &Menu, text: &Text) {
+    let confirm = m.screen == super::Screen::Confirm;
+    let g = m.confirm_geo();
+    let on = |row: usize| confirm && m.picking.is_none() && m.sel == row;
+    if confirm && m.picking.is_none() && m.sel >= CONFIRM_ROWS && let Some(&rect) = g.plates.get(m.sel - CONFIRM_ROWS) {
+        frame::focus(d, rect, 14.0 * super::roster::PX, 4.0 * super::roster::PX, 3.0 * super::roster::PX);
+    }
+    if confirm {
+        for (p, &rect) in g.plates.iter().enumerate() {
+            d.hit(rect, pointer::Act::Row(CONFIRM_ROWS + p, pointer::OK));
+        }
+    }
+    let u = m.umpire as usize;
+    let umpire = match (u, m.umpire_mod_of(u)) {
+        (UMPIRES, _) => "Random".to_string(),
+        (_, Some(x)) => x.name.clone(),
+        _ => m.umpire_name(text, u),
+    };
+    let cells = [
+        Cell { label: "COURT", value: m.court_title(text, m.court), arrows: false, sel: on(1), thumb: Thumb::Court(m.court) },
+        Cell { label: "UMPIRE", value: umpire, arrows: false, sel: on(4), thumb: Thumb::Umpire(u) },
+        Cell { label: "SETS", value: SETS[m.sets].to_string(), arrows: true, sel: on(2), thumb: Thumb::None },
+        Cell { label: "GAMES", value: m.games.to_string(), arrows: true, sel: on(3), thumb: Thumb::None },
+    ];
+    frame::strip(d, m, &g, &cells);
+    let n = m.players();
+    let ready = (0..n).filter(|&p| m.players[p].ready).count();
+    if confirm {
+        for (row, cell) in [(1, 0), (4, 1), (2, 2), (3, 3)] {
+            d.hit(g.cells[cell], pointer::Act::Row(row, pointer::OK));
+        }
+        frame::start(d, &g, "Start", "Everyone ready", true, on(0));
+        d.hit(g.start, pointer::Act::Row(0, pointer::OK));
+        if m.picking.is_some() {
+            picked_cell(d, m, &g);
+        }
+    } else {
+        frame::start(d, &g, "Start", &format!("{ready} of {n} ready"), false, false);
+    }
+}
+
 /// Sets or Games picked (B212): its cell lit blue with ‹ › (each gone at its end, as the original's); the cell's
 /// thirds step it, the middle keeps it, a tap off puts it back (as ○).
 fn picked_cell(d: &mut Draw, m: &Menu, g: &frame::Geo) {
@@ -97,6 +152,7 @@ fn picked_cell(d: &mut Draw, m: &Menu, g: &frame::Geo) {
     }
     let (at, n) = if m.sel == 2 { (m.sets, SETS.len()) } else { (super::GAMES.iter().position(|&n| n >= m.games).unwrap_or(1), super::GAMES.len()) };
     let (cap, value) = if m.sel == 2 { ("SETS", SETS[m.sets].to_string()) } else { ("GAMES", m.games.to_string()) };
+    // the cells lie Court, Umpire, Sets, Games; the rows Start, Court, Sets, Games, Umpire
     let [x, y, w, h] = g.cells[m.sel];
     let lit = [x, y + g.y(2.0), w, h - g.y(4.0)];
     frame::rounded(d, lit, g.x(6.0), frame::hex(0x2f5f9d), 128.0);

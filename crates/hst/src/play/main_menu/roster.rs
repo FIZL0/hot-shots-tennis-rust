@@ -317,36 +317,28 @@ pub(super) fn ringed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rim: 
 /// whole arcs; each side's dashes are spread to end flush with them.
 pub(super) fn dashed(d: &mut Draw, [x, y, w, h]: [f32; 4], r: f32, t: f32, rgb: [f32; 3], fill: [f32; 3]) {
     let (dash, gap) = (10.0, 6.0);
-    let (tx, ty) = (t * PX, t * PY);
-    // the dashes along a side from `r` to `len - r` (`k` units to the axis'), first and last touching the corners
+    // the whole rim, rounded like a solid card's, then the gaps cut out of its straight runs in the fill (a corner
+    // drawn on its own can't: the UI clamps a radius to half its box)
+    rounded(d, [x, y, w, h], r, rgb, 128.0);
+    d.out.last_mut().unwrap().rim = t * PX;
+    // one unit past the rim inside, the fill under it either way
+    let (tx, ty) = ((t + 1.0) * PX, (t + 1.0) * PY);
+    // the gaps along a side between `r` and `len - r` (`k` units to the axis'), dashes at both ends
     let run = |d: &mut Draw, len: f32, k: f32, at: &dyn Fn(f32, f32) -> [[f32; 4]; 2]| {
         let span = len - 2.0 * r * k;
-        let n = ((span + gap * k) / ((dash + gap) * k)).floor().max(1.0);
-        let l = (dash * k).min(span);
-        let step = if n > 1.0 { (span - l) / (n - 1.0) } else { 0.0 };
-        let first = if n > 1.0 { r * k } else { r * k + (span - l) / 2.0 };
+        let n = ((span - dash * k) / ((dash + gap) * k)).floor().max(0.0);
+        if n < 1.0 {
+            return;
+        }
+        let g = (span - (n + 1.0) * dash * k) / n;
         for i in 0..n as usize {
-            for rect in at(first + step * i as f32, l) {
-                d.q(Tex::Solid, [0.0; 4], rect, rgb, 128.0);
+            for rect in at(r * k + dash * k + (dash * k + g) * i as f32, g) {
+                d.q(Tex::Solid, [0.0; 4], rect, fill, 128.0);
             }
         }
     };
     run(d, w, PX, &|s, l| [[x + s, y, l, ty], [x + s, y + h - ty, l, ty]]);
     run(d, h, PY, &|s, l| [[x, y + s, tx, l], [x + w - tx, y + s, tx, l]]);
-    // the corners: an arc of rim with the box's fill inside it
-    let (cw, ch) = (r * PX, r * PY);
-    for (c, [cx, cy]) in [[x, y], [x + w - cw, y], [x + w - cw, y + h - ch], [x, y + h - ch]].into_iter().enumerate() {
-        let mut round = [0.0; 4];
-        round[c] = cw;
-        d.q(Tex::Solid, [0.0; 4], [cx, cy, cw, ch], rgb, 128.0);
-        d.out.last_mut().unwrap().round = round;
-        // inside: inset `t` from the two outer sides
-        let ix = if c == 0 || c == 3 { cx + tx } else { cx };
-        let iy = if c < 2 { cy + ty } else { cy };
-        round[c] = (cw - tx).max(0.0);
-        d.q(Tex::Solid, [0.0; 4], [ix, iy, cw - tx, ch - ty], fill, 128.0);
-        d.out.last_mut().unwrap().round = round;
-    }
 }
 
 /// `s` cut to fit `max` wide at `size`, "..." where it was cut.
@@ -395,7 +387,7 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     // the top bar: the title (Back for the pointer, after the "<" `drawn` puts over it), the players and the mode
     let size = 30.0 * PY;
     // M121: online, the select is the lobby
-    let title = if m.online() { "Online lobby" } else { "Choose your player" };
+    let title = if m.online() { "Online lobby" } else if m.screen == super::Screen::Confirm { "Ready to play?" } else { "Choose your player" };
     d.outlined(|d| d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE));
     d.hit([l, t, d.width(title, size) + 40.0, TOP_BAR * PY], pointer::press(|k| k.back = true));
     if m.online() {
@@ -434,6 +426,7 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
         d.outlined(|d| d.label(&who, right - ww / 2.0, my + 8.0 * PY, ws, ww, WHITE));
     }
     let c = player_columns(d, m, text, bind, pads);
+    super::confirm::local_foot(d, m, text);
     names(d, m, &c);
 }
 
@@ -1047,11 +1040,6 @@ pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, 
             tx + d.width(&tag, big) + 10.0 * PX
         }
     };
-    // concept: the seat's name button (Start / Options / + / N) as a chip after its tag
-    let nx = match naming {
-        Some(b) => nx + chip(d, b, [nx, y + (h - 18.0 * PY) / 2.0], 18.0 * PY, WHITE) + 8.0 * PX,
-        None => nx,
-    };
     let (ss, sh) = (12.0 * PY, 20.0 * PY);
     let gh = 14.0 * PY;
     let gw = glyph.map_or(0.0, |(g, i)| gh * legend::glyph_aspect(g, i) + 4.0 * PX);
@@ -1067,6 +1055,24 @@ pub(super) fn band(d: &mut Draw, s: &Seat, [x, y, w, h]: [f32; 4], solid: bool, 
         sx - 8.0 * PX
     } else {
         x + w - 8.0 * PX - if drop { 30.0 } else { 0.0 }
+    };
+    // concept: the seat's name button (Start / Options / + / N) in a pill like the costume's: [N] Name
+    let end = match naming {
+        Some(b) => {
+            let (ts, gh, ph) = (13.0 * PY, 18.0 * PY, 26.0 * PY);
+            let pw = 8.0 * PX + chip_w(d, b, gh) + 6.0 * PX + d.width("Name", ts) + 10.0 * PX;
+            if end - pw - nx < 48.0 * PX {
+                end
+            } else {
+                let (px, py) = (end - pw, y + (h - ph) / 2.0);
+                let grey = hex(look::GREY);
+                look::outlined_pill(d, [px, py, pw, ph], grey, 2.0);
+                let cw = chip(d, b, [px + 8.0 * PX, py + (ph - gh) / 2.0], gh, WHITE);
+                d.text("Name", px + 8.0 * PX + cw + 6.0 * PX, py + (ph - ts) / 2.0, ts, WHITE);
+                px - 8.0 * PX
+            }
+        }
+        None => end,
     };
     let room = (end - nx).max(10.0);
     let (ns, ds) = (20.0 * PY, 12.0 * PY);
