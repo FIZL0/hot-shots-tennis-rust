@@ -109,9 +109,12 @@ pub fn latest() -> Option<String> {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             let api = std::env::var("HST_UPDATE_API").unwrap_or_else(|_| "https://api.github.com/repos/FIZL0/opentennis/releases/latest".into());
             loop {
+                let asked = std::time::SystemTime::now();
                 match ours {
                     Ok(v) => match rt.block_on(check(&api, v, ASSET)) {
                         Ok(f) => {
+                            // in the log (a phone's hst-log.txt): whether this check saw the new release
+                            bevy::log::info!("update check: {}", f.as_ref().map_or(format!("{v} is the latest"), |f| format!("{} is out", f.tag)));
                             let now = f.is_some() && std::env::var_os("HST_UPDATE_NOW").is_some();
                             STATE.lock().unwrap().found = f;
                             if now {
@@ -126,9 +129,13 @@ pub fn latest() -> Option<String> {
                         Err(e) => bevy::log::info!("update check: {e}"),
                     },
                 }
-                // B567: [`recheck`] wakes it early (a phone app comes back from the background: iOS resumes it for days
-                // rather than starting it again, and a suspended app's half hour can be hours)
-                std::thread::park_timeout(std::time::Duration::from_secs(30 * 60));
+                // B567: half an hour by the wall clock, not one 30-minute sleep: a phone keeps the app suspended for
+                // hours or days and a sleep's clock stops meanwhile, so a resumed app asked again only after half an
+                // hour more of use (a 1.0 IPA opened on a phone after 1.1.0 came out didn't offer it); [`recheck`]
+                // wakes it at once when the app comes back to the foreground
+                while !due(asked, std::time::SystemTime::now()) && !WOKE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::park_timeout(std::time::Duration::from_secs(5));
+                }
             }
         });
         let _ = CHECKER.set(t.thread().clone());
@@ -143,15 +150,25 @@ pub fn latest() -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 static CHECKER: std::sync::OnceLock<std::thread::Thread> = std::sync::OnceLock::new();
+#[cfg(not(target_arch = "wasm32"))]
+static WOKE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// B567: the app came back to the foreground: check again now rather than at the half hour.
 pub fn recheck(mut life: bevy::prelude::MessageReader<bevy::window::AppLifecycle>) {
     if life.read().any(|l| *l == bevy::window::AppLifecycle::WillResume) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(t) = CHECKER.get() {
+            WOKE.store(true, std::sync::atomic::Ordering::Relaxed);
             t.unpark();
         }
     }
+}
+
+/// Whether the next check is due: half an hour after the last one `asked` by the wall clock (which keeps counting
+/// while a phone has the app suspended, and a clock set back to before it counts as due).
+#[cfg(not(target_arch = "wasm32"))]
+fn due(asked: std::time::SystemTime, now: std::time::SystemTime) -> bool {
+    now.duration_since(asked).map_or(true, |d| d >= std::time::Duration::from_secs(30 * 60))
 }
 
 /// The commit the "Beta" release was built from (GitHub's API asks for a User-Agent).
@@ -607,6 +624,17 @@ PGdwmy/sa9Kqh1f1dYqI+JP0Iweg2dLM/mEgnRNTVfsQ9pI1u5aeusKILuRdn61QcyAsnzeOSfS5RRAE
         }
         assert!(!newer("beta", "v0.1.0") && !newer("v0.1.0", "beta") && !newer("v1.2", "v1.0.0"));
         assert!(newer("1.0.0", "v0.9.9"));
+    }
+
+    /// B567: a check is due half an hour after the last by the wall clock, however long a phone kept the app
+    /// suspended in between; a clock set back counts as due.
+    #[test]
+    fn checks_again_half_an_hour_later_by_the_wall_clock() {
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+        let min = |m: u64| std::time::Duration::from_secs(60 * m);
+        assert!(!due(t, t) && !due(t, t + min(29)));
+        assert!(due(t, t + min(30)) && due(t, t + min(7 * 60)));
+        assert!(due(t, t - min(1)));
     }
 
     #[test]

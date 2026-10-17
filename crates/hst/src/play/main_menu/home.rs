@@ -333,6 +333,8 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         Row::Extras => "Donate: what building OpenTennis has taken so far, and a link to support my work on Ko-fi.".into(),
         Row::Update if cfg!(target_arch = "wasm32") => "A new version is out. Refresh loads this page again with it; your settings and mods stay.".into(),
         Row::Update if crate::update::installs() => "A new version is out. Update downloads it, checks its signature and restarts the game into it; your settings and mods stay.".into(),
+        Row::Update if cfg!(target_os = "ios") => "A new version is out. Download opens its release page: install its .ipa over this app the way you installed this one (AltStore, Sideloadly...); your disc, settings and mods stay.".into(),
+        Row::Update if cfg!(target_os = "android") => "A new version is out. Download opens its release page: install its .apk over this app; your disc, settings and mods stay.".into(),
         Row::Update => "A new version is out. Download opens its release page: replace this game with the new build and keep your settings and mods folders next to it.".into(),
         Row::Quit if cfg!(target_arch = "wasm32") => "Leave the game for the launcher page: your disc, settings, mods and files. Play there comes back here.".into(),
         Row::Quit => "Close the game.".into(),
@@ -366,6 +368,8 @@ fn preview(d: &mut Draw, m: &Menu, text: &Text, r: Row, pads: usize, [x, y, w, h
         }
         Row::Update if cfg!(target_arch = "wasm32") => vec![("Refresh", "Reloads this page".into()), ("Keeps", "Settings, mods, ISO".into())],
         Row::Update if crate::update::installs() => vec![("Update", "Download, check, restart".into()), ("Keeps", "Settings, mods, ISO".into())],
+        Row::Update if cfg!(target_os = "ios") => vec![("Download", "GitHub release page".into()), ("Install", ".ipa over this app".into())],
+        Row::Update if cfg!(target_os = "android") => vec![("Download", "GitHub release page".into()), ("Install", ".apk over this app".into())],
         Row::Update => vec![("Download", "GitHub release page".into()), ("Builds", "Linux, Windows".into())],
         Row::Settings => vec![("Pages", options::tabs_shown().len().to_string()), ("Texture replacements", on(m.settings.0[0])), ("Menu music", on(m.settings.0[1]))],
         Row::Extras => match super::extras::stats() {
