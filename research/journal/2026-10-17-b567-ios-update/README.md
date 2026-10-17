@@ -11,3 +11,7 @@ can be hours and an app opened before 1.1.0 never asks again.
 Fix: the checker parks (`park_timeout`) instead of sleeping; `update::recheck` (Last, every platform) unparks it on
 `AppLifecycle::WillResume`. Not verified on a device (no iPhone here); `hst-log.txt` in Files → OpenTennis shows
 an `update check:` line if the request itself fails.
+
+Follow-up (user's hst-log.txt, 2026-10-17 17:00): the phone was already on the v1.1.0 release IPA ("Hot Shots
+Tennis 1.1.0 (build 3238)"; the published 1.0.0 IPA is build 3079, 1.1.0's is 3238), so there was nothing newer to
+offer, and the log has no `update check:` error. The resume re-check stays: it's still right for an app left open.
