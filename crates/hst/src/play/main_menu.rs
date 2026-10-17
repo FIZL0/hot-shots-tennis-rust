@@ -654,6 +654,9 @@ impl Default for Menu {
 /// Rows per screen (the main screen's: `Menu::main_rows`).
 const CONFIRM_ROWS: usize = 5;
 
+/// The system bank's cue for a device joining the roster (not the select cue, key 2).
+const JOIN_SOUND: u8 = 3;
+
 /// What a step asks of the app.
 #[derive(Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)] // `Online`'s network command, as `online::Fx`: a step's effects live for one frame
@@ -1101,10 +1104,7 @@ impl Menu {
         // B331: on a local roster the seat goes back to the computer, open to the next ✕
         self.seats[p] = if self.screen == Screen::Chars && !self.local_roster() { Some(Dev::Open) } else { None };
         self.unready(p);
-        // B361: down to two devices, a local roster goes back to singles
-        if self.local_roster() && self.doubles && self.humans() <= 2 {
-            self.swap_mode(false);
-        }
+        // a local roster stays doubles when a device leaves: only a third device joining changes the mode on its own
         true
     }
 
@@ -1437,7 +1437,7 @@ impl Menu {
                 if k.ok && !self.seats.contains(&Some(dev)) && let Some(p) = self.join_seat() {
                     self.seats[p] = Some(dev);
                     self.unready(p);
-                    out.push(Sound(2));
+                    out.push(Sound(JOIN_SOUND));
                     return out;
                 }
                 let Some(p) = self.driven(dev) else { return out };
@@ -3838,12 +3838,13 @@ mod tests {
         assert_eq!(m.screen, Screen::Chars);
         m.step(pad, ok); // the pad joins as 2P
         assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(pad), None, None]));
-        // B361: a third device makes it doubles (1P's partner, the pad across the net), leaving makes it singles again
+        // B361: a third device makes it doubles (1P's partner, the pad across the net); leaving keeps it doubles
         let pad2 = Dev::Pad(Entity::from_raw_u32(11).unwrap());
         m.step(pad2, ok);
         assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), Some(pad2), Some(pad), None]));
         m.step(pad2, press(|p| &mut p.back));
-        assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(pad), None, None]));
+        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), None, Some(pad), None]));
+        m.seats = [Some(Dev::Keys), Some(pad), None, None];
         // doubles with the pad as 1P's partner (a paused match's seats); B216: a computer player 1P picks for on 3P;
         // 4P stays open (its automatic pick)
         m.doubles = true;
@@ -4177,20 +4178,16 @@ mod tests {
         assert!(m.players[2].ready);
         m.step(pb, press(|p| &mut p.back)); // ready → picking again
         m.step(pb, press(|p| &mut p.back)); // ○ off its seat
-        // B361: two devices left, singles again: 2P (pa) 1P's opponent
-        assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(pa), None, None]));
-        assert!(m.players.iter().all(|p| !p.ready));
+        // down to two devices the roster stays doubles: pb's seat goes back to the computer
+        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), Some(pa), None, None]));
+        assert!(!m.players[2].ready);
         assert_eq!(m.driven(pb), None);
-        m.step(pb, ok); // the third device: doubles, pb 1P's partner, pa still across the net
-        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), Some(pb), Some(pa), None]));
+        m.step(pb, ok); // back into the free seat
+        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), Some(pa), Some(pb), None]));
         m.point(Dev::Keys, pointer::Act::Drop(1), true);
-        assert_eq!((m.doubles, m.seats), (false, [Some(Dev::Keys), Some(pa), None, None]));
-        m.step(pa, ok); // seated already: readies its own, doesn't take a seat
-        assert!(m.players[1].ready);
-        let keys2 = Dev::Pad(Entity::from_raw_u32(7).unwrap());
-        m.step(keys2, ok); // B361: joining makes it doubles, pa's pick stays ready
-        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), Some(keys2), Some(pa), None]));
-        assert!(m.players[2].ready && !m.players[1].ready);
+        assert_eq!((m.doubles, m.seats), (true, [Some(Dev::Keys), None, Some(pb), None]));
+        m.step(pb, ok); // seated already: readies its own, doesn't take a seat
+        assert!(m.players[2].ready);
         // 1P backing out of the roster: the main menu, the other seats freed
         m.step(Dev::Keys, press(|p| &mut p.back));
         assert_eq!((m.screen, m.seats), (Screen::Main, [Some(Dev::Keys), None, None, None]));
