@@ -642,8 +642,8 @@ fn step(
         return;
     }
     let sets = g.rules.sets.clamp(1, 3);
-    // M124: online too when this machine plays two seats, which can swap its pads
-    menu.local = net.as_ref().is_none_or(|np| np.lock.mine.len() > 1);
+    // M124: online too (concept: with any local player), its own seats only
+    menu.local = net.as_ref().is_none_or(|np| !np.lock.mine.is_empty());
     let n = options(menu.local).len();
     // B178: the confirm's pills are Yes and No
     let (ask, rows) = (menu.ask.is_some(), if menu.ask.is_some() { 2 } else { n });

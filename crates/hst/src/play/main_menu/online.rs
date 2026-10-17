@@ -219,6 +219,30 @@ impl Menu {
         if self.net.fit > 0 { n.min(self.net.fit) } else { n }
     }
 
+    /// Concept: the room seat another pad on this machine takes with ✕: the first open one (the host seats it there,
+    /// `Room::repick`), while this machine may bring another player.
+    pub(super) fn lobby_join_seat(&self) -> Option<usize> {
+        if !self.select_online() || !matches!(self.screen, Screen::Lobby | Screen::Chars) || self.net.edit.is_some() || self.counting() > 0 {
+            return None;
+        }
+        let mine = (0..4).filter(|&p| self.seats[p].is_some()).count();
+        if mine == 0 || mine >= self.local_max() {
+            return None;
+        }
+        self.net.room.as_ref()?.seats.iter().position(Option::is_none).filter(|&i| i < 4)
+    }
+
+    /// Concept: `dev` joins the lobby in [`Menu::lobby_join_seat`] and picks on the select.
+    pub(super) fn lobby_join(&mut self, dev: super::Dev, out: &mut Vec<Effect>) -> bool {
+        let Some(i) = self.lobby_join_seat() else { return false };
+        (self.seats[i], self.players[i], self.scroll[i]) = (Some(dev), default(), 0);
+        out.extend([Effect::Sound(2), Effect::Online(Fx::Net(Cmd::Picks(self.picks())))]);
+        if self.screen == Screen::Lobby {
+            self.go(Screen::Chars, out);
+        }
+        true
+    }
+
     /// This machine's players' picks, in seat order.
     fn picks(&self) -> Vec<Pick> {
         (0..self.players()).filter(|&p| self.seats[p].is_some()).map(|p| self.wire(p)).collect()
@@ -3088,6 +3112,12 @@ mod tests {
         assert_eq!(r.open(), 3);
         m.heard(Event::Room(r.clone()));
         assert_eq!((m.screen, m.doubles, m.players(), m.seats[0]), (Screen::Chars, true, 4, Some(dev)));
+        // concept: another pad's ✕ joins the first open seat, from the lobby onto the select
+        let mut join = m.clone();
+        join.screen = Screen::Lobby;
+        let fx = join.step(pad, ok);
+        assert_eq!((join.screen, join.seats[1]), (Screen::Chars, Some(pad)), "{fx:?}");
+        assert!(fx.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Picks(p))) if p.len() == 2)), "{fx:?}");
         let mut guest = m.clone();
         guest.net.hosting = false;
         // B522: a guest's □ is its team instead

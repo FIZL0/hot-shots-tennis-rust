@@ -444,6 +444,12 @@ impl Room {
     /// B195: `peer`'s chosen picks into the seats it holds (same count), its placeholders replaced; false (no
     /// change) if the count differs.
     fn repick(&mut self, peer: &str, picks: &[Pick]) -> bool {
+        // concept: one pick more than the seats held: another local player joined the lobby, into the first open seat
+        // (the app picks the same one, `Menu::lobby_join_seat`)
+        let held = self.seats.iter().flatten().filter(|s| s.peer == peer).count();
+        if held > 0 && picks.len() == held + 1 && let Some(i) = self.seats.iter().position(Option::is_none) {
+            self.seats[i] = Some(Seat { peer: peer.into(), pick: picks[0].clone() });
+        }
         let mut held: Vec<&mut Seat> = self.seats.iter_mut().flatten().filter(|s| s.peer == peer).collect();
         if held.len() != picks.len() || picks.is_empty() {
             return false;
@@ -3479,6 +3485,9 @@ mod tests {
         assert!(r.repick("g", &[Pick::disc(3, 1), Pick::disc(5, 0)]));
         let chars: Vec<_> = r.seats.iter().flatten().map(|s| s.pick.char).collect();
         assert_eq!((chars, r.picking.is_empty(), r.ready.is_empty(), r.ver), (vec![0, 3, 5], true, true, v + 1));
+        // a third local player joins: the first open seat
+        assert!(r.repick("g", &[Pick::disc(3, 1), Pick::disc(5, 0), Pick::disc(7, 0)]));
+        assert_eq!(r.seats.iter().map(|s| s.as_ref().map(|s| (s.peer.as_str(), s.pick.char))).collect::<Vec<_>>(), [Some(("host", 0)), Some(("g", 3)), Some(("g", 5)), Some(("g", 7))]);
     }
 
     /// Start's open seats go to random disc characters nobody holds, not always the first (Ashley).

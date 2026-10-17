@@ -1257,6 +1257,10 @@ impl Menu {
         if self.settings_step(dev, k, &mut out) {
             return out;
         }
+        // concept: another pad here joins the online lobby with ✕, into the open seat its card prompts
+        if k.ok && matches!(dev, Dev::Pad(_)) && !self.seats.contains(&Some(dev)) && self.lobby_join(dev, &mut out) {
+            return out;
+        }
         match self.screen {
             Screen::Main => {
                 let main = self.main_rows();

@@ -730,7 +730,7 @@ pub(super) fn open_line(m: &Menu) -> &'static str {
 
 fn compact_card(d: &mut Draw, m: &Menu, text: &Text, s: &Seat, card: [f32; 4], p: usize) {
     let Some(f) = m.card_facts(text, p) else {
-        return open_seat_saying(d, s, card, p, false, open_line(m));
+        return open_seat_saying(d, s, card, p, m.lobby_join_seat() == Some(p), open_line(m));
     };
     let [x, y, w, h] = card;
     let com = f.rank.is_some();
