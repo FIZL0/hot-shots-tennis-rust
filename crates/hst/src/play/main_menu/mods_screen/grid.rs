@@ -160,6 +160,8 @@ pub(super) struct Browse {
     pub wipe: Option<f32>,
     /// The made-up store of a `sample` screen: no picture is fetched (installed ones show the select's).
     pub offline: bool,
+    /// B566: the zips whose picture isn't in the cache (fetched in their turn, not looked for there again).
+    pub uncached: HashSet<String>,
 }
 
 /// A filter's or Show's option.
@@ -1194,6 +1196,8 @@ enum Face {
     Court(usize),
     Select((Tex, [f32; 4])),
     Initial(String, bool),
+    /// B566: nothing but the loading shimmer under it (no initial flashing before the picture comes)
+    Blank,
 }
 
 fn draw_face(d: &mut Draw, m: &Menu, f: &Face, [x, y, w, h]: [f32; 4], a: [f32; 3]) {
@@ -1207,6 +1211,7 @@ fn draw_face(d: &mut Draw, m: &Menu, f: &Face, [x, y, w, h]: [f32; 4], a: [f32; 
         Face::Court(c) => super::super::court_picture(d, m, *c, [x, y, w, h]),
         Face::Select(f) => super::super::face_frame(d, *f, x + w / 2.0, y + h / 2.0, h.min(w * PY / PX) * 0.9, WHITE),
         Face::Initial(c, dim) => d.centred(c, x + w / 2.0, y + h / 2.0 - h * 0.2, h * 0.4, if *dim { look::c(look::RULE) } else { a }),
+        Face::Blank => {}
     }
 }
 
@@ -1225,7 +1230,8 @@ fn entry_face(m: &Menu, e: &Entry) -> (Face, bool) {
         _ if court(m, e).is_some() => Face::Court(court(m, e).unwrap_or_default()),
         _ => match face(m, e).filter(|_| state == Some(Pic::Missing)) {
             Some(f) => Face::Select(f),
-            None => initial(&e.meta.name, loading),
+            None if loading => Face::Blank,
+            None => initial(&e.meta.name, false),
         },
     };
     (f, loading)
@@ -2300,24 +2306,56 @@ pub(super) fn want(v: &mut View, l: &Lay, cap: usize) -> Vec<Entry> {
     if !v.grid() {
         return Vec::new();
     }
-    let tiles: Vec<Entry> = v.tiles().into_iter().cloned().collect();
-    let lines = lines(&v.secs(), l.cols);
-    let order = plan(&lines, v.top, l.fit(&lines, v.top), v.b.down);
     let asked = v.b.pics.values().filter(|p| **p == Pic::Asked).count();
-    let mut go = Vec::new();
-    for &i in &order {
-        let Some(e) = tiles.get(i) else { continue };
-        if e.meta.sha256.is_empty() || e.rev.starts_with("local:") || v.b.pics.contains_key(&e.meta.sha256) {
-            continue;
-        }
-        if asked + go.len() >= cap {
-            break;
-        }
+    let go: Vec<Entry> = unasked(v, l).into_iter().take(cap.saturating_sub(asked)).collect();
+    for e in &go {
         v.b.pics.insert(e.meta.sha256.clone(), Pic::Asked);
-        go.push(e.clone());
     }
     go
 }
+
+/// The tiles on view and the next screen (`plan`'s order) with no picture asked for yet.
+fn unasked(v: &View, l: &Lay) -> Vec<Entry> {
+    let tiles = v.tiles();
+    let lines = lines(&v.secs(), l.cols);
+    let order = plan(&lines, v.top, l.fit(&lines, v.top), v.b.down);
+    let mut seen = HashSet::new();
+    order.into_iter().filter_map(|i| tiles.get(i).copied()).filter(|e| !e.meta.sha256.is_empty() && !e.rev.starts_with("local:") && !v.b.pics.contains_key(&e.meta.sha256) && seen.insert(&e.meta.sha256)).cloned().collect()
+}
+
+/// B566: the cached pictures to show now, ahead of [`want`]'s fetches: of the tiles on view and the next screen
+/// without one, those `cached` has (its `modstore::cached_thumb`), at most every tile on view and [`READS`] more a
+/// frame. A cached picture so shows on the frame its tile does, not after the fetches before it (its tile flashing
+/// its loading face first); the ones not cached are remembered and wait for their fetch.
+pub(super) fn from_cache(v: &mut View, l: &Lay, mut cached: impl FnMut(&str) -> Option<Option<Vec<u8>>>) -> Vec<(Entry, Option<Vec<u8>>)> {
+    if !v.grid() {
+        return Vec::new();
+    }
+    let lines = lines(&v.secs(), l.cols);
+    let mut budget = l.laid(&lines, v.top).1.len() + READS;
+    let mut out = Vec::new();
+    for e in unasked(v, l) {
+        if budget == 0 {
+            break;
+        }
+        if v.b.uncached.contains(&e.meta.sha256) {
+            continue;
+        }
+        match cached(&e.meta.sha256) {
+            Some(png) => {
+                budget -= 1;
+                out.push((e, png));
+            }
+            None => {
+                v.b.uncached.insert(e.meta.sha256.clone());
+            }
+        }
+    }
+    out
+}
+
+/// B566: the cached pictures read a frame past the ones on view.
+const READS: usize = 8;
 
 /// The loaded pictures to drop: past [`KEEP`], the ones not on view or the next screen.
 pub(super) fn evict(v: &mut View, l: &Lay) -> Vec<u32> {
@@ -2341,6 +2379,8 @@ pub(super) fn evict(v: &mut View, l: &Lay) -> Vec<u32> {
 
 /// A picture came back for the zip `sha`: shown in slot `slot` (its width over height), or none.
 pub(super) fn got(v: &mut View, sha: String, pic: Option<(u32, f32)>) {
+    // (kept in the cache now: read from there if it's dropped and wanted again)
+    v.b.uncached.remove(&sha);
     v.b.pics.insert(sha, pic.map_or(Pic::Missing, |(s, a)| Pic::Shown(s, a)));
 }
 
