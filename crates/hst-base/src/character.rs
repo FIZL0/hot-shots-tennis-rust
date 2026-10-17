@@ -145,6 +145,12 @@ pub struct Feet {
     pub toes: [usize; 2],
     /// Per foot its thigh and calf, when the leg is thigh → calf → foot (else that foot isn't bent to the ground).
     pub legs: [Option<(usize, usize)>; 2],
+    /// Per joint, the foot (0 left, 1 right) whose subtree it is in.
+    pub sides: Vec<Option<usize>>,
+    /// Per foot, the ankle (bind space) and the turn about it that `mods::level_feet` took out of its binds (the
+    /// donor's bind frame, then the sole laid flat): a mod's own clips key the foot in the costume's own frame, so
+    /// [`Feet::unturn`] puts it back while one draws.
+    pub turn: [(Vec3, Quat); 2],
 }
 
 /// One foot's chain worked out by [`Feet::chains`]: the costume's foot (position, rotation) in the drawn pose, and
@@ -201,6 +207,32 @@ impl Feet {
             let donor = (dp + dq * theirs[0]).y.max((dtp + dtq * theirs[1]).y);
             Chain { at: p, turn: q, low, tip, donor, donor_turn: [dq, dtq] }
         }))
+    }
+
+    /// Undo `u` (0 none, 1 all) of the binds' turn in the drawn pose `local`, for a mod's own clip (B563): each
+    /// foot joint drawn turned by its bind's conjugate of the turn back, so its skinning is the unturned bind's.
+    pub fn unturn(&self, joints: &[Joint], local: &mut [(Quat, Vec3)], u: f32) {
+        if u <= 0.0 {
+            return;
+        }
+        // per joint in a foot: inverse_bind · turn⁻ᵘ · inverse_bind⁻¹ (in its own frame)
+        let fix = |j: usize| -> Option<Mat4> {
+            let (a, q) = self.turn[self.sides.get(j).copied().flatten()?];
+            let back = Mat4::from_translation(a) * Mat4::from_quat(Quat::IDENTITY.slerp(q, u)) * Mat4::from_translation(-a);
+            let ib = joints[j].inverse_bind;
+            Some(ib * back * ib.inverse())
+        };
+        let fixes: Vec<Option<Mat4>> = (0..joints.len().min(local.len())).map(fix).collect();
+        for (j, f) in fixes.iter().enumerate() {
+            let Some(f) = f else { continue };
+            let (r, t) = local[j];
+            let mut m = Mat4::from_scale_rotation_translation(joints[j].rest.scale, r, t) * *f;
+            if let Some(p) = joints[j].parent.and_then(|p| fixes[p]) {
+                m = p.inverse() * m;
+            }
+            let (_, r, t) = m.to_scale_rotation_translation();
+            local[j] = (r.normalize(), t);
+        }
     }
 
     /// Test only: per foot the donor's sole low and the costume's in pose `local`, whatever the clip.
@@ -1122,6 +1154,13 @@ pub fn animate(
                 lift += (c.lift(&rig.data, feet, other) - lift) * w;
             }
             feet.plant(&rig.data.joints, clip, &mut drawn, lift);
+            // a mod's own clip keys the foot in the costume's own frame: its binds' turn undone (B563)
+            let own = |c: &Clip| rig.data.visual.values().any(|v| std::ptr::eq(v, c)) as u8 as f32;
+            let u = match over {
+                Some((other, _, w)) => own(clip) + (own(other) - own(clip)) * w,
+                None => own(clip),
+            };
+            feet.unturn(&rig.data.joints, &mut drawn, u);
         }
         for (j, joint) in rig.data.joints.iter().enumerate() {
             let (Ok(mut tf), Some(&(rotation, translation))) = (joints.get_mut(rig.joints[j]), drawn.get(j)) else { continue };

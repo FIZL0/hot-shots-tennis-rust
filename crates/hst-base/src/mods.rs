@@ -994,7 +994,7 @@ fn level_feet(joints: &mut [Joint], sides: &[Option<usize>], soles: &[Vec<(Vec3,
             Some((rest, t, bone))
         })
         .collect();
-    let mut feet = Vec::new();
+    let (mut feet, mut turns) = (Vec::new(), Vec::new());
     let mut legs = [None; 2];
     let mut toes = [0; 2];
     // the stance's joints in the world (rotation, translation), the costume's own rests where it keys nothing
@@ -1023,6 +1023,7 @@ fn level_feet(joints: &mut [Joint], sides: &[Option<usize>], soles: &[Vec<(Vec3,
         let toe = joints[t].inverse_bind.inverse().w_axis.truncate();
         let (_, want, _) = bind(df).to_scale_rotation_translation();
         let back = (Mat4::from_translation(ankle) * Mat4::from_quat(want * rot.inverse()) * Mat4::from_translation(-ankle)).inverse();
+        turns.push((ankle, want * rot.inverse()));
         for j in (0..joints.len()).filter(|&j| sides[j] == Some(side)) {
             joints[j].inverse_bind *= back;
         }
@@ -1055,6 +1056,9 @@ fn level_feet(joints: &mut [Joint], sides: &[Option<usize>], soles: &[Vec<(Vec3,
                 for j in (0..joints.len()).filter(|&j| sides[j] == Some(side)) {
                     joints[j].inverse_bind *= fix;
                 }
+                // B563's turn to undo: this one (about the ankle, in bind space) on top of `back`'s
+                let (_, br, _) = b.to_scale_rotation_translation();
+                turns[side].1 = (br * x.to_scale_rotation_translation().1 * br.inverse()).inverse() * turns[side].1;
                 // the heel and toe in the foot's frame, after the turn
                 // the tip: the frontmost vertex within 40 mm of the sole
                 let tip = pts.iter().copied().filter(|p| p.y > o.y - 0.04).max_by(|a, b| along(*a).total_cmp(&along(*b))).unwrap_or(o);
@@ -1069,7 +1073,7 @@ fn level_feet(joints: &mut [Joint], sides: &[Option<usize>], soles: &[Vec<(Vec3,
         let thigh = calf.and_then(|c| joints[c].parent);
         legs[side] = thigh.zip(calf).filter(|(t, c)| joints[*t].name.ends_with("Thigh") && joints[*c].name.ends_with("Calf"));
     }
-    let mut out = character::Feet { root, donor, feet: [feet[0], feet[1]], toes, legs };
+    let mut out = character::Feet { root, donor, feet: [feet[0], feet[1]], toes, legs, sides: sides.to_vec(), turn: [turns[0], turns[1]] };
     // the donor's sole is on the ground in its stance: its sole points moved to meet it there
     if let Some(c) = stand {
         let mut local = Vec::new();
@@ -2232,6 +2236,56 @@ mod tests {
         }
         eprintln!("{} of {n} costumes of {} mods load", n - bad, dirs.len());
         assert_eq!(bad, 0);
+    }
+
+    /// B563: while a mod's own clip draws, each foot joint skins as with its unturned bind (the costume's own
+    /// frame, which the clip keys), and a donor clip still with B543's turned one.
+    #[test]
+    fn own_clips_skin_the_feet_unturned() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods/fore_pc21_hubert");
+        let (Ok(mut iso), Ok(m)) = (Iso::open(ISO), read(&dir)) else { return eprintln!("no ISO or mods/hst-mods/fore_pc21_hubert, skipped") };
+        let mut s = Stores(default(), default(), default(), default());
+        let c = load(&mut iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let f = c.feet.as_ref().unwrap();
+        let clip = &c.visual[&44];
+        let world = |local: &[(Quat, Vec3)]| {
+            let mut w: Vec<Mat4> = Vec::new();
+            for (j, joint) in c.joints.iter().enumerate() {
+                let l = Mat4::from_scale_rotation_translation(joint.rest.scale, local[j].0, local[j].1);
+                w.push(joint.parent.map_or(l, |p| w[p] * l));
+            }
+            w
+        };
+        let mut n = 0;
+        for i in 0..8 {
+            let mut pose = Vec::new();
+            character::pose_at(&c.joints, clip, clip.length * i as f32 / 8.0, &mut pose);
+            let raw = world(&pose);
+            let mut un = pose.clone();
+            f.unturn(&c.joints, &mut un, 1.0);
+            let un = world(&un);
+            for (j, side) in f.sides.iter().enumerate() {
+                let Some(side) = *side else { assert!(un[j].abs_diff_eq(raw[j], 1e-4), "joint {j} off the feet moved"); continue };
+                // the bind before level_feet turned it: inverse_bind · back⁻¹
+                let (a, q) = f.turn[side];
+                let unturned = c.joints[j].inverse_bind * Mat4::from_translation(a) * Mat4::from_quat(q) * Mat4::from_translation(-a);
+                let (want, got) = (raw[j] * unturned, un[j] * c.joints[j].inverse_bind);
+                // a vertex 30 cm out on the foot, skinned
+                for v in [Vec3::ZERO, Vec3::X * 0.3, Vec3::Y * 0.3, Vec3::Z * 0.3] {
+                    let p = c.joints[j].inverse_bind.inverse().transform_point3(v);
+                    let d = want.transform_point3(p).distance(got.transform_point3(p));
+                    assert!(d < 1e-3, "joint {} at {i}/8: {d} m off", c.joints[j].name);
+                }
+                n += 1;
+            }
+        }
+        assert!(n > 0);
+        // a donor clip draws untouched
+        let mut pose = Vec::new();
+        character::pose_at(&c.joints, &c.motions[&0], 0.0, &mut pose);
+        let mut same = pose.clone();
+        f.unturn(&c.joints, &mut same, 0.0);
+        assert_eq!(pose, same);
     }
 
     /// The lowest point (game space, y down: the largest y) of each foot's heel (vertices mostly on `Bip01?Foot`)
