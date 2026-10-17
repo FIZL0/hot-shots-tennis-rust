@@ -59,7 +59,8 @@ async function visit(n, pick) {
   // a headless tab starts out hidden (rAF at 1 Hz) until it's activated
   await ok('browsingContext.activate', { context: ctx });
   if (pick) {
-    for (let i = 0; i < 100 && !(await evaluate("!document.getElementById('disc')?.hidden")); i++) await sleep(200);
+    // M107: the site's text shows from the start; wait for site.js's picker handler, not just a visible #disc
+    for (let i = 0; i < 100 && !(await evaluate("!document.getElementById('disc')?.hidden && !!document.getElementById('iso')?.onchange")); i++) await sleep(200);
     const el = (await ok('script.evaluate', { expression: "document.getElementById('iso')", target: { context: ctx }, awaitPromise: false, resultOwnership: 'root' })).result;
     await ok('input.setFiles', { context: ctx, element: { sharedId: el.sharedId }, files: [resolve(iso)] });
     for (let i = 0; i < 600; i++) {

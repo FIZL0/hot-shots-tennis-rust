@@ -124,6 +124,9 @@ pub struct CharacterData {
     pub visual: HashMap<usize, Clip>,
     /// A mod's feet, set down where the donor's are (B543, looks only): see [`Feet`].
     pub feet: Option<Feet>,
+    /// B556: an online mod: the cameras frame it on its gameplay clips ([`framed`](Self::framed)), as every peer has
+    /// them, whether or not it has the looks (`visual` differs, and the camera decides the match's draws).
+    pub frame_gameplay: bool,
 }
 
 /// A mod's feet against its donor's (B543, looks only). The donor's clips bind to the costume's own bone lengths
@@ -327,6 +330,11 @@ impl CharacterData {
     /// The clip drawn for motion `id`: the mod's own if it has one, else the gameplay clip.
     pub fn drawn(&self, id: usize) -> Option<&Clip> {
         self.visual.get(&id).or_else(|| self.motions.get(&id))
+    }
+
+    /// The clip a camera frames motion `id` by: the one drawn, but an online mod's gameplay clip (`frame_gameplay`).
+    pub fn framed(&self, id: usize) -> Option<&Clip> {
+        if self.frame_gameplay { self.motions.get(&id) } else { self.drawn(id) }
     }
 }
 
@@ -667,7 +675,7 @@ pub fn load_disc_with(
     // the game binds a face track to the target of the same name; others are dropped
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions_with(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name), only)?;
     let binds = part_skins(&joints, &parts, meshes, bindposes);
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: model.morph_names.clone(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new(), feet: None })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: model.morph_names.clone(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new(), feet: None, frame_gameplay: false })
 }
 
 /// The node names of disc character `n`'s body model (costume 0; every costume shares the skeleton).
@@ -916,6 +924,7 @@ pub fn load_npc(
         texture_face: None,
         visual: HashMap::new(),
         feet: None,
+        frame_gameplay: false,
     })
 }
 

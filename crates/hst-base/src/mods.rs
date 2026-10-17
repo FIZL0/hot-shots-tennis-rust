@@ -1227,7 +1227,7 @@ pub fn load_with(
     let binds = crate::character::part_skins(&joints, &parts, meshes, bindposes);
     let springs = crate::spring::masses(&nodes, &joints);
     let noise = (!swaying.is_empty() || !springs.is_empty()).then(|| std::sync::Arc::new(crate::noise::Costume { deformers, parts: swaying, springs }));
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: names, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual, feet })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: names, faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face, visual, feet, frame_gameplay: false })
 }
 
 /// `mod.json`'s `disc_racket` (§6, M1r): the disc character (0..13) whose racket it holds when it ships no

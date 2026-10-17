@@ -682,9 +682,9 @@ impl Menu {
                 continue;
             };
             // B370: the hand toggle too, so the lobby's card and preview follow it
-            let (char, costume, ready, id, swap) = match r.live_of(i).filter(|_| s.human()) {
-                Some(l) => (l.char, l.costume, l.ready, l.r#mod.clone(), l.swap),
-                None => (s.pick.char, s.pick.costume, !r.picking.contains(&s.peer), s.pick.r#mod.as_ref().map(|w| w.id.clone()), s.pick.swap),
+            let (char, costume, ready, id, swap, random) = match r.live_of(i).filter(|_| s.human()) {
+                Some(l) => (l.char, l.costume, l.ready, l.r#mod.clone(), l.swap, l.random),
+                None => (s.pick.char, s.pick.costume, !r.picking.contains(&s.peer), s.pick.r#mod.as_ref().map(|w| w.id.clone()), s.pick.swap, s.pick.random),
             };
             let mut pl = super::Player { cursor: super::GRID.iter().position(|g| g.0 == char).unwrap_or(0), costume, ready, swap, ..default() };
             match id.map(|id| self.mods.iter().position(|m| m.id == id)) {
@@ -693,8 +693,8 @@ impl Menu {
                 Some(None) => pl.costume = 0,
                 None => {}
             }
-            // a computer added on Random stays on it when the host picks for it again
-            pl.random = !s.human() && s.pick.random;
+            // a peer's Random card (live as they pick, then their pick's), and a computer added on Random stays on it
+            pl.random = random;
             self.players[i] = pl;
         }
     }
@@ -2871,9 +2871,11 @@ fn launch(menu: &Menu, room: Room, me: String, gamepads: &Query<(Entity, &Gamepa
         });
         let iso = w.resource::<crate::Args>().iso.clone();
         let mode = crate::play::netplay::mode(crate::match_mode(&iso, &flags, back), net, room, me);
+        // B550: their costumes loaded in the background from here, as the disc characters
+        let early_mods = crate::online_mod_lineup(&iso, &flags, &mm);
         let mode = if mm.0.is_empty() { mode } else { mode.and(move |app| {
             app.insert_resource(mm);
-        }) };
+        }).early(move |w| crate::preload::mods(w, &iso, &early_mods)) };
         w.insert_resource(crate::mode::Next(Some(mode)));
     });
 }
@@ -3786,14 +3788,19 @@ mod tests {
         (h.net.me, h.net.go, h.seats[0]) = ("host".into(), Some(Go::Host), Some(super::super::Dev::Keys));
         h.net.room.as_mut().unwrap().live.insert("k51qzi5uqu5d".into(), vec![Live { char: 1, swap: true, ..Default::default() }]);
         h.align();
-        assert!(h.players[1].swap && !h.players[2].swap);
+        assert!(h.players[1].swap && !h.players[2].swap && !h.players[1].random);
+        // the guest on the Random card: the host's lobby shows Random, not the card under it
+        h.net.room.as_mut().unwrap().live.insert("k51qzi5uqu5d".into(), vec![Live { char: 1, random: true, ..Default::default() }]);
+        h.align();
+        assert!(h.players[1].random);
         // readied: the pick carries it
         let r = h.net.room.as_mut().unwrap();
         r.live.remove("k51qzi5uqu5d");
-        r.seats[1].as_mut().unwrap().pick.swap = true;
+        let pick = &mut r.seats[1].as_mut().unwrap().pick;
+        (pick.swap, pick.random) = (true, true);
         h.players[1].swap = false;
         h.align();
-        assert!(h.players[1].swap);
+        assert!(h.players[1].swap && h.players[1].random);
     }
 
     /// B522: a guest's □ moves its player to the other team (on the roster and in the lobby, the legend saying so);

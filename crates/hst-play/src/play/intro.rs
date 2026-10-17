@@ -3,7 +3,7 @@
 //! held still meanwhile, the way the pause screen holds it (its flare ticks were drawn at setup), so the intro
 //! never touches the sim or its RNG; ✕ skips the flyover (the rest of the intro then runs `SKIPPED` ticks; ✕ does
 //! nothing after the flyover). Over the flyover the court's title plate (`plate`): name, surface and ball ratings
-//! top left, "✕ Skip" bottom right, the score panel, balloons and markers hidden till the intro ends. Its last
+//! top left, Skip in the key legend, the score panel, balloons and markers hidden till the intro ends. Its last
 //! `BANNER` ticks show the "Start the Match!" banner over the match camera (the INPANE model with the "N Sets N
 //! Games" pill and "Set 1"). Its sounds
 //! (`sounds`): the court's BGM (with `--music`) from the intro's start, running on into the match; the gallery's
@@ -138,7 +138,7 @@ struct BannerSlot(usize);
 
 pub fn plugin(app: &mut App) {
     app.add_systems(PostStartup, (start.after(super::setup), system_bank.after(start)))
-        .add_systems(Update, (draw_plate, sounds))
+        .add_systems(Update, (draw_plate, sounds, legend))
         .add_systems(PostUpdate, hide_hud.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate))
         .add_systems(RunFixedMainLoop, hold.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop))
         .add_systems(Update, show.after(crate::character::animate)) // after the match camera, as the ceremony (B246)
@@ -385,9 +385,8 @@ const SURFACE: [[u8; 3]; 3] = [[41, 120, 25], [114, 72, 31], [26, 100, 127]];
 
 /// The title plate on intro frame `f` (drawn from 1) for a court's plate row (surface, ball ratings): a dark bar
 /// across the top at half alpha, the name fading in over 15 frames, its underline, the tinted surface label and the
-/// two rows of 4 balls (bright up to the rating, dark after); once the name is in, "✕ Skip" bottom right, its glow
-/// blinking every 15 frames. The plate keeps its distance from the left edge as a whole, the bar spans the window
-/// and "✕ Skip" keeps to the right edge.
+/// two rows of 4 balls (bright up to the rating, dark after). The plate keeps its distance from the left edge as a
+/// whole, the bar spans the window. The original's "✕ Skip" is our key legend's (`legend`).
 fn plate([surface, a, b]: [u8; 3], f: u32) -> Vec<Quad> {
     let fade = 16u32.saturating_sub(f) as i32;
     let alpha = (128 - fade * 128 / 15).max(0) as u8;
@@ -408,14 +407,15 @@ fn plate([surface, a, b]: [u8; 3], f: u32) -> Vec<Quad> {
             q.push((0, [u, 0.0, 24.0, 21.0], [x + 48.0 + 24.0 * i as f32, 52.0, 24.0, 21.0], on, l));
         }
     }
-    if f >= 16 {
-        if (f - 16) / 15 % 2 == 1 {
-            q.push((2, [144.0, 160.0, 32.0, 32.0], [512.0, 400.0, 32.0, 32.0], on, Anchor::Sides));
-        }
-        q.push((2, [224.0, 96.0, 32.0, 32.0], [512.0, 400.0, 32.0, 32.0], on, Anchor::Sides));
-        q.push((0, [0.0, 72.0, 80.0, 32.0], [544.0, 400.0, 80.0, 32.0], on, Anchor::Sides));
-    }
     q
+}
+
+/// ✕ Skip in the key legend once the plate's name is in, while the flyover runs (the original's own bottom-right prompt).
+fn legend(intro: Option<Res<Intro>>, last: Res<super::legend::Last>, mut out: ResMut<super::legend::Legend>) {
+    use super::legend::{Act, item};
+    if intro.is_some_and(|i| i.showing() && i.at >= 16) {
+        out.one(*last, vec![item(Act::Ok, "Skip", &["Enter", "J"])]);
+    }
 }
 
 fn draw_plate(
@@ -518,13 +518,11 @@ mod tests {
         let bright = |x0: f32| q.iter().filter(|q| q.2[0] >= x0 && q.2[0] < x0 + 96.0 && q.1[0] == 184.0).count();
         assert_eq!((bright(240.0), bright(400.0)), (2, 4));
         assert_eq!(q[5].3, [41, 120, 25, 128]);
-        let skip = |f| plate([0, 2, 4], f).iter().filter(|q| q.0 == 2).count();
-        assert_eq!([skip(15), skip(16), skip(30), skip(31), skip(45), skip(46)], [0, 1, 1, 2, 2, 1]);
         assert!(plate([0, 2, 4], 31).len() <= 20);
     }
 
     /// 16:9: the bar spans the window, the plate keeps its 4:3 distance from the left edge (the right-hand balls
-    /// too), "Skip" keeps its 16 px from the right edge.
+    /// too).
     #[test]
     fn pinned_16_9() {
         let q = plate([0, 2, 4], 40);
@@ -532,8 +530,6 @@ mod tests {
         assert_eq!(at(&q[0]), (0.0, 100.0));
         let ball = q.iter().find(|q| q.2[0] == 472.0).unwrap();
         assert!((at(ball).0 - 472.0 / 6.4 * 0.75).abs() < 1e-4);
-        let (l, w) = at(q.last().unwrap());
-        assert!((100.0 - l - w - 16.0 / 6.4 * 0.75).abs() < 1e-4);
     }
 
     #[test]

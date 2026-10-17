@@ -1,4 +1,5 @@
 <!-- What's new since the last release, for players, in plain English: one "- " line per change. tools/release.sh puts this in the release and empties it. -->
+- Matches with mod characters start more smoothly: their models load in the background while the menu fades out, instead of freezing the first frames of the match.
 - On iPhone and iPad Safari, the website shows how to add OpenTennis to your home screen so the game plays full screen.
 - The website's "Pick your ISO" button at the top now opens the file picker straight away.
 - Online lobbies show how far along a download of another player's mod is, instead of a message that never changes.
@@ -45,5 +46,8 @@
 - Mod characters no longer bob up and down when they walk or run, and their character select pictures are drawn again so they match how they look in a match.
 - The match results screen shows only the usual button legend along the bottom, no more PlayStation-style ✕ Continue / Score Screen prompts above it.
 - Mod characters now cheer (or groan) in their own voice at the end-of-match trophy ceremony instead of staying silent.
-- Holding an emote key (or a pad button bound to one) plays the emote once instead of repeating it; press again for another.
 - Controllers screen: the selected seat has a pointing hand and a clear ring, the cards are smaller, the keyboard can take over player 1 from a controller or join any empty seat (Enter or a click on it), and the Start button in the corner is gone (Start is in the key bar).
+- Holding an emote key, the right stick or a button bound to an emote plays the emote once instead of repeating it; press or flick again for another.
+- The court intro before the first point shows Skip in the usual button legend instead of a PlayStation ✕ in the corner.
+- Online lobby: a player sitting on the Random card shows as Random to everyone, not as the character under it.
+- Online: matches no longer go out of sync when a player couldn't download a mod character's looks, and the red and yellow landing markers no longer vanish after a resync.

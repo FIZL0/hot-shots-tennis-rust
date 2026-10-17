@@ -57,19 +57,21 @@ fn setup(mut commands: Commands, args: Res<Args>) {
 
 /// Bone `name`'s world matrix with the player's motion `id` as drawn at time `t` (clamped to its length), the player
 /// standing at `pos`. Drawn (B502): a mod's own clip for the motion (its reactions 0x2c..0x2f can face up to half a
-/// turn from the donor's the game plays), else the gameplay clip, so a shot frames the body on screen.
+/// turn from the donor's the game plays), else the gameplay clip, so a shot frames the body on screen. Online, a mod's
+/// gameplay clip (B556, `CharacterData::framed`): the camera decides the match's draws (`reaction_voices`), and a peer
+/// without the mod's looks draws its donor.
 pub(super) fn bone(p: &Player, data: &CharacterData, id: usize, t: f32, pos: [f32; 4], name: &str) -> Option<M4> {
     let sk = &data.skeleton;
-    let c = data.drawn(id)?;
+    let c = data.framed(id)?;
     let n = sk.names.iter().position(|s| s == name)?;
     let mut m = player_matrix(p);
     m[3] = pos;
     Some(node_world(sk, &c.locals(sk, t.min(c.length)), n, &m))
 }
 
-/// The time on the clock of the clip drawn for `m`: a mod's own clip runs on `Motion::drawn`, else the gameplay clock.
+/// The time on the clock of the clip framed for `m`: a mod's own clip runs on `Motion::drawn`, else the gameplay clock.
 pub(super) fn drawn_time(data: &CharacterData, m: &Motion) -> f32 {
-    if data.visual.contains_key(&m.id) { m.drawn.sampled } else { m.clock.sampled }
+    if !data.frame_gameplay && data.visual.contains_key(&m.id) { m.drawn.sampled } else { m.clock.sampled }
 }
 
 /// Player `i`'s head and Spine2 as their reaction will leave them `t` frames in (as drawn: a mod's own clip starts

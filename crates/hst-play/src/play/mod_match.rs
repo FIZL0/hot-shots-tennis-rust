@@ -26,11 +26,11 @@ pub(super) fn load(
 ) -> Arc<CharacterData> {
     let mut d = if m.costumes.is_empty() {
         // an online mod whose looks this machine declined (M2i): the plain donor (B489: no recolour)
-        crate::character::load_disc(iso, m.donor, outfit, meshes, materials, images, bindposes)
+        crate::preload::load_disc(iso, m.donor, outfit, meshes, materials, images, bindposes)
             .or_else(|_| crate::character::load_disc(iso, m.donor, 0, meshes, materials, images, bindposes))
             .unwrap_or_else(|e| panic!("mod {} stand-in: {e}", m.id))
     } else {
-        mods::load(iso, m, outfit % m.costumes.len(), meshes, materials, images, bindposes).unwrap_or_else(|e| panic!("mod {}: {e}", m.id))
+        crate::preload::load_mod(iso, m, outfit % m.costumes.len(), meshes, materials, images, bindposes).unwrap_or_else(|e| panic!("mod {}: {e}", m.id))
     };
     if let Some(sk) = &m.skeleton {
         // online: every peer poses the owner's skeleton for the game (contacts, toss, body hits), whatever it draws
@@ -39,6 +39,8 @@ pub(super) fn load(
             d.visual = std::mem::take(&mut d.motions);
         }
         (d.motions, d.paths, d.pelvis, d.arm, d.stance_ball, d.skeleton) = (mo.motions, mo.paths, mo.pelvis, mo.arm, mo.stance_ball, (**sk).clone());
+        // B556: what it draws differs by peer, so the cameras frame it as the game plays it
+        d.frame_gameplay = true;
     }
     Arc::new(d)
 }
