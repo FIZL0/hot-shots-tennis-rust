@@ -137,6 +137,20 @@ if (!('game' in document.documentElement.dataset))
   #copysheet button.done { background: #555; color: #fff; }
   /* M16: the Mods screen's Add mod row (web.rs mod_picker): a tap on it is the file input's own */
   #modzip { position: fixed; z-index: 5; opacity: 0; cursor: pointer; }
+  /* B539: iPhone Safari in the browser (not the home-screen app) has no Fullscreen API for pages; the one way to lose its
+     bars is a swipe that scrolls the page, so there the page is a little taller than the screen and scrolls up and
+     down (the canvas, fixed, stays put and still takes no pans) and #swipe asks for that swipe while the bars show */
+  html.swipe { height: auto; overflow: visible; }
+  html.swipe body { height: calc(var(--app-h, 100dvh) + 240px); overflow: visible; }
+  html.swipe, html.swipe body, #swipe, #swipe * { touch-action: pan-y; }
+  #swipe { position: fixed; left: 0; top: 0; width: var(--app-w, 100vw); height: var(--app-h, 100dvh); z-index: 15;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .5em; padding: 16px;
+    box-sizing: border-box; background: #000b; color: #fff; text-align: center; }
+  #swipe[hidden] { display: none; }
+  #swipe b { font-size: 22px; }
+  #swipe .hand { font-size: 44px; animation: swipe-up 1.4s ease-in-out infinite; }
+  #swipe small { color: #bbb; max-width: 26em; }
+  @keyframes swipe-up { from { transform: translateY(24px); opacity: 0; } 30% { opacity: 1; } to { transform: translateY(-24px); opacity: 0; } }
   /* B298: Firefox/Zen notice, a tap closes it */
   #gecko { position: fixed; top: 0; left: 0; right: 0; z-index: 40; padding: .6em 16px; background: #333e; color: #fff;
     text-align: center; font-size: 14px; cursor: pointer; }
@@ -460,7 +474,9 @@ if (answer) {
       root.setProperty('--app-w', w + 'px');
       root.setProperty('--app-h', h + 'px');
     }
-    if (scrollX || scrollY) scrollTo(0, 0);
+    // B539: iPhone Safari's swipe-up mode keeps its scroll (that's what hides the bars)
+    const keep = document.documentElement.classList.contains('swipe');
+    if (scrollX || (scrollY && !keep)) scrollTo(0, keep ? scrollY : 0);
   };
   // after a turn every frame for 2 s (B438: the canvas follows the screen as soon as the browser has the new size,
   // not at the next of a few fixed times), and still a few times after in case frames stop (a hidden page)
@@ -478,6 +494,41 @@ if (answer) {
   document.addEventListener('visibilitychange', () => document.hidden || settle());
   settle();
 }
+</script>
+<script>
+// B539: full screen in iPhone Safari's browser tab. Pages get no Fullscreen API there (touch.js's first-tap request
+// does nothing) and `minimal-ui` is long gone; what still works is Safari's own: a swipe that scrolls the page down
+// hides the bars (fully in landscape, down to the small address pill in portrait). So while the game (not the site)
+// is up the page is scrollable (`html.swipe`) and, while it sits at the top with the bars out, #swipe covers the game
+// asking for one swipe up, and names Add to Home Screen as the way to play with no bars at all. A tap on it closes it
+// until the next turn of the phone. `navigator.standalone` is iOS Safari's own (false in the tab, true when started
+// from the home screen); iPad has the Fullscreen API, so it's iPhone only.
+if (navigator.standalone === false && /iPhone|iPod/.test(navigator.userAgent)) addEventListener('DOMContentLoaded', () => {
+  const html = document.documentElement;
+  const el = document.body.appendChild(document.createElement('div'));
+  el.id = 'swipe';
+  el.hidden = true;
+  el.innerHTML = '<div class="hand">☝︎</div><b>Swipe up for full screen</b>'
+    + '<small>Safari hides its bars when the page scrolls. For no bars at all: Share → Add to Home Screen. Tap to play as is.</small>';
+  let closed = false, moved = false;
+  el.addEventListener('touchstart', () => { moved = false; }, { passive: true });
+  el.addEventListener('touchmove', () => { moved = true; }, { passive: true });
+  el.addEventListener('click', () => { if (!moved) { closed = true; update(); } });
+  const site = () => !('game' in html.dataset) && document.getElementById('disc')?.hidden === false;
+  const update = () => {
+    const on = !site() && !document.fullscreenElement && !document.webkitFullscreenElement;
+    html.classList.toggle('swipe', on);
+    el.hidden = !on || closed || scrollY > 0;
+  };
+  for (const e of ['scroll', 'resize', 'pageshow']) addEventListener(e, update, { passive: true });
+  visualViewport?.addEventListener('resize', update);
+  const turned = () => { closed = false; update(); };
+  addEventListener('orientationchange', turned);
+  screen.orientation?.addEventListener?.('change', turned);
+  // the site closes without an event of its own
+  new MutationObserver(update).observe(document.getElementById('disc') ?? html, { attributes: true, attributeFilter: ['hidden'] });
+  update();
+});
 </script>
 <script>
 // Boot status and errors on the page instead of a silent black screen. A Rust panic logs its message with
