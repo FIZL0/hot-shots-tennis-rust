@@ -941,6 +941,8 @@ pub enum Event {
     Datagram(String, Vec<u8>),
     /// In the lobby: a mod's looks (`Cmd::Want`): its hash and the pack, as received (unchecked).
     Pack(u64, Vec<u8>),
+    /// B537: a mod's looks on their way here: its hash, the bytes in so far and the pack's length.
+    Progress(u64, u64, u64),
     /// M20: another peer's chat line (sender's peer, name, text), cleaned by the host. `Net::poll` keeps these for
     /// `Net::chats`.
     Chat { from: String, name: String, text: String },
@@ -1469,19 +1471,45 @@ enum Guest {
     Datagram(String, String, Vec<u8>),
     /// A mod's looks from its owner: hash, pack.
     Pack(u64, Vec<u8>),
+    /// B537: how far a mod's looks from its owner are (hash, bytes so far, length).
+    Progress(u64, u64, u64),
 }
 
-/// Mod packs (M2i) go on their own uni streams, one each: the hash (u64 LE), then the pack. Each received one goes to
-/// `out` as it was sent.
-async fn read_packs(c: Conn, out: impl Fn(u64, Vec<u8>)) {
+/// Mod packs (M2i) go on their own uni streams, one each: the hash (u64 LE), the pack's length (u64 LE, B537), then
+/// the pack. Each received one goes to `out` as it was sent; `got` hears how far one is (hash, bytes so far, length),
+/// once per whole percent.
+async fn read_packs(c: Conn, out: impl Fn(u64, Vec<u8>), got: impl Fn(u64, u64, u64)) {
     // ponytail: QUIC only; the browser's LAN (M2k) gets stand-ins, add a pack channel to rtc.rs if wanted
     #[allow(irrefutable_let_patterns)]
     let Conn::Quic(c) = c else { return };
+    let mut buf = vec![0u8; 64 << 10];
     while let Ok(mut r) = c.accept_uni().await {
-        if let Ok(b) = r.read_to_end(crate::mods_online::CAP + 8).await
-            && b.len() >= 8
-        {
-            out(u64::from_le_bytes(b[..8].try_into().unwrap()), b[8..].to_vec());
+        let mut head = [0u8; 16];
+        if r.read_exact(&mut head).await.is_err() {
+            continue;
+        }
+        let h = u64::from_le_bytes(head[..8].try_into().unwrap());
+        let n = u64::from_le_bytes(head[8..].try_into().unwrap());
+        if n > crate::mods_online::CAP as u64 {
+            let _ = r.stop(0u32.into());
+            continue;
+        }
+        let mut b = Vec::with_capacity(n as usize);
+        let mut said = None;
+        got(h, 0, n);
+        while let Ok(Some(k)) = r.read(&mut buf).await {
+            b.extend_from_slice(&buf[..k]);
+            if b.len() as u64 > n {
+                break;
+            }
+            let pct = b.len() as u64 * 100 / n.max(1);
+            if said != Some(pct) {
+                said = Some(pct);
+                got(h, b.len() as u64, n);
+            }
+        }
+        if b.len() as u64 == n {
+            out(h, b);
         }
     }
 }
@@ -1492,6 +1520,7 @@ fn send_pack(c: &Conn, h: u64, b: std::sync::Arc<Vec<u8>>) {
     n0_future::task::spawn(async move {
         if let Ok(mut s) = c.open_uni().await {
             let _ = s.write_all(&h.to_le_bytes()).await;
+            let _ = s.write_all(&(b.len() as u64).to_le_bytes()).await;
             let _ = s.write_all(&b).await;
             let _ = s.finish();
         }
@@ -1548,7 +1577,8 @@ async fn guest(gtx: amp::UnboundedSender<Guest>, peer: String, conn: Conn, link:
         return;
     };
     let g = gtx.clone();
-    n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(g.send(Guest::Pack(h, b)))));
+    let p = gtx.clone();
+    n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(g.send(Guest::Pack(h, b))), move |h, got, n| drop(p.send(Guest::Progress(h, got, n)))));
     let _ = gtx.send(Guest::In { peer: peer.clone(), name, picks, build, link, conn, courts, device });
     loop {
         tokio::select! {
@@ -1973,6 +2003,8 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     }
                     packs.insert(h, b);
                 }
+                // B537: the host's own wait for a guest's mod shows how far it is
+                Guest::Progress(h, got, n) if wants.get(&h).is_some_and(|w| w.iter().any(|p| p == "host")) => cx.say(Event::Progress(h, got, n)),
                 Guest::Said(peer, Msg::Chat { text, .. }) => chat(cx, &peer, &text, &room.names, &joined, &mut rates),
                 Guest::Said(peer, Msg::Emote { seat, dir }) => emote(cx, &peer, seat, dir, &room, &joined, &mut emoted),
                 // M95: a guest's input changed (shown only: no relisting, no ready reset)
@@ -1994,7 +2026,7 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         waiting.retain(|p| *p != peer);
                     }
                 }
-                Guest::Said(..) | Guest::Datagram(..) | Guest::Pack(..) => {}
+                Guest::Said(..) | Guest::Datagram(..) | Guest::Pack(..) | Guest::Progress(..) => {}
                 Guest::Gone(peer) => {
                     recent.remove(&peer);
                     if !joined.iter().any(|(p, ..)| *p == peer) {
@@ -2257,7 +2289,7 @@ async fn relay(cx: &Ctx, mut room: Room, mut joined: Vec<(String, Link, Conn)>, 
                         send_datagram(&c, &from, &data);
                     }
                 }
-                Guest::Said(..) | Guest::Pack(..) => {}
+                Guest::Said(..) | Guest::Pack(..) | Guest::Progress(..) => {}
             },
             c = cmds.recv() => match c {
                 Some(Cmd::Send(Msg::Lobby(r))) => {
@@ -2530,7 +2562,8 @@ async fn join_as(cx: &Ctx, code: &str, mut picks: Vec<Pick>, cmds: &mut amp::Unb
     cx.say(Event::Me(me.clone()));
     let Inbox { msgs: mut inbox, mut dgrams } = inbox;
     let ev = cx.ev.clone();
-    n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(ev.send(Event::Pack(h, b)))));
+    let p = cx.ev.clone();
+    n0_future::task::spawn(read_packs(conn.clone(), move |h, b| drop(ev.send(Event::Pack(h, b))), move |h, got, n| drop(p.send(Event::Progress(h, got, n)))));
     let mut seated = false;
     let mut playing = false;
     // B114: connected but no seat from the host by then: give up instead of "Joining..." for ever
@@ -3943,6 +3976,9 @@ mod tests {
             let (_, w) = seen.mods().next().expect("the mod's wire");
             assert_eq!((w.looks, w.dir.is_none(), &w.names), (h, true, &wire.names));
             gcmd.send(Cmd::Want(h)).unwrap();
+            // B537: how far it is, the whole of it last, then the pack
+            let n = pack.len() as u64;
+            assert_eq!(next(&gev, |e| matches!(e, Event::Progress(_, got, _) if got > &0)).await, Event::Progress(h, n, n));
             assert_eq!(next(&gev, |e| matches!(e, Event::Pack(..))).await, Event::Pack(h, pack));
             // the host's court mod, the same way
             assert_eq!(seen.court_mod.as_ref().map(|c| (c.looks, c.dir.is_none())), Some((hc, true)));
