@@ -122,6 +122,74 @@ pub struct CharacterData {
     /// A mod's own clips (standard §6 `motions`), by motion number, drawn in place of `motions`' but never read by
     /// gameplay: each plays at its own length on `Motion::drawn`, so timing, events and the sim stay the donor's.
     pub visual: HashMap<usize, Clip>,
+    /// A mod's feet, set down where the donor's are (B543, looks only): see [`Feet`].
+    pub feet: Option<Feet>,
+}
+
+/// A mod's feet against its donor's (B543, looks only). The donor's clips bind to the costume's own bone lengths
+/// (`ClipTrack::scale`) and hips, so a costume whose legs are long or short for its Bip01 height stands in the court
+/// or above it. Each drawn frame the root moves up or down so the costume's lower foot meets the ground where the
+/// donor's lower foot would: the same rotations on the donor's own skeleton.
+#[derive(Clone, Debug)]
+pub struct Feet {
+    /// `Bip01`, the skeleton's root.
+    pub root: usize,
+    /// Per joint of the costume, the donor's joint of that name: its rest rotation and translation, and its bone
+    /// over the costume's (what a keyed position scales by).
+    pub donor: Vec<Option<(Quat, Vec3, f32)>>,
+    /// Per foot: `Bip01?Foot`, then the heel and toe on the ground at rest in the foot's frame, the costume's (in
+    /// its drawn frame, `mods::level_feet`) and the donor's.
+    pub feet: [(usize, [Vec3; 2], [Vec3; 2]); 2],
+}
+
+impl Feet {
+    /// How far to move the root down (game y) in the drawn pose `local` (each joint's rotation and translation)
+    /// of `clip`; 0 for the costume's own clips (bound unscaled).
+    pub fn lift(&self, joints: &[Joint], clip: &Clip, local: &[(Quat, Vec3)]) -> f32 {
+        // per joint whether the clip keys its rotation and its position
+        let mut keyed = vec![(false, false); joints.len()];
+        let mut own = true;
+        for (k, t) in clip.tracks.iter().enumerate() {
+            if let Some(o) = keyed.get_mut(t.node) {
+                let (r, p) = clip.keys(k);
+                *o = (r > 0, p > 0);
+                own &= t.scale == 1.0;
+            }
+        }
+        if own {
+            return 0.0;
+        }
+        let (mut low, mut donor) = (f32::MIN, f32::MIN);
+        for &(f, sole, theirs) in &self.feet {
+            let mut chain = vec![f];
+            while let Some(u) = joints[*chain.last().unwrap()].parent {
+                chain.push(u);
+            }
+            let (mut q, mut p, mut dq, mut dp) = (Quat::IDENTITY, Vec3::ZERO, Quat::IDENTITY, Vec3::ZERO);
+            for &j in chain.iter().rev() {
+                let (r, t) = local[j];
+                p += q * t;
+                q *= r;
+                let (rd, td) = match self.donor[j] {
+                    Some((rest, at, bone)) => (if keyed[j].0 { r } else { rest }, if keyed[j].1 { t * bone } else { at }),
+                    None => (r, t),
+                };
+                dp += dq * td;
+                dq *= rd;
+            }
+            low = sole.iter().map(|s| (p + q * *s).y).fold(low, f32::max);
+            donor = theirs.iter().map(|s| (dp + dq * *s).y).fold(donor, f32::max);
+        }
+        donor - low
+    }
+}
+
+/// Disc character `n`'s body model (costume 0; every costume shares the skeleton).
+pub fn disc_body(iso: &mut Iso, n: usize) -> Result<mdl::Model, String> {
+    let data = iso.read(&format!("PC/PC{n:02}C00.XB")).map_err(|e| e.to_string())?;
+    let arc = Archive::parse(&data).map_err(|e| e.0)?;
+    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).ok_or("no body model")?;
+    mdl::parse(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)
 }
 
 /// A texture face (standard §4b): the face materials show the strongest channel's whole-face texture above 0.5,
@@ -589,7 +657,7 @@ pub fn load_disc_with(
     // the game binds a face track to the target of the same name; others are dropped
     let Motions { motions, paths, pelvis, arm, faces, stance_ball } = disc_motions_with(iso, n, &skeleton, |name| model.morph_names.iter().position(|m| m == name), only)?;
     let binds = part_skins(&joints, &parts, meshes, bindposes);
-    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: model.morph_names.clone(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new() })
+    Ok(CharacterData { joints, parts, racket, motions, paths, binds, pelvis, arm, morph_names: model.morph_names.clone(), faces, part_nodes, stance_ball, skeleton, noise, gs, texture_face: None, visual: HashMap::new(), feet: None })
 }
 
 /// The node names of disc character `n`'s body model (costume 0; every costume shares the skeleton).
@@ -600,13 +668,6 @@ pub fn disc_nodes(iso: &mut Iso, n: usize) -> Result<Vec<String>, String> {
 /// The morph targets of disc character `n`'s body model (costume 0).
 pub fn disc_morph_names(iso: &mut Iso, n: usize) -> Result<Vec<String>, String> {
     Ok(disc_body(iso, n)?.morph_names)
-}
-
-fn disc_body(iso: &mut Iso, n: usize) -> Result<mdl::Model, String> {
-    let data = iso.read(&format!("PC/PC{n:02}C00.XB")).map_err(|e| e.to_string())?;
-    let arc = Archive::parse(&data).map_err(|e| e.0)?;
-    let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).ok_or("no body model")?;
-    mdl::parse(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)
 }
 
 /// What a character takes from its disc motion set: the clips, root paths, pelvis rows, arm table, faces and the
@@ -844,6 +905,7 @@ pub fn load_npc(
         gs,
         texture_face: None,
         visual: HashMap::new(),
+        feet: None,
     })
 }
 
@@ -930,17 +992,28 @@ pub fn animate(
         c.arm(rig, motion.arm);
         let arm = c.arm.as_ref().filter(|_| motion.arm.is_some()).map_or(&[][..], |a| &a.1);
         let (pa, pb) = (&c.poses[k[0]].1, &c.poses[k[1]].1);
-        for (j, joint) in rig.data.joints.iter().enumerate() {
-            let Ok(mut tf) = joints.get_mut(rig.joints[j]) else { continue };
-            let ((qa, va), (qb, vb)) = (pa[j], pb[j]);
+        let mut drawn = std::mem::take(&mut c.drawn);
+        drawn.clear();
+        for (j, (&(qa, va), &(qb, vb))) in pa.iter().zip(pb).enumerate().take(rig.data.joints.len()) {
             let mut rotation = if f == 0.0 { qa } else { qa.slerp(qb, f) };
             // the contact IK turns the arm joints in their parents' frames (the game's local·Q, rows; translation kept)
             if let Some(q) = arm.iter().find(|a| a.0 == j).map(|a| a.1) {
                 rotation = (q * rotation).normalize();
             }
-            let to = Transform { translation: if f == 0.0 { va } else { va.lerp(vb, f) }, rotation, scale: joint.rest.scale };
-            tf.set_if_neq(to);
+            drawn.push((rotation, if f == 0.0 { va } else { va.lerp(vb, f) }));
         }
+        // a mod's feet on the ground where the donor's are (B543)
+        if let Some(feet) = &rig.data.feet
+            && drawn.len() == rig.data.joints.len()
+        {
+            let lift = feet.lift(&rig.data.joints, clip, &drawn);
+            drawn[feet.root].1.y += lift;
+        }
+        for (j, joint) in rig.data.joints.iter().enumerate() {
+            let (Ok(mut tf), Some(&(rotation, translation))) = (joints.get_mut(rig.joints[j]), drawn.get(j)) else { continue };
+            tf.set_if_neq(Transform { translation, rotation, scale: joint.rest.scale });
+        }
+        c.drawn = drawn;
     }
     let now = *frame;
     cache.retain(|_, c| c.frame == now);
@@ -954,6 +1027,8 @@ pub struct Posing {
     arm: Option<(([[f32; 4]; 4], u32, usize), Vec<(usize, Quat)>)>,
     face: Option<(usize, u32)>,
     frame: u32,
+    /// This frame's drawn pose (each joint's rotation and translation), kept for its allocation.
+    drawn: Vec<(Quat, Vec3)>,
 }
 
 /// What a sampled pose depends on: the character, the clip and its time, and the crossfade's clip, time and weight.
