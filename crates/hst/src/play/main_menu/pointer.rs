@@ -152,6 +152,17 @@ impl Menu {
             Act::Lobby(i, k) if tap => out = self.lobby_tap(i, k),
             Act::Lobby(..) => {}
             Act::Row(i, k) => {
+                // concept: the local select's court / umpire strip: a tap takes it (that device drives it with 1P's);
+                // hovering doesn't while it's not this device's
+                if !self.online() && (self.screen == Screen::Chars || self.screen == Screen::Confirm && !self.drives_foot(dev)) {
+                    if !tap || !(1..super::CONFIRM_ROWS).contains(&i) {
+                        return out;
+                    }
+                    if self.lead() != Some(dev) {
+                        self.foot = Some(dev);
+                    }
+                    self.screen = Screen::Confirm;
+                }
                 // a row on a screen the press can't reach (the confirm screen's rows while another device drives)
                 if self.choose(i) {
                     out.push(Effect::Sound(0));

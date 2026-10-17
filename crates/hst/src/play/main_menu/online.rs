@@ -3237,6 +3237,20 @@ mod tests {
         assert!(fx.contains(&Effect::Online(Fx::Net(Cmd::Join("K7QX".into(), m.picks())))), "{fx:?}");
     }
 
+    /// Concept: a pad joining the lobby takes its open seat onto the select; the keyboard's Back still goes back
+    #[test]
+    fn keys_back_after_a_pad_joins() {
+        let mut m = Menu { screen: Screen::Lobby, seats: [Some(super::super::Dev::Keys), None, None, None], ..default() };
+        sample(&mut m);
+        m.net.me = "host".into();
+        m.players[0].ready = true;
+        let pad = super::super::Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        m.step(pad, Press { ok: true, ..default() });
+        assert_eq!((m.screen, m.seats[3]), (Screen::Chars, Some(pad)));
+        m.step(super::super::Dev::Keys, Press { back: true, ..default() });
+        assert_eq!((m.screen, m.players[0].ready, m.seats[3]), (Screen::Lobby, true, Some(pad)));
+    }
+
     #[test]
     fn creating_lobby_ok_leaves() {
         // no room yet: the hidden side panel isn't there, ✕ is on Leave (not Select Court)

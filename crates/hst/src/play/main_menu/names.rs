@@ -417,7 +417,7 @@ pub(super) fn typing(
 ) {
     use bevy::input::keyboard::Key;
     let typing = |m: &Menu, d: Dev| (0..4).find(|&p| m.seats[p] == Some(d) && matches!(m.names.open[p], Some(Picker::Typing(..))));
-    if menu.screen != Screen::Chars {
+    if !matches!(menu.screen, Screen::Chars | Screen::Confirm) {
         typed.clear();
         return;
     }
@@ -483,7 +483,7 @@ pub(super) fn tag_rect(name: &str, [x, y]: [f32; 2], h: f32) -> [f32; 4] {
 
 /// Writes the saved names when they change; closes the pickers off the select.
 pub(super) fn persist(mut menu: ResMut<Menu>, args: Res<crate::Args>) {
-    if menu.screen != Screen::Chars && menu.names.open.iter().any(Option::is_some) {
+    if !matches!(menu.screen, Screen::Chars | Screen::Confirm) && menu.names.open.iter().any(Option::is_some) {
         menu.names.open = default();
     }
     if menu.names.dirty {

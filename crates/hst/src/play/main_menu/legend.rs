@@ -16,7 +16,7 @@ pub(crate) use super::super::legend::Last;
 /// probes `step` for them).
 pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
     let mut v: Vec<(Act, &str)> = Vec::new();
-    let host = m.hosts(dev);
+    let host = if m.screen == Screen::Confirm { m.drives_foot(dev) } else { m.hosts(dev) };
     let s = m.sel;
     match m.screen {
         // B516: the splash's one press (none once 1P is taken)
@@ -132,7 +132,7 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
                 v.push((Act::Card, "Favorite"));
             }
             // B371 / B375: Start names the player on the device's own seat (Stats / Picture is the card's pill)
-            if m.seats[p] == Some(dev) {
+            if (0..m.players()).any(|q| m.seats[q] == Some(dev)) {
                 v.push((Act::Name, "Name"));
             }
             if !me.ready && !m.blocked(p) {
@@ -183,11 +183,19 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         Screen::Confirm if host => {
             // B449: about the screen; ✕ on a plate sends that player back to the select
             moves(&mut v, m.confirm_axes());
-            v.push((Act::Ok, if s == 0 { "Start" } else if s < CONFIRM_ROWS || !m.online() { "Change" } else { "Back" }));
+            let all = m.online() || (0..m.players()).all(|p| m.players[p].ready);
+            let theirs = s >= CONFIRM_ROWS && !m.online() && !(m.seats[s - CONFIRM_ROWS] == Some(dev) || m.seats[s - CONFIRM_ROWS].is_none());
+            if (s != 0 || all) && !theirs {
+                v.push((Act::Ok, if s == 0 { "Start" } else if s < CONFIRM_ROWS || !m.online() { "Change" } else { "Back" }));
+            }
             if m.confirm_swap() {
                 v.push((Act::Page, "Singles / Doubles"));
             }
-            v.extend([(Act::Name, "Start"), (Act::Back, "Back")]);
+            // the name picker, for the device's own seat
+            if (0..m.players()).any(|p| m.seats[p] == Some(dev)) {
+                v.push((Act::Name, "Name"));
+            }
+            v.push((Act::Back, "Back"));
         }
         Screen::Online => {
             moves(&mut v, m.pill_axes());

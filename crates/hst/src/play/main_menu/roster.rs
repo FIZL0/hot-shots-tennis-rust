@@ -387,7 +387,7 @@ pub(super) fn chars(d: &mut Draw, m: &Menu, text: &Text, bind: &Bindings, pads: 
     // the top bar: the title (Back for the pointer, after the "<" `drawn` puts over it), the players and the mode
     let size = 30.0 * PY;
     // M121: online, the select is the lobby
-    let title = if m.online() { "Online lobby" } else if m.screen == super::Screen::Confirm { "Ready to play?" } else { "Choose your player" };
+    let title = if m.online() { "Online lobby" } else if (0..m.players()).all(|p| m.players[p].ready) { "Ready to play?" } else { "Choose your player" };
     d.outlined(|d| d.text(title, l + 32.0, t + 16.0 * PY, size, WHITE));
     d.hit([l, t, d.width(title, size) + 40.0, TOP_BAR * PY], pointer::press(|k| k.back = true));
     if m.online() {

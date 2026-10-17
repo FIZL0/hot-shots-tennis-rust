@@ -533,6 +533,8 @@ struct Menu {
     flame: flame::Flame,
     /// B64: the court or umpire picker is open (on row `sel`), with the value it opened on (○ puts it back).
     picking: Option<usize>,
+    /// Concept: the device besides 1P's that tapped the local select's court / umpire strip and drives it.
+    foot: Option<Dev>,
     /// B190: the custom grid's fit to the window.
     grid: Grid,
     /// M16: the Mods screen's state.
@@ -627,6 +629,7 @@ impl Default for Menu {
             net: online::View::default(),
             flame: flame::Flame::default(),
             picking: None,
+            foot: None,
             grid: Grid::default(),
             add: default(),
             paused: false,
@@ -954,10 +957,11 @@ impl Menu {
     }
 
     /// The local select done: on to the court and umpire once every card is ready.
-    fn chars_done(&mut self, out: &mut Vec<Effect>) {
+    fn chars_done(&mut self, _out: &mut Vec<Effect>) {
         self.preset_coms();
-        if (0..self.players()).all(|q| self.players[q].ready) {
-            self.go(Screen::Confirm, out);
+        // concept: the strip under the cards takes 1P's presses, the screen stays (no slide)
+        if (0..self.players()).all(|q| self.players[q].ready) && self.screen != Screen::Confirm {
+            (self.screen, self.sel) = (Screen::Confirm, 0);
         }
     }
 
@@ -1019,6 +1023,11 @@ impl Menu {
 
     /// Whether `dev` works the screens only 1P drives: 1P's device ([`lead`](Self::lead)); B516: on the mode and
     /// court screens (no seat of its own to move) the keyboard too, whoever has 1P.
+    /// Concept: whether `dev` works the confirm rows: online the host's, locally 1P's device or the one that tapped the strip.
+    fn drives_foot(&self, dev: Dev) -> bool {
+        if self.online() { self.hosts(dev) } else { self.lead() == Some(dev) || self.foot == Some(dev) }
+    }
+
     fn hosts(&self, dev: Dev) -> bool {
         self.lead() == Some(dev) || dev == Dev::Keys && self.lead().is_some() && matches!(self.screen, Screen::Mode | Screen::Confirm)
     }
@@ -1268,7 +1277,9 @@ impl Menu {
             out.push(Sound(LEAVE_SOUND));
             return out;
         }
-        match self.screen {
+        // concept: the local select is one screen; the strip under it is the confirm rows, the others keep picking
+        let screen = if self.screen == Screen::Confirm && !self.online() && !self.drives_foot(dev) { Screen::Chars } else { self.screen };
+        match screen {
             Screen::Main => {
                 let main = self.main_rows();
                 rows(main.len(), &mut self.sel, &mut out);
@@ -1473,7 +1484,8 @@ impl Menu {
                 // B375: a seated pad's Start is the name picker's, not ✕
                 let k = Press { ok: k.ok && !k.name, ..k };
                 // B371: Start the name picker for the device's own seat; while open it takes the presses
-                let np = (0..self.players()).find(|&q| self.seats[q] == Some(dev) && self.naming(q)).unwrap_or(p);
+                // concept: ready too
+                let np = (0..self.players()).find(|&q| self.seats[q] == Some(dev)).unwrap_or(p);
                 if self.name_step(np, dev, k, &mut out) {
                     return out;
                 }
@@ -1513,6 +1525,11 @@ impl Menu {
                 if !self.players[p].ready && self.grid_move(p, k) {
                     self.follow(p);
                     out.push(Sound(0));
+                } else if k.down && self.players[p].ready && !self.online() && self.lead() == Some(dev) {
+                    // concept: 1P's ↓, once its pick is in, to the court and umpire strip
+                    (self.screen, self.sel) = (Screen::Confirm, 1);
+                    out.push(Sound(0));
+                    return out;
                 }
                 if !self.players[p].ready && (k.prev || k.next) {
                     // M1n / B66: past a costume that failed to load or that someone else is ready on
@@ -1542,7 +1559,11 @@ impl Menu {
                         }
                     }
                 } else if k.back {
-                    if self.players[p].ready {
+                    if self.players[p].ready && p == 0 && self.online() && !self.net.first {
+                        // concept: 1P back on the lobby while another local player picks (its pick stays)
+                        self.screen = Screen::Lobby;
+                        out.push(Sound(1));
+                    } else if self.players[p].ready {
                         self.unready(p);
                         out.push(Sound(1));
                     } else if self.online() && self.net.edit == Some(p) {
@@ -1577,8 +1598,8 @@ impl Menu {
                 }
             }
             // B451: the umpire picker's rows
-            Screen::Confirm if self.hosts(dev) && self.picking.is_some() && self.sel == 4 => umpire_picker::step(self, k, &mut out),
-            Screen::Confirm if self.hosts(dev) && self.picking.is_some() => {
+            Screen::Confirm if self.drives_foot(dev) && self.picking.is_some() && self.sel == 4 => umpire_picker::step(self, k, &mut out),
+            Screen::Confirm if self.drives_foot(dev) && self.picking.is_some() => {
                 // the pickers: the court and umpire strips' ←→ (Random first, stop at the ends); ✕ keeps, ○ puts back
                 let d = k.right as i32 - k.left as i32;
                 if self.sel == 1 {
@@ -1634,10 +1655,20 @@ impl Menu {
                     self.venue_picked(&mut out);
                 }
             }
-            Screen::Confirm if self.hosts(dev) => {
-                // B449: the arrows go about the screen as its parts lie; Start (a pad's also sends ✕) starts
-                let start = k.name || (k.ok && self.sel == 0);
+            Screen::Confirm if self.drives_foot(dev) => {
+                // B371: Start / N is the name picker's (its own seat, ready or not)
+                let own = (0..self.players()).find(|&q| self.seats[q] == Some(dev));
+                if let Some(q) = own && self.name_step(q, dev, k, &mut out) {
+                    return out;
+                }
+                // B449: the arrows go about the screen as its parts lie; ✕ on Start starts once every card is ready
                 let k = Press { ok: k.ok && !k.name, ..k };
+                let all = (0..self.players()).all(|q| self.players[q].ready);
+                let start = k.ok && self.sel == 0 && (all || self.online());
+                if k.ok && self.sel == 0 && !start {
+                    out.push(Sound(1));
+                    return out;
+                }
                 let to = self.confirm_step(k);
                 if to != self.sel {
                     self.sel = to;
@@ -1672,12 +1703,21 @@ impl Menu {
                     out.push(Sound(1));
                 } else if (k.back || k.ok && self.sel >= CONFIRM_ROWS) && self.online() {
                     self.go(Screen::Lobby, &mut out);
+                } else if k.ok && self.sel >= CONFIRM_ROWS && !(self.seats[self.sel - CONFIRM_ROWS] == Some(dev) || self.bot(self.sel - CONFIRM_ROWS)) {
+                    // another person's card is theirs to pick again
+                    out.push(Sound(1));
                 } else if k.back || k.ok && self.sel >= CONFIRM_ROWS {
-                    // ○, or ✕ on a plate: back to the select
-                    for p in 0..4 {
-                        self.unready(p);
+                    // ✕ on a plate: that card picked again; ○: off the strip, with every card ready the last computer
+                    // player's picked again (B355), else this device's own
+                    let n = self.players();
+                    let again = if k.ok { Some(self.sel - CONFIRM_ROWS) } else if all { (0..n).rev().find(|&q| self.bot(q)).or(own).or(Some(0)) } else { None };
+                    if let Some(q) = again {
+                        self.unready(q);
                     }
-                    self.screen = Screen::Chars;
+                    if self.foot == Some(dev) {
+                        self.foot = None;
+                    }
+                    (self.screen, self.sel) = (Screen::Chars, 0);
                     out.push(Sound(1));
                 }
             }
@@ -4036,12 +4076,40 @@ mod tests {
         assert!((0..4).all(|p| (0..4).all(|q| p == q || picks[p] != picks[q])), "{picks:?}");
     }
 
+    /// Concept: the local select is one screen: 1P, ready, goes down to the strip while the other still picks; Start
+    /// waits for every card; N / Start names (ready too), never starts; a tap on the strip takes it for that device.
+    #[test]
+    fn local_strip_while_others_pick() {
+        let pad = Dev::Pad(Entity::from_raw_u32(9).unwrap());
+        let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        let (ok, down) = (press(|p| &mut p.ok), press(|p| &mut p.down));
+        m.step(Dev::Keys, ok);
+        m.step(Dev::Keys, down);
+        assert_eq!((m.screen, m.sel), (Screen::Confirm, 1));
+        m.step(Dev::Keys, ok);
+        assert_eq!(m.picking, Some(m.court));
+        m.step(Dev::Keys, ok);
+        m.sel = 0;
+        assert_eq!(m.step(Dev::Keys, ok), [Sound(1)], "2P still picking");
+        assert!(!m.step(Dev::Keys, press(|p| &mut p.name)).contains(&Launch));
+        assert!(m.naming(0), "1P names, ready");
+        m.names.open = default();
+        m.step(pad, ok);
+        assert!(m.players[1].ready && m.screen == Screen::Confirm);
+        assert_eq!(m.step(Dev::Keys, ok), [Sound(2), Launch]);
+        // the pad's tap on the strip on the cards: it drives the picker
+        let mut m = Menu { screen: Screen::Chars, seats: [Some(Dev::Keys), Some(pad), None, None], ..default() };
+        m.point(pad, pointer::Act::Row(4, pointer::OK), true);
+        assert_eq!((m.screen, m.sel, m.picking.is_some(), m.foot), (Screen::Confirm, 4, true, Some(pad)));
+    }
+
     /// B297: Start puts a Rematch card at the top of the main menu; it launches the same match flags, Local takes it
     /// off again, and Back from Local lands on the Local row.
     #[test]
     fn rematch_replays_the_setup() {
         // a fixed umpire: Random (B191's default) draws again for the rematch
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 3, umpire: 2, ..default() };
+        m.players.iter_mut().for_each(|p| p.ready = true);
         assert!(!m.main_rows().contains(&home::Row::Rematch));
         assert_eq!(m.step(Dev::Keys, press(|p| &mut p.ok)), [Effect::Sound(2), Effect::Launch]);
         let first = m.args(&[]);
@@ -4060,6 +4128,7 @@ mod tests {
     #[test]
     fn random_court_and_umpire() {
         let mut m = Menu { screen: Screen::Confirm, seats: [Some(Dev::Keys), None, None, None], court: 0, ..default() };
+        m.players.iter_mut().for_each(|p| p.ready = true);
         let (right, ok) = (press(|p| &mut p.right), press(|p| &mut p.ok));
         m.sel = 1;
         m.step(Dev::Keys, ok);
@@ -4586,9 +4655,9 @@ mod tests {
         assert_eq!((flag("--chars"), flag("--outfits")), ("5,5".into(), "0,1".into()));
         let mods: Vec<_> = a.windows(3).filter(|w| w[0] == "--slot-mod").map(|w| (w[1].clone(), w[2].clone())).collect();
         assert_eq!(mods, [("0".into(), "mods/a".into()), ("1".into(), "mods/a".into())]);
-        // back from the confirm: everyone picks again where they were
+        // back off the strip: the last computer player picks again where it was
         m.step(Dev::Keys, press(|p| &mut p.back));
-        assert!(m.players[0].modded && !m.players[0].ready);
+        assert!(m.players[1].modded && !m.players[1].ready && m.players[0].ready);
         // M1n: a costume whose model failed to load is passed by L1 / R1 and can't be readied on
         let mut m = Menu { mods: vec![fake("c", 3, 3)], ..default() };
         m.step(Dev::Keys, ok);

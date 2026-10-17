@@ -130,17 +130,18 @@ pub(super) fn local_foot(d: &mut Draw, m: &Menu, text: &Text) {
     frame::strip(d, m, &g, &cells);
     let n = m.players();
     let ready = (0..n).filter(|&p| m.players[p].ready).count();
+    // concept: the strip takes a tap while the cards are still picked too
+    for (row, cell) in [(1, 0), (4, 1), (2, 2), (3, 3)] {
+        d.hit(g.cells[cell], pointer::Act::Row(row, pointer::OK));
+    }
+    let all = ready == n;
+    let note = if all { "Everyone ready".to_string() } else { format!("{ready} of {n} ready") };
+    frame::start(d, &g, "Start", &note, all, on(0));
     if confirm {
-        for (row, cell) in [(1, 0), (4, 1), (2, 2), (3, 3)] {
-            d.hit(g.cells[cell], pointer::Act::Row(row, pointer::OK));
-        }
-        frame::start(d, &g, "Start", "Everyone ready", true, on(0));
         d.hit(g.start, pointer::Act::Row(0, pointer::OK));
         if m.picking.is_some() {
             picked_cell(d, m, &g);
         }
-    } else {
-        frame::start(d, &g, "Start", &format!("{ready} of {n} ready"), false, false);
     }
 }
 

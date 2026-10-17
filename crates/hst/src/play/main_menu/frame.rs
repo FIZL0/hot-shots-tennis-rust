@@ -745,10 +745,9 @@ pub(super) fn strip(d: &mut Draw, m: &Menu, g: &Geo, cells: &[Cell]) {
     for (k, (c, &[cx, cy, cw, ch])) in cells.iter().zip(&g.cells).enumerate() {
         let inner = [cx + if k == 0 { g.x(2.0) } else { 0.0 }, cy + g.y(2.0), cw - if k == 0 || k == last { g.x(2.0) } else { 0.0 }, ch - g.y(4.0)];
         if c.sel {
-            d.q(Tex::Solid, [0.0; 4], inner, RULE, 128.0);
-            let r = if k == 0 || k == last { g.x(10.0) } else { 0.0 };
-            d.out.last_mut().unwrap().round = if k == 0 { [r, 0.0, 0.0, r] } else { [0.0, r, r, 0.0] };
-            ringed(d, inner, g.x(3.0), g.x(3.0), WHITE, None);
+            // concept: the lit cell is a pill of its own, rounded as the strip's ends
+            rounded(d, inner, g.x(10.0), RULE, 128.0);
+            ringed(d, inner, g.x(10.0), g.x(3.0), WHITE, None);
         }
         if k > 0 {
             d.q(Tex::Solid, [0.0; 4], [cx - g.x(1.0), cy + g.y(2.0), g.x(2.0), ch - g.y(4.0)], RULE, 128.0);
