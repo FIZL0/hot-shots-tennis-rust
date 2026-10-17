@@ -183,7 +183,7 @@ fn about(o: Opt) -> &'static str {
         OnlineMods => "When an online lobby has a mod you don't have: ask each time, always download it, or never (a stand-in plays it).",
         KeepDownloads => "After an online match, the mods you downloaded for it: ask whether to add them to your mods, always add them, or never.",
         Chat => "Show the online lobby's and match's text chat (T, or R2/L2 on a pad), or hide it.",
-        Renderer => "Auto: WebGPU when the browser has it, else WebGL2. A change asks first: the page reloads into it.",
+        Renderer => "Auto: WebGPU when the browser has it, else WebGL2; the one in use shows in brackets. A change asks first: the page reloads into it.",
         Vibration => vibration_about(),
         UpdateCheck => "Look for a newer version when the game starts. The main menu offers it: Update downloads and checks it, then restarts the game into it (or opens its page where the game can't replace itself).",
         FewerShadows => "At Low shadows, only the players, the umpire and what shades the court cast: fewer draws. Off: Low casts as many as High.",
@@ -810,7 +810,12 @@ pub(super) fn page_layout(d: &mut Draw, m: &Menu, hand_x: f32) {
         if m.editing.is_none() {
             d.hit(r, pointer::Act::Row(i, pointer::OK));
         }
-        let value = m.settings.value(o);
+        let mut value = m.settings.value(o);
+        // the renderer actually running beside the setting: Auto's pick, or WebGL2 where the browser lacked WebGPU
+        let running = if crate::graphics::webgl2() { "WebGL2" } else { "WebGPU" };
+        if o == Renderer && value != running {
+            value = format!("{value} ({running})");
+        }
         let editing = on && m.editing.is_some() && !locked(o);
         if o == Advanced {
             // (a way in, not a value: no arrows)
