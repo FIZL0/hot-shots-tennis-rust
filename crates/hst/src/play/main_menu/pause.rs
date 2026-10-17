@@ -54,6 +54,30 @@ fn seats_now(humans: [bool; 4], slots: &PadSlots) -> [Option<Dev>; 4] {
     })
 }
 
+/// B540: the human seats' devices the pause menu's assignment last handed the match, for the front-end it goes back to
+/// (`Kept`'s menu, held in the match's way out since it started). Taken by `seats_back`.
+static SWAPPED: std::sync::Mutex<Option<[Option<Option<Dev>>; 4]>> = std::sync::Mutex::new(None);
+
+/// B540: back from a match whose seats were reassigned over the pause menu: the menu's seats follow (the computer's
+/// stay as they were), and 1P's device, if it has one, drives the menus 1P alone drives (`Menu::p1`), as it would
+/// have had it come in on the splash.
+pub(super) fn seats_back(menu: &mut Menu) {
+    let Some(seats) = SWAPPED.lock().unwrap().take() else { return };
+    for (s, d) in seats.into_iter().enumerate() {
+        if let Some(d) = d {
+            menu.seats[s] = d;
+        }
+    }
+    if let Some(d) = menu.seats[0] {
+        menu.p1 = Some(d);
+    }
+}
+
+/// B540: the assignment's seats as the front-end keeps them: each human seat's, none for the computer's.
+fn swapped(menu: &Menu) -> [Option<Option<Dev>>; 4] {
+    std::array::from_fn(|s| (!menu.bots[s]).then_some(menu.seats[s]))
+}
+
 /// B254: the assignment's seats into the match: each pad held by its seat (`pads`, the sorted list, gives `Seat`'s
 /// index), the keyboard on its own; a seat left without a device takes none until assigned again.
 fn apply(seats: [Option<Dev>; 4], pads: &[Entity], slots: &mut PadSlots) {
@@ -229,6 +253,7 @@ fn after(
             let mut pads: Vec<_> = gamepads.iter().filter(|(_, g)| super::super::controls::readable(g)).map(|(e, _)| e).collect();
             pads.sort();
             apply(menu.seats, &pads, &mut slots);
+            *SWAPPED.lock().unwrap() = Some(swapped(&menu));
         }
         if menu.screen != Screen::Assign {
             ps.open = false;
@@ -488,6 +513,33 @@ mod tests {
         assert_eq!((slots.0, slots.keys()), ([Some(a), None, Some(b), None], None));
         // no `--pads`: 1P's pad stands for the keyboard beside it, a missing pad leaves its human seat empty
         assert_eq!(seats_now([true, true, false, false], &PadSlots([Some(b), None, None, None], None)), [Some(Dev::Pad(b)), None, None, None]);
+    }
+
+    /// B540: singles, 1P on the keyboard, 2P on pad a. Over the match they trade seats; back on the front-end pad a
+    /// is 1P and drives the main screen, the keyboard sits in 2P, and another pad (b, never seated) still can't.
+    #[test]
+    fn swapped_seats_drive_the_front_end_after_the_match() {
+        let [a, b] = [5, 7].map(|n| Entity::from_raw_u32(n).unwrap());
+        let mut front = Menu { seats: [Some(Dev::Keys), Some(Dev::Pad(a)), None, None], p1: Some(Dev::Keys), ..default() };
+        let humans = [true, true, false, false];
+        let slots = PadSlots([None, Some(a), None, None], Some([Some(Seat::Keys), Some(Seat::Pad(0)), None, None]));
+        let mut m = Menu { screen: Screen::Assign, seats: seats_now(humans, &slots), bots: humans.map(|h| !h), paused: true, ..default() };
+        m.step(Dev::Keys, Press { right: true, ..default() });
+        m.step(Dev::Keys, Press { ok: true, ..default() });
+        assert_eq!((m.screen, m.seats), (Screen::Chars, [Some(Dev::Pad(a)), Some(Dev::Keys), None, None]));
+        *SWAPPED.lock().unwrap() = Some(swapped(&m));
+        front.after_match();
+        seats_back(&mut front);
+        assert_eq!((front.seats, front.p1, front.lead()), ([Some(Dev::Pad(a)), Some(Dev::Keys), None, None], Some(Dev::Pad(a)), Some(Dev::Pad(a))));
+        let local = front.main_at(super::super::home::Row::Local);
+        front.sel = local + 1;
+        front.step(Dev::Pad(b), Press { up: true, ..default() });
+        assert_eq!(front.sel, local + 1, "pad b isn't 1P");
+        front.step(Dev::Pad(a), Press { up: true, ..default() });
+        assert_eq!(front.sel, local, "pad a, now 1P, drives the main screen");
+        // taken: the next match back with no reassignment leaves the seats alone
+        seats_back(&mut front);
+        assert!(SWAPPED.lock().unwrap().is_none());
     }
 
     /// A row changes and saves; Back on a Settings tab goes to `Screen::Main`, which `after` takes as closing.
