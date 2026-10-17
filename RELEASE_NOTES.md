@@ -10,4 +10,4 @@
 - Player select shows which button renames your player, right next to the name.
 - After picking (or backing out of) a computer player's character in an online lobby, the cursor stays on that computer's card instead of jumping back to yours.
 - Lobby cards no longer have an X: the selected card shows a Remove/Kick hint with its button instead, so moving the cursor can't take a player out by accident.
-- Mod characters no longer leave stray footprints on clay while celebrating or sulking after a point.
+- Mod characters no longer leave stray footprints or dust puffs while celebrating or sulking after a point.

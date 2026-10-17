@@ -128,8 +128,8 @@ fn tick(fx: Option<ResMut<FootFx>>, mut g: ResMut<Game>, w: Option<Res<Weather>>
                     dive,
                     lunge,
                     dive_over,
-                    // a mod character's reactions are its own motions: the donor's steps would print out of place
-                    no_prints: m.id as i32 >= hst_sim::motion::id::HIT_BY_BALL && mm.as_ref().is_some_and(|mm| mm.get(i).is_some()),
+                    // a mod character's reactions are its own motions: the donor's steps would puff and print out of place
+                    no_steps: m.id as i32 >= hst_sim::motion::id::HIT_BY_BALL && mm.as_ref().is_some_and(|mm| mm.get(i).is_some()),
                     ..Runner::default()
                 },
             ))
