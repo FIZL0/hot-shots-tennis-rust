@@ -14,6 +14,7 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [~] **B510** Post-point camera inside an object (user 2026-10-16): a post-point camera sat inside something (court/view not yet given; ask the user for court + screenshot). B240's eye-buried test and B303's in_front fallback miss it. Reproduce with bot matches logging the drawn camera vs nearby props/umpire chair/court walls, compare with the original at the same moment, hide/move as the original does (else B303's fallback) → play/net_hide.rs · hst-sim/src/cutaway.rs · play/cutaway.rs | j: 2026-10-13-b240-near-camera-props BLOCKED: user 2026-10-16: it happened on a modded court (a mod's props/geometry, not stock); needs the mod court + screenshot from the user to reproduce — skipped by user 2026-10-16; agent stopped mid-work, WIP parked on wip/B510 (stash commit: net_hide.rs, stage.rs, main.rs; untracked files in its 3rd parent) — wip/B510 (TEMP HST_CAMLOG probe in net_hide.rs) deleted 2026-10-16; rewrite the probe if the mod court turns up
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:
 index out of bounds: the len is 0 but the index is 0"
+- [ ] **B565** Joining from a link (user 2026-10-17, e.g. https://beta.opentennis.dev/?code=VTPP) seats the keyboard as P1. Leave P1 unassigned and give it to the first input that presses something (keyboard or pad), since someone may open the link and then pick up a controller
 
 ### Netplay and mobile (user 2026-10-09: right after the bugs/priority list, in this order)
 
