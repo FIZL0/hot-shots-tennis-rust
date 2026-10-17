@@ -1978,10 +1978,10 @@ fn thumb_image(png: &[u8]) -> Option<(Image, f32)> {
     Some((i, s.x as f32 / s.y.max(1) as f32))
 }
 
-/// B372: Browse's tile pictures: the ones on view and the next screen asked for (cached ones read at once, the rest
-/// fetched a few at a time: one while installs run, else Downloads at Once, at least two), far-off ones dropped.
+/// B372: Browse's tile pictures: the ones on view and the next screen asked for (cached ones read at once, B566: ahead
+/// of the rest, fetched a few at a time: one while installs run, else Downloads at Once, at least two), far-off ones
+/// dropped.
 fn browse_pictures(menu: &mut Menu, shelf: &mut Shelf, images: &mut Assets<Image>) {
-    menu.add.b.tick = menu.add.b.tick.wrapping_add(1);
     if menu.add.store.is_none() {
         return;
     }
@@ -1991,27 +1991,21 @@ fn browse_pictures(menu: &mut Menu, shelf: &mut Shelf, images: &mut Assets<Image
             images.remove(&h);
         }
     }
-    let cap = if menu.add.doing.is_empty() { menu.settings.downloads_at_once().max(2) } else { 1 };
     let dir = grid::cache_dir();
-    // cached pictures don't wait for a turn: up to a few rounds a frame
-    for _ in 0..8 {
-        let go = grid::want(&mut menu.add, &l, cap);
-        let mut read = false;
-        for e in go {
-            // a sample screen (offline) reads the cache only: a planted picture shows, nothing is fetched
-            let cached = if menu.add.b.offline { Some(modstore::cached_thumb(&dir, &e.meta.sha256).flatten()) } else { modstore::cached_thumb(&dir, &e.meta.sha256) };
-            match cached {
-                Some(png) => {
-                    let png = png.or_else(|| installed_card(menu, &e.meta.sha256));
-                    let pic = png.and_then(|b| thumb_image(&b)).map(|(i, a)| (shelf.slot(images.add(i)), a));
-                    grid::got(&mut menu.add, e.meta.sha256.clone(), pic);
-                    read = true;
-                }
-                None => modstore::thumb(&e, &dir),
-            }
-        }
-        if !read {
-            break;
+    // B566: cached pictures first, not queued behind the fetches: each shows the frame its tile does
+    for (e, png) in grid::from_cache(&mut menu.add, &l, |sha| modstore::cached_thumb(&dir, sha)) {
+        let png = png.or_else(|| installed_card(menu, &e.meta.sha256));
+        let pic = png.and_then(|b| thumb_image(&b)).map(|(i, a)| (shelf.slot(images.add(i)), a));
+        grid::got(&mut menu.add, e.meta.sha256.clone(), pic);
+    }
+    let cap = if menu.add.b.offline { usize::MAX } else if menu.add.doing.is_empty() { menu.settings.downloads_at_once().max(2) } else { 1 };
+    for e in grid::want(&mut menu.add, &l, cap) {
+        // a sample screen (offline) fetches nothing: an installed one shows the select's picture
+        if menu.add.b.offline {
+            let pic = installed_card(menu, &e.meta.sha256).and_then(|b| thumb_image(&b)).map(|(i, a)| (shelf.slot(images.add(i)), a));
+            grid::got(&mut menu.add, e.meta.sha256.clone(), pic);
+        } else {
+            modstore::thumb(&e, &dir);
         }
     }
 }
@@ -3116,6 +3110,42 @@ mod tests {
         let free = grid::evict(&mut m.add, &l);
         let shown = m.add.b.pics.values().filter(|p| matches!(p, grid::Pic::Shown(..))).count();
         assert!(shown <= 160 && (3 * on_view <= 160 || !free.is_empty()), "{shown} {}", free.len());
+    }
+
+    /// B566: cached pictures don't wait behind the fetches: with every fetch turn taken, the cached ones on view are
+    /// still read on the same frame; the uncached ones are looked for once, then left to their fetch.
+    #[test]
+    fn cached_pictures_skip_the_fetch_queue() {
+        let mut m = Menu { screen: Screen::Mods, grid: super::super::Grid::fit(16.0 / 9.0), ..default() };
+        let e = |i: usize| Entry { meta: Meta { id: format!("m{i:03}"), name: format!("M{i:03}"), sha256: format!("{i:064x}"), size: 1, ..Default::default() }, rev: "main".into(), verified: true };
+        m.add.store = Some((0..200).map(e).collect());
+        m.mods_page(Page::Browse, 0);
+        m.add.b.sort = grid::Sort::Az;
+        let l = grid::lay(&m.grid);
+        let lines = grid::lines(&m.add.secs(), l.cols);
+        let on_view = l.laid(&lines, 0).1.len();
+        // the first two aren't cached and take both fetch turns
+        let go = grid::want(&mut m.add, &l, 2);
+        assert_eq!(go.iter().map(|e| e.meta.name.as_str()).collect::<Vec<_>>(), ["M000", "M001"]);
+        let even = |sha: &str| u64::from_str_radix(&sha[48..], 16).unwrap().is_multiple_of(2);
+        let mut looked = Vec::new();
+        let read = grid::from_cache(&mut m.add, &l, |sha| {
+            looked.push(sha.to_string());
+            even(sha).then(|| Some(vec![1]))
+        });
+        assert!(read.len() >= on_view / 2 && read.iter().all(|(e, _)| even(&e.meta.sha256)), "{} of {on_view}", read.len());
+        assert!(!looked.contains(&go[0].meta.sha256), "an asked one isn't looked for again");
+        for (e, _) in read {
+            grid::got(&mut m.add, e.meta.sha256, Some((0, 1.0)));
+        }
+        // the odd ones: not cached, not looked for again; still asked for in their turn
+        grid::from_cache(&mut m.add, &l, |sha| {
+            assert!(even(sha), "{sha} looked for twice");
+            Some(Some(vec![1]))
+        });
+        assert!(grid::want(&mut m.add, &l, 2).is_empty(), "both turns still taken");
+        grid::got(&mut m.add, go[0].meta.sha256.clone(), None);
+        assert_eq!(grid::want(&mut m.add, &l, 2).len(), 1);
     }
 
     /// B372: the tile pictures' cache is keyed by the zip's sha256: a picture kept is read back, "none" (an empty file)

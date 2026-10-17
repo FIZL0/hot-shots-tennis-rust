@@ -836,6 +836,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B562** Fore mods' voice lines sit in the wrong programs: Fore has no effort shout, so package.py fills the stroke shouts 0/1/3 with jy3/jy4 sentences, many of them bad-shot lines (Hubert 'Failure is imminent.', Mike 'It's tanking!', Sam 'This is no good!', Emma 'I don't like golf!'), and point-lost 8/10 with the bogey line, which can be a laugh (Hubert 'Ha ha ha! What a total mind blow!'). User heard Hubert's bad line as he walked back after winning a point. Transcribe every Fore cue with faster-whisper as B209 did (Whisper output for the packaged takes: context/fore-voices/fore.txt), sort them by meaning, keep long sentences out of the stroke shouts, rebuild, bump mod.json versions (../opentennis-mods package.py golf()/voices(), notes; research/journal/2026-10-13-b209-oob-voices)
 - [x] **B567** iOS app doesn't offer the new update (user 2026-10-17): on the 1.0 IPA no update shows, though 1.1.0 is released. Find why the iOS build doesn't see or offer it (update check, release assets, or how the IPA updates at all) and fix it
 - [x] **B565** Joining from a link (user 2026-10-17, e.g. https://beta.opentennis.dev/?code=VTPP) seats the keyboard as P1. Leave P1 unassigned and give it to the first input that presses something (keyboard or pad), since someone may open the link and then pick up a controller
+- [x] **B566** Mods store: the mod icons flicker before they finish loading/show; load them without the flicker (crates/hst/src/play/main_menu/mods_screen/)
 
 
 ### Shots
