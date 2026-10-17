@@ -49,3 +49,4 @@
 - Holding an emote key, the right stick or a button bound to an emote plays the emote once instead of repeating it; press or flick again for another.
 - The court intro before the first point shows Skip in the usual button legend instead of a PlayStation ✕ in the corner.
 - Online lobby: a player sitting on the Random card shows as Random to everyone, not as the character under it.
+- Mod characters' feet now stay on the court through runs, swings and celebrations instead of floating above it or sinking into it: their legs bend to put each foot where the original character's would be.
