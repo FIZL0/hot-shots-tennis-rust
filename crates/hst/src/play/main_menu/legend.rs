@@ -22,6 +22,10 @@ pub(super) fn acts(m: &Menu, dev: Dev) -> Vec<(Act, String)> {
         // B516: the splash's one press (none once 1P is taken)
         Screen::Press if m.p1.is_none() => v.push((Act::Ok, "Start")),
         Screen::Press => {}
+        // M127: the pad takeover prompt: the asked pad answers, the keyboard's Esc dismisses it
+        _ if m.takeover_asking() && m.takeover_asked(dev) => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Keep keyboard")]),
+        _ if m.takeover_asking() && dev == Dev::Keys => v.push((Act::Back, "Keep keyboard")),
+        _ if m.takeover_asking() => {}
         Screen::Main if m.add.ask.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose")]),
         _ if m.mod_asking() => v.extend([(Act::UpDown, "Move"), (Act::Ok, "Choose"), (Act::Back, "Stand-in")]),
         _ if m.switch.is_some() => v.extend([(Act::Move, "Move"), (Act::Ok, "Choose"), (Act::Back, "Cancel")]),

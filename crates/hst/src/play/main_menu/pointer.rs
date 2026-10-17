@@ -140,6 +140,10 @@ impl Menu {
 
     /// A pointer act from `dev`: hovered (`tap` false) or tapped / clicked.
     pub(super) fn point(&mut self, dev: Dev, act: Act, tap: bool) -> Vec<Effect> {
+        // M127: the pad takeover prompt's pills
+        if let Some(fx) = self.takeover_point(act, tap) {
+            return fx;
+        }
         let mut out = Vec::new();
         match act {
             Act::Press(k) if tap => out = self.step(dev, k),
