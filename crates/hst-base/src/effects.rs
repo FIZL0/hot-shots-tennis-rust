@@ -924,6 +924,12 @@ fn layer(arc: &Archive, s: &str, view: &Shown<Fx>, materials: &mut Assets<Fx>) -
 }
 
 impl LandingMarks {
+    /// The red and yellow markers' drawing entities and materials.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn views(&self) -> [&Shown<Fx>; 2] {
+        [&self.red.1, &self.smash.1]
+    }
+
     /// One game frame: `start_smash` (the first smash point was just found) restarts the yellow marker's play.
     pub fn tick(&mut self, start_smash: bool) {
         if self.red_at.is_some() {
@@ -981,7 +987,12 @@ impl crate::Wire for BallBounce {
     }
 }
 
-impl crate::Wire for LandingMarks {}
+// B556: without this a resynced peer's markers posed the host's entities with no materials (no red or yellow mark)
+impl crate::Wire for LandingMarks {
+    fn local(&mut self, l: &Self) {
+        (self.red.1, self.smash.1) = (l.red.1.clone(), l.smash.1.clone());
+    }
+}
 
 #[cfg(test)]
 mod tests {

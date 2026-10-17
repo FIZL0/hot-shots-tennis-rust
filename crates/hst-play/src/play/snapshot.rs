@@ -95,9 +95,10 @@ pub fn fnv(text: &str) -> u64 {
     h.0
 }
 
-/// What `state_hash` hashes (a desync's report keeps it, to diff the machines').
+/// What `state_hash` hashes (a desync's report keeps it, to diff the machines'). A motion's drawn clock goes as its
+/// gameplay one (B556): it runs a mod's own clip, which a peer without the mod's looks doesn't have, and only draws.
 pub fn state_text(w: &mut World) -> String {
-    let mut figures: Vec<_> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, *m)).collect();
+    let mut figures: Vec<_> = w.query::<(&Figure, &Motion)>().iter(w).map(|(f, m)| (f.0, Motion { drawn: m.clock, drawn_prev: m.prev, ..*m })).collect();
     figures.sort_by_key(|f| f.0);
     format!("{:?}{:?}{:?}", w.get_resource::<Game>(), figures, w.get_resource::<TickPads>())
 }
@@ -452,6 +453,29 @@ mod tests {
                 state_hash(app.world_mut())
             })
             .collect()
+    }
+
+    /// The drawing entities and materials of the landing markers and the call pop-ups.
+    fn views(w: &bevy::prelude::World) -> Vec<(Entity, usize)> {
+        let marks = w.resource::<effects::LandingMarks>().views().map(|v| (v.root, v.materials.len()));
+        marks.into_iter().chain(w.resource::<popups::Calls>().views()).collect()
+    }
+
+    /// B556: a resync's state keeps this machine's own marker and call-model entities and materials (they went as
+    /// the host's entities with none: no red or yellow landing marker after a resync).
+    #[test]
+    fn a_resync_keeps_the_local_marker_views() {
+        if !Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        let mut app = app();
+        run(&mut app, &[[tick_input::IDLE; 4]; 30]);
+        let before = views(app.world());
+        assert!(before.iter().all(|&(_, m)| m > 0), "{before:?}");
+        // the state as a machine sends it (its materials never go on the wire)
+        let data = super::encode(app.world_mut());
+        super::decode(app.world_mut(), &data).unwrap();
+        assert_eq!(views(app.world()), before);
     }
 
     #[test]

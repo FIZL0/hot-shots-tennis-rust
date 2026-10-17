@@ -1752,6 +1752,17 @@ impl Calls {
     pub(super) fn roots(&self) -> impl Iterator<Item = Entity> + '_ {
         self.models.iter().map(|(_, v)| v.root)
     }
+
+    /// Each call model's root and material count.
+    #[cfg(test)]
+    pub(super) fn views(&self) -> Vec<(Entity, usize)> {
+        self.models.iter().map(|(_, v)| (v.root, v.materials.len())).collect()
+    }
 }
 
-impl super::snapshot::Wire for Calls {}
+// a resync keeps this machine's call models (B556: as `effects::LandingMarks`)
+impl super::snapshot::Wire for Calls {
+    fn local(&mut self, l: &Self) {
+        self.models.iter_mut().zip(&l.models).for_each(|(m, l)| m.1 = l.1.clone());
+    }
+}
