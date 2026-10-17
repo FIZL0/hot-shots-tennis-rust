@@ -1756,6 +1756,13 @@ fn page(
                 let had = v.have.get(&key).map(|h| h.1.clone());
                 v.finish(&key, &r);
                 v.refresh();
+                // re-uploaded since the cached listing: the install fetched the newer zip, so the listing takes its
+                // sha256 (else it says Update and offers it again until the store is read anew)
+                if let Some((sha, _)) = r.is_ok().then(|| v.have.get(&key)).flatten() {
+                    for e in v.store.iter_mut().flatten().filter(|e| e.key() == key) {
+                        e.meta.sha256.clone_from(sha);
+                    }
+                }
                 let placed = r.is_ok().then(|| v.have.get(&key).map(|h| h.1.clone())).flatten().filter(|_| pack);
                 if let Some(dir) = &placed {
                     pack_installed(v, dir, had.is_none(), args.as_deref(), &menu_settings, &mut images);
