@@ -9,3 +9,4 @@
 - iPhone Safari: the game asks for one swipe up, which hides Safari's bars so the game fills the screen (or add it to the Home Screen for no bars at all).
 - After swapping controllers in the pause menu, whoever took player 1's seat now also controls the menus once the match is over.
 - The Controllers screen (pause menu) now shows every player's character card with their stats, so you can see who you're handing a controller to; in an online match with two players on your machine you can swap your controllers between them from the pause menu.
+- Joining an online lobby no longer flashes a "can't join" message for a moment before you get in.
