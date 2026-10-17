@@ -392,7 +392,8 @@ pub fn call_out(player: usize, bit: bool) -> Play {
     play(slot::voice(player), voice::CALL_OUT, 3 + bit as u8, FULL)
 }
 
-/// The cry of a player the ball hits (program 5 key 0, 0x80 at the player), as the ball touches them.
+/// The cry of a player the ball hits (program 5 key 0, 0x80 at the player), as the ball touches them. A mod
+/// character's is its pack's `voice/5_0.wav` (B560: the packaged mods ship one, Fore!'s none), else silence (B181).
 pub fn hit_cry(player: usize) -> Play {
     play(slot::voice(player), voice::HIT_CRY, 0, FULL)
 }

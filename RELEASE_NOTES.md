@@ -45,3 +45,4 @@
 - Mod characters no longer bob up and down when they walk or run, and their character select pictures are drawn again so they match how they look in a match.
 - The match results screen shows only the usual button legend along the bottom, no more PlayStation-style ✕ Continue / Score Screen prompts above it.
 - Mod characters now cheer (or groan) in their own voice at the end-of-match trophy ceremony instead of staying silent.
+- Get a Grip, Out of Bounds and Open Tee 2 mod characters now cry out when the ball hits them ("Ouch!", "Ow!", "Ugh!"), in their own voice, once you update them from the mod store.
