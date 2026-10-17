@@ -25,3 +25,4 @@
 - Button hints now show your own controller's buttons (or your keyboard keys) instead of always naming PlayStation buttons: the Singles / Doubles / Swap team button, the Controllers screen's help, the title screen and the mods page.
 - Mod store: updating a mod that was re-uploaded within the last hour no longer fails with a size mismatch; the new version installs.
 - Online lobbies no longer slow to a crawl on phones when you've picked a large custom character.
+- Online: a host whose lobby code is slow to go online no longer stays stuck on "Connecting to the relay" — it becomes joinable as soon as a friend gets in, and a code that takes too long falls back to the lobby link.
