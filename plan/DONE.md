@@ -837,6 +837,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B567** iOS app doesn't offer the new update (user 2026-10-17): on the 1.0 IPA no update shows, though 1.1.0 is released. Find why the iOS build doesn't see or offer it (update check, release assets, or how the IPA updates at all) and fix it
 - [x] **B565** Joining from a link (user 2026-10-17, e.g. https://beta.opentennis.dev/?code=VTPP) seats the keyboard as P1. Leave P1 unassigned and give it to the first input that presses something (keyboard or pad), since someone may open the link and then pick up a controller
 - [x] **B566** Mods store: the mod icons flicker before they finish loading/show; load them without the flicker (crates/hst/src/play/main_menu/mods_screen/)
+- [x] **B568** hst-base `mods::tests::rerigged_mod_plays_forehand_and_run` fails ("rest·inverse bind off by 0.0037", seen 2026-10-17 in B565's done.sh, unrelated to it): local `context/mods/test_pc00` or the rig code drifted (feet-ik merge?); rebuild the test mod or fix the bind — crates/hst-base/src/mods.rs
 
 
 ### Shots
