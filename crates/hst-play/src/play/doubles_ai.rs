@@ -360,6 +360,7 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
     if let Some(bit) = x.said.take() {
         g.whooshes.push((0, i, hst_sim::sound::call_out(i, bit)));
     }
+    let x_kind = x.kind;
     let (net, net_rate, net_left, aim) = (x.mind.net, x.mind.net_rate, x.mind.net_left, x.stick);
     (me.lost, me.lost_log) = (b.lost, b.lost_log);
     g.doubles_ai.records = w.records;
@@ -369,7 +370,10 @@ pub(super) fn step(g: &mut Game, i: usize, mind: &hst_sim::ai::Mind) -> bool {
         m.rally(&mut ai_roll(&mut g.rng));
     }
     g.players[i].ai_mind = Some(m);
-    if !busy {
+    // the routine's dive press lets go of the stick: the dive starts from the run it was judged on (the stroke state
+    // takes over from the run), not from a body this frame's stand already stopped
+    let dives = out.button.is_some() && x_kind == hst_sim::aim::contact::DIVE;
+    if !busy && !dives {
         let dir = if mind.active { [out.stick[0], out.stick[2]] } else { [0.0; 2] };
         let [x, z] = loco::stick_dir(loco::bot_stick(dir), phase);
         // past its wait the stick breaks off a serve's follow-through (`ai_serve_step`)
@@ -687,5 +691,31 @@ mod tests {
         }
         assert!(rallies > 0 && stepped > 0, "{rallies} {stepped}");
         assert_eq!(pinned, 0);
+    }
+
+    /// A singles bot's dive press dives: the routine lets go of the stick as it presses, and before the press kept
+    /// the run, that frame's stand stopped the body and the dive search (a running player's) found nothing, so every
+    /// dive the AI picked was an air swing.
+    #[test]
+    fn bots_dive() {
+        if !std::path::Path::new(ISO).is_file() {
+            return eprintln!("no ISO, skipped");
+        }
+        crate::play::AUTOPLAY.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Mesh>().init_asset::<StandardMaterial>().init_asset::<Image>().init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>();
+        app.insert_resource(Args { iso: ISO.into(), archives: vec![], shot: None, shot_at: 0.5, radius: None, ball: false, court: 0, stage: None, play: true, singles: true, chars: vec![6, 1], outfits: vec![], viewer: None, sound: None, music: false, umpire: 4, sets: 1, games: 4, pads: None });
+        app.init_resource::<Pads>().init_resource::<tick_input::TickPads>();
+        app.world_mut().spawn((GameSpace, Transform::default(), Visibility::default()));
+        app.add_systems(Startup, setup);
+        app.add_systems(FixedUpdate, (remember, control, simulate, motions, character::tick, played_out, held_ball).chain());
+        app.update();
+        let dove = (0..60 * 60 * 4).position(|_| {
+            app.world_mut().run_schedule(FixedUpdate);
+            app.world().resource::<Game>().players.iter().any(|p| p.dive.is_some())
+        });
+        eprintln!("first dive at frame {dove:?}");
+        assert!(dove.is_some(), "no bot dove in 4 minutes");
     }
 }

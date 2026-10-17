@@ -5,3 +5,4 @@
 - Mod store: tiles waiting for their picture no longer flicker when the frame rate is uncapped, and pictures you've already seen show straight away.
 - The original players' roster pictures no longer show up zoomed in and cut off before their full-size icons are ready.
 - The Mods screen opens with the cursor on the first mod; up goes to the Characters tab, then Browse.
+- Computer players now actually dive for balls just out of reach, instead of swinging at thin air.
