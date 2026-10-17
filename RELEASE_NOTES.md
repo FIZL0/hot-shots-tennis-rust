@@ -6,3 +6,4 @@
 - iPhone and Android: high-resolution texture packs and mod textures are scaled down to fit the phone's memory, so the game should no longer close itself and reload mid-match.
 - In an online lobby, everyone now sees who is still downloading a mod and how far along they are, on that player's card, in the chat box and on the Start / Ready button.
 - iPhone Safari: the game asks for one swipe up, which hides Safari's bars so the game fills the screen (or add it to the Home Screen for no bars at all).
+- After swapping controllers in the pause menu, whoever took player 1's seat now also controls the menus once the match is over.

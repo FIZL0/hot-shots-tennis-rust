@@ -808,6 +808,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **B538** iOS (iPhone 15 Pro): game keeps reloading/crashing, probably out of memory; find the peak and keep it under iOS's limit (textures, preload, pipelines; crates/hst-base/src/ios.rs, textures.rs, crates/hst-play/src/preload.rs)
 - [x] **M122** Online lobby: show every player a notice when someone is still downloading a mod, so they know why that player isn't ready (builds on B537's progress; crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
 - [x] **B539** iOS Safari (in the browser, not the home-screen web app): play full screen with no tab/address bar, as far as iPhone Safari allows (it has no Fullscreen API for pages; check what minimal-ui/scroll tricks still work, else lean on M123's home-screen tutorial) (web/index.html, web/site.js)
+- [x] **B540** After swapping controllers in the pause menu's controller select, whoever holds P1's seat drives the menus once the match is left (results, back to the front-end); today menu control goes back to the original P1 pad (crates/hst/src/play/main_menu/pause.rs, crates/hst/src/play/menu.rs, crates/hst-base/src/seats.rs, crates/hst/src/play/main_menu.rs)
 
 
 ### Shots
