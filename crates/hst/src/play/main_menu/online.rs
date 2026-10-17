@@ -547,6 +547,7 @@ impl Menu {
             Item::Seat(i) => return self.bot_pick(i, 0, 0).map(|_| "Add COM"),
             Item::Remove(i) if self.guest(i).is_some() => "Take Out",
             Item::Remove(_) => "Remove",
+            Item::Mode if !self.net.hosting => return self.lobby_team().map(|_| "Swap team"),
             Item::Mode if self.can_switch() => "Singles / Doubles",
             Item::Mode => return None,
             Item::Set(0 | 1) => "Choose",
@@ -1097,12 +1098,19 @@ impl Menu {
                 }
             }
             Screen::Lobby if let Some(h) = self.net.ask.filter(|_| !k.back) => {
+                // the prompt may have come up on another screen (the select's cursor, say 15): its first row
+                if self.sel >= ASK_ROWS.len() {
+                    self.sel = 0;
+                }
                 rows(ASK_ROWS.len(), &mut self.sel, out);
                 if k.ok {
                     self.answer_ask(h, self.sel, out);
                 }
             }
             Screen::Lobby if !self.net.keep.is_empty() => {
+                if self.sel >= KEEP_ROWS.len() {
+                    self.sel = 0;
+                }
                 rows(KEEP_ROWS.len(), &mut self.sel, out);
                 if k.ok || k.back {
                     self.answer_keep(if k.back { NOT_NOW } else { self.sel }, out);
@@ -1211,6 +1219,9 @@ impl Menu {
                 } else if let Item::Set(i) = item {
                     // OK steps it on, as →
                     self.change_setting(i, 1, out);
+                } else if item == Item::Mode && !self.net.hosting {
+                    // a guest's pill is Swap team (its □)
+                    self.switch_team(self.lobby_team_seat(), out);
                 } else if item == Item::Mode {
                     let r = self.net.room.as_ref();
                     // singles only while the taken seats fit in two
@@ -3440,6 +3451,17 @@ mod tests {
         b.seats[0] = Some(super::super::Dev::Keys);
         b.align();
         assert_eq!(b.pick(1), (super::super::Who::Mod(0), 0));
+    }
+
+    /// The mod prompt up on the lobby with the cursor left far down by another screen (15 of its 4 rows): its first
+    /// row, not a panic.
+    #[test]
+    fn mod_prompt_with_a_stale_cursor() {
+        let mut b = Menu { screen: Screen::Lobby, ..default() };
+        sample(&mut b);
+        (b.net.ask, b.sel) = (Some(7), 15);
+        let out = b.step(super::super::Dev::Keys, OK);
+        assert!(out.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Want(7))))), "{out:?}");
     }
 
     /// B484: the other side's mod is settled while this side still picks: asked about over the select (its cursors

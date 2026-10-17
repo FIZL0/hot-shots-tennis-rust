@@ -19,3 +19,4 @@
 - Online chat on iPhone and Android: the chat button now brings up the keyboard during a match, not just in the lobby.
 - On iPhone and iPad Safari the game now offers a new version even when Safari stops its background download, instead of staying on the old one.
 - On phones, the choices shown when an online player doesn't come back (a bot plays for them, everyone to the lobby, leave) can be tapped again; the on-screen stick no longer swallows the taps.
+- Online: the game no longer crashes when the "download this mod?" question comes up in the lobby and you answer it.
