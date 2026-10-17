@@ -42,8 +42,35 @@ pub fn plugin(app: &mut App) {
             mark::<3>.in_set(R::PrepareViews).after(prepare_windows),
             mark::<4>.in_set(R::Prepare).after(R::PrepareBindGroups),
             render_end.in_set(R::Cleanup),
+            held.in_set(R::Cleanup),
         ),
     );
+}
+
+/// A texture's bytes on the GPU, all mip levels and layers.
+fn gpu_bytes(d: &wgpu_types::TextureDescriptor<Option<&'static str>, &'static [wgpu_types::TextureFormat]>) -> u64 {
+    let (bw, bh) = d.format.block_dimensions();
+    let block = d.format.block_copy_size(None).unwrap_or(4) as u64;
+    (0..d.mip_level_count)
+        .map(|l| (d.size.width >> l).max(1).div_ceil(bw) as u64 * (d.size.height >> l).max(1).div_ceil(bh) as u64 * block)
+        .sum::<u64>()
+        * d.size.depth_or_array_layers as u64
+        * d.sample_count as u64
+}
+
+/// B538: every 5 s, the textures the render world holds (all levels) and the biggest of them, to find a phone's
+/// memory peak in its log.
+fn held(images: Res<RenderAssets<bevy::render::texture::GpuImage>>, mut next: Local<f32>) {
+    let now = since_start();
+    if now < *next {
+        return;
+    }
+    *next = now + 5.0;
+    let mut all: Vec<_> = images.iter().map(|(_, i)| (gpu_bytes(&i.texture_descriptor), &i.texture_descriptor)).collect();
+    all.sort_by_key(|(b, _)| std::cmp::Reverse(*b));
+    let total: u64 = all.iter().map(|(b, _)| b).sum();
+    let top: Vec<String> = all.iter().take(6).map(|(b, d)| format!("{}x{}x{} {:?} {} mips {:.1} MB", d.size.width, d.size.height, d.size.depth_or_array_layers, d.format, d.mip_level_count, *b as f32 / 1e6)).collect();
+    diag!("textures held at {now:.0} s: {} ({:.1} MB); biggest {}", all.len(), total as f32 / 1e6, top.join(", "));
 }
 
 /// The render frame's stage marks (`plugin`'s order).

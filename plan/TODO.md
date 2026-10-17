@@ -12,7 +12,6 @@ crate's `tests/`. Fixtures in `context/fixtures/` (`match_s05.bin` slot-5 bot ma
 - [ ] **B536** iOS IPA can't find or host online lobbies; likely the same iroh transport issue Safari/web had — compare with the web fix (crates/hst-base/src/net.rs, net/, ios.rs)
 - [ ] **M121** Online lobby: put the character select roster inside the lobby instead of two separate menus (crates/hst/src/play/main_menu/, crates/hst-base/src/net.rs)
 - [ ] **B537** Online lobby: progress of downloading a joined player's mods may not update on screen (crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
-- [ ] **B538** iOS (iPhone 15 Pro): game keeps reloading/crashing, probably out of memory; find the peak and keep it under iOS's limit (textures, preload, pipelines; crates/hst-base/src/ios.rs, textures.rs, crates/hst-play/src/preload.rs)
 1949cf8c6b5b557f/bevy_render-0.19.1/src/render_phase/mod.rs:1241:40:
 index out of bounds: the len is 0 but the index is 0"
 

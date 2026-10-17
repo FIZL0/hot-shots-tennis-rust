@@ -210,8 +210,58 @@ impl Files {
     fn load(&self) -> Option<Pixels> {
         // a pack file that won't read or decode falls through, as a broken `texture-replacements/` file does
         let packed = self.pack.as_deref().and_then(|p| crate::modfs::read(p).map_err(|e| warn!("textures: {}: {e}", p.display())).ok());
-        packed.and_then(|b| texhash::decode_png(std::io::Cursor::new(b))).or_else(|| self.rest.load())
+        packed.and_then(|b| texhash::decode_png(std::io::Cursor::new(b))).or_else(|| self.rest.load()).map(fit_pixels)
     }
+}
+
+/// B538: the longest side a replacement or mod texture keeps on a phone. iOS closes an app past its memory limit, and
+/// with the HD pack a match's textures were 506 MB (127 MB of disc ones; 278 MB at 512, which looks the same on a
+/// phone's screen), before any mod's 4K-class upscaled set. `HST_TEXTURE_MAX=N` sets it anywhere (0: none).
+pub fn max_side() -> Option<u32> {
+    static MAX: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| match std::env::var("HST_TEXTURE_MAX").ok().and_then(|v| v.parse().ok()) {
+        Some(n) => (n > 0).then_some(n),
+        None => cfg!(any(target_os = "ios", target_os = "android")).then_some(512),
+    })
+}
+
+/// RGBA8 pixels halved (2×2 box) until their longest side is within [`max_side`].
+pub fn fit_pixels(px: Pixels) -> Pixels {
+    match max_side() {
+        Some(max) => halve_to(px, max),
+        None => px,
+    }
+}
+
+fn halve_to((mut w, mut h, mut rgba): Pixels, max: u32) -> Pixels {
+    while w.max(h) > max && rgba.len() == (w * h * 4) as usize {
+        let (w2, h2) = ((w / 2).max(1), (h / 2).max(1));
+        let mut out = vec![0u8; (w2 * h2 * 4) as usize];
+        for y in 0..h2 {
+            let (y0, y1) = ((y * 2).min(h - 1), (y * 2 + 1).min(h - 1));
+            for x in 0..w2 {
+                let (x0, x1) = ((x * 2).min(w - 1), (x * 2 + 1).min(w - 1));
+                for c in 0..4 {
+                    let at = |x: u32, y: u32| rgba[((y * w + x) * 4 + c) as usize] as u32;
+                    out[((y * w2 + x) * 4 + c) as usize] = ((at(x0, y0) + at(x1, y0) + at(x0, y1) + at(x1, y1) + 2) / 4) as u8;
+                }
+            }
+        }
+        (w, h, rgba) = (w2, h2, out);
+    }
+    (w, h, rgba)
+}
+
+/// [`fit_pixels`] for a decoded mod image (one level of 4-byte texels; anything else is left as it is).
+pub fn fit(img: &mut Image) {
+    let d = &img.texture_descriptor;
+    if max_side().is_none_or(|m| d.size.width.max(d.size.height) <= m) || d.mip_level_count != 1 || d.size.depth_or_array_layers != 1 || d.format.block_copy_size(None) != Some(4) {
+        return;
+    }
+    let Some(data) = img.data.take() else { return };
+    let (w, h, rgba) = fit_pixels((d.size.width, d.size.height, data));
+    img.texture_descriptor.size = Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+    img.data = Some(rgba);
 }
 
 impl State {
@@ -410,6 +460,20 @@ mod tests {
 
     /// M5a: per texture the first pack in the order wins, then `texture-replacements/`, then the disc (`None`); a
     /// pack switched off is skipped; the browser's in-memory pack files read as the disc's do.
+    /// B538: halved until the longest side fits, each texel the rounded mean of its 2×2 block; an odd edge repeats.
+    #[test]
+    fn halves_to_the_cap() {
+        let px: Vec<u8> = (0..4 * 2).flat_map(|i| [i as u8 * 10, 0, 255, 100]).collect();
+        let (w, h, out) = halve_to((4, 2, px.clone()), 2);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(&out[..4], &[(0 + 10 + 40 + 50 + 2) / 4, 0, 255, 100]);
+        assert_eq!(halve_to((4, 2, px.clone()), 4), (4, 2, px.clone()), "within the cap: untouched");
+        let (w, h, _) = halve_to((5, 3, vec![7; 5 * 3 * 4]), 1);
+        assert_eq!((w, h), (1, 1));
+        let (w, h, out) = halve_to((3, 1, vec![9; 12]), 2);
+        assert_eq!((w, h, out), (1, 1, vec![9; 4]));
+    }
+
     #[test]
     fn packs_over_replacements_over_disc() {
         let root = std::env::temp_dir().join(format!("hst-texlayers-{}", std::process::id()));
