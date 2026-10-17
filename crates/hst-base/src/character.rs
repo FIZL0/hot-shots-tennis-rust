@@ -191,20 +191,37 @@ pub struct Face {
     pub uv_unbound: Vec<(String, Vec<i32>, Vec<[f32; 4]>)>,
 }
 
+impl Face {
+    /// Each bound track's weight at `t` (ticks) into the morph weights `w` (unbound targets untouched); where several
+    /// tracks bind one target (a mod's channel standing in for donor tracks it lacks) the strongest shows.
+    pub fn weights(&self, t: f32, w: &mut [f32]) {
+        for (k, (target, ticks, values)) in self.tracks.iter().enumerate() {
+            let v = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];
+            w[*target] = if self.tracks[..k].iter().any(|e| e.0 == *target) { w[*target].max(v) } else { v };
+        }
+    }
+}
+
 /// The node a mod's eye materials hold in `part_nodes`, and its donor's eye tracks bind to (standard §4c).
 pub const EYES: usize = usize::MAX;
 
 /// A motion's face from its `.MOR` and `.UVA` files (`None` without either): MOR tracks bind by `target`, UVA
 /// tracks to the skeleton node of their name (the game's node binding; unmatched tracks never play).
 pub fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &impl Fn(&str) -> Option<usize>) -> Option<Face> {
+    face_counted(m, u, skeleton, target, &|t| target(t).is_some())
+}
+
+/// [`face`] with the face clock's length over the tracks `counts` names, bound or not (a mod's: those its donor's
+/// own model binds, so its faces keep the donor's timing whatever channels it lacks).
+pub fn face_counted(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target: &impl Fn(&str) -> Option<usize>, counts: &impl Fn(&str) -> bool) -> Option<Face> {
     let (mor, uva) = (m.and_then(|d| mor::parse(&d, 1).ok()), u.and_then(|d| mor::parse(&d, 4).ok()));
     if mor.is_none() && uva.is_none() {
         return None;
     }
     let mut f = Face::default();
     if let Some(t) = mor {
+        f.length = hst_sim::face::length(t.tracks.iter().filter(|tr| counts(&tr.name)).map(|tr| &tr.ticks[..]), t.ticks_per_frame);
         f.tracks = t.tracks.into_iter().filter_map(|tr| Some((target(&tr.name)?, tr.ticks, tr.values))).collect();
-        f.length = hst_sim::face::length(f.tracks.iter().map(|t| &t.1[..]), t.ticks_per_frame);
     }
     if let Some(t) = uva {
         f.uv_length = hst_sim::face::length(t.tracks.iter().map(|t| &t.ticks[..]), t.ticks_per_frame);
@@ -219,11 +236,10 @@ pub fn face(m: Option<Vec<u8>>, u: Option<Vec<u8>>, skeleton: &Skeleton, target:
 }
 
 impl CharacterData {
-    /// The morph target a `.MOR` track binds: the same name (disc) or the name after its object prefix (a mod's
-    /// donor tracks, `face\x01joy_eye`).
+    /// The morph target a `.MOR` track binds: the same name (disc), else a mod's channel for it
+    /// ([`crate::mods::face_target`]: the name after its object prefix, `face\x01joy_eye`, or the nearest expression).
     pub fn morph_target(&self, track: &str) -> Option<usize> {
-        let short = track.rsplit('\x01').next();
-        self.morph_names.iter().position(|n| n == track).or_else(|| self.morph_names.iter().position(|n| Some(n.as_str()) == short))
+        self.morph_names.iter().position(|n| n == track).or_else(|| crate::mods::face_target(&self.morph_names, track))
     }
 
     pub fn joint(&self, name: &str) -> Option<usize> {
@@ -578,10 +594,19 @@ pub fn load_disc_with(
 
 /// The node names of disc character `n`'s body model (costume 0; every costume shares the skeleton).
 pub fn disc_nodes(iso: &mut Iso, n: usize) -> Result<Vec<String>, String> {
+    Ok(disc_body(iso, n)?.node_names)
+}
+
+/// The morph targets of disc character `n`'s body model (costume 0).
+pub fn disc_morph_names(iso: &mut Iso, n: usize) -> Result<Vec<String>, String> {
+    Ok(disc_body(iso, n)?.morph_names)
+}
+
+fn disc_body(iso: &mut Iso, n: usize) -> Result<mdl::Model, String> {
     let data = iso.read(&format!("PC/PC{n:02}C00.XB")).map_err(|e| e.to_string())?;
     let arc = Archive::parse(&data).map_err(|e| e.0)?;
     let e = arc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with("_c00.mdl")).ok_or("no body model")?;
-    Ok(mdl::parse(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)?.node_names)
+    mdl::parse(&arc.read(e).map_err(|e| e.0)?).map_err(|e| e.0)
 }
 
 /// What a character takes from its disc motion set: the clips, root paths, pelvis rows, arm table, faces and the
@@ -619,6 +644,12 @@ pub fn disc_motions(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl F
 
 /// [`disc_motions`], only the motions `only` (and their faces) if given.
 pub fn disc_motions_with(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl Fn(&str) -> Option<usize>, only: Option<&[usize]>) -> Result<Motions, String> {
+    let counts = |t: &str| target(t).is_some();
+    disc_motions_counted(iso, n, skeleton, &target, counts, only)
+}
+
+/// [`disc_motions_with`], each face's length over the tracks `counts` names ([`face_counted`]).
+pub fn disc_motions_counted(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: impl Fn(&str) -> Option<usize>, counts: impl Fn(&str) -> bool, only: Option<&[usize]>) -> Result<Motions, String> {
     let want = |id: usize| only.is_none_or(|o| o.contains(&id));
     // motions by the game's numbers
     let anims = iso.read(&format!("PCANI/PC{n:02}ANI.XB")).map_err(|e| e.to_string())?;
@@ -632,7 +663,7 @@ pub fn disc_motions_with(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: i
     for id in (0..ani::MOTIONS.len()).filter(|&id| want(id)) {
         let stem = ani::motion_name(id, n).unwrap().to_ascii_lowercase();
         let file = |ext: &str| aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.{ext}"))).and_then(|e| aarc.read(e).ok());
-        faces.extend(face(file("mor"), file("uva"), skeleton, &target).map(|f| (id, f)));
+        faces.extend(face_counted(file("mor"), file("uva"), skeleton, &target, &counts).map(|f| (id, f)));
         let Some(e) = aarc.entries.iter().find(|e| e.name.to_ascii_lowercase().ends_with(&format!("{stem}.ani2"))) else { continue };
         let Ok(a) = ani::parse(&aarc.read(e).map_err(|e| e.0)?) else { continue };
         if let (Some(h), Some(row)) = (hip, pelvis.get_mut(id)) {
@@ -684,7 +715,7 @@ pub fn disc_motions_with(iso: &mut Iso, n: usize, skeleton: &Skeleton, target: i
         if let Some(a) = file("ani").and_then(|d| ani::parse(&d).ok()) {
             motions.insert(POSE, Clip::new(skeleton, &a));
         }
-        faces.extend(face(file("mor"), file("uva"), skeleton, &target).map(|f| (POSE, f)));
+        faces.extend(face_counted(file("mor"), file("uva"), skeleton, &target, &counts).map(|f| (POSE, f)));
     }
     let strokes: Option<Vec<Clip>> = (0x10..0x1c).map(|m| motions.get(&m).cloned()).collect();
     let arm = strokes.map(|c| Arc::new(arm_table(skeleton, &c, n as i32)));
@@ -1028,10 +1059,7 @@ impl Posing {
         let w = weights.weights_mut();
         w.fill(0.0);
         if let Some(face) = rig.data.faces.get(&motion.face) {
-            let t = hst_sim::ps2::mul(motion.face_clock.sampled, 80.0);
-            for (target, ticks, values) in &face.tracks {
-                w[*target] = hst_sim::face::sample(ticks, values, t, &mut 0, false)[0];
-            }
+            face.weights(hst_sim::ps2::mul(motion.face_clock.sampled, 80.0), w);
         }
     }
 }

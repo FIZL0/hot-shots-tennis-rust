@@ -809,6 +809,7 @@ Oldest entries first (full text as they were in the old TODO.md):
 - [x] **M122** Online lobby: show every player a notice when someone is still downloading a mod, so they know why that player isn't ready (builds on B537's progress; crates/hst-base/src/mods_online.rs, crates/hst/src/play/main_menu/)
 - [x] **B539** iOS Safari (in the browser, not the home-screen web app): play full screen with no tab/address bar, as far as iPhone Safari allows (it has no Fullscreen API for pages; check what minimal-ui/scroll tricks still work, else lean on M123's home-screen tutorial) (web/index.html, web/site.js)
 - [x] **M123** Website front page: on iOS Safari only (not already a home-screen app), show a short tutorial for Add to Home Screen (Share → Add to Home Screen) so the game runs full screen (web/index.html, web/site.js, web/site.css)
+- [x] **B542** Hot Shots Golf: Out of Bounds mod characters (Sophie at least, maybe others) show no facial animation in a match: check every OOB character's face morphs/expressions play (blinks, mouth, emotes), find where they're lost (export in ../opentennis-mods tools/oob2gltf: face morph targets + weight channels; or our loader/animator), fix it and list which characters were affected (crates/hst-base/src/mods.rs, crates/hst-base/src/character.rs, ../opentennis-mods/tools/oob2gltf, ../opentennis-mods/notes/oob.md)
 
 
 ### Shots

@@ -560,10 +560,7 @@ pub(super) fn pose(
         if let Some(face) = &c.faces[i][s] {
             let w = weights.weights_mut();
             w.fill(0.0);
-            let at = hst_sim::ps2::mul(t.min(face.length), 80.0);
-            for (target, ticks, values) in &face.tracks {
-                w[*target] = hst_sim::face::sample(ticks, values, at, &mut 0, false)[0];
-            }
+            face.weights(hst_sim::ps2::mul(t.min(face.length), 80.0), w);
             let offset = crate::inspect::face_uv(&rig.data, face, t.min(face.uv_length));
             for (mesh, mat) in parts.iter_many(kids.iter_descendants(root)) {
                 let o = rig.data.parts.iter().position(|p| p.0.id() == mesh.0.id()).map_or(Vec2::ZERO, |k| offset[k]);

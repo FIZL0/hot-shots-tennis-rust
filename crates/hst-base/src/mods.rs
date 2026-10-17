@@ -23,6 +23,78 @@ const SKELETON: &str = include_str!("../../hst/hst_skeleton.json");
 /// The face channels a morph face must carry (§4a).
 const FACE: [&str; 8] = ["joy_eye", "joy_mouth", "anger_eye", "anger_mouth", "sorrow_eye", "sorrow_mouth", "doki_eye", "doki_mouth"];
 
+/// HST's face channels and the expression words that stand in for them, best first (standard §4a, opentennis-mods
+/// `tools/rerig/rerig.py`'s table, plus the donors' own extras: `niya` grin, `tukare` tired).
+const FACE_WORDS: [(&str, &[&str]); 5] = [
+    ("blink", &["blink", "close", "wink"]),
+    ("joy", &["joy", "smile", "laugh", "bigsmile", "grin", "joe", "niya"]),
+    ("anger", &["anger", "angry", "vexing", "muka", "scowl", "miken", "frown", "katamayu", "provocation", "clench"]),
+    ("sorrow", &["sorrow", "sad", "cry", "worry", "disapoint", "beaten", "tukare", "nihil", "pain"]),
+    ("doki", &["doki", "surprise", "suprise", "amaze", "awa", "shy", "open", "o", "ayo", "oh"]),
+];
+
+/// A morph target name as rerig.py's `face_word` reads it: (word, part `eye`/`mouth`, side `L`/`R`/`LR`/"", variant
+/// rank), `close_eyeL` → (close, eye, L, 0), `sorrowA_mouth` → (sorrow, mouth, "", 1), `joy2_mouth` → (joy, mouth, "", 2).
+fn face_word(name: &str) -> Option<(String, &'static str, &str, u32)> {
+    let word_ok = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_alphabetic() || c == '-');
+    let (head, part, tail) = [("_eye", "eye"), ("_mouth", "mouth")].into_iter().find_map(|(m, part)| {
+        let i = name.rfind(m)?;
+        let tail = &name[i + m.len()..];
+        (tail.chars().all(|c| c.is_ascii_digit()) || tail == "L" || tail == "R").then(|| (&name[..i], part, tail))
+    })?;
+    let (head, side) = ["_LR", "_L", "_R"].into_iter().find_map(|s| head.strip_suffix(s).map(|h| (h, &s[1..]))).unwrap_or((head, ""));
+    // the leading side marker, where a word is left after it
+    let (head, lead) = match head.strip_prefix(['L', 'R']) {
+        Some(r) if !r.trim_start_matches('_').is_empty() => (r.trim_start_matches('_'), &head[..1]),
+        _ => (head, ""),
+    };
+    let digits = head.len() - head.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    let (word, var) = if digits > 0 {
+        head.split_at(head.len() - digits)
+    } else if head.len() > 1 && head.ends_with(['A', 'B', 'C']) {
+        head.split_at(head.len() - 1)
+    } else {
+        (head, "")
+    };
+    if !word_ok(word) {
+        return None;
+    }
+    let var = if var.is_empty() && tail != "L" && tail != "R" { tail } else { var };
+    let rank = match var {
+        "A" => 1,
+        "B" => 2,
+        "C" => 3,
+        v => v.parse().unwrap_or(0),
+    };
+    let side = [lead, side, if tail == "L" || tail == "R" { tail } else { "" }].into_iter().find(|s| !s.is_empty()).unwrap_or("");
+    Some((word.to_ascii_lowercase().trim_end_matches('-').to_string(), part, side, rank))
+}
+
+/// The morph target of a mod (`names`, no object prefix) a donor `.MOR` track drives: the one named as the track
+/// after its prefix (`face\x01joy_eye` → `joy_eye`); failing that, the nearest expression the mod has (the donor's
+/// own extras, `joy2_mouth`, `wink_eye`, `smile_eye`, play on its channel, `joy_mouth`, `blink_eye`, `joy_eye`; a
+/// channel the mod lacks on its closest same-part target by [`FACE_WORDS`]), so the face moves wherever the
+/// donor's does. `None` for a track with no expression word (`kiss_mouth`), or none of its words in the mod.
+pub fn face_target(names: &[String], track: &str) -> Option<usize> {
+    let short = track.rsplit('\x01').next()?;
+    if let Some(i) = names.iter().position(|n| n == short) {
+        return Some(i);
+    }
+    let (word, part, ..) = face_word(short)?;
+    let (channel, words) = FACE_WORDS.iter().find(|(_, w)| w.contains(&word.as_str()))?;
+    if let Some(i) = names.iter().position(|n| *n == format!("{channel}_{part}")) {
+        return Some(i);
+    }
+    words.iter().find_map(|w| {
+        names
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| face_word(n).filter(|f| f.0 == *w && f.1 == part && matches!(f.2, "" | "LR")).map(|f| (f.3, i)))
+            .min()
+            .map(|f| f.1)
+    })
+}
+
 /// A mod's manifest (`mod.json`, §6), checked.
 #[derive(Debug, Clone)]
 pub struct Mod {
@@ -1056,8 +1128,11 @@ pub fn load_with(
         }
     };
 
-    // the donor's motions; its face tracks (`face\x01joy_eye`) bind by the name after the object prefix
-    let Motions { motions, paths, pelvis, arm, mut faces, stance_ball } = character::disc_motions_with(iso, m.donor, &skeleton, |t| names.iter().position(|n| Some(n.as_str()) == t.rsplit('\x01').next()), only)?;
+    // the donor's motions; its face tracks (`face\x01joy_eye`) bind by the name after the object prefix, or to the
+    // nearest expression (B542), and each face lasts as long as on the donor's own model
+    let donor_targets = character::disc_morph_names(iso, m.donor)?;
+    let Motions { motions, paths, pelvis, arm, mut faces, stance_ball } =
+        character::disc_motions_counted(iso, m.donor, &skeleton, |t| face_target(&names, t), |t| donor_targets.iter().any(|d| d == t), only)?;
     // the donor's eye tracks on nodes the costume lacks drive its §4c eye materials (those the donor's own model
     // binds: a track naming no node of it plays on neither)
     if !eyes.is_empty() {
@@ -1356,6 +1431,96 @@ mod tests {
             }
         }
         assert!(shown > 0, "the donor's faces never show an expression");
+    }
+
+    /// B542: target names read like rerig.py's `face_word`, and a donor track the mod has no target of plays on its
+    /// nearest expression.
+    #[test]
+    fn donor_tracks_fall_back_to_the_nearest_expression() {
+        let w = |n: &str| face_word(n).map(|(w, p, s, r)| format!("{w} {p} {s} {r}"));
+        assert_eq!(w("close_eyeL").as_deref(), Some("close eye L 0"));
+        assert_eq!(w("sorrowA_mouth").as_deref(), Some("sorrow mouth  1"));
+        assert_eq!(w("joy2_mouth").as_deref(), Some("joy mouth  2"));
+        assert_eq!(w("amaze_LR_eye").as_deref(), Some("amaze eye LR 0"));
+        assert_eq!(w("Lsmile_mouth").as_deref(), Some("smile mouth L 0"));
+        assert_eq!(w("anger_eye2").as_deref(), Some("anger eye  2"));
+        assert_eq!(w("U_mouth").as_deref(), Some("u mouth  0"));
+        assert_eq!(w("out_tongue_mouth"), None);
+        assert_eq!(w("uplip_down"), None);
+        // Sophie (Out of Bounds pc02) under donor 6, whose faces also drive joy2_mouth and wink_eye
+        let names: Vec<String> = ["anger_mouth", "sorrow_eye", "laugh_eye", "muka_eye", "blink_eye", "chu_mouth", "smile_eye", "smile_mouth", "joy_eye", "joy_mouth"].map(String::from).into();
+        let at = |t: &str| face_target(&names, t).map(|i| names[i].as_str());
+        assert_eq!(at("face\x01joy_mouth"), Some("joy_mouth"));
+        assert_eq!(at("face\x01joy2_mouth"), Some("joy_mouth"));
+        assert_eq!(at("face\x01wink_eye"), Some("blink_eye"));
+        assert_eq!(at("face\x01smile_eye"), Some("smile_eye"));
+        assert_eq!(at("face\x01anger_eye"), Some("muka_eye"));
+        assert_eq!(at("face\x01doki_eye"), None);
+        assert_eq!(at("face\x01kiss_mouth"), None);
+        // a channel's lowest variant, never one half of the face
+        let names: Vec<String> = ["surprise_mouth2", "surprise_mouth1", "close_eyeL", "close_eyeR"].map(String::from).into();
+        assert_eq!(face_target(&names, "face\x01doki_mouth"), Some(1));
+        assert_eq!(face_target(&names, "face\x01blink_eye"), None);
+        // two tracks on one target: the stronger shows
+        let f = character::Face { tracks: vec![(0, vec![0, 80], vec![[0.0; 4]; 2]), (0, vec![0, 80], vec![[0.75; 4]; 2]), (1, vec![0], vec![[0.5; 4]])], ..default() };
+        let mut out = [9.0; 3];
+        f.weights(40.0, &mut out);
+        assert_eq!(out, [0.75, 0.5, 9.0]);
+    }
+
+    /// B542: an Out of Bounds mod's faces move wherever its donor's do: every donor track bound on the donor's own
+    /// model binds on the mod unless the mod has no expression for it, and each face lasts as long as the donor's.
+    fn oob_faces_follow_the_donor(iso: &mut Iso, id: &str) -> Option<String> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods");
+        let m = read(&root.join(id)).ok()?;
+        let mut s = Stores(default(), default(), default(), default());
+        let c = load(iso, &m, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let disc = character::load_disc(iso, m.donor, 0, &mut s.0, &mut s.1, &mut s.2, &mut s.3).unwrap();
+        let mut missing = std::collections::BTreeSet::new();
+        for (id, f) in &disc.faces {
+            let g = &c.faces[id];
+            assert_eq!(g.length, f.length, "{} motion {id:#x}: face length", m.id);
+            for t in &f.tracks {
+                let name = &disc.morph_names[t.0];
+                if face_target(&c.morph_names, name).is_none() {
+                    missing.insert(name.rsplit('\x01').next().unwrap().to_string());
+                }
+            }
+            assert_eq!(g.tracks.len() + f.tracks.iter().filter(|t| face_target(&c.morph_names, &disc.morph_names[t.0]).is_none()).count(), f.tracks.len(), "{} motion {id:#x}", m.id);
+        }
+        // the channels the donor's faces reach, at their peak
+        let mut peak = vec![0f32; c.morph_names.len()];
+        for face in c.faces.values() {
+            for k in 0..(face.length as i32) {
+                let mut w = vec![0.0; c.morph_names.len()];
+                face.weights(hst_sim::ps2::mul(k as f32, 80.0), &mut w);
+                peak.iter_mut().zip(w).for_each(|(p, w)| *p = p.max(w));
+            }
+        }
+        let shown: Vec<_> = c.morph_names.iter().zip(&peak).filter(|p| *p.1 > 0.0).map(|p| p.0.as_str()).collect();
+        Some(format!("{}: donor {}, plays {shown:?}, no target for {missing:?}", m.id, m.donor))
+    }
+
+    /// Sophie (skipped without `mods/hst-mods/oob_pc02_sophie`): her donor's smile (`joy2_mouth`) and wink play.
+    #[test]
+    fn sophie_smiles_and_winks() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let Some(r) = oob_faces_follow_the_donor(&mut iso, "oob_pc02_sophie") else { return eprintln!("no oob_pc02_sophie, skipped") };
+        eprintln!("{r}");
+        assert!(r.contains("no target for {\"doki_eye\", \"doki_mouth\"}"), "{r}");
+        assert!(r.contains("\"joy_mouth\"") && r.contains("\"blink_eye\""), "{r}");
+    }
+
+    /// Every Out of Bounds mod in `mods/hst-mods` (~5 s; `-- --nocapture` prints what each one plays and lacks).
+    #[test]
+    fn oob_faces_all() {
+        let Ok(mut iso) = Iso::open(ISO) else { return eprintln!("no ISO, skipped") };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mods/hst-mods");
+        let mut ids: Vec<_> = std::fs::read_dir(root).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("oob_")).collect();
+        ids.sort();
+        for id in ids {
+            eprintln!("{}", oob_faces_follow_the_donor(&mut iso, &id).unwrap());
+        }
     }
 
     /// A motions file keying a joint only some costumes have still loads the others (B99: Phoebe's costumes 4–7 lack
