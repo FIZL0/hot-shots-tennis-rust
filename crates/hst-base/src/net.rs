@@ -1717,6 +1717,10 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 // 10 s) would time out there; native joiners would still find the host by the DHT
                 // B266: and never without one while the relays are on (the 30 s cap published a relay-less code,
                 // which a browser read as Relay off): a code without a relay is a Relay off host's
+                if relays && ep.addr().relay_urls().next().is_none() {
+                    // B549: the stage a host stuck on "Connecting to the relay" is at
+                    bevy::log::info!("short code: waiting for a home relay");
+                }
                 while relays && ep.addr().relay_urls().next().is_none() {
                     if n0_future::time::timeout(Duration::from_secs(30), ep.online()).await.is_err() {
                         if ctx_.is_closed() {
@@ -1750,11 +1754,14 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                 let c = loop {
                     let ticket = code_ticket(&ep, None);
                     let code = shown.lock().unwrap().clone();
+                    bevy::log::info!("short code {code}: checking and publishing it ({:?} in)", t.elapsed());
+                    // B549: a put that never answers (a stalled request on Android) counts as a failed one: the ticket
+                    // instead, joinable, tried again
                     let c = roll(&dht, code, &ticket, |c| {
                         *shown.lock().unwrap() = c.into();
                         drop(ev.send(Event::Short(c.into())))
-                    })
-                    .await;
+                    });
+                    let c = n0_future::time::timeout(ROLL_CAP, c).await.unwrap_or_else(|_| Err(format!("no answer in {} s", ROLL_CAP.as_secs())));
                     let why = match c {
                         Ok(c) => break Some(c),
                         _ if !relays || ctx_.is_closed() => break None,
@@ -1892,7 +1899,11 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                     if let Some(c) = code {
                         let mut r = Ok(());
                         if again {
-                            r = publish(&cx2.dht, &c, &ticket).await.map_err(|e| format!("the code {c} didn't go out ({e})"));
+                            // B549: a stalled put is a missed one, not a republish task left hanging
+                            r = n0_future::time::timeout(ROLL_CAP, publish(&cx2.dht, &c, &ticket))
+                                .await
+                                .unwrap_or_else(|_| Err(format!("no answer in {} s", ROLL_CAP.as_secs())))
+                                .map_err(|e| format!("the code {c} didn't go out ({e})"));
                         }
                         if put && r.is_ok() {
                             // B213: a private lobby's board slot is overwritten as full, like its DHT listing
@@ -1986,6 +1997,12 @@ async fn host(cx: &Ctx, mut room: Room, cmds: &mut amp::UnboundedReceiver<Cmd>) 
                         continue;
                     }
                     let name = if name.trim().is_empty() { short(&peer).to_string() } else { name.chars().take(16).collect() };
+                    // B549: someone reached the lobby (board, LAN or link) before its short code went out: friends can
+                    // join, whatever stage the code is stuck at
+                    if cx.relays && code.is_none() {
+                        bevy::log::info!("joinable: {name} joined before the short code went out");
+                        cx.say(Event::Joinable);
+                    }
                     cx.say(Event::Status(format!("{name} joined.")));
                     room.names.insert(peer.clone(), name);
                     room.courts.insert(peer.clone(), courts);
@@ -3109,6 +3126,10 @@ async fn relay_put(code: &str, ticket: &str) -> Result<(), String> {
     Err(why)
 }
 
+/// B549: the longest a host's short code check and put may take before it counts as failed (the ticket shown, the
+/// lobby joinable, the put tried again): the relay's put takes 5-20 s (B151), a taken code's lookup up to 15 s.
+const ROLL_CAP: Duration = Duration::from_secs(60);
+
 /// A short code for the lobby with `ticket`, `code` first: a free one, published (Err: why the DHT or relay
 /// didn't take it). Each code tried after a taken one goes to `show`.
 async fn roll(dht: &Dht, mut code: String, ticket: &str, show: impl Fn(&str)) -> Result<String, String> {
@@ -4041,6 +4062,50 @@ mod tests {
         // a listing from before M22 has no build: read as another build's
         let before: Listing = serde_json::from_str(r#"{"id":"x","name":"","doubles":false,"court":0,"taken":1,"seats":2,"time":0}"#).unwrap();
         assert!(!before.same_build());
+    }
+
+    /// B549 on loopback: a host with the relays on whose code never goes out (here: no home relay, ever) isn't
+    /// joinable by the code, but a guest who reaches it anyway (its ticket, the board, the LAN) makes it so.
+    #[test]
+    fn a_joined_guest_makes_a_stuck_host_joinable() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let testnet = n0_mainline::Testnet::new(3).await.unwrap();
+            let cx = |relays| {
+                let bootstrap = testnet.bootstrap.clone();
+                async move {
+                    let (ep, _) = endpoint(&Relay::Off).await.unwrap();
+                    let (tx, rx) = mpsc::channel();
+                    (Ctx { ep: Some(ep), dht: Dht::builder().bootstrap(&bootstrap).build().unwrap(), lan: Lan::default(), ev: tx, name: "g".into(), courts: Vec::new(), device: Default::default(), seat: None, relays }, rx)
+                }
+            };
+            let ((hcx, hev), (gcx, gev)) = (cx(true).await, cx(false).await);
+            let (_hcmd, mut hrx) = amp::unbounded_channel();
+            let (_gcmd, mut grx) = amp::unbounded_channel();
+            let mut r = room(false);
+            r.take("host", &[Pick::disc(3, 0)]);
+            tokio::spawn(async move { host(&hcx, r, &mut hrx).await });
+            let mut joinable = false;
+            let code = loop {
+                match hev.try_recv() {
+                    Ok(Event::Code(c)) => break c,
+                    Ok(Event::Joinable) => joinable = true,
+                    _ => tokio::time::sleep(Duration::from_millis(20)).await,
+                }
+            };
+            // (stuck: no relay, so neither a code nor a failed one says Joinable)
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            joinable |= std::iter::from_fn(|| hev.try_recv().ok()).any(|e| matches!(e, Event::Joinable));
+            assert!(!joinable, "joinable with no code out and nobody in");
+            tokio::spawn(async move { join_as(&gcx, &code, vec![Pick::disc(1, 0)], &mut grx, our_build()).await });
+            let t = tokio::time::Instant::now();
+            while !matches!(gev.try_recv(), Ok(Event::Room(_))) {
+                assert!(t.elapsed() < Duration::from_secs(10), "the guest never got in");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            joinable = std::iter::from_fn(|| hev.try_recv().ok()).any(|e| matches!(e, Event::Joinable));
+            assert!(joinable, "still connecting with a guest in the lobby");
+        });
     }
 
     /// M2i on loopback: the host brings a mod (and a court mod); the guest sees its wire, asks for its looks and gets
