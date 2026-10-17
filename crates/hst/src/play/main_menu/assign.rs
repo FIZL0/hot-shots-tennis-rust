@@ -151,12 +151,8 @@ fn seat_card(d: &mut Draw, m: &Menu, text: &Text, pads: &[Entity], card: [f32; 4
         Kind::Com => "COM".into(),
         Kind::Online => "Online".into(),
     };
-    let device = match m.player_name(p) {
-        Some(own) => format!("{own} - {device}"),
-        None => device,
-    };
     let side = if p < (m.players() / 2).max(1) { "Near" } else { "Far" };
-    band(d, &s, [x, y, w, BAND * PY], human, p, &name, &device, side, None, m.droppable(p));
+    band(d, &s, [x, y, w, BAND * PY], human, p, m.player_name(p).as_deref(), &name, &device, side, None, m.droppable(p));
     if m.droppable(p) {
         super::drop_button(d, p, x + w - 30.0, y - 6.0);
     }

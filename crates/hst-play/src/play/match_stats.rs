@@ -766,7 +766,7 @@ fn draw(
         _ => None,
     };
     let slots: Vec<usize> = (0..n).map(slot).collect();
-    plates.0[super::name_tags::RESULT] = super::name_tags::take(&mut quads, names.as_deref(), &slots, label, |q| (q.dst, q.rgb, q.alpha));
+    plates.0[super::name_tags::RESULT] = super::name_tags::take(&mut quads, names.as_deref(), &slots, label, |q| (q.dst, q.src, q.rgb, q.alpha));
     for (Slot(i), mut img, mut node, mut vis) in &mut q {
         let Some(quad) = quads.get(*i) else {
             vis.set_if_neq(Visibility::Hidden);

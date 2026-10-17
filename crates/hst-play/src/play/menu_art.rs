@@ -26,7 +26,7 @@ pub fn wall_k() -> f32 {
     if OFF.load(Ordering::Relaxed) { 1.0 } else { K as f32 }
 }
 
-static HEAVY: &[u8] = include_bytes!("../../../hst/assets/fonts/MPLUSRounded1c-ExtraBold.ttf");
+pub(crate) static HEAVY: &[u8] = include_bytes!("../../../hst/assets/fonts/MPLUSRounded1c-ExtraBold.ttf");
 pub(crate) static BOLD: &[u8] = include_bytes!("../../../hst/assets/fonts/MPLUSRounded1c-Bold.ttf");
 
 /// A label: its ink box on the disc sheet (x, y, w, h) and its words.
@@ -633,7 +633,7 @@ fn clear(out: &mut Pixmap, [x, y, w, h]: [f32; 4]) {
 
 /// `words` in our font in `cell` (disc px, the ring's outer edge): its cap height fills the cell less the ring, the
 /// width squeezed only if it doesn't fit, centred; ring, outline, then the fill's fade over the cap height.
-fn stamp(out: &mut Pixmap, font: &ab_glyph::FontRef, [x, y, w, h]: [f32; 4], words: &str, l: &Look) {
+pub(crate) fn stamp(out: &mut Pixmap, font: &ab_glyph::FontRef, [x, y, w, h]: [f32; 4], words: &str, l: &Look) {
     let (Some(path), Some(caps)) = (text_path(font, words), text_path(font, "H")) else { return };
     let k = K as f32;
     let m = l.ew + l.rw;
