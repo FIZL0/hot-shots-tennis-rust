@@ -53,6 +53,8 @@ pub struct View {
     /// it), the ones asked for and not here yet, the one the prompt asks about, the line-up last reported settled.
     pub looks: HashMap<u64, Option<PathBuf>>,
     pub wanted: HashSet<u64>,
+    /// B537: how far each `wanted` one's download is (bytes so far, the pack's length), once its bytes start coming.
+    pub progress: HashMap<u64, (u64, u64)>,
     pub ask: Option<u64>,
     /// After a match, the mods it downloaded (folder, name) the lobby asks whether to keep (Keep Online Downloads),
     /// and the ones already kept or turned down, not asked about again.
@@ -618,7 +620,11 @@ impl Menu {
         let h = s.pick.r#mod.as_deref().filter(|w| w.name == n).map(|w| w.looks);
         let what = match h {
             Some(h) if self.net.looks.get(&h).is_some_and(|d| d.is_none()) => "you'll see a stand-in",
-            Some(h) if self.net.wanted.contains(&h) => "downloading its looks...",
+            // B537: how far, once its bytes come (the host may still be getting it from its owner first)
+            Some(h) if self.net.wanted.contains(&h) => match self.net.progress.get(&h) {
+                Some(&(got, len)) => return Some(format!("{n} mod: downloading its looks ({}%)", got * 100 / len.max(1))),
+                None => "downloading its looks...",
+            },
             Some(h) if self.net.ask == Some(h) => "download its looks?",
             _ => match self.settings.4 {
                 Ask::Never => "you'll see a stand-in",
@@ -893,6 +899,7 @@ impl Menu {
         (self.net.code, self.net.short, self.net.finding) = (String::new(), String::new(), 0);
         (self.net.ask, self.net.ready, self.net.hosting, self.net.prepared, self.net.deciding) = (None, None, false, false, false);
         self.net.wanted.clear();
+        self.net.progress.clear();
         self.net.pick_next = true;
         self.net.fail = None;
         (self.net.me, self.net.sent) = (if go == Go::Host { "host".into() } else { String::new() }, None);
@@ -1531,7 +1538,7 @@ impl Menu {
                 v.status = "Back in the lobby.".into();
                 self.align();
             }
-            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) | Event::Chat { .. } | Event::Emote { .. } => {}
+            Event::Match(_) | Event::Dropped(_) | Event::Datagram(..) | Event::Pack(..) | Event::Progress(..) | Event::Chat { .. } | Event::Emote { .. } => {}
         }
     }
 
@@ -1660,8 +1667,17 @@ impl Menu {
         self.net.room.as_ref().filter(|_| !self.net.started).is_some_and(|r| r.mods().any(|(_, w)| open(&w.looks)) || self.court_to_fetch(r).is_some_and(|c| open(&c.looks)))
     }
 
+    /// B537: mod `h`'s looks are `got` bytes of `len` in, for its seat's note; only while still wanted (a late one after
+    /// a new lobby is dropped).
+    fn download_progress(&mut self, h: u64, got: u64, len: u64) {
+        if self.net.wanted.contains(&h) {
+            self.net.progress.insert(h, (got, len));
+        }
+    }
+
     /// A mod's looks arrived: checked and kept, or refused (a stand-in plays it).
     fn got_pack(&mut self, iso: &str, h: u64, pack: &[u8]) {
+        self.net.progress.remove(&h);
         if !self.net.wanted.remove(&h) {
             return;
         }
@@ -2320,6 +2336,9 @@ pub(super) fn poll(
             }
             if let Event::Pack(h, b) = &e {
                 menu.got_pack(&args.iso, *h, b);
+            }
+            if let Event::Progress(h, got, len) = e {
+                menu.download_progress(h, got, len);
             }
             menu.heard(e);
         }
@@ -3363,6 +3382,17 @@ mod tests {
         assert!(out.iter().any(|e| matches!(e, Effect::Online(Fx::Net(Cmd::Want(7))))), "{out:?}");
         assert_eq!((b.net.ask, b.net.wanted.contains(&7), b.settings.4, b.mod_asking()), (None, true, Ask::Each, false));
         assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: downloading its looks..."));
+        // B537: how far, as its bytes come; another mod's (not wanted here) changes nothing
+        b.download_progress(7, 0, 200);
+        assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: downloading its looks (0%)"));
+        b.download_progress(7, 101, 200);
+        b.download_progress(8, 200, 200);
+        assert_eq!(b.remote_mod_note(1).as_deref(), Some("Emi mod: downloading its looks (50%)"));
+        assert!(!b.net.progress.contains_key(&8));
+        b.got_pack(iso, 7, b"not a pack");
+        assert_eq!((b.net.progress.get(&7), b.remote_mod_note(1).as_deref()), (None, Some("Emi mod: you'll see a stand-in")), "refused");
+        b.net.looks.clear();
+        b.net.wanted.insert(7);
         // asked again (its looks never came): ○ plays it as a stand-in
         b.net.wanted.clear();
         b.settle(iso, &net);
