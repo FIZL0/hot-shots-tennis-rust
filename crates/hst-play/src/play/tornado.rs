@@ -94,6 +94,8 @@ fn setup(
 /// One game frame: a swing locking onto the ball latches it, and the shot leaving the racket then starts it (the
 /// game's ball-away flag is the contact frame; before `start_effects` takes the hit), then it rides the ball. A dive
 /// or a missed swing posts no record, so a dive's return starts none unless an earlier lock is still latched.
+// It aims along the ball's last move (`Flight::last`, the game's), not its velocity: a curve serve's wind and bend
+// move the ball off its velocity, and a velocity-aimed tornado stuck out sideways from the path.
 // ponytail: the latch clears once the point is over; the game clears it at its point reset, no contact comes between
 fn tick(fx: Option<ResMut<Wind>>, g: Res<Game>) {
     let Some(mut fx) = fx else { return };
@@ -107,11 +109,11 @@ fn tick(fx: Option<ResMut<Wind>>, g: Res<Game>) {
         fx.latched = false;
     }
     if g.hit_effect.is_some() && std::mem::take(&mut fx.latched) {
-        fx.tornado.start(v4(b.vel, 0.0), fx.fade);
+        fx.tornado.start(v4(g.flight.last, 0.0), fx.fade);
         fx.uv.restart(fx.tornado.uv_speed());
         debug!("tornado {} at speed {}", if fx.tornado.on { "on" } else { "too slow" }, fx.tornado.speed);
     }
-    fx.tornado.tick(g.flight.bounces, v4(b.pos, 1.0), v4(b.vel, 0.0), fx.fade);
+    fx.tornado.tick(g.flight.bounces, v4(b.pos, 1.0), v4(g.flight.last, 0.0), fx.fade);
     if fx.tornado.on {
         fx.uv.tick();
     }
@@ -136,7 +138,7 @@ fn draw(fx: Option<Res<Wind>>, g: Res<Game>, virt: Res<Time<Virtual>>, fixed: Re
     if virt.relative_speed() < 1.0 {
         let (b, v4) = (&g.flight.ball, |v: [f32; 3], w: f32| [v[0], v[1], v[2], w]);
         // ponytail: the UV scroll holds at the tick's (no time before/after kept); the scale, aim and fade move on
-        scale = tween.between(g.flight.bounces, v4(b.pos, 1.0), v4(b.vel, 0.0), fixed.overstep_fraction(), [0.0; 2], fx.fade, 0).0;
+        scale = tween.between(g.flight.bounces, v4(b.pos, 1.0), v4(g.flight.last, 0.0), fixed.overstep_fraction(), [0.0; 2], fx.fade, 0).0;
     }
     let t = &tween;
     if let Ok((mut tr, mut v)) = q.get_mut(fx.view.root) {

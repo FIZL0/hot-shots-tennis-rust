@@ -4195,7 +4195,7 @@ fn start_effects(
         hit,
         dead,
         g.flight.ball.pos,
-        g.flight.ball.vel,
+        g.flight.last,
         g.prev_ball,
         &mut commands,
     );

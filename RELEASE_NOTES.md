@@ -38,3 +38,4 @@
 - Every setting with more than two choices (Shadows, Anti-aliasing, Show FPS, Renderer and the rest) is now a dropdown list; On/Off settings still toggle.
 - In the browser, switching renderer is now picked from the Renderer list, and only then asks whether to reload or cancel.
 - Pressing Online while a newer version is out suggests updating first, with a Play anyway button to go online as you are.
+- The white wind swirl on curve serves now trails along the ball's path instead of sticking out sideways, as in the original.
