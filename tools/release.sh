@@ -8,7 +8,8 @@
 #   SHA256SUMS  SHA256SUMS.sig
 #   web.tar.gz                                                         the website, which pages.yml deploys as built here
 # VERSION with a suffix (1.1.0-rc.1) is a pre-release, never Latest. notes.md is the "New in …" list (Markdown
-# bullets); without it, the commit subjects since the last v* tag (required for the first release). A draft unless
+# bullets); without it, RELEASE_NOTES.md (kept up to date as changes land; emptied and committed after the release),
+# and if that has no bullets either, the commit subjects since the last v* tag (required for the first release). A draft unless
 # `publish` is given: check it on GitHub and publish there. Publishing puts the release on opentennis.dev when the repo
 # variable SITE_FROM is `release` (pages.yml). Every push to main is a beta (pages.yml), not made here.
 set -e
@@ -28,6 +29,7 @@ done
 tag=v$version
 pre=
 [[ $version == *-* ]] && { pre=--prerelease; [ "$publish" = --draft ] || publish=--latest=false; }
+[ -n "$notes" ] || ! grep -q '^- ' RELEASE_NOTES.md || notes=RELEASE_NOTES.md
 last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
 [ -n "$notes" ] || [ -n "$last" ] || { echo "the first release needs a notes.md (no earlier v* tag to list commits from)" >&2; exit 1; }
 [ -z "$notes" ] || [ -f "$notes" ] || { echo "no such notes file: $notes" >&2; exit 1; }
@@ -98,7 +100,7 @@ body=$out/notes.md
     echo
     echo "## New in $version"
     echo
-    if [ -n "$notes" ]; then cat "$notes"; else git log --format='- %s' "$last..HEAD" --no-merges; fi
+    if [ -n "$notes" ]; then sed '/^<!--/d' "$notes"; else git log --format='- %s' "$last..HEAD" --no-merges; fi
     echo
     echo "## Verify the download"
     echo
@@ -113,4 +115,8 @@ body=$out/notes.md
 git push -q origin HEAD
 gh release create "$tag" --target "$(git rev-parse HEAD)" --title "OpenTennis $version" \
     --notes-file "$body" $pre $publish "$out"/opentennis-* "$out"/web.tar.gz "$out"/SHA256SUMS "$out"/SHA256SUMS.sig
+if [ "$notes" = RELEASE_NOTES.md ]; then
+    sed -i '/^<!--/!d' RELEASE_NOTES.md
+    git commit -qm "Release notes: emptied after v$version" -- RELEASE_NOTES.md && git push -q origin HEAD
+fi
 echo "$tag: $([ "$publish" = --draft ] && echo "draft, publish it on GitHub" || echo published)"

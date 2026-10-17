@@ -23,6 +23,11 @@ Rust/Bevy remaster of Hot Shots Tennis (SCUS-97610). Faithful: same AI, physics,
   the journal.
 - Gameplay ports are verified against the real game over PINE (`tools/pine.py`, launch with `tools/pcsx2-hst.sh`).
 
+## Release notes
+Anything a player would notice (new feature, fix, change in how something plays or looks) gets one plain-English
+`- ` line in `RELEASE_NOTES.md`, committed with the change: what changed for the player, not how. No task IDs, crate
+names or jargon. Internal work (tests, tooling, refactors, research) gets nothing. `tools/release.sh` publishes it.
+
 ## Research setup
 `research/README.md` rebuilds `context/` from the disc (extract, overlay ELFs, Ghidra project, decompilation
 dumps, save states, recordings) and lists the tool pitfalls.
