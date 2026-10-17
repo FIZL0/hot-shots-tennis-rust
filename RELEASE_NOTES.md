@@ -32,3 +32,4 @@
 - Online: if your browser page reloads or the game crashes mid-match, starting it again puts you straight back into the match in your old seat after one button press; the others now wait up to two minutes for you (the countdown says so). If the host reloads, the match still ends.
 - Picking up a controller while you're using the keyboard in the menus now asks whether the controller should be player 1; say yes and the keyboard is free for a second player, say no (or wait a few seconds) and it won't ask again until that controller is plugged back in.
 - Mods: after updating a mod it shows as Installed right away, instead of still offering Update until you refresh.
+- Music and ambience now start at half volume on a fresh install (your saved volumes are kept).

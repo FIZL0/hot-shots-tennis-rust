@@ -1461,6 +1461,8 @@ mod tests {
     #[test]
     fn sound_sliders() {
         let mut m = Menu { screen: Screen::Sound, sel: 1, ..default() };
+        assert_eq!(m.settings.2, Volumes([10, 5, 10, 10, 5]), "music and ambience default to half");
+        m.settings.2 = Volumes([10; 5]);
         m.step(Dev::Keys, press(|k| &mut k.ok));
         assert!(m.step(Dev::Keys, press(|k| &mut k.right)).is_empty(), "at its end: no sound, no save");
         assert_eq!(m.settings.2, Volumes([10, 10, 10, 10, 10]));

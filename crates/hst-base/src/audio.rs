@@ -305,14 +305,15 @@ pub struct Volumes(pub [u8; 5]);
 
 impl Default for Volumes {
     fn default() -> Self {
-        Volumes([10; 5])
+        // music and ambience start at half (user 2026-10-17)
+        Volumes([10, 5, 10, 10, 5])
     }
 }
 
 impl Volumes {
     pub const NAMES: [&str; 5] = ["master_volume", "music_volume", "sfx_volume", "voice_volume", "ambience_volume"];
 
-    /// The volume lines of a settings.txt (others ignored; missing ones full).
+    /// The volume lines of a settings.txt (others ignored; missing ones at their default).
     pub fn parse(text: &str) -> Self {
         let mut v = Volumes::default();
         for (k, x) in text.lines().filter_map(|l| l.split('#').next()?.split_once('=')) {
