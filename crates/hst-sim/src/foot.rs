@@ -119,6 +119,9 @@ pub struct Runner {
     pub lunge: f32,
     /// The dive's streak stops (the player's dive is done).
     pub dive_over: bool,
+    /// No steps or hip sprays: no puffs, no footprints (a mod character's own reactions, whose steps the donor's
+    /// table doesn't match).
+    pub no_steps: bool,
 }
 
 /// A player's dive as the run object reads it from the player: the hit event's dive branch fires on the frame a
@@ -198,16 +201,16 @@ impl Feet {
             let scale = st.scale.get(r.motion as usize).copied().unwrap_or(0.0);
             // the hips (one character's spine in one motion) coming down to the court
             let low = |m: &world::M4, y: f32| m[3][1] >= y;
-            if st.burst.get(r.motion as usize).copied().unwrap_or(false) && !self.burst[p] && low(&r.pelvis, -0.25) {
+            if !r.no_steps && st.burst.get(r.motion as usize).copied().unwrap_or(false) && !self.burst[p] && low(&r.pelvis, -0.25) {
                 self.burst[p] = true;
                 self.spray(t, dusty, wet, scale, &r.pelvis);
             }
-            if r.character == SUZUKI as usize && r.motion == id::LOST_GAME && !self.burst[p] && low(&r.spine, -0.26) {
+            if !r.no_steps && r.character == SUZUKI as usize && r.motion == id::LOST_GAME && !self.burst[p] && low(&r.spine, -0.26) {
                 self.burst[p] = true;
                 self.spray(t, dusty, wet, scale, &r.spine);
             }
             let late = self.after_point && r.motion >= id::WON && r.sub >= LATE_SUB;
-            let runs = !late && st.runs.get(r.motion as usize).copied().unwrap_or(false);
+            let runs = !late && !r.no_steps && st.runs.get(r.motion as usize).copied().unwrap_or(false);
             for f in (0..2).filter(|_| runs) {
                 let y = r.toes[f][1];
                 let mut step = false;

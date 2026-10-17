@@ -1,12 +1,1 @@
 <!-- What's new since the last release, for players, in plain English: one "- " line per change. tools/release.sh puts this in the release and empties it. -->
-- Phones (and sleeping laptops) check for a new version again soon after you come back to the game, and the iPhone and Android update notice says how to install it
-- In the mods store, pressing up from the top row of mods now goes to the mod-type tabs (Characters, …) instead of jumping to the sort button
-- Opening a lobby link no longer puts the keyboard on player 1: the first keyboard or controller to press a button joins as player 1.
-- Mod store: tiles waiting for their picture no longer flicker when the frame rate is uncapped, and pictures you've already seen show straight away.
-- The original players' roster pictures no longer show up zoomed in and cut off before their full-size icons are ready.
-- The Mods screen opens with the cursor on the first mod; up goes to the Characters tab, then Browse.
-- Computer players now actually dive for balls just out of reach, instead of swinging at thin air.
-- Online lobbies: the "connecting to the relay" notice sits at the very top of the screen, and you can copy the lobby link while it's still connecting.
-- Player select shows which button renames your player, right next to the name.
-- After picking (or backing out of) a computer player's character in an online lobby, the cursor stays on that computer's card instead of jumping back to yours.
-- Lobby cards no longer have an X: the selected card shows a Remove/Kick hint with its button instead, so moving the cursor can't take a player out by accident.
