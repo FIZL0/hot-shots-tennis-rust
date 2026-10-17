@@ -62,8 +62,7 @@ impl Menu {
     pub(in super::super) fn lobby_foot(&self) -> frame::Geo {
         let [l, t, r, b] = self.grid.view;
         let band = super::band_h(self, r - l - 2.0 * roster::MARGIN * PX);
-        let chat = self.items().contains(&Item::Button("Chat"));
-        frame::foot([l + roster::MARGIN * PX, t + band, r - roster::MARGIN * PX, b], chat)
+        frame::foot([l + roster::MARGIN * PX, t + band, r - roster::MARGIN * PX, b])
     }
 
     /// M121: the top bar's buttons, right to left: Singles / Doubles, the code pill's place (the pill right-aligned
@@ -169,18 +168,6 @@ pub(in super::super) fn over(d: &mut Draw, m: &Menu) {
         }
     }
     strip(d, m, rm, &g, &on, &hit);
-    // the bottom row: Leave, the chat box, Start / Ready
-    frame::back(d, &g, "Leave", on(Item::Button("Leave")));
-    hit(d, Item::Button("Leave"), g.back, OK);
-    if at(Item::Button("Chat")).is_some() {
-        crate::chat::BOXED.store(true, std::sync::atomic::Ordering::Relaxed);
-        let mut lines = crate::chat::RECENT.lock().map(|l| l.clone()).unwrap_or_default();
-        if let Some(s) = super::status_line(m) {
-            lines.push((String::new(), s));
-        }
-        frame::chat(d, &g, &lines, on(Item::Button("Chat")));
-        hit(d, Item::Button("Chat"), g.chat, OK);
-    }
     start_button(d, m, rm, &g, &items, &on);
 }
 

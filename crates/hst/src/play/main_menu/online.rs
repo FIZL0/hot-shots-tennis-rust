@@ -175,8 +175,8 @@ fn row_rects(extra: f32) -> Vec<[f32; 4]> {
 /// B526: a browser's LAN lobby (`lan_host`) has "Paste" (a guest's link back) where "Public" is: it's listed nowhere.
 /// B396: in the side panel's invite box and the bottom bar; "Chat" (when chat's on) goes before Start / Ready; a
 /// player's own seat card is where they pick again (no Characters button).
-const HOST_BUTTONS: [&str; 5] = ["Code", "Copy Link", "Public", "Leave", "Start"];
-const GUEST_BUTTONS: [&str; 4] = ["Code", "Copy Link", "Leave", "Ready"];
+const HOST_BUTTONS: [&str; 4] = ["Code", "Copy Link", "Public", "Start"];
+const GUEST_BUTTONS: [&str; 3] = ["Code", "Copy Link", "Ready"];
 
 /// What a lobby selection is: a guest's seat (the host can take them out) or a button.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -314,7 +314,8 @@ impl Menu {
     fn items(&self) -> Vec<Item> {
         let room = self.net.room.as_ref();
         // Settings → Chat (what `chat::HIDDEN` follows)
-        let chat = self.settings.0[super::CHAT].then_some(Item::Button("Chat"));
+        // concept: chat is the in-game overlay (T), not a lobby item
+        let chat: Option<Item> = None;
         let with_chat = |b: &[&'static str]| {
             let (last, rest) = b.split_last().unwrap();
             rest.iter().map(|b| Item::Button(b)).chain(chat).chain([Item::Button(last)]).collect::<Vec<_>>()

@@ -242,15 +242,17 @@ fn chat_box(back: [f32; 4], start: [f32; 4], on: bool, x: &dyn Fn(f32) -> f32, y
 /// M121: the lobby's lower rows alone along the bottom of `reach`: the strip, then Leave, the chat box and Start, as
 /// wide as `reach` (at most full size, smaller only to fit its width or a fifth of a short window's height). The online
 /// select's columns go over them; `stage` is what's left above, the bar and the plates empty.
-pub(super) fn foot([l, t, r, b]: [f32; 4], chat: bool) -> Geo {
-    let rows = ROW_GAP + STRIP_H + ROW_GAP + FOOT_H + PAD_B;
-    let foot_w = (BACK_W + START_W + 12.0 + if chat { CHAT_MIN + 12.0 } else { 0.0 }).max(STRIP_MIN);
+pub(super) fn foot([l, t, r, b]: [f32; 4]) -> Geo {
+    // concept: one row, the strip's cells then Start inline (no Leave: Back leaves; chat is the overlay)
+    let rows = ROW_GAP + STRIP_H + PAD_B;
+    let foot_w = STRIP_MIN + 12.0 + INLINE_START_W;
     let k = ((r - l) / PX / foot_w).min((b - t) / PY * 0.3 / rows).min(1.0);
     let x = |px: f32| px * k * PX;
     let y = |px: f32| px * k * PY;
-    let foot = b - y(PAD_B) - y(FOOT_H);
-    let strip = [l, foot - y(ROW_GAP) - y(STRIP_H), r - l, y(STRIP_H)];
-    let stage = [l, t, r - l, strip[1] - y(ROW_GAP) - t];
+    let row = b - y(PAD_B) - y(STRIP_H);
+    let start = [r - x(INLINE_START_W), row, x(INLINE_START_W), y(STRIP_H)];
+    let strip = [l, row, start[0] - x(12.0) - l, y(STRIP_H)];
+    let stage = [l, t, r - l, row - y(ROW_GAP) - t];
     let sum: f32 = GROW.iter().sum();
     let mut at = strip[0];
     let cells = GROW.map(|g| {
@@ -258,12 +260,13 @@ pub(super) fn foot([l, t, r, b]: [f32; 4], chat: bool) -> Geo {
         at += w;
         [at - w, strip[1], w, strip[3]]
     });
-    let back = [l, foot, x(BACK_W), y(FOOT_H)];
-    let start = [r - x(START_W), foot, x(START_W), y(FOOT_H)];
-    let chat = chat_box(back, start, chat, &x, &y);
     let none = [l, t, 0.0, 0.0];
-    Geo { k, s: 1.0, turned: false, title: none, pill: none, code: none, copy: none, public: none, mode: none, stage, court: stage, labels: [none; 2], vs: none, plates: Vec::new(), strip, cells, back, chat, start }
+    let gone = [l, row, 0.0, 0.0];
+    Geo { k, s: 1.0, turned: false, title: none, pill: none, code: none, copy: none, public: none, mode: none, stage, court: stage, labels: [none; 2], vs: none, plates: Vec::new(), strip, cells, back: gone, chat: gone, start }
 }
+
+/// Concept: Start's width when it sits inline at the end of the strip.
+const INLINE_START_W: f32 = 260.0;
 
 /// The strip with only its first `n` cells, spread by their shares across all of it (the rest left zero wide at its
 /// right end): the confirm screen leaves Handicap out until handicaps work (B482, back with B40g1).
