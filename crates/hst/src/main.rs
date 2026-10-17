@@ -494,12 +494,16 @@ fn start(argv: Vec<String>) {
         });
         let a = args.clone();
         let (iso, early) = (args.iso.clone(), lineup(&args, &slot_mods, viewer_mod.is_some().then_some(mod_slot)));
+        let early_mods = mod_lineup(&args, &slot_mods, viewer_mod.as_ref().map(|d| (mod_slot, d)));
         let first = mode::Mode::new(move |app| {
             app.insert_resource(a).insert_resource(swap_hands).insert_resource(names).add_systems(Startup, load);
             add_match(app, viewer_mod, mod_slot, slot_mods, umpire_mod);
             court_mod::add(app, court_mod);
         })
-        .early(move |world| preload::characters(world, &iso, &early));
+        .early(move |world| {
+            preload::characters(world, &iso, &early);
+            preload::mods(world, &iso, &early_mods);
+        });
         app.add_plugins((mode::plugin, inspect::render)).insert_resource(mode::Next(Some(first.back(back))));
     } else if let Some(r) = roster {
         app.add_plugins(inspect::viewer).insert_resource(r);
@@ -522,6 +526,24 @@ fn lineup(args: &Args, slot_mods: &[(usize, String)], viewer_slot: Option<usize>
         .filter(|i| !modded.contains(i))
         .map(|i| (args.chars.get(i).copied().unwrap_or([6, 1, 2, 3][i]), args.outfits.get(i).copied().unwrap_or(0)))
         .collect()
+}
+
+/// B550: the mods playing (`add_match`'s), each with its slot's costume number, for [`preload::mods`]; one that
+/// doesn't read is left to the match's start (which says why).
+fn mod_lineup(args: &Args, slot_mods: &[(usize, String)], viewer: Option<(usize, &String)>) -> Vec<(mods::Mod, usize)> {
+    slot_mods
+        .iter()
+        .map(|(n, d)| (*n, d))
+        .chain(viewer)
+        .filter_map(|(n, d)| Some((mods::read(d.as_ref()).ok()?, args.outfits.get(n).copied().unwrap_or(0))))
+        .collect()
+}
+
+/// B550: the online match's mods (`mm`, by match slot) with the costume numbers `flags` give their slots, for
+/// [`preload::mods`].
+pub fn online_mod_lineup(iso: &str, flags: &[String], mm: &mods::MatchMod) -> Vec<(mods::Mod, usize)> {
+    let outfits = parse(std::iter::once(iso.to_string()).chain(flags.iter().cloned())).args.outfits;
+    mm.0.iter().enumerate().filter_map(|(n, m)| Some((m.clone()?, outfits.get(n).copied().unwrap_or(0)))).collect()
 }
 
 /// The match: `play::plugin`; `--play --mod DIR [--mod-slot N]` or `--slot-mod N DIR` (any number): the mod plays
@@ -553,6 +575,7 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     textures::set(iso, upscale);
     let cover = loading::cover(args.iso.clone(), args.court, court_mod.as_ref().and_then(|c| c.loading_picture()));
     let (iso, early) = (args.iso.clone(), lineup(&args, &slot_mods, viewer_mod.is_some().then_some(mod_slot)));
+    let early_mods = mod_lineup(&args, &slot_mods, viewer_mod.as_ref().map(|d| (mod_slot, d)));
     graphics::MESH.store(gfx.mesh, std::sync::atomic::Ordering::Relaxed);
     mode::Mode::new(move |app| {
         app.insert_resource(gfx);
@@ -565,7 +588,10 @@ pub fn match_mode(iso: &str, flags: &[String], back: mode::Mode) -> mode::Mode {
     })
     .back(back)
     .cover(cover)
-    .early(move |world| preload::characters(world, &iso, &early))
+    .early(move |world| {
+        preload::characters(world, &iso, &early);
+        preload::mods(world, &iso, &early_mods);
+    })
 }
 
 /// How many clouds court `n` makes outside heavy rain (`layout::cloud_count`; singles' environment row 1, doubles' 0).

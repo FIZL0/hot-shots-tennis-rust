@@ -1428,6 +1428,34 @@ pub fn open(what: &str) {
 
 #[cfg(test)]
 mod tests {
+    /// B557: every listed mod's `meta.json` (as Browse reads it, index included) names the size and sha256 of the
+    /// `mod.zip` beside it on the same rev, so a size mismatch at install is a listing older than a re-upload (B548's
+    /// retry), not the store disagreeing with itself. Network: `tools/check.sh -p hst-base store_meta_matches -- --ignored`
+    /// when a player reports one.
+    #[test]
+    #[ignore]
+    fn store_meta_matches_its_zips() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let lists = rt.block_on(lists()).unwrap();
+        let mut trees = std::collections::HashMap::new();
+        let (mut n, mut bad) = (0, Vec::new());
+        for e in lists.iter().flatten() {
+            let tree: &serde_json::Value = trees.entry(e.rev.clone()).or_insert_with(|| {
+                let url = format!("{HF}/api/datasets/{REPO}/tree/{}/mods?recursive=true", rev_part(&e.rev));
+                serde_json::from_slice(&rt.block_on(get(&url, 16 << 20)).unwrap()).unwrap()
+            });
+            let path = format!("mods/{}/mod.zip", e.meta.id);
+            let Some(z) = tree.as_array().unwrap().iter().find(|f| f["path"] == path.as_str()) else { continue };
+            n += 1;
+            let (size, oid) = (z["lfs"]["size"].as_u64().or(z["size"].as_u64()), z["lfs"]["oid"].as_str());
+            if size != Some(e.meta.size) || oid != Some(e.meta.sha256.as_str()) {
+                bad.push(format!("{}: meta {} {}, zip {size:?} {oid:?}", e.key(), e.meta.size, e.meta.sha256));
+            }
+        }
+        eprintln!("{n} listed zips checked");
+        assert!(n > 0 && bad.is_empty(), "{bad:#?}");
+    }
+
     /// B227: the browser's install of the store's Anya (PR 2, 513 MB) by range requests: fetches only her kept files
     /// (no `textures/upscaled/`), in memory. Network: `tools/check.sh -p hst ranged_install -- --ignored` after
     /// touching `ranged`.
