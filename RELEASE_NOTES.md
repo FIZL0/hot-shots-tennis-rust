@@ -59,3 +59,4 @@
 - Local matches: a player leaving the character select no longer flips a doubles match back to singles (a third player joining still turns singles into doubles), and a player leaving now has its own sound.
 - Mod characters' feet now stay on the court through runs, swings and celebrations instead of floating above it or sinking into it: their legs bend to put each foot where the original character's would be.
 - Online: a host whose lobby code is slow to go online no longer stays stuck on "Connecting to the relay" — it becomes joinable as soon as a friend gets in, and a code that takes too long falls back to the lobby link.
+- Leaving an online lobby and joining it again no longer gets you turned away as "not enough open seats".
