@@ -1728,7 +1728,7 @@ pub fn read_input(
         .find(|(a, _)| bind.key_just_pressed(&keys, *a))
         .map(|(_, kind)| kind);
     kb.serve = bind.key_just_pressed(&keys, A::Replay);
-    kb.emote = emote::KEYS.iter().position(|a| bind.key_pressed(&keys, *a)).map(|d| d as u8);
+    kb.emote = emote::KEYS.iter().position(|a| bind.key_just_pressed(&keys, *a)).map(|d| d as u8);
     if let Some(k) = held.keys() {
         now[k] = kb;
     }

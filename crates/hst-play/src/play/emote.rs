@@ -40,9 +40,9 @@ pub fn touch(g: &Gamepad, name: Option<&Name>) -> Option<u8> {
         .map(|(_, d)| d)
 }
 
-/// A pad button bound to an emote in `controls.txt` (none by default), held: its direction.
+/// A pad button bound to an emote in `controls.txt` (none by default), just pressed: its direction (held, it doesn't repeat).
 pub fn bound(g: &Gamepad, bind: &super::controls::Bindings) -> Option<u8> {
-    KEYS.iter().position(|a| bind.pad_pressed(g, *a)).map(|d| d as u8)
+    KEYS.iter().position(|a| bind.pad_just_pressed(g, *a)).map(|d| d as u8)
 }
 
 /// The touch pad's id (web/touch.js `pad.id`), as gilrs names it.
